@@ -226,4 +226,131 @@ final class AudioResponseTests: XCTestCase {
         XCTAssertEqual(pulse, 0, accuracy: 1e-6, "0.3 은 0.5 하한 아래 — smoothstep 이 0 으로 뭉갠다")
         XCTAssertGreaterThan(shake, 0.05)
     }
+
+    // MARK: 셰이더 어노테이션 파싱 (종전 [미해결] — 2026-08-21 해소)
+
+    /// `assets/effects/pulse/shaders/effects/pulse.vert` 의 오디오 선언 다섯 줄 **원문**.
+    /// 동봉 `WEAssets/effects/pulse/...` 및 설치본 `projects/defaultprojects/razer_bedroom/...`
+    /// 사본과 문자 단위로 같다(2026-08-21 실측 — 세 파일 15줄이 오디오 어노테이션 전부다).
+    private static let pulseAudioDecl = """
+    #if AUDIOPROCESSING
+    uniform float g_AudioSpectrum16Left[16];
+    uniform float g_AudioSpectrum16Right[16];
+
+    uniform float g_AudioFrequencyMin; // {"material":"frequencymin","label":"ui_editor_properties_frequency_min","default":0,"int":true,"range":[0,15]}
+    uniform float g_AudioFrequencyMax; // {"material":"frequencymax","label":"ui_editor_properties_frequency_max","default":1,"int":true,"range":[0,15]}
+    uniform float g_AudioPower; // {"material":"audioexponent","label":"ui_editor_properties_audio_exponent","default":1.0,"range":[0,4]}
+    uniform vec2 g_AudioBounds; // {"material":"audiobounds","label":"ui_editor_properties_audio_bounds","default":"0.5 1.0"}
+    uniform float g_AudioMultiply; // {"material":"audioamount","label":"ui_editor_properties_audio_amount","default":1,"range":[0,2]}
+    #endif
+    """
+
+    /// `assets/effects/shake/shaders/effects/shake.vert` — `audiobounds` 한 줄만 다르다.
+    private static let shakeAudioDecl = """
+    uniform float g_AudioFrequencyMin; // {"material":"frequencymin","label":"ui_editor_properties_frequency_min","default":0,"int":true,"range":[0,15]}
+    uniform float g_AudioFrequencyMax; // {"material":"frequencymax","label":"ui_editor_properties_frequency_max","default":1,"int":true,"range":[0,15]}
+    uniform float g_AudioPower; // {"material":"audioexponent","label":"ui_editor_properties_audio_exponent","default":1.0,"range":[0,4]}
+    uniform vec2 g_AudioBounds; // {"material":"audiobounds","label":"ui_editor_properties_audio_bounds","default":"0.0 1.2"}
+    uniform float g_AudioMultiply; // {"material":"audioamount","label":"ui_editor_properties_audio_amount","default":1,"range":[0,2]}
+    """
+
+    /// 파스 결과가 손으로 적은 표와 같아야 한다. 이게 표를 "실측" 으로 만들어 준다 —
+    /// 표만 있고 파서가 없으면 워크샵 셰이더에서 다시 추정이 된다.
+    func testParsingRealShaderSourceReproducesTheHandWrittenTable() {
+        let pulse = AudioResponse.declaredDefaults(shaderSource: Self.pulseAudioDecl)
+        let shake = AudioResponse.declaredDefaults(shaderSource: Self.shakeAudioDecl)
+        XCTAssertEqual(pulse, AudioResponse.pulseDefaults)
+        XCTAssertEqual(shake, AudioResponse.shakeDefaults)
+        // 갈리는 것은 audiobounds 하나뿐이라는 것도 파스 결과로 재확인한다.
+        XCTAssertEqual(pulse?.bounds, SIMD2<Float>(0.5, 1.0))
+        XCTAssertEqual(shake?.bounds, SIMD2<Float>(0.0, 1.2))
+        XCTAssertEqual(pulse?.freqMin, shake?.freqMin)
+        XCTAssertEqual(pulse?.freqMax, shake?.freqMax)
+        XCTAssertEqual(pulse?.power, shake?.power)
+        XCTAssertEqual(pulse?.multiply, shake?.multiply)
+    }
+
+    /// **유니폼 이름이 아니라 `"material"` 값으로 건다**(함정 8). 실물 이름은
+    /// `g_AudioPower`/`g_AudioMultiply` 이고 `g_AudioExponent`/`g_AudioAmount` 는 두 코퍼스
+    /// 전수에서 0건이다 — 유니폼 이름으로 걸었으면 다섯 중 둘을 놓쳤다.
+    func testParserKeysOnMaterialNameNotUniformName() {
+        // 유니폼 이름을 통째로 바꿔도 material 이 같으면 잡아야 한다.
+        let renamed = """
+        uniform vec2 u_Whatever; // {"material":"audiobounds","default":"0.25 0.75"}
+        uniform float u_Another; // {"material":"audioexponent","default":2.5}
+        """
+        let d = AudioResponse.declaredDefaults(shaderSource: renamed)
+        XCTAssertEqual(d?.bounds, SIMD2<Float>(0.25, 0.75))
+        XCTAssertEqual(d?.power, 2.5)
+        // 반대로 유니폼 이름이 g_AudioBounds 라도 material 이 오디오 키가 아니면 안 잡는다.
+        let decoy = """
+        uniform vec2 g_AudioBounds; // {"material":"bounds","default":"0 1"}
+        """
+        XCTAssertNil(AudioResponse.declaredDefaults(shaderSource: decoy))
+    }
+
+    /// 오디오 어노테이션이 없는 셰이더는 nil — 호출부가 이름표 폴백으로 떨어질 수 있어야 한다.
+    func testSourceWithoutAudioAnnotationsReturnsNilAndFallsBackToTheNameTable() {
+        let plain = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        uniform vec2 g_PulseThresholds; // {"material":"bounds","label":"ui_editor_properties_pulse_bounds","default":"0 1"}
+        """
+        XCTAssertNil(AudioResponse.declaredDefaults(shaderSource: plain))
+        XCTAssertEqual(AudioResponse.declaredDefaults(effectName: "shake", shaderSource: plain),
+                       AudioResponse.shakeDefaults)
+        XCTAssertEqual(AudioResponse.declaredDefaults(effectName: "shake",
+                                                      shaderSource: Self.pulseAudioDecl),
+                       AudioResponse.pulseDefaults, "원문이 이기고 이름표는 폴백이다")
+        XCTAssertEqual(AudioResponse.declaredDefaults(effectName: "shake", shaderSource: nil),
+                       AudioResponse.shakeDefaults)
+    }
+
+    /// **주석 처리된 선언은 집지 않는다.** 동봉 코퍼스에 실제로 있는 형태다
+    /// (`//uniform float g_AudioSpectrum16[16];` — techno·audiophileglow 2건).
+    func testCommentedOutDeclarationsAreNotParsed() {
+        let commented = """
+        //uniform vec2 g_AudioBounds; // {"material":"audiobounds","default":"0.9 0.95"}
+        uniform vec2 g_AudioBounds; // {"material":"audiobounds","default":"0.5 1.0"}
+        """
+        XCTAssertEqual(AudioResponse.declaredDefaults(shaderSource: commented)?.bounds,
+                       SIMD2<Float>(0.5, 1.0))
+        let onlyCommented = """
+        //uniform vec2 g_AudioBounds; // {"material":"audiobounds","default":"0.9 0.95"}
+        """
+        XCTAssertNil(AudioResponse.declaredDefaults(shaderSource: onlyCommented))
+    }
+
+    /// 벡터 기본값의 구분자는 **공백과 쉼표 둘 다**다. 공백만으로 쪼개면 `Float("0.0,") == nil`
+    /// 이라 첫 성분이 소리 없이 사라지고 `vec2` 가 한 성분이 된다 — 그러면 하한이 1.2 로
+    /// 올라앉아 `shake` 가 어떤 신호에도 반응하지 않는다.
+    func testCommaSeparatedVectorDefaultKeepsBothComponents() {
+        let comma = """
+        uniform vec2 g_AudioBounds; // {"material":"audiobounds","default":"0.0, 1.2"}
+        """
+        let d = AudioResponse.declaredDefaults(shaderSource: comma)
+        XCTAssertEqual(d?.bounds, SIMD2<Float>(0.0, 1.2))
+        // 공백 전용 분리였다면 [1.2] 한 성분 → bounds.x 가 1.2 가 됐을 것.
+        XCTAssertNotEqual(d?.bounds.x, 1.2)
+    }
+
+    /// 부분 선언은 두 코퍼스에 없지만(다섯 키 × 파일 수로 정확히 나누어떨어진다) 워크샵은
+    /// 미측정이다. 빠진 키는 `pulse` 값으로 채운다.
+    func testPartialAnnotationsFillTheRestFromPulse() {
+        let partial = """
+        uniform vec2 g_AudioBounds; // {"material":"audiobounds","default":"0.1 0.9"}
+        """
+        let d = AudioResponse.declaredDefaults(shaderSource: partial)
+        XCTAssertEqual(d?.bounds, SIMD2<Float>(0.1, 0.9))
+        XCTAssertEqual(d?.freqMin, AudioResponse.pulseDefaults.freqMin)
+        XCTAssertEqual(d?.freqMax, AudioResponse.pulseDefaults.freqMax)
+        XCTAssertEqual(d?.power, AudioResponse.pulseDefaults.power)
+        XCTAssertEqual(d?.multiply, AudioResponse.pulseDefaults.multiply)
+    }
+
+    /// 다섯 키의 material 이름 목록 자체를 고정한다 — 하나라도 빠지면 그 키가 무시된다.
+    func testAudioAnnotationKeySetIsExactlyTheFiveDeclaredInTheCorpus() {
+        XCTAssertEqual(Set(AudioResponse.audioAnnotationMaterialKeys),
+                       ["frequencymin", "frequencymax", "audioexponent", "audiobounds", "audioamount"])
+        XCTAssertEqual(AudioResponse.audioAnnotationMaterialKeys.count, 5)
+    }
 }

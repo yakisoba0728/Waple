@@ -37,6 +37,11 @@
 **접지 않고**, 셋째 배열의 실물 이름은 `average`(= mono 사분면)다(§8.3). 더해서
 **상한 클램프도 dB 변환도 없다**는 것을 전수로 확인했고(§8.2), 32·16밴드의 **빈/주파수 경계표**를
 처음 적었다(§8.4 — 16밴드 0…6 이 정확히 등간격 91.875 Hz).
+2026-08-21 3차는 **자산 지형도**를 먼저 그리고(§9.1 — 오디오 유니폼을 읽는 파일 7 대
+`frequencymin` 형제 키 43), 거기서 남은 미지수인 엔진 설정 쪽을 파서 **게인이 상수가 아니라는
+것**을 확정했다(§9.2 — `user.audioinputvolume × 0.02` 가 `AP+0x0C` 다). 위 표의 `162.56` 은
+배포 기본 설정 50 에서의 값이고, 슬라이더가 0…200 이라 실사용 게인 범위는 **0…650.24** 다.
+같은 라운드가 셰이더 어노테이션 파싱의 [미해결] 도 닫았다(§9.4).
 
 ---
 
@@ -369,6 +374,11 @@ band[0..127] *= g                                  ; 4 float × 16 회 × 2 배�
 
 `AP[0x0C]` 는 생성자 `0x1400c0cc4` 가 심은 `1.0`, `0.001` 은 `0x140492608`, `0.5` 는
 `0x1404926c0`, 루프 상한 `0x40`(=64 밴드)은 `0x1400d1df3`.
+
+> **[정정 2026-08-21 → §9.2]** 그 `1.0` 은 **생성자 기본값이지 실행값이 아니다.** 설정 로더가
+> `0x14006c766` 에서 `user.audioinputvolume × 0.02` 로 같은 필드(`0x1404e55b4` = `AP+0x0C`)를
+> 덮어쓴다. 배포 기본 설정이 50 이고 `50 × 0.02f` 가 float32 에서 정확히 1.0 이라 둘이 겹쳐
+> 보였을 뿐이다. 산식 자체는 그대로 유효하다.
 
 이 `g` 는 **비정규화 DFT 진폭**에 걸리고, 시간영역에서 이미 127 이 곱해져 있다. 진폭을
 `|DFT|/N` 규약으로 옮기면
@@ -1070,3 +1080,282 @@ return AudioParams(
 프로듀서가 채널 0 을 `[rbp+0x40]`(좌 절반)에 싣는다는 §3.3 에서 **간접**으로 온다.
 `uniform-feed` 계열은 소유 밖이라 넘긴다.
 
+
+---
+
+## 9. 2026-08-21 (3차) — 자산 지형도 · 입력 볼륨/임계가 게인에 들어가는 사슬 · 어노테이션 파싱
+
+이번 라운드는 **x86 을 뜨기 전에 자산부터 grep 했다**(브리프 함정 7). 그 지형도가
+"게인이 상수가 아니다" 를 찾게 만들었다 — 오디오를 읽는 자산이 워낙 적어서 **엔진 설정 쪽**이
+남은 미지수라는 게 표에서 바로 보였기 때문이다.
+
+### 9.1 자산 지형도 — 오디오 이름이 실제로 어디에 있나
+
+측정 범위: **동봉 `Sources/WapleRender/Resources/WEAssets` 텍스트 2,506파일**,
+**설치본 `wallpaper_engine`(`ui/` 제외) 텍스트 3,148파일**. 워크샵 코퍼스는 이 컨테이너에
+없다(함정 19) — 아래 어디에도 워크샵 수치는 없다. `f` = 파일 수, `occ` = 출현 수.
+
+| 이름 | 종류 | 동봉 f/occ | 설치본 f/occ | 비고 |
+| --- | --- | --- | --- | --- |
+| `g_AudioSpectrum16Left` | 유니폼 | 3/6 | **8/32** | 설치본 8 중 1(`neon_sunset`)은 주석 |
+| `g_AudioSpectrum16Right` | 유니폼 | 3/6 | 6/12 | 설치본 6 중 1(`neon_sunset`)은 주석 |
+| `g_AudioSpectrum32Left/Right` | 유니폼 | 1/2 각 | 1/2 각 | `Simple_Audio_Bars` 단독 |
+| `g_AudioSpectrum64Left/Right` | 유니폼 | 1/2 각 | 1/2 각 | `Simple_Audio_Bars` 단독 |
+| `g_AudioSpectrum16`(접미사 없음) | 유니폼(구) | 3/12 | 9/46 | **전부 주석 줄** — 바인딩 대상 아님 |
+| `g_AudioBounds` | 유니폼 | 2/6 | 3/9 | |
+| `g_AudioFrequencyMin` / `Max` | 유니폼 | 2/16 각 | 3/24 각 | |
+| `g_AudioPower` | 유니폼 | 2/4 | 3/6 | json 키는 `audioexponent` |
+| `g_AudioMultiply` | 유니폼 | 2/4 | 3/6 | json 키는 `audioamount` |
+| `g_AudioExponent` / `g_AudioAmount` | — | **0/0** | **0/0** | **존재하지 않는 이름** |
+| `AUDIOPROCESSING` | 콤보 | 4/18 | 6/26 | `.vert` 정의 + `.frag` 소비 |
+| `"audiobounds"` / `"audioexponent"` / `"audioamount"` | 어노테이션 material | 2/2 각 | 3/3 각 | |
+| `"frequencymin"` / `"frequencymax"` | **두 뜻** | 43/52 · 45/53 | 46/57 · 48/58 | 아래 |
+| `supportsaudioprocessing` | project.json | 0/0 | **5/5** | 동봉에는 0 |
+| `wallpaperRegisterAudioListener` | 웹 API | 0/0 | 1/1 | `corsair_o_tron/js/main.js` |
+| `audioinputvolume` / `audioinputthreshold` | 앱 설정 | 0/0 | 6/6 각 | `config.json` + 백업 5 |
+| `audioband` | — | 0/0 | 0/0 | **이 어휘는 WE 에 없다** |
+
+**유니폼 이름 두 개가 통념과 다르다(확정).** `audioexponent` → `g_AudioPower`,
+`audioamount` → `g_AudioMultiply` 다. `g_AudioExponent`·`g_AudioAmount` 는 두 코퍼스 전수에서
+**0건**이라, 파서를 유니폼 이름으로 걸었으면 다섯 키 중 둘을 놓친다. 파서는 반드시
+`"material"` 값으로 걸어야 한다(함정 8).
+
+**`frequencymin`/`frequencymax` 는 형제 키다(확정, 함정 8 정면 사례).**
+동봉 43파일 중 **41개가 파티클 프리셋 JSON** 이고 거기서 이 키는 **오디오와 무관한
+오실레이터 주파수**다 — 소유 오퍼레이터는 `oscillatealpha` 30 · `oscillateposition` 16 ·
+`oscillatesize` 4 (동봉 50객체 / 설치본 54객체: 32·18·4). 오디오 쪽 `frequencymin` 은
+**셰이더 어노테이션 2파일(동봉) · 3파일(설치본)** 뿐이다. 도수만 보고 "43개 자산이 쓴다" 고
+읽으면 통째로 틀린다.
+
+**실제로 스펙트럼을 읽는 자산(주석 제외, 확정).**
+
+| 파일 | 해상도 | occ | 축약 |
+| --- | --- | --- | --- |
+| `assets/effects/pulse/shaders/effects/pulse.vert` | 16 | 4 | `CreateAudioResponse` |
+| `assets/effects/shake/shaders/effects/shake.vert` | 16 | 4 | `CreateAudioResponse` |
+| `projects/defaultprojects/razer_bedroom/…/pulse.vert` | 16 | 4 | `CreateAudioResponse`(pulse 사본) |
+| `assets/zcompat/scene/shaders/2084198056/Simple_Audio_Bars.frag` | 16·32·64 | 12 | 자체(바 인덱싱) |
+| `projects/defaultprojects/audiophile/shaders/audiophile.vert` | 16 | 6 | 자체(`L[i]+L[i+1]`, `×0.5`) |
+| `projects/defaultprojects/audiophile/shaders/audiophileglow.vert` | 16 | 2 | 자체(`L[0]` 한 칸) |
+| `projects/defaultprojects/demon_core/shaders/core.vert` | 16 | **18** | 자체(16칸 합 `/16` + `L[idx]`) |
+
+동봉은 위의 앞 넷 중 셋(`razer_bedroom` 제외)만 들어 있다 = **3파일**. §6 의 "설치본 6 · 동봉 3"
+과 같은 수다(파일 7개 = 자산 6개, `audiophile` 이 셰이더 둘).
+
+**바로 따라오는 것 둘.**
+
+1. **`AudioResponse.compute`(= `CreateAudioResponse`)가 덮는 것은 7파일 중 3뿐이다.** 나머지
+   넷은 스펙트럼 배열을 **직접** 읽는다. 즉 축약식보다 **스펙트럼 값 자체**의 도달이 높다 —
+   이번 라운드가 게인 쪽을 판 이유다.
+2. **16밴드가 압도적이다.** 7파일 중 6이 16밴드 전용이고, 32·64 는 `Simple_Audio_Bars`
+   하나뿐이다(그마저 `RESOLUTION` 기본값 32 — §6.2).
+
+### 9.2 [확정] 게인은 상수가 아니다 — `user.audioinputvolume` 이 `AP+0x0C` 다
+
+§0 표와 §3.4 는 게인을 `AP[0x0C]·0.001·B/(N/2)` 로 적고 `AP[0x0C]` 를 "생성자가 심은 1.0" 이라고
+단정했다. **1.0 은 생성자 기본값이지 실행값이 아니다.** 실행값은 `config.json` 의
+`user.audioinputvolume` 에서 온다.
+
+**주입.** 설정 로더(`0x14006c280–0x14006ce9b` 안):
+
+```
+0x14006c722  lea   r8,  0x140476f10                 ; key end   (begin+0x10 → 길이 16)
+0x14006c72c  lea   rdx, 0x140476f00                 ; "audioinputvolume"
+0x14006c739  call  0x140086de0                      ; Json::Value 조회(begin,end)
+0x14006c741  call  0x140085ee0                      ; asInt  (태그 0/1/2/3/5 처리 — 함정 18)
+0x14006c757  movd  xmm0, eax
+0x14006c75b  cvtdq2ps xmm0, xmm0
+0x14006c75e  mulss xmm0, [0x14049262c]               ; = 0.019999999552965164f
+0x14006c766  movss [0x1404e55b4], xmm0
+```
+
+`asInt` 와 저장 사이에 **`minss`/`maxss`/`comiss` 가 한 개도 없다 — 클램프가 없다**(확정).
+[VA-정정] 이 네 주소는 종전에 `rip_refs` 산출물(disp32 필드 위치, 각각 `+4`)로 적혀
+있었다 — 명령 주소로 옮겼다. 옛 값[VA-정정]: `0x14006c762`·`0x1401020f9`·`0x140180e9e`·`0x1401bf734`.
+
+상수 `0x14049262c` 의 **적재 자리는 이미지 전체에서 4곳**(`0x14006c75e` · `0x1401020f5` ·
+`0x140180e9a` · `0x1401bf730`)이고 오디오 경로의 것은 첫 번째 하나다(함정 4 — 호출이 아니라
+적재를 셌다).
+
+**소비**(함정 3 — 심는 것과 쓰는 것은 다르다). 저장 주소가 그 오디오 객체의 필드임을 세 갈래로
+독립 확인했다:
+
+1. **생성자가 그 전역에 대해 불린다.** `0x140064d0f  lea rcx,[0x1404e55a0]` →
+   `0x140064d28  call 0x1400c0c80`. 생성자 호출 자리는 이미지 전체 **2곳**뿐이고
+   나머지 하나(`0x14011efdf`)는 `lea rcx,[rdi+0x2a0]` 로 **다른 객체에 박힌 인스턴스**다.
+2. **스레드 기준 베이스는 `+8`.** 생성자가 `0x1400c0ca6  lea rbx,[rcx+8]` 로 잡고 거기에
+   0x200 바이트 밴드 버퍼 포인터를 심는다(`0x1400c0cb9  mov [rbx], rax`). 그래서
+   ctor-this `0x1404e55a0` ↔ 스레드 베이스 `0x1404e55a8` 이고
+   `0x1404e55a8 + 0x0C = 0x1404e55b4`(볼륨) · `+0x10 = 0x1404e55b8`(임계)다.
+   교차 확인: 생성자 즉시값 `+0xEC`=30.0(`0x1400c0d6d`) ↔ 스레드 `+0xE4`, `+0x1C`=0x21(33 ms,
+   `0x1400c0ccf`) ↔ 스레드 `+0x14` — §1 의 8 어긋남 주석과 정확히 맞는다.
+3. **캡처 스레드가 그 전역 위에서 돈다.** `0x1400d02b0` 은 직접 호출 자리가 **0곳**이고,
+   16바이트 클로저 `{this, fn}` 로 뜬다: `0x14006e525  mov [rax], rcx`(rcx = `0x1404e55a8`,
+   `0x14006e510` 의 `lea`) + `0x14006e52f  mov [rax+8], rcx`(rcx = `0x1400d02b0`,
+   `0x14006e528` 의 `lea`). 재시도 분기도 같다(`0x14006e597`/`0x14006e5ac`/`0x14006e5b6`).
+   같은 함수가 `0x14006e4df` 에서 캡처 초기화 `0x1400cf120` 를 부르며 넘기는
+   `rcx = 0x1404e568c` 가 정확히 `AP+0xE4`(§1 표의 인자 1)다 — 베이스가 맞는다는 네 번째 근거.
+
+그리고 스레드 안에서 **`AP+0x0C` 를 읽는 자리는 게인 한 곳뿐이다**
+(`0x1400d1d3f  movss xmm2,[rdi+0xc]`, `rdi = [rbp+0x330] = this`). 즉:
+
+```
+gain_raw = (audioinputvolume × 0.02) · 0.001 · B / (N/2)
+```
+
+**슬라이더 도메인(확정).** `ui/dist/scripts/scripts.js` 의
+`audioSlider={hideLimitLabels:!0,floor:0,ceil:200,…}` — **0…100 이 아니라 0…200** 이다.
+그래서 곱수 도메인이 `[0, 4]` 이고 **중립점이 50**(= 배포 `config.json` 기본값)이다.
+float32 에서 정확히 떨어진다: `25→0.5` · `50→1.0` · `100→2.0` · `150→3.0` · `200→4.0`
+(50×0.02f 의 오차 2.2e-8 < 반ULP 3.0e-8).
+
+정규화 진폭 규약으로 옮기면 `gain = 127 · 0.002 · B · (설정×0.02)` 이므로
+
+| `audioinputvolume` | 0 | 25 | **50(기본)** | 100 | 200 |
+| --- | --- | --- | --- | --- | --- |
+| 게인 | 0 | 81.28 | **162.56** | 325.12 | 650.24 |
+
+**`AudioSpectrum.gain = 162.56` 은 설정 50 에서의 값이다.** 종전 주석의 "모든 샘플레이트에서
+같은 상수" 는 참이지만 "설정과도 무관한 상수" 는 **거짓**이다. 둘이 우연히 겹쳐 보인 이유는
+`0.02 = 1/50` 이라 기본 설정이 정확히 1.0 을 만들기 때문이다.
+
+**임계도 같은 사슬이다(확정).** `0x14006c776  call 0x140086220`(asFloat) →
+`0x14006c77b  mulss xmm0,[0x140492608]`(= 0.001) → `0x14006c794  movss [0x1404e55b8]` = `AP+0x10`,
+읽는 자리는 `0x1400d1a15  movss xmm5,[r14+0x10]` 하나. 슬라이더는
+`audioThresholdSlider={…,floor:0,ceil:10,step:.1,precision:2,…}` 라 임계 도메인이 `[0, 0.01]` 이고
+기본 0 은 게이트 비활성이다(`threshold > FLT_EPSILON`, `0x1400d1a1b`).
+
+**우리와 갈리는 자리(값으로).** `SystemAudioSpectrumProvider.AudioInputSettings.volume` 은
+**곱수**(기본 1)이고 WE 설정은 **0…200 정수**(기본 50)다. WE 값을 그대로 곱수로 넣으면 정확히
+**50배**, 임계를 그대로 넣으면 **1000배**(어떤 실신호도 무음)다. 코어에 변환기를 뒀다 —
+`AudioSpectrum.inputVolumeGain(setting:)` / `inputThreshold(setting:)` /
+`gain(inputVolumeSetting:)`. 곱해지는 **위치**는 다르지만(실물은 비정규화 진폭에, 우리는 밴드
+출력에) 곱셈은 결합적이라 관측 결과는 같다.
+
+> **[정정] §0 표 "게인" 행과 §3.4** — `AP[0x0C]` 를 상수 1.0 으로 읽은 것은 기본 설정에서만
+> 맞다. 두 절의 산식 자체는 그대로 유효하고, `AP[0x0C]` 의 출처만 이 절이 채운다.
+
+### 9.3 §8.1 상수 재확인 — 이번에도 정정 0건
+
+§8 을 베끼지 않고 **상수 적재 자리를 다시 세서** 대조했다(값은 `.rdata` 원시 바이트 직독).
+
+| 상수 | 주소 | 실제 값 | 이미지 전체 적재 자리 | 소비단(`0x140110630–0x140113bc0`) |
+| --- | --- | --- | --- | --- |
+| 1-pole 계수 | `0x14049288c` | 20.0 | 4 | **1** |
+| 슬루 상한 | `0x1404928c4` | 40.0 | **1** | 1 |
+| 슬루 하한 | `0x140492a10` | −40.0 | **1** | 1 |
+| 엔벨로프 하강 | `0x1404929ac` | −0.5 | 11 | **8**(8배 언롤) |
+| 그룹 비율 하한 | `0x140492698` | 0.333 | **1** | 1 |
+| 무음 임계 | `0x1404925fc` | 1e-4 | 12 | 3 |
+
+−0.5 가 소비단에서 정확히 **8곳**인 것이 §8.1 의 "8배 언롤 × 바깥 루프 2회 = 16그룹" 과 맞고,
+40.0/−40.0/0.333 은 이미지 전체에 **하나씩**뿐이라 다른 해석의 여지가 없다. **정정 0건.**
+
+창 함수 없음(§2.3) · dB 변환 없음(§8.2) · 상한 클램프 없음(§8.2)도 그대로다 — 이번 라운드에서
+새로 반증할 근거를 찾지 못했다.
+
+### 9.4 [해소] 셰이더 어노테이션을 실제로 파싱한다
+
+`AudioResponse.declaredDefaults(effectName:)` 의 주석은 "우리는 어노테이션을 파싱하지 않으므로
+어차피 추정이고 … 정공법은 셰이더 어노테이션을 실제로 파싱하는 것이다 — **[미해결]**" 로
+끝나 있었다. 파서를 넣어 닫았다(`AudioResponse.declaredDefaults(shaderSource:)`).
+
+**파스 규약은 코퍼스에서 재서 정했다(확정).**
+
+- 오디오 어노테이션 줄은 **설치본 3파일 15줄 · 동봉 2파일 10줄**이다. 다섯 키 × 파일 수로
+  정확히 나누어떨어진다 — **부분 선언은 두 코퍼스에 없다**(워크샵 미측정).
+- `"default"` 값 형태는 **숫자와 따옴표 문자열 둘뿐**이다. 배열형 `"default":[…]` 은 동봉·설치
+  셰이더 전수에서 **0건**이라 지원하지 않는다(동봉 셰이더의 따옴표 기본값 511건, 숫자 나머지).
+- 문자열 벡터의 구분자는 **공백과 쉼표 둘 다** 봐야 한다. 오디오 다섯 키는 전부 공백이지만
+  같은 코퍼스에 쉼표형이 **동봉 2파일 4건** 있다 — `"0.0, 1.0"` · `"0.02, 0.02"` ·
+  `"0.0, 360.0"` · `"0.315, 0.135, 0.1125"`.
+- `//` 앞이 `uniform` 으로 시작하는 줄만 본다 — 주석 처리된 선언(`//uniform float
+  g_AudioSpectrum16[16];`)을 집지 않기 위해서다.
+- **키는 `"material"` 값으로 건다.** §9.1 의 `g_AudioPower`/`g_AudioMultiply` 때문이다.
+
+파서 결과가 §7.2(c)·§8.5 의 손으로 적은 표(`pulse` `"0.5 1.0"` / `shake` `"0.0 1.2"`, 나머지 넷 동일)와
+**같다는 것을 테스트가 고정한다** — 표만 있고 파서가 없으면 워크샵 셰이더에서 다시 추정이 된다.
+
+### 9.5 Waple 반영과 넘길 것
+
+**고친 것(소유 안).**
+
+- `Sources/WapleCore/AudioSpectrum.swift`
+  - `inputVolumeScaleFactor`(0.02) · `inputVolumeSettingRange`(0…200) ·
+    `defaultInputVolumeSetting`(50) · `inputThresholdScaleFactor`(0.001) ·
+    `defaultInputThresholdSetting`(0)
+  - `inputVolumeGain(setting:)` · `inputThreshold(setting:)` · `gain(inputVolumeSetting:)`
+  - `engineRawBandGain(binCount:fftLength:apVolume:)` — 리터럴 1.0 을 인자로 승격(기본값 1.0 이라 무회귀)
+  - `gain` 주석에서 "설정 무관 상수" 를 걷어냈다
+- `Sources/WapleCore/AudioResponse.swift`
+  - `declaredDefaults(shaderSource:)` · `declaredDefaults(effectName:shaderSource:)` ·
+    `audioAnnotationMaterialKeys` — §9.4
+- 테스트 17개 추가(`AudioInputSettingsParityTests` 10 신규 파일 · `AudioResponseTests` 7),
+  돌연변이 7종 전부 검출.
+
+**넘기는 것(소유 밖).**
+
+**(a) `Sources/WapleRender/SystemAudioSpectrumProvider.swift`** — `AudioInputSettings` 의 단위를
+WE 어휘로 바꾼다. 지금은 `volume`(곱수, 기본 1) / `threshold`(임계 그대로) 인데, WE 설정을
+그대로 옮겨 오면 각각 50배·1000배가 된다. 저장은 WE 와 같은 **설정 단위**로 두고 변환은 코어에
+맡기는 형태를 제안한다:
+
+```swift
+/// WE `user.audioinputvolume` 와 같은 단위(정수, 슬라이더 0…200, 기본 50 = 곱수 1.0).
+public static var volumeSetting: Int {
+    get { UserDefaults.standard.object(forKey: volumeKey) == nil
+            ? AudioSpectrum.defaultInputVolumeSetting
+            : UserDefaults.standard.integer(forKey: volumeKey) }
+    set { UserDefaults.standard.set(newValue, forKey: volumeKey) }
+}
+/// 분석 결과에 곱하는 스칼라. `0x14006c75e` 의 ×0.02.
+public static var volume: Float { AudioSpectrum.inputVolumeGain(setting: volumeSetting) }
+
+/// WE `user.audioinputthreshold` 와 같은 단위(실수, 슬라이더 0…10 step 0.1, 기본 0).
+public static var thresholdSetting: Float { … }
+public static var threshold: Float { AudioSpectrum.inputThreshold(setting: thresholdSetting) }
+```
+
+**키 마이그레이션 주의**: 기존 `waple.audioInputVolume` 에는 **곱수**가 들어 있다. 키 이름을
+바꾸지 않고 의미만 바꾸면 이미 값을 저장한 사용자가 50배를 맞는다. 새 키
+(`waple.audioInputVolumeSetting`)를 쓰고 옛 키는 읽지 않는 것이 안전하다.
+(도달은 0 이라 무회귀 정정이다 — §6.1: 기본 상태에서 오디오를 켜는 자산이 0건.)
+
+**(b) `Sources/WapleCore/GLSLTranslator.swift` 의 `jsonFloats`** — 문자열 기본값을
+`split(separator: " ")` 로만 쪼갠다. `"0.0, 1.0"` 은 `["0.0,", "1.0"]` 이 되고
+`Float("0.0,") == nil` 이라 `compactMap` 이 **첫 성분을 조용히 버린다** → `vec2` 가 한 성분.
+동봉 2파일 4건이 걸린다(`Simple_Audio_Bars.frag` 의 `u_BarBounds` `"0.0, 1.0"` ·
+`u_CircleAngles` `"0.0, 360.0"` · `u_AASmoothness` `"0.02, 0.02"`, 그리고 색 `vec3` 1건은
+3성분이 1성분이 된다). 설치본도 같은 4건이다. 정정:
+
+```swift
+return String(after[after.index(after: q1)..<q2])
+    .split(whereSeparator: { $0 == " " || $0 == "," || $0 == "\t" })
+    .compactMap { Float($0) }
+```
+
+`AudioResponse` 의 `audioAnnFloats` 가 이미 이 규약이다 — 둘이 갈려 있는 상태다.
+
+**(c) `Sources/WapleRender/SceneRendererResources.swift` 의 `audioBoundsAnnotationDefault`** —
+§8.5(b) 의 제안을 `declaredDefaults(effectName:shaderSource:)` 로 갱신한다. 손포팅 경로가
+셰이더 원문을 갖고 있으면 원문을 넘기고, 없으면 이름표 폴백으로 떨어진다:
+
+```swift
+let d = AudioResponse.declaredDefaults(effectName: eff.name, shaderSource: eff.vertexSource)
+```
+
+**(d) 정본** — `spec/engine/effect-fbo-audio.json` 에 `AP+0x0C`/`AP+0x10` 의 **출처**(설정 키와
+스케일)를 적을 자리가 없다. §8.5(d) 의 `uniform-feed` 공백과 함께 정본 소유자에게 넘긴다.
+
+### 9.6 이번에도 못 푼 것 — [미해결]
+
+- **`0x14022a8a0` 파티클 오디오 축약(`.peak`)의 도달이 0 이다.** 파티클 프리셋 JSON 전수에서
+  오디오 키가 **0건**이고(§9.1: `frequencymin` 은 전부 오실레이터), 그래서 `.peak` 경로가
+  어떤 자산에서 켜지는지 **코퍼스로 확인하지 못했다**. 축약식 자체는 §7.1 에서 명령 단위로 떴다.
+- **§8.3 의 9개 스크립트 버퍼를 누가 채우는지**는 이번에도 못 떴다(§8.3 의 이유 그대로).
+- **`enabled` 슬롯(`ctx+0x2b0`)의 소비처** 역시 못 찾았다.
+- **`audioinputdevice` 문자열이 스레드 쪽 `AP+0x100` 과 전역 `0x1404e5580` 중 어느 쪽으로
+  들어가는지** — `0x14006e4df` 의 캡처 초기화 호출은 `rdx = 0x1404e5580`(설정 전역)을 넘기고,
+  §1 표의 `AP+0x100` 은 스레드 내부 호출 자리에서 온 것이다. **두 호출 자리가 서로 다른 인자를
+  넘긴다**는 것까지는 확인했으나 어느 쪽이 실제로 쓰이는 경로인지는 가리지 못했다.
+  장치 선택은 이 문서의 결론에 영향이 없어 더 파지 않았다.
