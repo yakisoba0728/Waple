@@ -1,0 +1,684 @@
+# 씬 카메라 모션 복원 — shake · parallax · fade · 투영
+
+wallpaper64.exe(imagebase `0x140000000`)에서 **씬 카메라가 매 프레임 어떻게 움직이는지**를
+바이트 단위로 복원한 기록이다. 파스·기본값 쪽은 `docs/re/scene-postprocessing.md` §2·§5 가
+이미 확정해 두었으므로 여기서는 **소비(consumption)** 만 다룬다 — 파스 표를 다시 싣지 않고
+필요한 곳에서 참조한다. 겹치는 결론은 이번에 독립 재측정해 확인/정정했다.
+
+- 바이너리: `/root/.claude/uploads/.../440072bd-wallpaper64.exe`
+- 코퍼스: 동봉 `Sources/WapleRender/Resources/WEAssets/**`(씬 172) + 설치본
+  `wallpaper_engine/**`(씬 190, `assets/` + `projects/defaultprojects/`)
+- 셰이더 평문: `wallpaper_engine/assets/shaders/`, `assets/materials/`
+- 타입 정의 평문: `wallpaper_engine/ui/dist/monaco/autocomplete/lib.sceneScript.d.ts`
+
+---
+
+## 0. 요약 — 이 문서가 확정한 것
+
+| # | 결론 | 등급 |
+|---|---|---|
+| 1 | camera shake 는 **노이즈가 아니라 2주파 사인/코사인 3성분**이다. 펄린·심플렉스·퍼뮤테이션 테이블을 쓰지 않는다 | 확정 |
+| 2 | shake 위상은 `speed² × g_Time` — **속도의 제곱**이다 | 확정 |
+| 3 | shake 는 eye 와 target 에 **같은 델타**를 더한다 = 순수 평행이동, **회전 없음** | 확정 |
+| 4 | `camerashakeroughness` 는 주파수가 아니라 **벡터 크기 리매핑 지수**(`|v|^(r³)`)다. r=1 이면 무연산 | 확정 |
+| 5 | 2D(정사영) 씬은 shake 진폭이 `orthoHeight` 로 스케일되고 z 성분이 0 이다 | 확정 |
+| 6 | parallax 에 **시간(자동) 성분은 없다**. 마우스 전용이며 `mouseinfluence` 는 초점을 캔버스 중앙↔마우스 사이에서 선형 보간한다 | 확정 |
+| 7 | `cameraparallaxdelay` 는 지연 시간이 아니라 **수렴률 노브**: `α = min(1, 10·(1 − delay/3)·dt)`. `delay ≥ 3` 이면 완전 정지 | 확정 |
+| 8 | 레이어 시차 오프셋은 `(origin − focus) × amount × parallaxDepth`, **z 는 항상 0**, 그리고 **정사영 씬에서만** 적용된다 | 확정 |
+| 9 | parallax 는 레이어 이동과 별개로 **`g_ParallaxPosition` 유니폼**(renderState `+0x9c`)도 만든다 | 확정 |
+| 10 | `camerafade` 는 씬 시작 페이드인이 **아니다**. `camera.paths` 가 있을 때만 살아 있고, 각 경로 구간의 **처음 0.5초·마지막 0.5초**를 `materials/util/fade.json`(스킴 컬러 ×0.7)로 덮는다 | 확정 |
+| 11 | `camerapreview` 는 바이너리에 문자열 자체가 없다 — 런타임 미소비(에디터 전용) | 확정(재확인) |
+| 12 | 2D 씬은 뷰 행렬을 만든 뒤 **eye 를 (W/2, H/2, 2000)으로 재중심화**한다 | 확정 |
+| 13 | `orthogonalprojection.auto` 는 로드 1회가 아니라 **매 프레임** 재계산된다 | 확정 |
+| 14 | **`camerashake:true` 동봉 코퍼스 도달 0건**, 설치본 전체에서도 1건(`ricepod`, 3D) | 확정 |
+| 15 | Waple 의 `parallaxDelay` 의미론(= 지수 시상수 초)은 **틀렸다**. 기본 0.1 근처에서만 우연히 맞는다 | 확정 |
+| 16 | Waple 주석의 "camerashake 코퍼스 활성 13/168씬" 은 **반증됐다**(실측 0/168) | 확정 |
+
+---
+
+## 1. 프레임 파이프라인에서 카메라가 놓이는 자리
+
+```
+Renderer::frame(renderer, dt)                 0x14017fa70 – 0x1401816cc
+  ├ 시간 누적    [renderer+0x148](f64) += dt ; [renderer+0x140] = (f32)  0x14017fcca–0x14017fce5
+  │              432000.0 초과 시 0 으로 되감음(상수 0x14049296c)        0x14017fcde–0x14017fcf6
+  ├ Scene::updateCamera(scene, dt)             0x14017fd26 → 0x1401891a0
+  ├ Composite::buildProjection(renderer)       0x14017fd2e → 0x140183a70
+  ├ zoom 적용(정사영 씬 한정)                   0x14017fd45 – 0x14017fd5d
+  └ … 레이어 그리기 … camerafade 오버레이       0x140180c1a – 0x140180cc0
+```
+
+### 1.1 renderState 는 renderer + 0x10 이다 (이번에 확정)
+
+`scene[0xd8]`(= scene-postprocessing.md 가 "렌더 상태" 라 부르는 객체)의 정체를 고정했다.
+
+```
+0x140181b82  lea  r9, [r14 + 0x10]          ; r14 = renderer
+0x140181b8c  call 0x140186c90               ; Scene::Scene(..., r9)
+0x140181b9a  mov  qword ptr [r14], rax      ; renderer[0] = scene   (역참조 확인)
+0x140186d13  mov  qword ptr [r14 + 0xd8], rsi   ; scene[0xd8] = rsi = r9
+```
+
+→ **`renderState = renderer + 0x10`**. 이 한 줄이 아래 두 필드를 서로 검증해 준다:
+
+| renderer | renderState | 정체 | 근거 |
+|---|---|---|---|
+| `+0x140` | `+0x130` | **`g_Time`**(초) | 유니폼 ID 3 핸들러 `0x1400d8457` 가 `[renderState+0x130]` 을 그대로 복사 |
+| `+0x130` | `+0x120` | **`g_Alpha`** | 유니폼 ID 0 핸들러 `0x1400d83d7`; camerafade 가 여기에 알파를 쓴다(§4) |
+
+유니폼 점프테이블: 인덱스 바이트 `0x1400daaac`, 오프셋 테이블 `0x1400da984`, 디스패처 `0x1400d8300`.
+같은 테이블에서 이번 문서에 필요한 renderState 필드를 전부 뽑았다:
+
+| 유니폼 | ID | renderState 오프셋 | 크기 | 핸들러 VA | 등록 VA |
+|---|---:|---|---|---|---|
+| `g_Alpha` | 0 | `+0x120` | f32 | `0x1400d83d7` | — |
+| `g_Time` | 3 | `+0x130` | f32 | `0x1400d8457` | — |
+| `g_Frametime` | 4 | `+0x14c` | f32 | `0x1400d846f` | — |
+| `g_Daytime` | 5 | `+0x140` | f32 | `0x1400d8487` | — |
+| `g_PointerPositionLast` | 104 | `+0x94` | vec2 | `0x1400d9e12` | `0x1400d9df8`… |
+| **`g_PointerPosition`** | **105** | **`+0x8c`** | vec2 | `0x1400d9df8` | `0x140003ecf`(id) · `0x140003ed7`(이름) |
+| `g_PointerState` | 106 | — | — | — | `0x140003eef` · `0x140003ef7` |
+| **`g_ParallaxPosition`** | **107** | **`+0x9c`** | vec2 | `0x1400d9e90` | `0x140003f0f`(id) · `0x140003f17`(이름) |
+| `g_RenderVar0` | 108 | `+0xa8` | vec4 | `0x1400d9eaa` | `0x140003f2e` · `0x140003f35` |
+
+> **함정 기록.** 유니폼 이름 문자열은 16바이트 정렬 블록(`0x14048d100`–`0x14048db80`)에 있고,
+> 등록 초기화자(`0x140002860`)는 **ID 를 스택에 먼저 깔고 그 다음 이름을 `lea`** 한다.
+> `lea` 바로 뒤의 `mov imm` 를 ID 로 읽으면 전부 한 칸씩 밀린다.
+
+### 1.2 `Scene::updateCamera` — `0x1401891a0` – `0x140189e07`
+
+인자 `(rcx = scene, xmm1 = dt)`. 9개 `.pdata` 조각이 한 함수다(`primary()` 로 병합).
+
+```
+① 자식 오브젝트 업데이트 루프                       0x1401891f0 – 0x140189203
+② 활성 카메라 레이어 탐색(objects 역순, flags bit0)  0x140189220 – 0x14018924e
+③ camera.paths 유무 판정 (scene[0x310] vs [0x318])   0x140189251 – 0x140189271
+④ 실효 fov 선택 → scene[0x148]                      0x140189278 – 0x1401892c4   (§5.1)
+⑤ eye/target/up/zoom 결정 — 세 경로 중 하나
+     A. 카메라 레이어 있음      0x1401892d3 – 0x140189425
+     B. 레이어도 경로도 없음    0x14018942a – 0x1401894a4
+     C. camera.paths 재생       0x1401894a9 – 0x140189b07
+   각 경로 끝에서 camerashake(flags bit7) 호출        0x140189420 / 0x14018949f / 0x140189a6f
+⑥ fov 클램프 [0.1, 179.9] → scene[0x148]            0x140189b0f – 0x140189b4c   (§5.2)
+⑦ cameraparallax(flags bit8) 초점 계산               0x140189b42 – 0x140189cf3   (§3)
+⑧ 뷰 행렬 빌드 → renderState+0x38                    0x140189cf3 – 0x140189d8b
+⑨ orthogonalprojection.auto 재계산                   0x140189d8f – 0x140189d9b   (§5.4)
+⑩ 2D eye 재중심화 (W/2, H/2, 2000)                   0x140189da0 – 0x140189df0   (§5.5)
+```
+
+씬 런타임 카메라 슬롯(파스된 `camera.*` 원본과 별개):
+
+| 오프셋 | 내용 | 비고 |
+|---|---|---|
+| `scene+0xf0/0xf4/0xf8` | 런타임 **eye** | shake 가 여기에 가산 |
+| `scene+0xfc/0x100/0x104` | 런타임 **target(center)** | shake 가 같은 값 가산 |
+| `scene+0x108/0x10c/0x110` | 런타임 **up** | shake 무관 → **롤 없음** |
+| `scene+0x114` | 런타임 **zoom**(카메라 레이어/경로 유래) | `0x14017fd5d` 에서 `general.zoom` 과 곱해짐 |
+| `scene+0xe4 / 0xe8 / 0xec` | 경로 인덱스 / 트랜스폼 인덱스 / 경로 경과시간 | §4 |
+| `scene+0x340/0x344` | **시차 초점**(정사영 픽셀 좌표, 스무딩 상태) | §3 |
+
+경로 B(레이어도 경로도 없음)가 `scene+0x118/0x124/0x130` (= 파스된 `camera.eye/center/up`) 을
+`scene+0xf0/0xfc/0x108` 로 그대로 복사하는 것이 위 세 슬롯의 정의를 확정한다
+(`0x14018942e`–`0x14018948a`). 같은 자리에서 `scene+0x13c → scene+0x114`(`0x140189484`–`0x14018948a`)도
+복사되는데, `0x13c` 는 생성자 기본 1.0(`0x140186d51`)이고 **JSON 이 이 슬롯을 쓰는 경로를 못 찾았다 — [미해결]**
+(`general.zoom` 은 별개 슬롯 `0x154`, 생성자 기본 1.0 @`0x140186d93`). `scene+0x114` 자체의 생성자
+기본값도 1.0 이다(`0x140186d46`).
+
+---
+
+## 2. camera shake — `0x140199580` – `0x14019977c`
+
+호출: `shake(rcx = scene, rdx = &scene[0xf0] /*eye*/, r8 = &scene[0xfc] /*target*/)`.
+게이트는 세 곳 모두 `test r?b, r?b` + `jns` 로 **flags 바이트의 bit7 = `camerashake`** 를 본다
+(`0x14018940a` · `0x140189490` · `0x140189a5d`).
+
+### 2.1 수식 전문
+
+```
+T = renderState.g_Time                                 ; [scene+0xd8] + 0x130   0x1401995de·0x140199600
+s = scene[0x328]  camerashakespeed                     ; 0x1401995d2
+a = scene[0x32c]  camerashakeamplitude                 ; 0x1401995e5
+r = scene[0x330]  camerashakeroughness                 ; 0x14019959e
+
+k   = powf(r, 3.0)                                     ; 0x1401995cd   상수 3.0 @0x140492830
+phi = s * s * T                                        ; 0x1401995f7 (s·s) → 0x140199600 (×T)
+
+v.x = cosf(phi)                                        ; 0x14019960b   cosf = 0x14041a2e0
+v.y = sinf(phi * 1.3329999446868896)                   ; 0x14019961e   상수 @0x140492728, sinf = 0x14041a9c0
+v.z = sinf(phi)                                        ; 0x14019962a
+
+if (scene.flags[0xe0] & 8)          /* 정사영 = 2D */   ; 0x14019962f
+        v.z   = 0                                      ; 0x140199644
+        scale = scene[0x358] * 0.1 * (a * 0.1)         ; 0x14019963b–0x14019964c  = a·H/100
+else    /* 원근 = 3D */
+        scale = a * 0.1                                ; 0x1401995fb / 0x140199653
+
+/* 거칠기 리매핑 — k 가 1 도 0 도 아닐 때만 */
+if (k > 0.001 && k != 1.0) {                           ; 0x140199657 (@0x140492608) · 0x14019966e (@0x140492704)
+        L = sqrtf(v.x² + v.y² + v.z²)                  ; 0x140199676–0x1401996b0  sqrtf = 0x14041ad10
+        m = powf(L, k)                                 ; 0x1401996bc
+        v = (v / L) * m                                ; 0x1401996c1–0x1401996ed
+}
+
+delta = v * scale                                      ; 0x1401996fa · 0x140199719 · 0x14019971e
+eye    += delta                                        ; 0x140199712–0x140199742   (rdx)
+target += delta                                        ; 0x140199747–0x14019976a   (r8)
+```
+
+성분 배치가 미묘하다 — **x 는 코사인, y 는 1.333배 주파수 사인, z 는 사인**이다:
+`[rdi+0]←v.x`, `[rdi+4]←v.y`, `[rdi+8]←v.z`(`0x140199731` / `0x14019973d` / `0x140199742`).
+
+### 2.2 CRT 함수 동정
+
+| VA | 정체 | 근거 |
+|---|---|---|
+| `0x14041a2e0` | `cosf`(코어) | 소각 근사가 `1 − 0.5x²` — 상수 `0x140471bb0`=1.0, `0x140471bc0`=0.5 (`0x14041a340`–`0x14041a348`) |
+| `0x14041a9c0` | `sinf`(코어) | 소각 근사가 `x − x³/6` — 상수 `0x140471d40`=0.16666666666666666 (`0x14041aa20`–`0x14041aa28`) |
+| `0x14041e350` | `powf(base=xmm0, exp=xmm1)` | 같은 함수가 `0x140182d85`–`0x140182dc6` 에서 색상 3성분에 `pow(c, 2.0)`(감마)로 쓰인다 |
+| `0x14041ad10` | `sqrtf` | 도메인 에러 경로가 문자열 `"sqrtf"`(`0x140471e00`)를 `_matherr` 에 넘긴다 |
+
+### 2.3 성질
+
+- **회전 없다.** eye 와 target 에 *같은* 벡터를 더하므로 시선 방향이 보존된다. `up` 은 건드리지 않아
+  롤도 없다. 카메라는 순수하게 평행이동한다.
+- **위상은 속도의 제곱.** `speed=3`(에디터 기본) → `phi = 9·t`. `speed` 를 2배로 하면 주파수는 4배다.
+- **roughness 기본값 1 은 완전 무연산.** `k = 1³ = 1` → `ucomiss ... je` 로 리매핑 블록을 건너뛴다.
+  즉 저작 코퍼스 전건(§6)에서 이 키는 아무 효과가 없다.
+- **roughness 는 주파수가 아니라 크기 곡선.** `|v'| = |v|^(r³)`. `r<1` 이면 지수가 작아져
+  `|v|` 가 1 쪽으로 밀리고(진폭이 고르게 커짐), `r>1` 이면 대비가 과장된다.
+  `r³ ≤ 0.001` 이면 리매핑을 통째로 건너뛴다 — `r ≤ 0.1` 이 그 경계다.
+- **2D 진폭 단위는 픽셀.** 2D 스케일이 `a·H/100` 이라 `orthogonalprojection.height` 에 비례한다.
+  기본 `a=0.5`, `H=256` → 피크 1.28 정사영 단위. 3D 스케일은 `a·0.1` 월드 단위다.
+- **shake 는 시차 초점에도 새어 들어간다.** §3 의 초점 계산이 `scene[0xf0]`(= shake 가 이미 더해진 eye)
+  을 읽으므로, 2D 에서 shake 와 parallax 를 동시에 켜면 `g_ParallaxPosition` 도 함께 떤다
+  (`0x140189c18` / `0x140189c24`).
+
+### 2.4 배제한 가설 — 심플렉스 노이즈
+
+리포에 `Sources/WapleCore/SimplexNoise.swift` 가 있고 퍼뮤테이션 테이블을 `0x140484f40`(256B)·
+`0x1404833a0`(512B) 에서 덤프해 왔기에, shake 가 같은 테이블을 쓰는지 먼저 확인했다. **안 쓴다.**
+
+- `0x140484f40` 의 코드 참조는 4곳뿐이다: `0x140198a98`(fn `0x140198910`), `0x14027b09c`,
+  `0x14027b2d6`, `0x14027b4db`. shake 함수(`0x140199580`)는 없다.
+- `0x140198910` 은 2D 심플렉스가 맞다 — F2 = 0.3660253882408142(`0x1404926a4`),
+  G2 = 0.21132487058639526(`0x140492680`), 격자 스큐/언스큐(`0x1401989b3`–`0x140198a1f`).
+  입력에 `g_Time`(`[rax+0x130]`, `0x140198994`)을 쓰고, 진입 게이트가 `[rcx+0x90] & 0x10000` 이다.
+  `rcx` 는 라이트 객체로 보인다 — 바로 앞 함수 `0x140196ce0` 이 `light+0x320` 을 다루는
+  라이트 업데이터다(`volumetric-light.md` §의 `0x14019871d`). **등급: 유력**(호출자가 전부 vtable
+  간접이라 소유자를 바이트로 못 박지 못했다). 어느 쪽이든 **카메라 shake 와 무관**한 것은 확정이다.
+- 즉 **Waple 의 `SimplexNoise` 를 카메라 shake 에 재사용하면 WE 와 달라진다.**
+
+---
+
+## 3. camera parallax
+
+parallax 는 **두 개의 독립 출력**을 만든다. 하나는 셰이더 유니폼, 하나는 레이어 트랜스폼이다.
+둘의 게이트 조건이 다르다는 점이 핵심이다.
+
+### 3.1 초점(focus) 계산 — `0x140189b42` – `0x140189cf3`
+
+게이트: `test dword ptr [rbx+0xe0], 0x100`(flags **bit8 = `cameraparallax`**) @ `0x140189b42`.
+꺼져 있으면 블록 전체를 건너뛴다 → `scene+0x340/0x344` 도 `g_ParallaxPosition` 도 갱신되지 않는다.
+
+```
+rs = scene[0xd8]                                        ; renderState
+f  = rs[0x118]                                          ; renderState 플래그
+
+infl = (f & 0x200200) ? 0.0 : scene[0x33c]              ; 0x140189b67–0x140189b7a
+                                                        ;   cameraparallaxmouseinfluence
+mx = clamp01(rs[0x8c])                                  ; 0x140189b8d/0x140189b9d  g_PointerPosition.x
+my = clamp01(1.0 − rs[0x90])                            ; 0x140189b95/0x140189ba8  (Y 반전)
+if (f & 0x800) mx = 1.0 − mx                            ; 0x140189bac–0x140189bb6  (포인터 X 미러)
+
+W = scene[0x354] ; H = scene[0x358]                     ; 정사영 폭/높이
+focus.x = W*0.5*(1−infl) + W*mx*infl + scene[0xf0]      ; 0x140189bda–0x140189c18
+focus.y = H*0.5*(1−infl) + H*my*infl + scene[0xf4]      ; 0x140189bde–0x140189c24
+
+/* 지연 스무딩 */
+d = scene[0x338]                                        ; cameraparallaxdelay   0x140189c0d
+if (d > 0) {                                            ; 0x140189c15 / 0x140189c2c
+    α = (1.0 − d/3.0) * 10.0 * dt                       ; 0x140189c2e–0x140189c43  (3.0, 10.0 @0x140492868)
+    if (α > 1.0) α = 1.0                                ; 0x140189c47–0x140189c4d
+    focus = prev + (focus − prev) * α                   ; 0x140189c51–0x140189c75
+}                                                        /* d ≤ 0 이면 즉시 스냅 */
+scene[0x340] = focus.x ; scene[0x344] = focus.y          ; 0x140189c79 / 0x140189c84
+
+/* 유니폼 출력 */
+rs[0x9c] = clamp01(focus.x / W)                          ; 0x140189ca1–0x140189cbe   g_ParallaxPosition.x
+rs[0xa0] = clamp01(focus.y / H)                          ; 0x140189c90–0x140189cc6   g_ParallaxPosition.y
+if (rs[0x118] & 0x800) rs[0x9c] = 1.0 − rs[0x9c]         ; 0x140189cd5–0x140189cea
+```
+
+**읽어야 할 것들**
+
+1. **자동(시간) 성분이 없다.** 초점의 두 항은 "캔버스 중앙" 과 "마우스 위치" 뿐이다.
+   `mouseinfluence` 는 둘 사이의 선형 보간 계수이지 게인이 아니다.
+   `infl = 0` → 초점은 캔버스 중앙에 고정되고 **시차는 시간에 따라 전혀 움직이지 않는다.**
+2. **`delay` 는 지연이 아니라 수렴률**이다. `rate = 10·(1 − delay/3)` [1/s], `α = min(1, rate·dt)`.
+   실효 시상수 `τ = 1/rate = 0.3/(3 − delay)` 초.
+
+   | delay | rate [1/s] | τ [s] | 비고 |
+   |---:|---:|---:|---|
+   | 0 (이하) | — | 0 | 즉시 스냅(스무딩 분기 자체를 건너뜀) |
+   | 0.1 (에디터 기본) | 9.667 | **0.1034** | |
+   | 1.0 | 6.667 | 0.150 | `ricepod` 저작값 |
+   | 2.0 | 3.333 | 0.300 | |
+   | 3.0 | 0.0 | ∞ | **완전 정지** — 초점이 영원히 초기값 |
+   | > 3.0 | 음수 | — | α<0 → 목표에서 **멀어진다**(발산). 엔진이 방어하지 않는다 |
+
+   즉 `delay` 는 0..3 구간 노브이며, 0.1 → 0.1034 s 라 "delay 초" 해석이 기본값 근처에서만
+   3.4% 오차로 우연히 맞는다. 그 밖에서는 전부 틀린다(§7 W-3).
+3. `α` 가 `dt` 에 **선형**이다(지수 `1−exp(−dt/τ)` 가 아니다). 프레임률이 낮으면 `α` 가 1 로 클램프되어
+   스냅한다.
+4. 초점은 **정사영 픽셀 좌표**([0,W]×[0,H])다. 2D 씬의 `camera.eye` 는 코퍼스 전건 `(0,0,0)` 이므로
+   무저작 초점은 정확히 캔버스 중앙 `(W/2, H/2)` 이고 `g_ParallaxPosition = (0.5, 0.5)` 다.
+   `depthparallax.vert:44` 의 `g_ParallaxPosition * 2 - 1` 이 이 정규화를 그대로 확증한다.
+5. `rs[0x118]` 의 bit9 / bit21 중 하나라도 서면 마우스 영향이 **0 으로 강제**된다(초점=중앙 고정).
+   두 비트의 이름은 **[미해결]** — 다른 참조가 `0x140176431`(bit21) 한 곳뿐이라 의미를 못 박지 못했다.
+   bit11 은 포인터 X 미러다(유력 — `0x14018e08c` 이 같은 비트로 `rs[0x8c]` 를 뒤집는다).
+
+### 3.2 레이어 오프셋 — `0x140189e10` 안 `0x14018a0a9` – `0x14018a11b`
+
+게이트가 **둘**이다(`0x140189f17` – `0x140189f2c`):
+
+```
+ecx = scene[0xe0]
+r13b = ((ecx >> 8) & 1)   /* cameraparallax */
+    && ((ecx >> 3) & 1)   /* orthogonalprojection 활성 = 2D */
+```
+
+**즉 3D(원근) 씬에서는 레이어 시차 오프셋이 전혀 적용되지 않는다.** 3D 에서 `cameraparallax` 를
+켜면 `g_ParallaxPosition` 유니폼만 갱신된다.
+
+```
+/* rdx = 레이어 오브젝트(vtable+0x60 이 1 또는 4 인 것만), rbx = scene */
+dx = rdx[0x128] − scene[0x340]      /* origin.x − focus.x */   ; 0x14018a0b3 / 0x14018a0c3
+dy = rdx[0x12c] − scene[0x344]      /* origin.y − focus.y */   ; 0x14018a0bb / 0x14018a0d3
+A  = scene[0x334]                   /* cameraparallaxamount */ ; 0x14018a0cb
+
+off.x = A * dx * rdx[0x170]         /* × parallaxDepth.x */    ; 0x14018a0de / 0x14018a0ff
+off.y = A * dy * rdx[0x174]         /* × parallaxDepth.y */    ; 0x14018a0e5 / 0x14018a10d
+off.z = A * 0.0 = 0                                            ; 0x14018a0ef  (xmm6 는 0x140189f3b 에서 0)
+```
+
+`off` 벡터(`[rsp+0x40..0x48]`)는 레이어 드로우 호출의 인자로 넘어간다
+(`0x14018a235` → `0x14019dbb0`, `0x14018a2a3` → 오브젝트 vtable `+0x88`).
+게이트가 꺼지면 `[rsp+0x40..0x48]` 는 `0x14018a086`/`0x14018a093` 에서 깐 0 그대로다.
+
+**오브젝트 오프셋 근거** — 오브젝트 프로퍼티 디스크립터 테이블 `0x1401e0530` – `0x1401e1389`
+(씬 `general` 과 같은 등록 헬퍼 `0x14000f880`, `+0x30`=타입 · `+0x34`=오프셋):
+
+| 이름 | 오프셋 | 타입 | 이름 세팅 VA | 문자열 VA |
+|---|---|---:|---|---|
+| `origin` | `0x128` | 2 (vec3) | `0x1401e05d2` | `0x14048f4dc` |
+| `scale` | `0x134` | 2 | `0x1401e06a3` | — |
+| `angles` | `0x140` | 2 | `0x1401e0759` | `0x14048fc5c` |
+| **`parallaxDepth`** | **`0x170`** | **1 (vec2)** | `0x1401e082f` | `0x1404902c8` |
+| `sortorder` | `0x124` | int | `0x1401e08f9` | `0x1404902d8` |
+| `name` | `0x1d8` | 5 (string) | `0x1401e11d0` | — |
+
+`lib.sceneScript.d.ts:2037-2039` 이 `ILayer.parallaxDepth: Vec2` 를
+"Controls parallax strength along x and y axes individually" 로 기술해 타입/의미가 맞물린다.
+
+**기하학적 의미.** `newOrigin = focus + (origin − focus)·(1 + A·depth)` — 즉 초점을 중심으로 한
+**스케일 아웃**이다. `infl=0` 이면 초점이 캔버스 중앙에 고정되므로 시차가 아니라 **정적 확대**가 된다
+(A=0.5, depth=1 → 중앙 기준 1.5배). 마우스 영향이 있어야 비로소 "따라오는" 시차가 된다.
+
+`off.z` 가 항상 0 이므로 **레이어 깊이(z) 방향 이동은 없다** — 시차는 전적으로 화면 평면 안에서 일어난다.
+
+### 3.3 `g_ParallaxPosition` 소비처(동봉 평문)
+
+| 셰이더 | 사용 |
+|---|---|
+| `assets/effects/depthparallax/shaders/effects/depthparallax.vert:44-46` | `prlxInput = g_ParallaxPosition*2−1` → 투영축으로 회전 → `v_ParallaxOffset` |
+| `assets/effects/depthparallax/preview/shaders/effects/depthparallax.frag:67,71,75` | 시차 매핑 뷰 방향 |
+
+동봉 셰이더 전량에서 이 두 파일이 전부다.
+
+---
+
+## 4. camerafade — 씬 시작 페이드가 **아니다**
+
+`camerafade` 는 flags bit2 다. 소비처는 딱 두 곳이고 둘 다 **`camera.paths` 존재**를 추가 조건으로 건다.
+
+### 4.1 머티리얼 로드 — `0x140181bae` – `0x140181bda`
+
+```
+rcx = renderer[0]                                  ; scene
+if (scene[0xe0] & 4) == 0            → 스킵         ; 0x140181bae
+if (scene[0x310] == scene[0x318])    → 스킵         ; 0x140181bb7–0x140181bc5  (paths 비어 있음)
+renderer[0x3180] = LoadMaterial("materials/util/fade.json")  ; 0x140181bce–0x140181bda
+                                                    ; 문자열 @0x14048e308
+```
+
+즉 **경로가 없는 씬은 fade 머티리얼을 아예 만들지 않는다.** `camerafade:true` 만으로는 아무 일도 없다.
+
+### 4.2 알파 곡선 — `0x140180c1a` – `0x140180cc0`
+
+```
+t = scene[0xec]                                    ; 현재 경로 구간의 경과 시간
+T = paths[scene[0xe4]].duration                    ; path 스트라이드 0x20, +0x18 = duration
+                                                   ; 0x140180c48 (shl rdx,5) / 0x140180c4c
+rem = T − t                                        ; 0x140180c56
+alpha = 0                                          ; 0x140180c0e (xorps xmm3)
+if (rem < 0.5)        alpha = 1 − 2*rem            ; 0x140180c5e→0x140180c81–0x140180c8c  (페이드 아웃)
+else if (t < 0.5)     alpha = 1 − 2*t              ; 0x140180c6c→0x140180c77–0x140180c8c  (페이드 인)
+if (alpha > 0) {                                   ; 0x140180c90 (xmm13 = 0.0 @0x140180166)
+    renderState[0x120] = alpha        /* g_Alpha */; 0x140180ca2
+    bind(renderer[0x3180]); drawFullscreen();      ; 0x140180caa / 0x140180cb6 / 0x140180cc0
+}
+```
+
+상수 0.5 는 `0x1404926c0`, 1.0 은 `0x14018032a`(xmm14). **양쪽 0.5 초, 선형.**
+
+### 4.3 무엇으로 페이드되는가 — 검정이 아니다
+
+```json
+// assets/materials/util/fade.json
+{"passes":[{"shader":"fade","cullmode":"nocull","depthtest":"disabled",
+            "depthwrite":"disabled","blending":"translucent",
+            "usershadervalues":{"schemecolor":"tint"}}]}
+```
+```glsl
+// assets/shaders/fade.frag
+uniform lowp vec3 color; // {"material":"tint","default":"0.315, 0.135, 0.1125"}
+gl_FragColor = vec4(color * 0.7, g_Alpha);
+```
+
+`tint` 가 프로젝트 **스킴 컬러**에 바인딩된다. 페이드 색 = `schemecolor × 0.7`,
+머티리얼 기본값은 `(0.315, 0.135, 0.1125)` — 어두운 주황이다. **검정 페이드가 아니다.**
+
+### 4.4 씬 시작 페이드인은?
+
+`0x1401891a0`/`0x14017fa70`/`0x140181af0` 어디에도 "씬 로드 후 N 초" 형태의 전역 페이드가 없다.
+`camerafade` 는 경로 구간 경계 전용이다. **씬 시작 페이드인은 없다**(경로가 있는 씬은 경로
+구간 0 의 페이드인이 결과적으로 시작 페이드처럼 보인다 — `t=0` 에서 alpha=1).
+플레이리스트 전환의 페이드는 별개 축이다(`docs/re/playlist-transition.md`).
+
+### 4.5 경로 데이터 레이아웃(부수 확정)
+
+`camera.paths` → `scripts/camera_XX.json` → `{"paths":[{"duration":…,"transforms":[{"timestamp","eye","center","up","zoom"}]}]}`
+
+| 구조 | 스트라이드 | 필드 |
+|---|---:|---|
+| path | `0x20` | `+0x00/+0x08` transforms begin/end, `+0x18` **duration** |
+| transform | `0x2c` | `+0x00` timestamp, `+0x04` eye(3), `+0x10` center(3), `+0x1c` up(3), `+0x28` **zoom** |
+
+근거: `imul rdx, rax, 0x2c`(`0x1401894bd`), `shl rsi, 5`(`0x1401894c5`),
+`[rdx+rcx+0x28]` → `scene[0x114]`(`0x140189a3f`/`0x140189a4e`), `[rdx+r8+0x18]`(`0x140180c4c`).
+경로 끝에서 다음 경로로 넘어가고 마지막이면 0 으로 되감는다(`0x140189acd`–`0x140189b00`).
+
+---
+
+## 5. 투영
+
+여기는 `scene-postprocessing.md` §5 가 이미 확정한 영역이다. **재측정으로 전건 확인**했고,
+그 문서가 다루지 않은 세 가지(카메라 레이어 fov 오버라이드 · auto 재계산 주기 · 2D eye 재중심화)를 더한다.
+
+### 5.1 실효 fov 선택 — `0x140189278` – `0x1401892c4` (재확인)
+
+```
+eax = 0x144 (perspectiveoverridefov) ; edx = 0x140 (fov)
+test r9b, 8            ; flags bit3 = 정사영
+cmove eax, edx         ; bit3==0(3D) 이면 fov, bit3==1(2D) 이면 override
+scene[0x148] = scene[eax]
+```
+**2D 는 `perspectiveoverridefov`(기본 95°), 3D 는 `fov`(기본 50°).** 확인.
+
+**추가 — 카메라 레이어가 있으면 fov 를 덮는다.** `0x1401893bf` – `0x140189402`:
+`test r8b, 8` 로 정사영이 아닐 때만, 카메라 레이어의 애니메이션 슬롯
+(`[camObj+0x2c0]` 배열의 `[idx]+0x33c`) 또는 정적값 `[camObj+0x2d8]` 을 `scene[0x148]` 에 쓴다.
+같은 자리에서 `[…]+0x338` / `[camObj+0x2dc]` → `scene[0x114]`(zoom)은 **정사영 여부와 무관하게** 덮는다.
+
+### 5.2 클램프 — `0x140189b1a` – `0x140189b4c` (재확인)
+
+`fov = clamp(fov, 0.1, 179.9)` — 상수 `0x140492654`=0.1, `0x140492900`=179.9. 확인.
+
+### 5.3 투영 행렬 — `0x140183a70` – `0x140184016` (재확인)
+
+분기 `test byte ptr [rdi+0xe0], 8` @ `0x140183aa2`.
+
+- **원근(bit3=0)** — `0x140183edf` –
+  - `aspect = renderer[0x84] / renderer[0x88]` (렌더타깃 폭/높이, **f32**) — `0x140183ee9`
+    (진입 `rcx` 는 renderState 가 아니라 **renderer** 다 — `0x14017fd2b` 이 `mov rcx, rsi` 로 넘긴다.
+    같은 함수의 `[rcx+0x1528]`(디바이스)도 renderState 의 `+0x1518` 과 `0x10` 차이로 정합한다.
+    정사영 파스가 정수로 쓰는 `renderState[0x84]/[0x88]` 과 **다른 필드**이니 혼동하지 말 것)
+  - `near = scene[0x14c]`, `far = scene[0x150]` — `0x140183f20` / `0x140183f28`
+  - `fovRad = scene[0x148] * 0.01745329238474369` — `0x140183f38`, 상수 `0x140492628`
+    → **fov 단위는 도(degree)**. 확정.
+  - 행렬 빌더 = 디바이스 vtable `+0x10`, 인자 순서 `(matrix, fovRad, aspect, near, far)` — `0x140183f50`
+  - **세로 화각인가**: 인자 배치가 표준 `PerspectiveFov(fovY, aspect, near, far)` 와 일치하고
+    aspect 가 별도 인자로 들어간다는 점에서 **세로(유력)**. 빌더가 디바이스 vtable 뒤에 있어
+    바이트로 못 박지는 못했다 — **[미해결]**. (Waple 은 이미 세로로 구현돼 있고 코퍼스에 반례가 없다.)
+  - `0x140183f11` 의 `je` 는 진입 분기의 결과가 이미 정해져 있어 ±2000 팔이 **도달 불가**다
+    (ortho 쪽의 대칭 사고와 같은 모양 — `scene-postprocessing.md` §5.3 보강 항목 참조).
+- **정사영(bit3=1)** — `0x140183ab8` – `0x140183eda`: near/far **±2000 고정**
+  (`0x140183df9`/`0x140183e01`, 상수 `0x14049294c`=2000.0 · `0x140492a1c`=−2000.0),
+  `nearz`/`farz` 를 읽는 팔은 도달 불가. `fovRad` 는 `[camera+0x120]` 에 그대로 실린다(`0x140183dd9`).
+
+> **[미해결]** 원근 경로가 행렬 빌드 직후 `[camera+0x120] = 2·atanf(1/(m11·2000))` 을 계산한다
+> (`0x140183f53`–`0x140183f71`, `xmm6`=2000.0 @`0x140183f09`). 정사영 경로가 같은 슬롯에
+> `fovRad` 를 넣는 것과 어긋나며 소비처를 못 찾았다. 카메라 모션과 직접 관련이 없어 미해결로 남긴다.
+
+### 5.4 `orthogonalprojection.auto` 는 매 프레임 돈다 (신규)
+
+```
+0x140189d8f  test byte ptr [rbx+0xe0], 0x10      ; bit4 = auto
+0x140189d9b  call 0x14018b2c0                    ; Scene::autoSizeOrtho
+```
+`Scene::updateCamera` 꼬리에 있으므로 **로드 1회가 아니라 프레임마다** 첫 `type==1` 오브젝트의
+`size` 로 정사영 크기와 오브젝트 센터링을 다시 잡는다. 오브젝트 `size` 가 애니메이션되면 따라 움직인다.
+
+### 5.5 2D eye 재중심화 (신규) — `0x140189da0` – `0x140189df0`
+
+```
+if (scene[0xe0] & 8) {                       /* 정사영 */
+    rs[0x68] += (float)rs[0x84] * 0.5;       /* eye.x += W/2 */    ; 0x140189db0–0x140189dc4
+    rs[0x6c] += (float)rs[0x88] * 0.5;       /* eye.y += H/2 */    ; 0x140189dd0–0x140189de4
+    rs[0x70]  = 2000.0;                      /* eye.z */           ; 0x140189df0 (imm 0x44fa0000)
+}
+```
+뷰 행렬(`renderState+0x38`)은 **재중심화 전** eye 로 이미 만들어졌다(`0x140189d0b`–`0x140189d8b`,
+룩앳 빌더 `0x14019d920`). 즉 이 보정은 **셰이더가 보는 eye 위치**(정사영 볼륨 `[0,W]×[0,H]` 기준
+캔버스 중앙, z=+2000 = far 평면)만 고친다. 정사영 near/far 가 ±2000 인 것과 정확히 맞물린다.
+
+### 5.6 zoom 적용 조건 (부수)
+
+```
+0x14017fd3f  eax = scene[0xe0]; shr eax,3; test al,1     ; 정사영일 때만
+0x14017fd50  xmm0 = scene[0x154]            /* general.zoom */
+0x14017fd5d  xmm0 *= scene[0x114]           /* 카메라 레이어/경로 zoom */
+```
+**`zoom` 은 2D 전용**이고 두 채널이 곱해진다. 3D 씬에서는 무시된다.
+(`lib.sceneScript.d.ts:1957-1962` 의 `ICamera.fov`="For 3D scenes only" / `zoom`="For 2D scenes only" 와 일치.)
+
+---
+
+## 6. 동봉 도달 실측
+
+`general` 블록을 가진 모든 JSON(파일명 `scene.json` 에 한정하지 않음 — `ricepod.json`,
+`fantasticcar.json` 이 그 밖에 있다)을 세었다.
+
+### 6.1 키 도달·값 분포
+
+| 키 | 동봉(172) | 설치본(190) | 저작값 분포(설치본) |
+|---|---:|---:|---|
+| `camerashake` | 168 | 175 | `false` 174 · **`true` 1** |
+| `camerashakespeed` | 168 | 175 | `3.0` 96 · `3` 78 · `5` 1 |
+| `camerashakeamplitude` | 168 | 175 | `0.5` 173 · `0.01` 2 |
+| `camerashakeroughness` | 168 | 175 | `1.0` 96 · `1` 77 · `0.1` 2 |
+| `cameraparallax` | 168 | 175 | `false` 174 · **`true` 1** |
+| `cameraparallaxamount` | 168 | 175 | `0.5` 174 · `1` 1 |
+| `cameraparallaxdelay` | 168 | 175 | `0.1`/`0.10000000149011612` 174 · `1` 1 |
+| `cameraparallaxmouseinfluence` | 168 | 175 | `0` 173 · `1.0` 1 · `0.5` 1 |
+| `camerapreview` | 168 | 175 | `true` 전건 |
+| `camerafade` | 94 | 102 | `true` 99 · `false` 3 |
+| `fov` | 94 | 98 | `50.0` 97 · `100` 1 |
+| `perspectiveoverridefov` | 77 | 77 | `95.0` 71 · `90.760002` 6 |
+| `nearz` | 92 | 96 | `0.01` 계열 92 · `0.1` 계열 4 |
+| `farz` | 92 | 96 | `10000.0` 전건 |
+| `orthogonalprojection` | 171 | 183 | 동봉 `{256,256}`166 · `{auto:true}`2 · `{600,600}`1 · `{640,640}`1 · `null`1 <br> 설치본 `{256,256}`166 · `{1920,1080}`4 · `null`3 · `{3840,2160}`2 · `{auto:true}`2 · 기타 초광폭 4 |
+| `zoom` | 89 | 92 | `1.0` 전건 |
+| 오브젝트 `parallaxDepth` | 99/203 오브젝트 (83씬) | 131/294 (88씬) | `1 1` 118 · `0 0` 5 |
+
+### 6.2 실제로 켜진 씬 — 단 둘
+
+| 씬 | 기능 | 값 | 투영 | 동봉? |
+|---|---|---|---|---|
+| `assets/effects/depthparallax/preview/scene.json` | `cameraparallax:true` | amount 0.5 · delay 0.1 · **mouseinfluence 1.0** | 정사영 600×600 | **동봉 ✓** |
+| `projects/defaultprojects/ricepod/ricepod.json` | `camerashake:true` | speed 5 · amplitude 0.01 · roughness 0.1 | `null` = **원근(3D)** | 동봉 ✗ |
+
+**`camerashake:true` 는 동봉 코퍼스에 0건**이다. 동봉만 쓰는 회귀 스위트로는 shake 경로를
+검증할 수 없다.
+
+`depthparallax` 프리뷰의 유일한 레이어는 `parallaxDepth: "0.00000 0.00000"` 이다 —
+**레이어 이동량이 0**이고, 시차의 목적이 전적으로 `g_ParallaxPosition` 유니폼 공급이다.
+§3.2 의 "레이어 오프셋" 채널은 동봉 코퍼스에서 **실제로 켜지는 사례가 0건**이다.
+
+### 6.3 `ricepod` shake 를 수식에 대입
+
+```
+speed 5 → phi = 25·t
+roughness 0.1 → k = powf(0.1f,3.0f)
+```
+`0.1f³ = 1.0000000447e-3`, 비교 상수 `0x140492608` = `1.0000000475e-3`. 두 값의 차(2.8e-12)가
+이 크기의 float ulp(≈1.16e-10)보다 작아 **같은 float 로 반올림**된다 → `comiss` 가 같음 →
+`jbe` 성립 → **거칠기 리매핑을 건너뛴다**. 3D 이므로 `scale = 0.01 × 0.1 = 0.001` 월드 단위.
+
+```
+delta(t) = 0.001 · ( cos(25t), sin(33.325t), sin(25t) )
+```
+`ricepod` 는 `camera.paths` 도 있으므로 경로 재생 분기(`0x140189a6f`)에서 shake 가 붙는다.
+
+### 6.4 `camera.paths` / `camerafade` 도달
+
+| 씬 | `camerafade` 실효 |
+|---|---|
+| `projects/defaultprojects/arsenal/scene.json` | 키 없음 → **기본 true** |
+| `projects/defaultprojects/demon_core/scene.json` | `false` |
+| `projects/defaultprojects/dna_fragment/scene.json` | `false` |
+| `projects/defaultprojects/fantasticcar/fantasticcar.json` | 키 없음 → **기본 true** |
+| `projects/defaultprojects/neon_sunset/scene.json` | `false` |
+| `projects/defaultprojects/ricepod/ricepod.json` | `true` |
+
+**동봉 코퍼스에는 `camera.paths` 씬이 0건**이다 → 동봉만 보면 `camerafade` 는 저작 94건 전부가
+**도달 불가**(경로가 없어 머티리얼조차 로드되지 않는다). 설치본 6씬 중 3씬에서만 실효한다.
+
+### 6.5 `camerapreview` — 런타임 미소비 재확인
+
+`wallpaper64.exe` 전체를 ASCII·UTF-16LE 양쪽으로 훑어 `camerapreview` 문자열 **0건**.
+같은 스캔에서 `camerashake`(`0x14048e900` 외 3), `cameraparallax`(`0x140488ae0`,
+`0x140489100` 외), `camerafade`(`0x14048e8c8`), `perspectiveoverridefov`(`0x14048e8e8`),
+`nearz`(`0x14048e8dc`), `farz`(`0x14048e8d4`), `orthogonalprojection`(`0x1404890c0`) 은 전부 존재한다.
+15바이트 이하 SSO 리터럴 가능성도 배제했다(`parallax` 바이트열의 코드 내 임베드 0건).
+→ **에디터 전용 키. 168씬 전건 저작이지만 플레이어는 읽지 않는다.**
+
+---
+
+## 7. Waple 갭
+
+`Sources/WapleCore/SceneDocument.swift`, `Sources/WapleRender/SceneRenderer.swift`,
+`Sources/WapleRender/SceneRendererFrameEncoder.swift`, `Sources/WapleRender/SceneRenderer3D.swift`,
+`Sources/WapleRender/ParallaxController.swift` 대조.
+
+| # | 항목 | WE 실측 | Waple 현행 | 등급 | 착지 지점 |
+|---|---|---|---|---|---|
+| **C-1** | shake 수식 | §2.1 (`cos φ`, `sin 1.333φ`, `sin φ`; `φ = s²·t`) | 2주파 사인 근사 + `roughness` 를 **고주파 오버톤 혼합비**로 해석, `φ = s·t` (`SceneRenderer.swift:920-937`) | **확정 · 미해소** | `SceneRenderer.cameraShakeOffset` 을 §2.1 로 축자 대체. 호출부·바인딩 불변(주석이 이미 그 계약을 적어 두었다) |
+| **C-2** | shake `roughness` 의미 | `|v|^(r³)` 크기 리매핑. **r=1 = 무연산** | 오버톤 혼합비(`norm = 1/(1+rough)`) — r=1 이 큰 변화를 준다 | **확정 · 미해소** | 위와 동일 |
+| **C-3** | shake 진폭 단위 | 2D `a·H/100` 정사영 픽셀 · 3D `a·0.1` 월드 | `amplitude × shakeNDCScale(0.03)` NDC 고정 (`SceneRenderer.swift:918`) | **확정 · 미해소** | 2D 는 `a*projectionHeight/100` 을 픽셀→NDC 로 환산, 3D 는 `a*0.1` 을 월드 오프셋으로 |
+| **C-4** | shake 성분 수 | 3성분(2D 는 z=0) | 2성분(x,y) | 확정 · 2D 무영향 | 3D 경로(`SceneRenderer3D`)에 z 추가 |
+| **C-5** | shake 적용 대상 | eye **와** target 에 동일 델타 = 평행이동 | 셰이더 전역 가산(`camX/camY`, `SceneRendererFrameEncoder.swift:668-669`) — 2D 는 등가, 3D 는 `viewProj` 좌승 | 유력 · 실질 등가 | 3D 는 `eye`/`center` 양쪽 가산이 축자 등가 |
+| **C-6** | shake 시계 | `g_Time`(renderState+0x130), 432000 s 되감김 | 씬 시간 `t` | 확정 · 등가 | 조치 불요 |
+| **C-7** | `camerashake` 코퍼스 활성 | 동봉 **0/168**, 설치본 1/175(3D, `ricepod`) | 주석 "코퍼스 활성 13/168씬(2D 11/3D 2)" (`SceneDocument.swift:1182-1183`), "코퍼스 0.04..1.0 / 0.0..1.1 / 0.5..7.0" (`:1186-1190`) | **확정 · 반증** | 주석 수치를 실측으로 교체. 값 범위 주장도 근거 없음(동봉·설치본 전건 `0.5/1.0/3.0`, 예외는 `0.01/0.1/5` 하나) |
+| **W-1** | parallax 시간 성분 | **없음**(마우스 전용) | 없음 | 확정 · 일치 | 조치 불요 |
+| **W-2** | `mouseinfluence` 의미 | 초점을 **중앙↔마우스 선형 보간** — `infl=0` 이어도 (정적) 오프셋이 남는다 | 목표 오프셋에 곱하는 게인 (`SceneRenderer.swift:1750`) — `infl=0` → 오프셋 0 | **확정 · 미해소** | 초점 모델로 교체: `focus = lerp(center, mouse, infl)`, 레이어 오프셋 = `(origin−focus)·amount·depth` |
+| **W-3** | `cameraparallaxdelay` | `α = min(1, 10·(1−d/3)·dt)`, τ = `0.3/(3−d)`, `d≥3` 정지 | `α = 1 − exp(−dt/d)`, τ = `d` 초 (`ParallaxController.swift:45-50`) | **확정 · 미해소** | `smoothed()` 를 `α = min(1, 10*(1 - delay/3)*dt)` 로. 기본 0.1 에서 τ 0.100→0.103(3.4%)이라 **동봉 회귀 영향은 미미**, 비기본값(설치본 `ricepod` d=1: 1.0s→0.15s, 6.7배)에서 크게 갈린다 |
+| **W-4** | 레이어 오프셋 공식 | `(origin − focus) × amount × parallaxDepth`, z=0 | 전역 `cameraOffset × parallaxDepth`(`SceneRendererFrameEncoder.swift:668-669`), `cameraOffset = mouse × amount × infl × 0.1` | **확정 · 미해소** | `origin` 종속항이 통째로 없다. WE 는 초점에서 먼 레이어일수록 더 움직인다 |
+| **W-5** | 레이어 오프셋 게이트 | `cameraparallax` **&&** 정사영(2D) | 2D 전용(3D 는 채널 없음) | 확정 · 일치 | 조치 불요 |
+| **W-6** | `g_ParallaxPosition` 유니폼 | renderState+0x9c, `clamp01(focus/size)`, 기본 (0.5,0.5) | **미구현**(리포 전체에 문자열 없음) | **확정 · 미해소** | `depthparallax` 이펙트를 구현할 때 필요. 무저작 씬은 `(0.5,0.5)` 로 채워야 셰이더가 중립이 된다 |
+| **W-7** | `parallaxDepth` 기본값 | **[미해결]** — 오브젝트 생성자에서 초기화 지점을 못 찾았다 | `Vec2(1,1)` (`SceneDocument.swift:949,1788`) | [미해결] | 코퍼스 저작 118/123 이 `1 1` 이라 실무상 안전. 확정 전까지 유지 |
+| **F-1** | `camerafade` 의미 | 경로 구간 처음/끝 0.5초를 `schemecolor×0.7` 로 덮음. **경로 없으면 무동작** | "파스만(의미 미확정 — 소비 보류)" (`SceneDocument.swift:1216-1218`) | **확정 · 신규** | 카메라 경로를 구현할 때 함께. 동봉 코퍼스 도달 0건이라 우선순위 낮음 |
+| **F-2** | 씬 시작 페이드인 | **없다** | 없음 | 확정 · 일치 | 조치 불요 |
+| **P-1** | `fov` 단위/축 | 도(확정) / 세로(유력) | 도·세로 (`SceneRenderer3D.swift:1460-1461,1526`) | 확정+유력 · 일치 | 조치 불요 |
+| **P-2** | `nearz`/`farz` 기본 | 0.1 / 10000, **3D 원근에서만 사용** | `?? 0.1` / `?? 10000` (`SceneDocument.swift:1885-1886`) | 확정 · 일치 | 조치 불요(2026-08-21 정정 반영됨) |
+| **P-3** | 2D 실효 fov | `perspectiveoverridefov`(기본 95) | `perspectiveOverrideFov: Float = 95` 파스 반영, 렌더는 리터럴 95 하드코딩 잔존 | 확정 · 부분 미해소 | `scene-postprocessing.md` W-7 과 동일 항목 |
+| **P-4** | `orthogonalprojection.auto` 주기 | **매 프레임** (`0x140189d8f`) | 로드 시 1회(`width ?? 1920` 폴백) | 확정 · 미해소 | 오브젝트 `size` 애니메이션이 있을 때만 갈린다. 동봉 auto 2씬은 정적 |
+| **P-5** | 2D eye 재중심화 | `(W/2, H/2, 2000)` (`0x140189da9`–`0x140189df0`) | 해당 개념 없음 | 확정 · 미해소 | 2D 에서 `g_EyePosition` 을 쓰는 셰이더가 생기면 필요 |
+| **P-6** | `zoom` 게이트 | 정사영일 때만, `general.zoom × 카메라레이어zoom` | `zoom` 파스·보존만(`SceneDocument.swift:1287` 부근) | 확정 · 미해소 | 코퍼스 전건 1.0 이라 회귀 위험 없음 |
+
+### 7.1 우선순위
+
+1. **W-3(`delay` 매핑)** — 한 줄 수정, 동봉 회귀 위험 거의 없음, 즉시 해소 가능.
+2. **C-7(주석 반증)** — 코드 변경 없음. 잘못된 실측 주장이 후속 판단을 오염시키고 있다.
+3. **C-1/C-2/C-3(shake 수식)** — 함수 하나 축자 대체. 동봉 도달 0건이라 **비트동일 회귀 위험 0**,
+   다만 그래서 회귀 스위트로 검증도 안 된다(설치본 `ricepod` 를 오라클로 써야 한다).
+4. **W-2/W-4(parallax 구조)** — 구조 변경. 동봉 1씬(`depthparallax`)의 `parallaxDepth=0` 때문에
+   레이어 채널은 여전히 무영향이라, 실효 이득은 W-6(유니폼)과 함께 갈 때 생긴다.
+
+---
+
+## 부록 A. 재현 절차
+
+```bash
+S=/tmp/claude-0/-home-user/abe2d757-2792-5050-8baf-0be7e33c5b76/scratchpad
+
+# 1) shake 함수 전문
+python3 $S/vdis2.py 0x140199580 0x14019977d
+
+# 2) 카메라 업데이트(9조각 병합 — primary/function_frags 로 확인 후 통짜 디스어셈)
+python3 -c "import sys;sys.path.insert(0,'$S');from wpe import function_frags;print(function_frags(0x1401891a0))"
+python3 $S/vdis2.py 0x1401891a0 0x140189e08
+
+# 3) 레이어 시차 오프셋
+python3 $S/vdis2.py 0x140189e10 0x14018aab9   # 게이트 0x140189f17, 수식 0x14018a0a9
+
+# 4) camerafade
+python3 $S/vdis2.py 0x140180c0b 0x140180cc5   # 알파 곡선
+python3 $S/vdis2.py 0x140181bab 0x140181be1   # fade.json 로드
+
+# 5) 유니폼 ID → renderState 오프셋 (g_Time / g_ParallaxPosition 확정)
+#    인덱스 0x1400daaac[uid] → 오프셋테이블 0x1400da984[idx]*4 → 핸들러 VA
+python3 - <<'PY'
+import sys,struct;sys.path.insert(0,"/tmp/claude-0/-home-user/abe2d757-2792-5050-8baf-0be7e33c5b76/scratchpad")
+from wpe import pe,DATA
+for uid in (0,3,4,5,104,105,107,108):
+    ci=DATA[pe.va2off(0x1400daaac+uid)]
+    off=struct.unpack_from('<I',DATA,pe.va2off(0x1400da984+ci*4))[0]
+    print(uid, hex(0x140000000+off))
+PY
+
+# 6) 코퍼스 도달 (파일명을 scene.json 으로 좁히지 말 것 — ricepod.json/fantasticcar.json 누락)
+python3 - <<'PY'
+import json,glob,os,collections
+for label,root in [('bundled','/home/user/Waple/Sources/WapleRender/Resources/WEAssets'),
+                   ('install','/home/user/Waple-wallpaper-source/wallpaper_engine')]:
+    on=[]
+    for f in glob.glob(os.path.join(root,'**','*.json'),recursive=True):
+        try: d=json.load(open(f,encoding='utf-8-sig'))
+        except Exception: continue
+        g=d.get('general') if isinstance(d,dict) else None
+        if not isinstance(g,dict): continue
+        if g.get('camerashake') is True or g.get('cameraparallax') is True:
+            on.append(os.path.relpath(f,root))
+    print(label,on)
+PY
+```
+
+## 부록 B. 배제한 가설
+
+| 가설 | 왜 틀렸나 |
+|---|---|
+| shake 가 펄린/심플렉스 노이즈 | 퍼뮤테이션 테이블 `0x140484f40`/`0x1404833a0` 의 코드 참조 4곳에 shake 함수가 없다. shake 는 `sinf`/`cosf` 3회 호출뿐(§2.4) |
+| shake 가 여러 옥타브를 합성 | `sinf`/`cosf` 호출이 정확히 3회(`0x14019960b`·`0x14019961e`·`0x14019962a`). 옥타브 루프 없음 |
+| `roughness` 가 주파수 노브 | `phi` 계산에 `roughness` 가 들어가지 않는다. `powf` 지수로만 쓰인다 |
+| shake 가 카메라를 회전시킨다 | eye 와 target 에 같은 델타 → 시선 방향 불변. `up`(scene+0x108)은 미접촉 |
+| `camerashakespeed` 가 선형 시간 스케일 | `mulss xmm6, xmm6`(`0x1401995f7`)로 제곱된다 |
+| parallax 에 자동 드리프트가 있다 | 초점 식(`0x140189bda`–`0x140189c24`)에 시간 항이 없다. `dt` 는 스무딩 α 에만 들어간다 |
+| `cameraparallaxdelay` 가 "지연 시간(초)" | `(1 − d/3)·10·dt` 는 **비율**이다. `d=3` 이면 α=0 = 영구 정지 — 지연이라면 3초 뒤 따라와야 한다 |
+| parallax 가 레이어 z(깊이)를 민다 | z 성분이 `amount × 0`(`0x14018a0ef`, xmm6 은 `0x140189f3b` 에서 0) |
+| parallax 가 3D 씬에서도 레이어를 민다 | 게이트가 `bit8 && bit3`(`0x140189f17`–`0x140189f2c`) — 정사영 전용 |
+| `camerafade` 가 씬 시작 페이드인 | 소비 2곳 모두 `scene[0x310] != scene[0x318]`(경로 존재)을 요구한다 |
+| `camerafade` 가 검정 페이드 | `fade.frag` 가 `schemecolor × 0.7` 을 쓴다 |
+| `camerapreview` 가 런타임 키 | 문자열이 바이너리에 없다(ASCII·UTF-16LE·SSO 임베드 전부 0건) |
+| 정사영 씬이 `nearz`/`farz` 를 쓴다 | ±2000 고정. `[rdi+0x14c]` 로드가 보이는 팔은 진입 분기 때문에 도달 불가 |
+| `orthogonalprojection.auto` 가 로드 1회 | `Scene::updateCamera` 꼬리(`0x140189d8f`)에서 매 프레임 호출 |
