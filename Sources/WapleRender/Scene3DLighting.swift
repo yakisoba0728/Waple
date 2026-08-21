@@ -269,13 +269,113 @@ enum Scene3DLighting {
     // 코퍼스 최대 6(젤다) — 8 은 상한 여유 포함. 셰이더 루프 상한(Mesh3DShaders mf_main)도 동일하게 올린다.
     //
     // ⚠️ **WE 에는 이런 고정 상한이 아예 없다**(2026-08-21 실측). 라이팅 스니펫 생성기
-    // (0x1401691c0–0x14016b154)가 씬의 `general.lightconfig` 를 콤보 문자열로 받아 `atoi`
+    // **0x140169140–0x14016b0d4** 가 씬의 `general.lightconfig` 를 콤보 문자열로 받아 `atoi`
     // (0x1402c82c0)한 값을 **배열 길이로 그대로 찍는다** — `uniform vec4 g_LPoint_Origin[`
     // (0x14048be50) + 개수 + `];`. 콤보 이름은 LIGHTS_POINT/…/LIGHTS_DIRECTIONAL_SHADOW
     // (0x140487630–0x140487948), lightconfig 키는 point/pointshadow/spot/spotshadow/spotcookie/
     // spotshadowcookie/tube/directional/directionalshadow (0x14048e4d8–0x14048e588).
     // 즉 씬마다 셰이더가 새로 생성돼 라이트 수만큼 루프가 언롤된다. 8 은 **Waple 쪽 캡**이다.
+    //
+    // ⛔️ **정정(2026-08-21)**: 종전 주석의 범위 `0x1401691c0–0x14016b154` 는 틀렸다.
+    // `primary(0x1401691c0)` 가 돌려주는 실측 함수는 `0x140169140–0x14016b0d4`(진입 `LIGHTING`
+    // 콤보 비교 0x1401691b8 · `#require LightingV1` 비교 0x1401691f5 · `return light;\n}` 방출
+    // 0x14016b0a3 · `ret` 0x14016b0cc)이다. 바로 뒤 `0x14016b0e0–0x14016c3f8` 은 스니펫이 아니라
+    // **전처리기 디렉티브 파서**(`^\s*#\s*([a-z]+)\b\s*(.*)` 0x14048d048)이고, HLSL 쪽 라이트 배열은
+    // 또 다른 함수 `0x1400f5cb0–0x1400f8520`(GLSL→HLSL 백엔드)이 `cbuffer g_bufLights` 안에
+    // `const float4 g_LPoint_Color[`(0x140487688) 형태로 찍는다. 범위를 남의 주석에서 베끼지 말 것.
+    // 전문·표는 `docs/re/scene-lighting.md` §1–§3.
     static let maximumLights = 8
+
+    /// `general.lightconfig` → 종류별 슬롯 예산. **저작 씬만** 상한이 되고, 미저작(nil)은
+    /// 종전 first-`maximumLights` 폴백을 그대로 쓴다(무회귀).
+    ///
+    /// ## WE 실측 규약 (2026-08-21)
+    /// 콤보 세터 `0x1401a5c40`–`0x1401a6c5d` 가 `[engine+0x121C]` 한 워드를 잘라 **9 콤보를 무조건**
+    /// 세운다 — point `and 0xF`(0x1401a5e44) · spot `shr 4`(0x1401a5eea) · tube `shr 8`(0x1401a5f78) ·
+    /// directional `shr 0xC`(0x1401a6002) · spotshadowcookie `shr 0x14`(0x1401a609b) ·
+    /// spotshadow `shr 0x10`(0x1401a6115) · spotcookie `shr 0x12`(0x1401a61a3) ·
+    /// directionalshadow `shr 0x16`(0x1401a621a) · pointshadow `shr 0x18`(0x1401a6220).
+    /// 즉 **콤보 값 = lightconfig 필드 그대로**다(9키 ↔ 9콤보 1:1, 변환 없음).
+    ///
+    /// 파생 콤보 둘도 같은 함수에서 나온다:
+    /// - `LIGHTS_SHADOW_MAPPING = 1` ⟸ pointshadow+directionalshadow+spotshadow+spotshadowcookie ≠ 0
+    ///   (0x1401a62ad–0x1401a62fc)
+    /// - `LIGHTS_COOKIE = 1` ⟸ spotcookie+spotshadowcookie ≠ 0 (0x1401a638c–0x1401a63e4)
+    /// - `LIGHTS_SHADOW_MAPPING_QUALITY = byte [engine+0x1AC]`(0x1401a6340) — **0 이면 섀도우 전면 오프**.
+    ///   `SceneDocument.SceneLightConfig` 주석이 `[미해결]` 로 남긴 `cmp byte [engine+0x1AC],0`
+    ///   (0x140187C39)의 정체가 이것이다.
+    ///
+    /// 그리고 유니폼 패커 `0x140190c80`–`0x1401964b8` 이 **종류별 잔여 카운터**로 쓴다:
+    /// point `[rsp+0x60]`(0x14019325f) · spot `[rbp-0x64]`(0x140192dbf) · tube `[rbp-0x68]`(0x140192a19) ·
+    /// directional `[rbp-0x28]`(0x14019111d) — 각각 `test/je` 로 **0 이면 그 라이트를 통째로 버리고**,
+    /// 아니면 `dec` 한다. 섀도우도 별도 카운터다(point `[rsp+0x6c]` 0x14019332b, directional
+    /// `[rbp+0x24]` 0x140193530). 함수 첫 줄 `test r9d,r9d; je`(0x140190ca8)는 **lightconfig 가 0이면
+    /// V1 라이트 유니폼을 하나도 안 싣는다**는 뜻이다 — 종별 카운트는 가산이 아니라 **총량**이고,
+    /// 섀도우 카운트는 그 총량의 앞부분을 가른다(생성기가 shadow 블록을 먼저 언롤: 0x140169bd0 루프가
+    /// `ebx < LIGHTS_POINT_SHADOW`, 이어서 0x140169d50 루프가 `ebx < LIGHTS_POINT`).
+    ///
+    /// **우리 쪽 차이(의도)**: (1) 미저작 씬은 WE 라면 V1 라이트 0개지만 우리는 종전 8캡을 유지한다
+    /// (`arsenal`/`demon_core` 의 레거시 `"point"` 를 살려 두는 현행 정책과 같은 이유 — Scene3DLightKind
+    /// 주석 참조). (2) 예산 소진 판정을 **유한성/반경 가드 뒤**로 미룬다(WE 는 가드가 없어 순서가 무의미).
+    /// (3) 셰이더 배열은 8 고정이라 카운트를 **줄이는** 방향만 반영한다 — 늘리는 쪽(lightconfig 합 > 8)은
+    /// `Mesh3DShaders`/`QuadShaders` 퍼뮤테이션이 필요해 `[미해결]`.
+    struct LightSlotBudget {
+        /// nil = 미저작(`general.lightconfig` 부재/비객체) → 상한 없음(종전 폴백).
+        private var point: Int?
+        private var spot: Int?
+        private var tube: Int?
+        private var directional: Int?
+        private var pointShadow: Int
+        private var directionalShadow: Int
+
+        /// `config == nil` 이면 모든 `take`/`takeShadow` 가 성공한다(= 종전 폴백, 비트동일).
+        init(_ config: SceneLightConfig?) {
+            guard let config else {
+                point = nil; spot = nil; tube = nil; directional = nil
+                pointShadow = Int.max
+                directionalShadow = Int.max
+                return
+            }
+            point = config.point
+            spot = config.spot
+            tube = config.tube
+            directional = config.directional
+            pointShadow = config.pointShadow
+            directionalShadow = config.directionalShadow
+        }
+
+        /// 종류별 슬롯 하나를 소비한다. 남은 슬롯이 없으면 false(= WE 가 그 라이트를 버리는 자리).
+        mutating func take(_ kind: Scene3DLightKind) -> Bool {
+            switch kind {
+            case .point: return Self.consume(&point)
+            case .spot: return Self.consume(&spot)
+            case .tube: return Self.consume(&tube)
+            case .directional: return Self.consume(&directional)
+            }
+        }
+
+        /// 섀도우 슬롯 하나를 소비한다. tube/spot 은 애초에 캐스터가 아니라 항상 false.
+        mutating func takeShadow(_ kind: Scene3DLightKind) -> Bool {
+            switch kind {
+            case .point: return Self.consumeShadow(&pointShadow)
+            case .directional: return Self.consumeShadow(&directionalShadow)
+            case .spot, .tube: return false
+            }
+        }
+
+        private static func consume(_ slot: inout Int?) -> Bool {
+            guard let remaining = slot else { return true }   // 미저작 = 무제한
+            guard remaining > 0 else { return false }
+            slot = remaining - 1
+            return true
+        }
+
+        private static func consumeShadow(_ slot: inout Int) -> Bool {
+            guard slot > 0 else { return false }
+            if slot != Int.max { slot -= 1 }                  // Int.max = 미저작 무제한
+            return true
+        }
+    }
 
     /// lpoint / ldirectional / lspot / ltube 를 월드 공간으로 해석한다. 입력 순서를 보존하고(first-N 정책),
     /// 부모가 있으면 그 부모의 현재 월드행렬/가시성을 적용한다.
@@ -287,10 +387,16 @@ enum Scene3DLighting {
     /// spot 섀도우는 스코프 밖(코퍼스 spot 전원 castshadow:false) → castShadow 는 point/directional 만 존중.
     /// ltube: origin=단점A / `controlpoint`=단점B(부모-로컬 동일 공간, 위 originB 필드 주석의 반증 참조),
     /// 무섀도우(WE 정본 — 스니펫 0x14048c9e0 의 shadowFactor 인자가 리터럴 1.0).
+    ///
+    /// `config` = 씬의 `general.lightconfig`(`SceneDocument.SceneLightConfig`). **nil(미저작)이면
+    /// 종전 first-`maximumLights` 정책 그대로**라 기존 호출부는 비트동일이다. 저작 씬은
+    /// `LightSlotBudget` 규약대로 종류별/섀도우별 슬롯을 소비하고 초과분을 버린다(주석 참조).
     static func resolveLights(_ lights: [SceneLight3D],
-                              nodes: [Int: Scene3DMath.Node]) -> [Scene3DResolvedLight] {
+                              nodes: [Int: Scene3DMath.Node],
+                              config: SceneLightConfig? = nil) -> [Scene3DResolvedLight] {
         var result: [Scene3DResolvedLight] = []
         result.reserveCapacity(maximumLights)
+        var budget = LightSlotBudget(config)
 
         for light in lights where result.count < maximumLights {
             guard let kind = Scene3DLightKind(type: light.type),
@@ -329,6 +435,15 @@ enum Scene3DLighting {
             guard position.x.isFinite, position.y.isFinite, position.z.isFinite,
                   forward.x.isFinite, forward.y.isFinite, forward.z.isFinite else { continue }
 
+            // lightconfig 슬롯 소비. WE 패커도 **가시성 판정 뒤**(0x1401910d6 `IsVisible` → 0x1401910f2
+            // 타입 분기 → 종별 `test/je`)에 카운터를 깎으므로 이 자리가 맞다. 미저작 씬은 항상 true.
+            guard budget.take(kind) else { continue }
+            // 섀도우도 별도 예산이다(point `[rsp+0x6c]` 0x14019332b · directional `[rbp+0x24]` 0x140193530).
+            // 예산이 없으면 그 라이트는 **섀도우만** 잃고 셰이딩은 남는다(WE 도 같다 — 초과 캐스터는
+            // 섀도우 프로젝션을 못 받고 언셰도우 슬롯 위치에 실린다).
+            let shadowCandidate = kind != .spot && kind != .tube && light.castShadow
+            let castsShadow = shadowCandidate && budget.takeShadow(kind)
+
             var resolved = Scene3DResolvedLight(
                 position: position,
                 exponent: light.exponent,
@@ -343,7 +458,8 @@ enum Scene3DLighting {
                 // tube 분기는 ComputePBRLightShadow 의 마지막 인자 shadowFactor 에 리터럴 1.0 을 넘긴다.
                 // point/spot 은 섀도우 유무로 두 문자열이 따로 있다 — point 0x14048c350(1.0)/0x14048c410
                 // (shadowFactor), spot 0x14048c750(1.0)/0x14048c820(shadowFactor) — 반면 tube 는 1.0 판 하나뿐).
-                castsShadow: kind != .spot && kind != .tube && light.castShadow,
+                // (위 `castsShadow` 지역변수 = 이 조건 + lightconfig 섀도우 예산.)
+                castsShadow: castsShadow,
                 kind: kind,
                 forward: forward)
             if kind == .spot {
