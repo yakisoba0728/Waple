@@ -52,10 +52,36 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 VA_RE = re.compile(r"0x1[0-9a-fA-F]{8}")
+# 범위 표기: `A–B`(엔대시) · `A-B` · `A..B` · `dis(A, B)` · `vdis2.py A B`
+RANGE_RE = re.compile(r"(0x1[0-9a-fA-F]{8})[`'\"]?\s*(?:–|—|-|\.\.|,\s*|\s+)\s*[`'\"]?(0x1[0-9a-fA-F]{8})")
 OTHER_BINARIES = ("webwallpaper64.exe", "scenescript64.dll", "wallpaperui.exe",
                   "mediaextensions64.dll", "resourceutil64.dll", "resourcecompiler64.exe",
                   "cloneextensions64.dll", "winrtutil64.exe", "wallpaper32.exe")
 DEFAULT_TARGETS = ("Sources", "Tests", "docs/re", "docs/dev", "scripts/spec", "spec")
+
+# **정정 기록** — 일부러 남긴 옛 주소. 툼스톤 규약상 "종전 0xA 를 0xB 로 고쳤다" 는 기록이
+# 문서에 남고, 그 0xA 는 당연히 명령 경계가 아니다. 그걸 매번 이탈로 세면 정정할수록
+# 보고서가 더러워진다.
+#
+# 키는 `line.strip()` 전문 일치다 — **줄 번호로 걸지 않는다**(줄 번호로 건 예외가 무관한
+# 편집을 막고 조용히 낡는 사고를 이 리포가 실제로 당했다. `check_spec_shrink_guard.py` 머리말).
+# 쓰이지 않는 항목은 낡은 흉터이므로 실행 끝에 지목한다.
+CORRECTION_LINES = {
+    "> | `0x140020ee6` | `0x140020ee3` | `lea r8, [rip + 0x453d30]` → `0x140474c1a` | disp32 필드 위치 |":
+        "scene-object-model.md 정정 표",
+    "> | `0x140259458` | `0x140259455` | `mov rax, [rip + 0x23841c]` → `0x140491878` | disp32 필드 위치 |":
+        "scene-object-model.md 정정 표",
+    "> | `0x1402594e6` | `0x1402594e3` | `lea rdx, [rip + 0x23838e]` → `0x140491878` | disp32 필드 위치 |":
+        "scene-object-model.md 정정 표",
+    "> | `0x14018ac60` | `0x14018ac5c` | `mov rcx, [rdi + 0xd8]` | 재현 명령의 **시작** 주소 |":
+        "scene-object-model.md 정정 표",
+    "> | `0x14022bea0` | `0x14022be9c` | `movaps [rsp + 0x50], xmm1` | 재현 명령의 **시작** 주소 |":
+        "scene-object-model.md 정정 표",
+    "> `collisionmodel` 행의 \"모델 참조 push\" 호출 자리가 `0x1401cfdcc` 로 적혀 있었는데 그 주소는":
+        "particle-operator-vm.md 정정 문단",
+    "> **`Sources/WapleCore/SceneDocument.swift` 의 주석에도 `0x140259458`/`0x1402594e6` 이 그대로":
+        "scene-object-model.md — 소유 밖 파일에 남은 같은 인용을 지목하는 줄",
+}
 SUFFIXES = (".swift", ".md", ".py", ".json")
 
 
@@ -136,14 +162,33 @@ def main(argv):
         return 1
 
     cited = collections.defaultdict(set)          # va -> {파일}
+    corrections = collections.Counter()           # 정정 기록에만 나오는 va
+    used_corrections = set()
+    ends = collections.Counter()                  # va -> 범위의 **끝**으로 나온 횟수
+    total = collections.Counter()                 # va -> 전체 등장 횟수
     mixed = {}                                    # 파일 -> 언급한 다른 바이너리
     for f in files:
         txt = f.read_text(encoding="utf-8", errors="replace")
         others = sorted({b for b in OTHER_BINARIES if b in txt})
         if others:
             mixed[str(f)] = others
-        for m in VA_RE.findall(txt):
-            cited[int(m, 16)].add(str(f))
+        for line in txt.splitlines():
+            stripped = line.strip()
+            record = stripped in CORRECTION_LINES
+            for m in VA_RE.finditer(line):
+                va = int(m.group(0), 16)
+                if record:
+                    corrections[va] += 1
+                    used_corrections.add(stripped)
+                    continue
+                cited[va].add(str(f))
+                total[va] += 1
+        # `A–B` / `A-B` / `A..B` 의 **B**, 그리고 `dis(A, B)` · `vdis2.py A B` 의 B 는
+        # **범위의 끝**이다. 끝은 배타적이거나 마지막 명령의 주소라 명령 경계가 아닐 수 있다 —
+        # 이걸 이탈로 세면 거짓 양성이 된다. **시작(A)은 반드시 경계여야 한다**(거기서 선형
+        # 디스어셈을 시작하니까) — 그래서 시작은 그대로 검사한다.
+        for m in RANGE_RE.finditer(txt):
+            ends[int(m.group(2), 16)] += 1
 
     # 함수별로 한 번만 뜬다.
     by_fn = collections.defaultdict(list)
@@ -152,7 +197,7 @@ def main(argv):
         fn = containing(funcs, va)
         (by_fn[fn].append(va) if fn else data_or_leaf.append(va))
 
-    ok, off, unreached = 0, [], []
+    ok, off, unreached, range_end = 0, [], [], []
     for (b, e), vas in sorted(by_fn.items()):
         o = disasm.off_of(b, secs)
         if o is None:
@@ -170,6 +215,9 @@ def main(argv):
                 continue
             if va >= reach:
                 unreached.append((va, sorted(cited[va])))
+                continue
+            if ends[va] and ends[va] >= total[va]:
+                range_end.append(va)          # 등장이 전부 범위의 끝이다 — 판정하지 않는다
                 continue
             host = next((i for i in cover if i.address < va < i.address + i.size), None)
             if host is None:
@@ -202,9 +250,17 @@ def main(argv):
         print()
     print(f"[va-citations] 고유 VA {len(cited)} · 데이터/리프 {len(data_or_leaf)} · "
           f"디스어셈 미도달 {len(unreached)}(함수 안 점프표 등 — 판정 불가) · "
+          f"범위 끝 {len(range_end)}(판정 안 함) · "
+          f"정정 기록 {len(corrections)}(판정 안 함) · "
           f"경계 OK {ok} · **경계 이탈 {len(off)}**")
+    stale = set(CORRECTION_LINES) - used_corrections
+    if stale:
+        print()
+        print(f"  ※ 쓰이지 않는 정정 기록 면제 {len(stale)}건 — 낡았다. 지워라:")
+        for line in sorted(stale):
+            print(f"      | {line}")
     if not off:
-        return 0
+        return 1 if stale else 0
     per_file = collections.defaultdict(list)
     for va, kind, hint, fs in off:
         for f in fs:

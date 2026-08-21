@@ -480,7 +480,7 @@ opid 8 과 동일 배치: `0x1401cc97e`,`0x1401cc98c`,`0x1401cc991`,`0x1401cc99a
 | 23 `collisionbox` | 공통 필드만. `controlpoint` 는 읽고 버린다(`0x1401cf6c2`). |
 | 24 `collisionbounds` | 공통 필드만. 고유 키 없음(`0x1401cf6de`–`0x1401cf720`). |
 | 25 `collisionquad` | `+0x14` 플래그(`0x1401cfd6b`) · `+0x18` `controlpoint`(`0x1401cfd72`) · `+0x20..+0xf0` `origin`/`plane`/`forward`/`size` 파생 기저(`0x1401cfc61`–`0x1401cfccb`) · `+0x100`,`+0x10c`,`+0x118` raw vec3 3개(`0x1401cfc12`,`0x1401cfc28`,`0x1401cfc41`) · `+0x120`(`0x1401cfc4f`) |
-| 26 `collisionmodel` | `+0x20`,`+0x28` 모델 핸들 2워드(`0x1401cfde8`,`0x1401cfdf5`). 모델 참조는 별도 18바이트 레코드 벡터에 push 된다(`0x1401d84b0` @`0x1401cfdcc`). |
+| 26 `collisionmodel` | `+0x20`,`+0x28` 모델 핸들 2워드(`0x1401cfde8`,`0x1401cfdf5`). 모델 참조는 별도 18바이트 레코드 벡터에 push 된다(`0x1401d84b0` @`0x1401cfe0c`). |
 
 ---
 
@@ -606,3 +606,12 @@ for l in dis(0x1401c5490,0x1401d152c,show=False):
 cd Sources/WapleRender/Resources/WEAssets
 grep -rho '"name"[[:space:]]*:[[:space:]]*"collisionquad"' . | wc -l
 ```
+
+---
+
+> **[2026-08-21 · VA 인용 정정 1건]** `scripts/re/va_citations.py` 전수 대조로 잡았다.
+> `collisionmodel` 행의 "모델 참조 push" 호출 자리가 `0x1401cfdcc` 로 적혀 있었는데 그 주소는
+> `movzx edx, byte ptr [rbp + 0x2238]` 의 **한복판**(+4)이다. 이미지 전체에서 `call 0x1401d84b0`
+> 을 바이트로 훑으면 자리가 **둘뿐**이고(`0x1401c6fda` · `0x1401cfe0c`) 이 함수 안의 것은
+> `0x1401cfe0c` 다. 바로 앞이 `mov dword ptr [rbp + 0x1a0], 3` / `lea rdx, [rbp + 0x1a0]` /
+> `mov rcx, rsi` 로 인자를 세우는 자리라 문맥도 맞는다. `0x1401cfe0c` 로 고쳤다.
