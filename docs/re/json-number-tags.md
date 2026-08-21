@@ -692,3 +692,226 @@ func numericUInt32(_ v: Any?) -> Int?     // 게이트 있음 — isNumeric 통�
 안 들어가면(NaN·±Inf 포함) "integer indefinite" `0x80000000` 을 내는데, 그건 MXCSR invalid
 마스크에 달린 값이고 이 컨테이너에서 실행으로 확인할 수단이 없다(**추정**). 값을 지어내는 대신
 `safeInt`/`safeFloat` 와 같은 규약으로 거절한다 — 위 실측대로 도달 0건이다.
+
+
+---
+
+## 9. **[2026-08-21 클러스터 BP] 접근자 이름이 두 쌍 바뀌어 있었다 — 그리고 게이트 전수가 미완이었다**
+
+이 절은 위 §0–§8 을 **정정**한다. 위 본문은 기록으로 남긴다(툼스톤 규약). 갈리는 곳마다
+해당 절에 인용 블록을 달아 두었다.
+
+### 9.1 판정 — `_wassert` 문자열과 jsoncpp 줄 번호
+
+여덟 접근자는 전부 실패 경로에서 같은 모양으로 죽는다:
+`_wassert(L"false && oss.str().c_str()"(`0x140478768`), L"D:\dev\we\windows\src\json\src\json_value.cpp"(`0x140478640`), line)`.
+**그 `line` 즉치와 메시지 문자열이 함수의 이름을 확정한다** — 추정이 아니다.
+
+| 함수 | 실패 메시지 | `mov r8d, line` | 줄 | 진짜 이름 | 종전 표기 |
+| --- | --- | --- | ---: | --- | --- |
+| `0x140085cc0` | "Type is not convertible to string"(`0x1404786e8`) | `0x140085e20` | 696 | `asString` | 같음 |
+| `0x140085ee0` | "Value is not convertible to Int."(`0x140478740`) | `0x140085f4d` | 719 | **`asInt`** | asUInt |
+| `0x140085f70` | "Value is not convertible to UInt."(`0x1404787c8`) | `0x140085fde` | 741 | **`asUInt`** | asInt |
+| `0x1400860c0` | "Value is not convertible to Int64."(`0x1404787a0`) | `0x14008612f` | 769 | **`asInt64`** | asUInt64 |
+| `0x140086000` | "Value is not convertible to UInt64."(`0x140478818`) | `0x14008609d` | 790 | **`asUInt64`** | asInt64 |
+| `0x140086150` | "Value is not convertible to double."(`0x1404787f0`) | `0x1400861ff` | 829 | `asDouble` | 같음 |
+| `0x140086220` | "Value is not convertible to float."(`0x140478868`) | `0x1400862d3` | 852 | `asFloat` | 같음 |
+| `0x140086300` | "Value is not convertible to bool."(`0x140478840`) | `0x14008637f` | 873 | `asBool` | 같음 |
+
+줄 번호가 **jsoncpp 원본의 함수 순서**(asString → asInt → asUInt → asInt64 → asUInt64 →
+asDouble → asFloat → asBool)와 정확히 맞는다. 변환 관용구도 같은 방향으로 갈린다:
+
+* `0x140085ee0` 태그 3 = `cvttsd2si eax`(**32비트**, `0x140085f12`) — MSVC 의 `int(double)`.
+* `0x140085f70` 태그 3 = `cvttsd2si rax`(**64비트**, `0x140085fa2`) 뒤 `eax` — MSVC 의 `unsigned(double)`.
+* `0x1400860c0` 태그 3 = `cvttsd2si rax`(`0x1400860f2`) — `int64_t(double)`.
+* `0x140086000` 태그 3 = `comisd` + `subsd 9.223372036854776e18` + `cvttsd2si rax` + `add rax,0x8000000000000000`
+  (`0x140086032`–`0x140086062`) — 부호 없는 64비트 변환의 교과서 시퀀스.
+
+**`e8 rel32` 전수 계수(이름 정정 후)**: `asFloat` 243 · `asString` 193 · `asBool` 148 ·
+`asUInt` **79** · `asInt` **74** · `asUInt64` 10 · `asInt64` 1 · `asDouble` 1.
+(§2 의 "`asInt 0x140085f70` 79" 는 수는 맞고 이름이 틀린 값이다.)
+
+### 9.2 파장 — 게이트 93자리의 접근자는 `asUInt` 35 가 아니라 **`asInt` 35** 다
+
+§2.2 의 접근자 칸을 이름만 바꿔 다시 세면 이렇다:
+`asFloat` 42 · **`asInt` 35** · `asUInt64` 4 · `asUInt` 2 · `asBool` 2 · `asString` 1 · 기타 7.
+
+`asInt` 는 **부호 있는** 하위 32비트다(태그 1/2 = `mov eax,[rcx]` `0x140085f1e`, 반환형 `int`).
+그래서 **음수가 감기지 않는다.** 이것이 §7.3·§8.1 의 결론을 뒤집는다 — 아래 §9.5.
+
+세 자리를 직접 다시 떠서 확인했다(전부 게이트 통과 뒤 곧장 `asInt`):
+
+| 자리 | 게이트 | 접근자 | 착지 | 부호 증거 |
+| --- | --- | --- | --- | --- |
+| `general.refreshdelay` | `0x1401874cc` 인라인 `isNumeric` | `asInt` `0x1401874d9` | `mov dword [r14+0x3b8], eax` `0x1401874e5` | — |
+| `general.orthogonalprojection.width` | `0x140187578` | `asInt` `0x14018758f` | `movss [r14+0x354]` `0x14018759e` | **`cvtdq2ps`** `0x14018759b`(부호 있는 int→float) |
+| `general.properties.<k>.order` | `0x140118b85` | `asInt` `0x140118b91` | 되쓰기 | `movsxd rcx,eax` `0x140118bb4` |
+
+### 9.3 게이트 전수가 미완이었다 — 술어가 다섯이다
+
+§2 의 전수는 `isNumeric`(`0x140088880`)과 그 인라인 전개만 셌다. 같은 술어 무리에 넷이 더 있고
+**전부 out-of-line 호출이 실재한다**(`.text` `e8 rel32` 전수):
+
+| 술어 | VA | 참인 태그 | 호출 |
+| --- | --- | --- | ---: |
+| `isBool` | `0x1400886d0` | 5 만(`cmp byte [rcx+8],5; sete`) | 9 |
+| **`isInt`** | `0x1400886e0` | 1: `(v + 0x80000000) <= 0xFFFFFFFF` · 2: `<= 0x7FFFFFFF` · 3: `−2147483648.0 ≤ x ≤ 2147483647.0` **그리고 소수부 0** | **20** |
+| **`isUInt`** | `0x140088760` | 1: `0 ≤ v ≤ 0xFFFFFFFF` · 2: `<= 0xFFFFFFFF` · 3: `0 ≤ x ≤ 4294967295.0` **그리고 소수부 0** | **13** |
+| `isUInt64` | `0x140088800` | 1: `v ≥ 0` · 2: 항상 · 3: `0 ≤ x < 1.8446744073709552e19` **그리고 소수부 0** | 3 |
+| `isNumeric` | `0x140088880` | 1/2/3 | 12 |
+
+셋(`isInt`/`isUInt`/`isUInt64`)은 태그 3 에서 `modf`(`0x1402d3b50`)를 불러 **소수부가 0 인지**까지
+본다(`0x140088718` · `0x14008879c` · `0x140088843`). 즉 `isNumeric` 보다 훨씬 좁다 —
+`{"k":1.5}` 는 `isNumeric` 은 통과하고 `isInt` 는 **막는다**. 그리고 다섯 술어 **전부 태그 5 를
+거부한다**(`isBool` 만 태그 5 를 받는다).
+
+이 넷을 세지 않아 종전 문서가 "게이트 없음" 이라고 적은 자리가 셋 있었고 **전부 오귀속**이었다:
+
+| 종전 서술 | 실제 | 근거 |
+| --- | --- | --- |
+| §2.1 "`alignment.value` 만 게이트가 없다 — `asUInt` 라 불리언 1/0 을 받는다" | `isInt` 게이트 + `asInt` | `0x140181f98 call 0x1400886e0` → `test al,al; je` → `0x140181fba call 0x140085ee0` |
+| §6.4 "이펙트 fbo `scale`/`width`/`height`/`fit` 은 게이트 없이 `asUInt`" | 넷 다 `isInt` 게이트 + `asInt` | `0x1401e77d1` · `0x1401e77f3` · `0x1401e7823` · `0x1401e7846` |
+| §7.2 "`lightconfig.*` 는 게이트 없이 `asUInt`" | `isUInt` 게이트 + `asUInt` | `0x140187b5e` 외 9자리 → `0x140187b6b` 외 |
+
+**이펙트 fbo 는 폭도 종전 서술과 다르다.** 게이트 실패 시 기본값이 살아 있고(함정 15) 착지 폭이
+1~2바이트다:
+
+| 키(순서대로) | 게이트 | `asInt` | 착지 | **게이트 실패 시** |
+| --- | --- | --- | --- | --- |
+| 1번째(`scale` 추정) | `0x1401e77d1` | `0x1401e77dd` | `mov byte [rbp+0xc], al` — **8비트** | `mov byte [rbp+0xc], 1` → **1** |
+| 2번째 | `0x1401e77f3` | `0x1401e77ff` | `mov word [rbp+0x12], ax` — **16비트** | `0xffff` |
+| 3번째 | `0x1401e7823` | `0x1401e782f` | `mov word [rbp+0xe], ax` | `0xffff` |
+| 4번째 | `0x1401e7846` | `0x1401e7852` | `mov word [rbp+0x10], ax` | `0xffff` |
+
+(키 이름 ↔ 슬롯 짝은 **[미해결]** — 앞선 `lea` 순서로 짝지으면 함정 16 에 걸린다. 넷이 `isInt`
+게이트 + `asInt` + 8/16비트 절삭이라는 것만 확정이다.)
+
+→ 그래서 §6.4 의 결론("Waple 의 사설 `safeInt` 가 불리언을 거부하는 것은 실물보다 엄격한
+**하드닝**")은 **틀렸다**. 실물도 `isInt` 로 불리언을 거부하므로 그 자리는 **정합**이다.
+남는 차이는 8/16비트 절삭과 `isInt` 의 "소수부 0" 조건뿐이다(도달 0).
+
+### 9.4 `asBool` · `asString` 의 강제 — 임무가 물은 경계
+
+**정수 오버플로: 범위 검사가 없다.** 여덟 접근자 어디에도 jsoncpp 원본의
+`JSON_ASSERT_MESSAGE(isInt(), …)` 범위 단언이 **컴파일돼 있지 않다**(명령 흐름에 범위 비교가
+한 줄도 없다 — 실패 경로는 태그 판정 하나뿐이다). 즉 **자르기만 하고 죽지 않는다.**
+
+**문자열→수 변환 실패: 변환 자체가 없다.** 숫자 접근자는 태그 4 에서 곧장 abort 한다
+(파스 시도 없음). Waple 의 `strict*` 가 문자열에 nil 을 주는 것은 실물보다 관대한 하드닝이고,
+`lenient*` 가 `"35"` 를 35 로 읽는 것은 **씬 리더가 따로 문자열 분기를 갖는 자리**의 규약이다
+(예: `rotationrandom.min` 의 `isString` 재시도 §3.3).
+
+**`asBool`(`0x140086300`–`0x14008639d`)** — 태그 5 밖에서도 산다:
+
+| 태그 | 동작 | VA |
+| --- | --- | --- |
+| 0 null | `xor al,al` → false | `0x14008635a` |
+| 1 int / 2 uint | `cmp qword [rcx],0; setne al` — **64비트** 비교 | `0x14008634b`–`0x14008634f` |
+| 3 real | `_dclass`(`0x1402d68e0` → `0x1402e7cc0`) 뒤 `test ecx,0xfffffffd; setne al` | `0x14008632e`–`0x140086340` |
+| 5 boolean | `movzx eax, byte [rcx]` | `0x140086323` |
+| 4/6/7 | abort | `0x140086364` |
+
+`_dclass` 는 NaN=2 · INF=1 · ZERO=0 · SUBNORMAL=−2 · NORMAL=−1 을 낸다
+(`0x1402e7cf6 inc ax` / `0x1402e7d11 and ax,0xfffe` / `0x1402e7d16 mov eax,-1`).
+`test ecx, ~2` 는 **0 과 2 만** 거짓으로 만들므로 **`NaN` → false · ±0 → false · 그 밖 → true** 다.
+C++ 의 맨 `double → bool` 이라면 NaN 이 true 여야 한다 — jsoncpp 의 "JavaScript 처럼 0 과 NaN 을
+거짓으로 본다" 규약을 명령으로 확인한 셈이다. **문자열은 abort** 이므로
+`{"visible":{"value":"true"}}` 는 실물에서 죽는다.
+
+**`asString`(`0x140085cc0`–`0x140085e3e`)은 방향이 반대다.** 태그 0..5 를 **점프 표**로 갈라
+전부 문자열을 만든다(표 `0x140085e40`, 6엔트리 · 디스패치 `0x140085ce2`–`0x140085ced` ·
+`cmp eax,5; ja abort` `0x140085cd2`):
+
+| 태그 | 결과 | 분기 |
+| --- | --- | --- |
+| 0 null | `""` | `0x140085cf0` |
+| 1 int | int64 십진 | `0x140085db0` → `0x140089a40` |
+| 2 uint | uint64 십진 | `0x140085dc7` → `0x140089ba0` |
+| 3 real | **정밀도 17**(`mov r9d,0x11` `0x140085deb`) | `0x140085dde` → `0x140089c60` |
+| 4 string | 그대로 복사 | `0x140085d12` |
+| 5 boolean | `"true"`(`0x140474460`) / `"false"`(`0x140474458`) | `0x140085d87`–`0x140085d9b` |
+| 6/7 | "Type is not convertible to string" abort | `0x140085e05` |
+
+→ **숫자 자리는 문자열을 죽이지만 문자열 자리는 숫자를 받아 찍는다.** 이 비대칭이 규약이다.
+Waple 은 이 강제를 옮기지 **않는다** — 문자열 자리에 숫자가 오는 저작이 동봉·설치본 도달 0 이고,
+옮기면 `as? String` 을 쓰는 자리 전부의 계약이 바뀐다.
+
+### 9.5 §7.3 [미해결] 해소 — `order` 는 **부호 있는** 정수다, 패치안을 **철회**한다
+
+§7.3 은 "네이티브가 `asUInt` 로 읽으니 `order: -2` 는 4294967294 가 되어 맨 뒤로 간다.
+리더가 둘이라 확정 못 한다" 였다. **접근자가 `asInt` 이므로 그 전제가 무너진다** — 네이티브도
+−2 를 −2 로 읽는다. 게다가 **엔진 자신이 음수 `order` 를 써 넣는다**:
+
+```
+0x140118b91  call 0x140085ee0            ; asInt(wproperties.schemecolor.order)
+0x140118b96  test eax,eax → jne          ; order == 0 일 때만
+0x140118bac  call 0x140085ee0            ; 다시 읽어
+0x140118bb1  sub  eax, 0x14              ;   order − 20  → -20
+0x140118bb4  movsxd rcx, eax             ;   **부호 확장**해서 int64 슬롯에 되쓴다
+0x140118bc3  mov  [rdi], rcx
+```
+
+`wproperties.audioprocessing.order` 도 같은 함수 안에서 `cmp eax,-1`(`0x140118c8a`) →
+`sub eax,0x14`(`0x140118cae`) → `cdqe`(`0x140118cb5`) 로 **−21** 을 써 넣는다.
+프로퍼티 목록 쪽(`0x14010a520`)은 반대로 `cmp eax,0x64` + **`jge`**(부호 있는 비교,
+`0x14010a807`·`0x14010a80a`) → `add eax,0x64`(`0x14010a80c`) 로 `order + 100` 을 써 넣는다.
+부호 없는 폭이라면 `−20` 도 `jge` 도 성립하지 않는다.
+
+→ **`Sources/WapleCore/WallpaperProperties.swift` 의 `parseNumber` 를 `strictUInt32` 로 바꾸는
+§7.3 의 패치안은 철회한다.** 적용했다면 `eagleflag` 의 두 색 프로퍼티가 목록 맨 뒤로 가서
+**실물과 어긋났을** 것이다(현재 Waple 동작이 맞다). 도달: 설치본 241 프로퍼티 중 음수 `order` 2건.
+
+### 9.6 §7.1 정정 · §7.2 철회
+
+* **§7.1(`orthogonalprojection.width/height`)** — 방향은 맞지만 부호가 틀렸다.
+  `numericUInt32` 가 아니라 **`numericInt32`**(부호 있는 32비트)다. `SceneDocument.orthoSize` 는
+  지금 `numericInt`(64비트)를 쓰고 있고, `numericInt32` 와 갈리는 것은 `|x| ≥ 2^31` 저작뿐이라
+  **도달 0**이다. 넘기는 한 줄은 아래 §9.8.
+* **§7.2(`lightconfig.*`)** — **철회**. 그 자리에는 `isUInt`(`0x140088760`) 게이트가 있고
+  (§9.3), 실물은 `{"point":true}` 를 **읽지 않고 건너뛴다**(불리언은 `isUInt` 거짓).
+  `{"point":1.5}` 도 소수부가 0 이 아니라 거짓이다. 즉 지금
+  `SceneDocument.uintField`(불리언 거부 + 정수만 + `0…2³²−1`) 가 **이미 정합**이다.
+  그 파일의 주석(`isUInt`(`0x140088760`) 게이트 뒤 `asUInt`(`0x140085F70`))도 맞게 적혀 있다.
+  §7.2 의 `strictUInt32` 치환은 **적용하면 회귀**다.
+
+### 9.7 Waple 쪽 조치
+
+`Sources/WapleCore/JSONNumerics.swift`:
+
+* 접근자 이름·VA 를 전부 정정하고 술어 다섯의 표를 넣었다.
+* **`wrapInt32` / `strictInt32` / `numericInt32` 를 새로 넣었다** — 게이트 35자리의 진짜 접근자다.
+* `wrapUInt32(Double)` 을 **진짜 `asUInt` 규약으로 고쳤다**: 종전에는 `cvttsd2si eax`(32비트)를
+  모델링해 Int32 범위 밖 실수를 nil 로 돌려줬는데, 실물 `asUInt` 는 `cvttsd2si rax`(64비트) 뒤
+  하위 32비트라 값이 나온다(`5000000000.5` → 705032704). Int64 범위 밖만 nil 로 남겼다
+  (integer indefinite 구간, **추정**).
+* 호출부는 여전히 **0**이다(위 §9.6 두 패치안이 다른 소유라). 사다리 자체는 이제 실물 셋을 덮는다.
+
+### 9.8 넘길 것 (다른 소유)
+
+`Sources/WapleCore/SceneDocument.swift` — `orthoSize`(현재 코드:
+`guard let w = numericInt(proj["width"]), let h = numericInt(proj["height"]) else { return nil }`):
+
+```swift
+-            guard let w = numericInt(proj["width"]), let h = numericInt(proj["height"]) else { return nil }
++            // 게이트 뒤 접근자는 **`asInt`**(`0x14018758f`)이고 곧바로 `cvtdq2ps`(`0x14018759b`)로
++            // **부호 있는** int32→float 다. `numericInt` 는 64비트라 `|x| ≥ 2^31` 저작에서만 갈린다
++            // (설치본·동봉 도달 0). 폭까지 맞추려면 `numericInt32` 다 — `numericUInt32` 가 아니다.
++            guard let w = numericInt32(proj["width"]), let h = numericInt32(proj["height"]) else { return nil }
+```
+
+같은 파일 `uintField` 는 **고치지 마라**(§9.6). `Sources/WapleCore/EffectManifest.swift` 의
+사설 `safeInt` 도 고치지 마라 — 다만 그 주석의 "실물보다 엄격한 하드닝" 은 **정합**으로 고쳐야 한다.
+
+이름이 바뀐 VA 를 인용하는 **다른 소유 파일**(전수 grep):
+`Sources/WapleCore/ParticleControlPointFrame.swift:236` · `Sources/WapleCore/ParticleSystem.swift`
+(`:989` `:1397` `:1408` `:2641` `:3340`) · `Sources/WapleCore/SceneDocument.swift:1735` ·
+`Sources/WapleCore/AudioSpectrum.swift:152` · `Sources/WapleCore/EffectManifest.swift:675` ·
+`Tests/WapleCoreTests/SceneDocumentTransformComponentTests.swift`(`:39` `:55`) ·
+`Tests/WapleCoreTests/ParticleNumericTagGateTests.swift:7` ·
+`Tests/WapleCoreTests/ParticleRemapFlagsWiringTests.swift:106` ·
+`docs/dev/re-methodology.md`(`:45` `:133`) · `docs/re/particle-control-points.md`(`:306` `:505` `:1320`) ·
+`docs/re/remap-operation.md`(`:304` `:928` `:1166`).
+**VA 는 그대로 두고 이름만 바꾸면 된다** — `0x140085f70` 을 `asInt` 라고 적은 자리는 `asUInt`,
+`0x140085ee0` 을 `asUInt` 라고 적은 자리는 `asInt` 다. (`docs/re/fluid-simulation.md:2106` 은
+`0x1400886e0`/`0x140085ee0` 을 이미 맞게 적고 있다 — 고칠 것이 없다.)
+
