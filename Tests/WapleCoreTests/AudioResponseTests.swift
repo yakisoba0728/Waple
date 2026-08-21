@@ -189,4 +189,41 @@ final class AudioResponseTests: XCTestCase {
         // 합산 항 수가 같은데도 값이 갈린다는 것이 요점이다(분모만 다르다).
         XCTAssertGreaterThan(frac, int0)
     }
+
+    // MARK: 셰이더 선언 기본값
+
+    /// `shake` 의 `audiobounds` 는 `pulse` 와 다르다 — `"0.0 1.2"` vs `"0.5 1.0"`
+    /// (`assets/effects/shake/shaders/effects/shake.vert:29` · `.../pulse/…/pulse.vert:31`).
+    /// 호출부가 `pulse` 값을 상수로 박아 두면 작은 신호에서 실물은 반응하는데 우리는 0 이다.
+    func testShakeDeclaresDifferentAudioBoundsThanPulse() {
+        let pulse = AudioResponse.declaredDefaults(effectName: "pulse")
+        let shake = AudioResponse.declaredDefaults(effectName: "shake")
+        XCTAssertEqual(pulse.bounds, SIMD2<Float>(0.5, 1.0))
+        XCTAssertEqual(shake.bounds, SIMD2<Float>(0.0, 1.2))
+        // 나머지 넷은 같다.
+        XCTAssertEqual(pulse.freqMin, shake.freqMin)
+        XCTAssertEqual(pulse.freqMax, shake.freqMax)
+        XCTAssertEqual(pulse.power, shake.power)
+        XCTAssertEqual(pulse.multiply, shake.multiply)
+        // 대소문자 무관, 모르는 이름은 pulse 로.
+        XCTAssertEqual(AudioResponse.declaredDefaults(effectName: "Shake"), shake)
+        XCTAssertEqual(AudioResponse.declaredDefaults(effectName: "bloom"), pulse)
+    }
+
+    /// 그 차이가 실제 응답에서 갈리는 것을 고정한다. 밴드 0..1 평균이 0.3 인 약한 신호는
+    /// `pulse` 경계(0.5–1.0)에서는 `smoothstep` 하한 아래라 정확히 0 이고, `shake` 경계
+    /// (0.0–1.2)에서는 0 이 아니다.
+    func testShakeBoundsRespondToSignalsThatPulseBoundsFloorToZero() {
+        let left = [Float](repeating: 0.3, count: 16)
+        let right = [Float](repeating: 0.3, count: 16)
+        func resp(_ d: AudioResponse.ShaderDefaults) -> Float {
+            AudioResponse.compute(left: left, right: right, mode: 1,
+                                  freqMin: d.freqMin, freqMax: d.freqMax,
+                                  bounds: d.bounds, power: d.power, multiply: d.multiply)
+        }
+        let pulse = resp(AudioResponse.declaredDefaults(effectName: "pulse"))
+        let shake = resp(AudioResponse.declaredDefaults(effectName: "shake"))
+        XCTAssertEqual(pulse, 0, accuracy: 1e-6, "0.3 은 0.5 하한 아래 — smoothstep 이 0 으로 뭉갠다")
+        XCTAssertGreaterThan(shake, 0.05)
+    }
 }

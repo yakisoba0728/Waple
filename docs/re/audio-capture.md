@@ -3,8 +3,10 @@
 **조사일 2026-08-21 · WE 2.8.42 `wallpaper64.exe` (imagebase `0x140000000`, sha256 `40e2ce02…`)**
 **대상: WASAPI 캡처 초기화 `0x1400cf120–0x1400cf969` · 오디오 스레드 본체 `0x1400d02b0–0x1400d2117`**
 
-뒤단(소비 정규화·스무딩·2단 MAX)은 `Sources/WapleCore/AudioSpectrumProcessor.swift` 가
-이미 실물과 맞춰져 있다. 이 문서는 그 **앞단** — 캡처 파라미터와 스펙트럼 산출 — 만 다룬다.
+§1–§5 는 **앞단**(캡처 파라미터 → FFT → 64밴드 산출)만 다룬다. 뒤단(소비 정규화·스무딩·
+2단 MAX)은 `Sources/WapleCore/AudioSpectrumProcessor.swift` 가 실물과 맞춰져 있고, **§7–§8 이
+그 뒤단까지 확장한다** — §7.1 의 축약 결함, §8.1 의 전건 재측정, §8.2 의 클램프/dB 부재,
+§8.3 의 씬 스크립트 API. §8 은 `bin/scenescript64.dll`(imagebase `0x180000000`)도 쓴다.
 
 ## 0. 결론
 
@@ -30,6 +32,11 @@
 오디오를 켜지 않는다** — 활성화 콤보가 동봉·설치 JSON 3,741개 중 **0건**이다(§6.1).
 새로 지을 것은 없고, 2026-08-20 라운드는 **어긋난 산술 셋 정정(§4 #1·#2·#10) + 순수부 이관**으로 끝났다.
 2026-08-21 재대조는 **소비단 32밴드 축약 결함 1건**을 찾았다(§7.1).
+같은 날 2차 라운드는 소비단을 **전건 재측정(정정 0건)** 하고, `scenescript64.dll` 의
+`registerAudioBuffers` 를 떠서 §7.2(b) 의 미해결을 닫았다 — 씬 스크립트 오디오 버퍼는
+**접지 않고**, 셋째 배열의 실물 이름은 `average`(= mono 사분면)다(§8.3). 더해서
+**상한 클램프도 dB 변환도 없다**는 것을 전수로 확인했고(§8.2), 32·16밴드의 **빈/주파수 경계표**를
+처음 적었다(§8.4 — 16밴드 0…6 이 정확히 등간격 91.875 Hz).
 
 ---
 
@@ -636,6 +643,11 @@ public func setSpectrumBands(_ out: AudioSpectrumProcessor.Output) {
 `engine.audioBuffer` 축약 규약을 실물에서 확인하지 못했다 — **[미해결]**. 유니폼 별칭
 (2797-2800)만이라도 `maxss` 규약으로 맞추는 것이 정합적이지만, 근거 없이 바꾸지 말고 먼저
 `registerAudioBuffers` 경로를 떠 봐야 한다.
+>
+> **[2026-08-21 2차 · 해소]** 그 경로를 떴다 — §8.3. `registerAudioBuffers` 는 `scenescript64.dll`
+> 에 있고(`0x181655170–0x18165580f`), **아무것도 접지 않는다**. 스크립트가 보는 `left/right` 는
+> 소비단이 `maxss` 로 접어 둔 값 그대로이고 셋째 배열의 이름은 `average`(= mono 사분면)다.
+> 즉 위 `avg(...)` 4줄은 **MAX 여야 한다**. 정정안 전체는 §8.5(a).
 
 **(c) `Sources/WapleRender/SceneRendererResources.swift` 의 `audioParams(for:)`**(2026-08-21 기준 2015-2035) — `audioParams` 의 폴백이
 `pulse.vert` 의 선언 기본값만 담고 있다. **`shake.vert` 는 `audiobounds` 기본값이 다르다**:
@@ -652,6 +664,11 @@ Waple 은 셰이더 어노테이션 기본값을 파싱하지 않고 `?? [0.5, 1
 **도달은 현재 0 이다**(§6.1 — `constantshadervalues` 에 오디오 키가 0건이고 콤보도 0건),
 그래서 무회귀 정정이다. 정공법은 셰이더별 어노테이션 기본값을 읽는 것이고, 최소 조치는
 이펙트 이름이 `shake` 일 때만 `(0.0, 1.2)` 로 갈아 주는 것이다.
+
+> **[2026-08-21 2차]** 이 표를 `AudioResponse.declaredDefaults(effectName:)` 로 코어에 옮기고
+> 테스트로 잠갔다(`Sources/WapleCore/AudioResponse.swift`). 호출부 한 줄 정정안은 §8.5(b).
+> 전수 재확인: `audiobounds` 를 선언하는 파일은 설치본(`ui/` 제외) **3개**, 동봉 `WEAssets`
+> **2개**뿐이고 `uniform vec2 g_AudioBounds` 선언도 같은 3줄이라 형제 키는 없다.
 
 ### 7.3 `scripts/spec/measure_effect_fbo_audio.py` 가 **검사하지 않는** 것
 
@@ -781,3 +798,275 @@ audioResponse = saturate(pow(audioResponse, g_AudioPower)) * g_AudioMultiply;
 `w = C − (1−C)cos(πt)` 는 `C=0.501` 에서 항상 `[0.002, 1.0]` 이라 `sqrt` 인자가 음수가 될 수 없다.
 실물에는 음수 분기(`0x1400d1ce9` 의 `ja` → 라이브러리 `sqrtf`)가 있지만 **도달 불가**이고,
 우리 `tiltAmplitudeWeights` 의 `w > 0 ? sqrtf(w) : 0` 클램프는 도달 가능 영역에서 등가다.
+
+---
+
+## 8. 2026-08-21 (2차) — 소비단 전건 재측정 · 밴드 경계표 · 씬 스크립트 오디오 API
+
+**바이너리 둘을 썼다**: `wallpaper64.exe`(imagebase `0x140000000`) 와
+`bin/scenescript64.dll`(imagebase `0x180000000`). 후자는 이 문서에서 처음 쓴다.
+
+### 8.1 소비단 전건 재측정 — 정정 0건
+
+§7 의 값을 베끼지 않고 **함수 시작에서 선형으로 다시 떴다**. `primary(0x140110630)` 는
+`0x140110630–0x140110867` 짜리 조각이라 그대로 쓰면 안 되고(브리프 함정 1),
+`merged` 가 주는 `0x140110630–0x140113bc0`(7조각)이 실제 범위다. 2,797개 명령을 전부 훑은 결과:
+
+| 항목 | 재측정 근거 | 판정 |
+| --- | --- | --- |
+| 그룹 크기 = 연속 8 float | 적재 오프셋 `{0x00,0x20,…,0x1e0}`(16개, 스트라이드 0x20)에서 `K+0/4/8/0xc`, 카운터 `add ecx,4`(`0x140111b81`) · `cmp ecx,8`(`0x140111baf`) → 4×2 = 8 | 일치 |
+| 비율 하한 0.333 | `0x140111c7d` `mulss xmm2, [0x140492698]` = 0.333 → `maxps` 4개(`0x140111c99`·`ca4`·`caf`·`cb3`)로 16그룹 | 일치 |
+| 무음 임계 1e-4 | `0x140111c72` `movss xmm6, [0x1404925fc]`, `0x140111c8c` `comiss` + `setae r9b` | 일치 |
+| 리시드 조건은 `env[0]` 하나 | `0x140111ca1` `comiss xmm6, [rax]` → `jb`(`0x140111cc3`) + `test r9b,r9b`(`0x140111cc9`) | 일치 |
+| 리시드 값 1.0 × 16 | `0x140111cd2`–`0x140111da3` 의 `mov dword [rax+n], 0x3f800000` 16개(오프셋 0x00…0x3c) | 일치 |
+| 스냅 / 상승 1.0 / 하강 −0.5 | `andps`(abs, 마스크 `0x140492fc0`) → `comiss xmm2, xmm6` → `jbe` 스냅(`0x140111f18`, 피크를 그대로 복사) / `comiss xmm3, xmm7(=0)` → `jbe` 면 `−0.5`(`0x1404929ac`), 아니면 `xmm11`(=1.0, `0x140492704`) | 일치 |
+| 스텝 `min(dt,1)` | `0x140111e68` `minss xmm1, xmm11` | 일치 |
+| 분모 바닥 0.001 + `rcpps` | `0x1401121b8` `movss xmm1, [0x140492608]`, 16개 `comiss`/`jbe` 후 `shufps …,0` + `rcpps`, 결과를 `[rbp+0x170 + 16g]` 에 적재 | 일치 |
+| 1-pole 계수 `min(dt·20,1)` | `0x140112363` `mulss xmm10, [0x14049288c]`(=20.0) → `comiss xmm11, xmm10`/`ja` | 일치 |
+| 슬루 `±min(dt·40,1)` | `0x1401123f0` `[0x1404928c4]`(=40.0) 와 `0x14011240f` `[0x140492a10]`(=−40.0), 하한은 `[0x1404929b8]`(=−1.0) | 일치 |
+| 슬루 분기 형태 | `maxps`(음수쪽) + `minps`(양수쪽) + `cmpltps 0, delta` 마스크 + `andps`/`andnps`/`orps` — 즉 `delta==0` 은 음수 가지로 떨어져 0 | 일치(우리 `min(max(d,−s),s)` 와 등가) |
+| 출력이 `[rbx]` 에 in-place | `0x1401124ba` `movups [rbx+rdx*4], xmm3` | 일치 |
+| `prev = out` 전체 복사 | `0x1401125e2`–`0x140112642`: `[r15+0x1a0]` ← `rbx`, 0x80B × 4 = **0x200B(128 float)** | 일치 |
+| 무음이면 출력만 memset | `0x14011242f` `je 0x140112646` → `memset(rbx, 0, 0x200)`; **prev 복사를 건너뛴다** | 일치 |
+| mono = 0.5·(L+R) | `0x1401126a4` `[rbx+…+0x100]` + `[rbx+…]`, `mulss xmm6`(0.5, `0x1404926c0`), 저장 `+0x200` | 일치 |
+| 64→32 MAX | `0x1401128da` `movss xmm0,[rbx+rax*4+4]` / `0x1401128e0` `maxss xmm0,[rbx+rcx*4]` → `[[rdi+0x2d8]+rcx*4]` | 일치 |
+| 32→16 MAX | `0x140112b6f` 부터 완전 언롤 `maxss` 사슬, 마지막 쌍이 `[rax+0x170]`·`[rax+0x178]`(=96 float 버퍼의 끝) → 48 출력 = **세 사분면 전부** | 일치 |
+| 버퍼 멤버 | `[obj+0x2d0]`=spec64(0x300B) · `[+0x2d8]`=spec32(0x180B) · `[+0x2e0]`=spec16(0xc0B) — `0x140115403`–`0x14011543a` | 일치 |
+| 유니폼 등록표 id 6개(§6.3) | 이름 6개 각각 ASCII **1건**·UTF-16LE **0건**·`.text` disp32 xref **1건**. 표는 `0x140003dcf`부터 선형으로 다시 떴다 — `mov [rsp+X], id` 가 자기 이름 `lea` **앞**에 오고, 슬롯 `lea rcx,[rbp+…]` 는 0x28 간격. 경계로 `0x61`=`g_LightSkylightColor`, `0x68`=`g_PointerPositionLast` 확인 | **일치**(0x62…0x67 = 16L·16R·32L·32R·64L·64R) |
+
+**정정 0건.** `AudioSpectrumProcessor.swift` 의 상수 9개·순서 10단계는 전부 실물과 같다.
+
+### 8.2 상한 클램프도 dB 변환도 없다
+
+새로 못 박은 두 가지다(§0 표에도 §7 에도 없던 항목).
+
+- **출력 클램프 없음.** 오디오 구간 `0x140111662–0x1401131bf` 의 `minss`/`minps` 는 **13개뿐**이고
+  전부 시간 계수·슬루다: `min(dt,1)` 1개(`0x140111e68`), 엔벨로프 스텝 `min(step,|d|)` **명령
+  8개** = 8배 언롤(`0x140111eeb`·`f43`·`f9e`·`ff9`·`0x140112054`·`0af`·`10a`·`165`; 바깥 루프가
+  2회 돌아 16그룹), 슬루 상한 `minps` 4개(`0x140112495`·`500`·`562`·`5c4`).
+  계수 셋(α·±슬루)은 `comiss`/`ja`/`movaps` 분기형이라 `minss` 로 세지 않는다.
+  **출력값을 1.0 으로 자르는 자리는 없다** — 엔벨로프가 초당 1.0 으로만 쫓아오므로 급격히 커진
+  대역은 1.0 을 넘겨 나가는 것이 정상이다.
+- **dB 없음.** 프로듀서 소비 루프 `0x1400d1bff–0x1400d1e00` 의 라이브러리 호출은 정확히 셋 —
+  `powf`(`0x1400d1c90`) · `cosf`(`0x1400d1ccd`) · `sqrtf` 폴백(`0x1400d1cf7`) — 이고 `log` 계열은
+  없다. 진폭은 `sqrt(w·p)` 선형 그대로 게인만 곱해 나간다.
+- **무신호 바닥값은 0** 이다(`0x140112646` 의 memset). `0.001` 바닥은 **분모에만** 걸린다.
+
+### 8.3 [해소] §7.2(b) — 씬 스크립트 오디오 버퍼는 접지 않는다
+
+`scenescript64.dll` 에 `registerAudioBuffers` 가 있다(ASCII 1건, `0x1819a3630`; UTF-16LE 사본 0건).
+오류 문자열 둘이 규약을 그대로 말해 준다:
+
+```
+0x1819a3af8  "registerAudioBuffers can only be called from global scope."
+0x1819a3b38  "Resolution must be either 16, 32 or 64."
+```
+
+구현은 `0x181655170–0x18165580f`(merged 9조각). 두 오류 문자열이 **이 함수 안에서만** 참조되는
+것으로 먼저 잡았고, 등록표 쪽에서 독립으로 확인했다 — `0x18164938e` 가 이름
+`"registerAudioBuffers"` 를 `lea` 하고 **바로 다음 항목**의 함수 포인터 `lea` 가
+`0x1816493d5: lea r8, 0x181655810` 인데, 그 `0x181655810` 이 정확히 이 함수의 **끝 다음 바이트**다.
+(즉 등록표는 여기서도 한 칸 밀려 있다 — 브리프 함정 16. 이름 뒤의 `lea` 를 그 이름의 구현으로
+읽으면 `registerAsset` 을 집는다.) 등록 대상 객체는 `AUDIO_RESOLUTION_*` 상수와 **같은 객체**이고
+(둘 다 `[rbp+0x98]` 을 `rcx` 로 받아 `0x1800090f0` 호출), 문자열 테이블에서 세 상수 바로 뒤에
+`engine` 이 온다 — 그래서 `engine.registerAudioBuffers` 로 적는다(객체 **이름**은 그 인접성에
+기댄 **추정**이다). 읽은 그대로:
+
+```
+0x181655216  cmp dword [rcx], 0        ; argc
+0x181655221  mov r15d, 0x10            ; ← **인자 없으면 16** (argc 검사보다 앞에 있다)
+0x181655227  jle <스킵>
+0x18165527a  r15d = (int32)arg0
+0x18165527e  mov  eax, 0xfffffff0
+0x181655283  add  eax, r15d            ; eax = res − 16
+0x181655286  test eax, 0xffffffcf      ; {16,32,48,64} 만 통과
+0x18165528b  jne  <throw>
+0x18165528d  cmp  r15d, 0x30           ; 48 은 여기서 따로 걷어낸다
+0x181655291  jne  <ok>
+```
+
+버퍼는 **미리 9개를 잡아 둔다** — `0x181655360`–`0x1816553ca` 의 3회 루프가 `rol r14d,4`
+(=16→32→64) × 4바이트로 크기를 만들고 매 바퀴 `alloc` 을 세 번 불러
+`[ctx+0x630]`, `[+0x638]`, `[+0x640]` … `[+0x670]` 에 채운다. 호출 때는
+`r15d >>= 5`(`0x1816553e2`) · `eax = 3·r15`(`0x1816553f6`) 로 한 벌을 고른다
+— 16→`0x630`, 32→`0x648`, 64→`0x660`.
+
+그 셋에 붙는 **프로퍼티 이름 셋을 확정했다.** 스크립트 컨텍스트 셋업
+`0x181647aa0–0x18164abef`(merged 2조각, `registerAudioBuffers` 라는 전역 이름을 등록하는 바로 그
+함수)이 인터닝된 이름을 슬롯에 심는다:
+
+| 슬롯 | 이름 | 심는 자리 | `registerAudioBuffers` 가 읽는 자리 | 물리는 버퍼 |
+| --- | --- | --- | --- | --- |
+| `ctx+0x2b0` | `enabled` | `0x18164891c` | (읽는 자리 못 찾음) | — |
+| `ctx+0x2b8` | `left` | `0x18164895b` | `0x181655642` | `+0x630` |
+| `ctx+0x2c0` | `right` | `0x18164899a` | `0x181655679` | `+0x638` |
+| `ctx+0x2c8` | `average` | `0x1816489d9` | `0x1816556a0` | `+0x640` |
+
+`enabled` 는 문자열 테이블에서 `left`/`right`/`average` 바로 앞에 붙어 있고 슬롯도 연속이라
+같은 오디오 객체의 넷째 프로퍼티로 **보이지만**, `registerAudioBuffers` 는 이 슬롯을 읽지 않는다 —
+어디서 쓰는지 못 찾았다(**추정**). 나머지 셋은 읽는 자리까지 확인했다.
+
+같은 함수가 상수도 심는다 — `AUDIO_RESOLUTION_16/32/64` = `0x10`/`0x20`/`0x40`
+(`0x181649c05`/`0x181649c65`/`0x181649cc5` 의 `mov r8d, imm` 이 각 이름 `lea` **앞**에 온다 —
+함정 16 이 여기서도 걸린다. 이름 뒤의 imm 으로 읽으면 한 칸 밀린다).
+
+**결론 셋.**
+
+1. **스크립트 쪽 축약은 없다.** `registerAudioBuffers` 는 해상도 하나로 미리 접어 둔 버퍼 한 벌을
+   고를 뿐이다. 즉 스크립트가 보는 `left/right` 는 소비단이 **`maxss` 로 접어 둔** `spec16/32/64`
+   그대로다 — §7.2(b) 가 미해결로 남겨 둔 질문의 답이고, `TextScriptEngine` 의 `avg(...)` 는 틀렸다.
+2. **셋째 배열의 실물 이름이 `average` 다.** §3.5 가 "읽는 쪽을 찾지 못했다" 고 남겨 둔 mono
+   사분면의 소비처가 이것이다. 셰이더 유니폼으로는 안 나가지만(등록표 6개 확정, §6.3)
+   스크립트에는 나간다.
+3. **`average32/16` 은 `average64` 를 MAX 로 접은 것**이지 접힌 L/R 을 다시 평균한 것이 아니다.
+   32→16 언롤 사슬이 96 float 버퍼의 셋째 사분면(`[rax+0x160]`…`[rax+0x178]`)까지 도는 것이 근거다.
+   두 순서는 갈린다 — L=[1,0], R=[0,1] 이면 실물 0.5, 뒤바꾼 순서 1.0.
+
+**[미해결]**: 이 9개 버퍼를 **누가 언제 채우는지**(호스트 → 스크립트 푸시 경로)는 못 떴다.
+크기(해상도당 3×res float)와 셋째 이름(`average`)이 소비단 `[L|R|M]` 사분면과 정확히 맞으므로
+소비단 출력이 그대로 들어간다는 것이 자연스러운 해석이지만, **복사 자리를 눈으로 보지는 못했다 —
+추정이다.** 좁히지 못한 이유는 오프셋이 흔해서다: `wallpaper64.exe` `.text` 에서 disp32 가
+`0x2d0`/`0x2d8`/`0x2e0` 인 메모리 오퍼랜드 **후보**가 각각 230/366/224건 나오고, 그중 이
+클래스의 것이 어느 것인지는 베이스 레지스터만으로 가려지지 않는다.
+
+### 8.4 32밴드·16밴드가 실제로 덮는 주파수
+
+§3.2 는 64밴드 표만 있었다. 32·16 은 **인접 2개씩 `maxss` 로 접은 것**이므로 경계가 64밴드
+경계의 부분집합이고, 그래서 아래 표는 §3.2 에서 **유도**된다(§3.2 자체를 `bandOfBin` 재구현으로
+독립 재현해 대조했다 — 64밴드 64개, 1:1 구간 밴드 0…28 의 29개까지 일치).
+기준은 원본 조건 `B = 640`, 44.1 kHz(빈 폭 22.96875 Hz).
+
+**32밴드** — 하위 14개가 각 2빈(≈46 Hz)이고 그 위가 급격히 벌어진다.
+
+| 밴드 | 빈 | 개수 | Hz |
+| --- | --- | --- | --- |
+| 0…13 | 각 2빈 (1–2, 3–4, … 27–28) | 2 | 23.0 – 666.1 |
+| 14 | 29–31 | 3 | 666.1 – 735.0 |
+| 15 | 32–40 | 9 | 735.0 – 941.7 |
+| 16 | 41–51 | 11 | 941.7 – 1194.4 |
+| 17 | 52–64 | 13 | 1194.4 – 1493.0 |
+| 18 | 65–80 | 16 | 1493.0 – 1860.5 |
+| 19 | 81–98 | 18 | 1860.5 – 2273.9 |
+| 20 | 99–119 | 21 | 2273.9 – 2756.2 |
+| 21 | 120–143 | 24 | 2756.2 – 3307.5 |
+| 22 | 144–171 | 28 | 3307.5 – 3950.6 |
+| 23 | 172–203 | 32 | 3950.6 – 4685.6 |
+| 24 | 204–239 | 36 | 4685.6 – 5512.5 |
+| 25 | 240–279 | 40 | 5512.5 – 6431.2 |
+| 26 | 280–324 | 45 | 6431.2 – 7464.8 |
+| 27 | 325–375 | 51 | 7464.8 – 8636.2 |
+| 28 | 376–432 | 57 | 8636.2 – 9945.5 |
+| 29 | 433–494 | 62 | 9945.5 – 11369.5 |
+| 30 | 495–563 | 69 | 11369.5 – 12954.4 |
+| 31 | 564–639 | 76 | 12954.4 – 14700.0 |
+
+**16밴드** — 실사용이 몰려 있는 해상도다(§6: 유니폼 출현 31/11 대 2/2/2/2).
+
+| 밴드 | 빈 | 개수 | Hz | 폭 |
+| --- | --- | --- | --- | --- |
+| 0 | 1–4 | 4 | 23.0 – 114.8 | 91.9 |
+| 1 | 5–8 | 4 | 114.8 – 206.7 | 91.9 |
+| 2 | 9–12 | 4 | 206.7 – 298.6 | 91.9 |
+| 3 | 13–16 | 4 | 298.6 – 390.5 | 91.9 |
+| 4 | 17–20 | 4 | 390.5 – 482.3 | 91.9 |
+| 5 | 21–24 | 4 | 482.3 – 574.2 | 91.9 |
+| 6 | 25–28 | 4 | 574.2 – 666.1 | 91.9 |
+| 7 | 29–40 | 12 | 666.1 – 941.7 | 275.6 |
+| 8 | 41–64 | 24 | 941.7 – 1493.0 | 551.3 |
+| 9 | 65–98 | 34 | 1493.0 – 2273.9 | 780.9 |
+| 10 | 99–143 | 45 | 2273.9 – 3307.5 | 1033.6 |
+| 11 | 144–203 | 60 | 3307.5 – 4685.6 | 1378.1 |
+| 12 | 204–279 | 76 | 4685.6 – 6431.2 | 1745.6 |
+| 13 | 280–375 | 96 | 6431.2 – 8636.2 | 2205.0 |
+| 14 | 376–494 | 119 | 8636.2 – 11369.5 | 2733.3 |
+| 15 | 495–639 | 145 | 11369.5 – 14700.0 | 3330.5 |
+
+**선형도 로그도 아니다** — 하위 7밴드가 **정확히 등간격 91.875 Hz**(= 4빈)이고 그 위가
+`pow(t,0.25)` 매핑대로 벌어진다. 그 등간격 구간은 별도 규칙이 아니라 §3.2 의 `prev+1` 클램프가
+64밴드 0…28 을 1빈씩으로 묶어 둔 결과의 그림자다. 그래서 **길이가 `B` 에 딸려 변한다** —
+`B ∈ 623…688` 에서만 "16밴드 0…6 이 4빈" 이고, 96 kHz(B=314)나 32 kHz(B=940)에서는 달라진다.
+
+**바로 따라오는 것 하나.** `CreateAudioResponse` 의 선언 기본값 `frequencymin=0`,
+`frequencymax=1`(§7.4)은 **밴드 0–1 = 23.0–206.7 Hz** 다. 즉 스톡 오디오 이펙트의 기본 반응은
+서브베이스~베이스 두 칸이고, 전 대역이 아니다. `audiophileglow.vert` 가 쓰는 `L[0]` 은
+**23–115 Hz 한 칸**이다.
+
+우리 구현은 48 kHz·N=2048 에서 `B=627`(빈 폭 23.4375 Hz)이라 위 표의 **구조는 같고**
+(1:1 구간 29 → 16밴드 0…6 이 각 4빈) 경계 주파수만 최대 0.92빈(≈21.6 Hz) 밀린다 —
+이 절충의 근거는 `AudioSpectrum.swift` 헤더에 있다.
+
+### 8.5 Waple 반영과 넘길 것
+
+**이번에 고친 것(소유 안).**
+
+- `Sources/WapleCore/AudioSpectrumProcessor.swift`
+  - `ScriptResolution`(16/32/64 · `fallback = 16` · `validate` 가 실물의 두 게이트를 그대로 태운다)
+  - `Output.scriptBuffers(_:)` → `(left, right, average)`
+  - 상한 클램프/dB 부재, 그룹 크기 8의 근거를 주석에 명시
+- `Sources/WapleCore/AudioResponse.swift`
+  - `ShaderDefaults` + `pulseDefaults`/`shakeDefaults` + `declaredDefaults(effectName:)`
+    (§7.2(c) 의 표를 코어로 옮겨 테스트로 잠갔다)
+- `Sources/WapleCore/AudioSpectrum.swift` — `bandOfBin` 주석에 32·16밴드 경계 유도(§8.4) 포인터.
+- 테스트 6개 추가(`AudioSpectrumProcessorTests` 3 · `AudioResponseTests` 2 ·
+  `AudioSpectrumWEParityTests` 1), 돌연변이 5/5 검출.
+
+**넘기는 것(소유 밖).**
+
+**(a) `Sources/WapleRender/TextScriptEngine.swift`** — `__setAudioData` 안 세 곳.
+
+```js
+// ① 64→32/16 은 평균이 아니라 MAX 다 (0x1401128e0 / 0x140112b6f)
+function fold(src, dst, group) {
+    for (var i = 0; i < dst.length; i += 1) {
+        var m = src[i * group];
+        for (var j = 1; j < group; j += 1) { if (src[i * group + j] > m) { m = src[i * group + j]; } }
+        dst[i] = m;
+    }
+}
+fold(__audioBuffer.left64,  __audioBuffer.left32,  2);
+fold(__audioBuffer.right64, __audioBuffer.right32, 2);
+fold(__audioBuffer.left64,  __audioBuffer.left16,  4);
+fold(__audioBuffer.right64, __audioBuffer.right16, 4);
+
+// ② average 는 **먼저 섞고 그 다음 접는다** — 접힌 L/R 을 다시 평균하면 안 된다
+for (var m = 0; m < 64; m += 1) { __audioBuffer.average64[m] = (__audioBuffer.left64[m] + __audioBuffer.right64[m]) / 2; }
+fold(__audioBuffer.average64, __audioBuffer.average32, 2);
+fold(__audioBuffer.average64, __audioBuffer.average16, 4);
+```
+
+③ `registerAudioBuffers(res)` 의 **무인자 폴백은 64 가 아니라 16** 이다(`0x181655221` 의
+`mov r15d, 0x10` 이 argc 검사보다 앞). 그리고 실물은 16/32/64 가 아니면 **던진다** — 지금 코드는
+조용히 64 로 떨어진다. 다만 `__audioBuffer.average = __audioBuffer.average64` 쪽 별칭은
+`engine.audio.average` 라는 **Waple 자체 확장**이라 실물 근거가 없다 — 그건 그대로 둬도 된다
+(실물에서 `average` 는 `registerAudioBuffers` 반환 객체의 프로퍼티로만 확인됐다).
+(도달은 0 이라 무회귀 정정이다 — §6.1.)
+
+호출부는 `AudioSpectrumProcessor.Output.scriptBuffers(_:)` 를 쓰면 코어와 규약이 하나로 붙는다.
+
+**(b) `Sources/WapleRender/SceneRendererResources.swift` 의 `audioParams(for:)`** — §7.2(c) 를
+코어 표로 대체한다(하드코딩 제거):
+
+```swift
+let d = AudioResponse.declaredDefaults(effectName: eff.name)
+let bounds = c["audiobounds"] ?? [d.bounds.x, d.bounds.y]
+return AudioParams(
+    mode: mode,
+    freqMin: c["frequencymin"]?.first ?? d.freqMin,
+    freqMax: c["frequencymax"]?.first ?? d.freqMax,
+    bounds: SIMD2<Float>(bounds.count > 0 ? bounds[0] : d.bounds.x,
+                         bounds.count > 1 ? bounds[1] : d.bounds.y),
+    power: c["audioexponent"]?.first ?? d.power,
+    multiply: c["audioamount"]?.first ?? d.multiply)
+```
+
+**(c) `scripts/spec/measure_effect_fbo_audio.py`** — §7.3 의 `BYTE_CHECKS` 4건 제안은 그대로
+유효하다(이번에 다시 읽어 바이트 전건 재확인). 라벨 8 어긋남 정정도 그대로.
+
+**(d) 정본 공백 하나 더.** `spec/engine/uniform-feed.json` 에는 **오디오 항목이 0건**이다
+(전수 확인: 키·값 어디에도 `udio` 문자열 없음). `scripts/spec/measure_uniform_feed.py` 역시
+`audio`/`0x62`/`0x66` 을 한 번도 언급하지 않는다. 즉 "id 0x62…0x67 이 소비단 버퍼의 어느
+사분면에서 오는가" 는 정본이 기록하지 않는다. 등록표(이름↔id)는 §6.3·§8.1 에서 확정했지만
+**매 프레임 피드 사이트는 이번에도 못 찾았다 — [미해결]**. 좌=사분면 0 이라는 것은
+프로듀서가 채널 0 을 `[rbp+0x40]`(좌 절반)에 싣는다는 §3.3 에서 **간접**으로 온다.
+`uniform-feed` 계열은 소유 밖이라 넘긴다.
+

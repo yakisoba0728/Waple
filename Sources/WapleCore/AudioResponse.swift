@@ -26,6 +26,54 @@ public enum AudioResponse {
         case peak
     }
 
+    /// 오디오 반응 셰이더가 **선언부 어노테이션으로** 들고 있는 기본값 한 벌.
+    ///
+    /// 씬은 `constantshadervalues` 로만 값을 채우고 우리는 셰이더 어노테이션을 파싱하지 않으므로,
+    /// 이 표가 곧 실효 기본값이다. 종전에는 호출부(`SceneRendererResources.audioParams(for:)`)가
+    /// `pulse` 의 값을 상수로 박아 두었는데 **`shake` 는 `audiobounds` 가 다르다**.
+    public struct ShaderDefaults: Equatable, Sendable {
+        public var freqMin: Float
+        public var freqMax: Float
+        public var power: Float
+        public var bounds: SIMD2<Float>
+        public var multiply: Float
+        public init(freqMin: Float, freqMax: Float, power: Float,
+                    bounds: SIMD2<Float>, multiply: Float) {
+            self.freqMin = freqMin; self.freqMax = freqMax
+            self.power = power; self.bounds = bounds; self.multiply = multiply
+        }
+    }
+
+    /// `assets/effects/pulse/shaders/effects/pulse.vert:28-32` 및
+    /// `projects/defaultprojects/razer_bedroom/shaders/effects/pulse.vert:21-25` 의 선언값.
+    /// 두 파일의 다섯 줄은 문자 단위로 같다.
+    public static let pulseDefaults = ShaderDefaults(
+        freqMin: 0, freqMax: 1, power: 1,
+        bounds: SIMD2<Float>(0.5, 1.0), multiply: 1)
+
+    /// `assets/effects/shake/shaders/effects/shake.vert:26-30`. `audiobounds` 만 다르다 —
+    /// `"0.0 1.2"` 라 `smoothstep` 의 하한이 0 이고 기울기가 1/1.2 다. `pulse` 값을 그대로 쓰면
+    /// 작은 신호에서 실물은 반응하는데 우리는 0 이 된다.
+    public static let shakeDefaults = ShaderDefaults(
+        freqMin: 0, freqMax: 1, power: 1,
+        bounds: SIMD2<Float>(0.0, 1.2), multiply: 1)
+
+    /// 이펙트 이름 → 선언 기본값.
+    ///
+    /// **`audiobounds` 를 선언하는 파일은 설치본(`ui/` 제외) 전수에서 3개, 동봉 `WEAssets` 에서
+    /// 2개뿐이다**(2026-08-21 실측: `grep -rn '"audiobounds"' --include=*.vert --include=*.frag
+    /// --include=*.h` → 설치본 3줄 = `assets/effects/pulse` · `assets/effects/shake` ·
+    /// `projects/defaultprojects/razer_bedroom`(pulse 사본), 동봉 2줄 = 앞의 pulse·shake).
+    /// `uniform vec2 g_AudioBounds` 선언 자체도 같은 3줄이라 다른 이름의 형제 키는 없다.
+    /// 그래서 표가 두 줄로 닫힌다.
+    ///
+    /// 모르는 이름은 `pulse` 쪽으로 떨어뜨린다 — 워크샵 이펙트가 자기 어노테이션을 갖고 올 수
+    /// 있으나 우리는 그걸 파싱하지 않으므로 어차피 추정이고, 스톡 다수가 `pulse` 값이다.
+    /// 정공법은 셰이더 어노테이션을 실제로 파싱하는 것이다 — **[미해결]**.
+    public static func declaredDefaults(effectName: String) -> ShaderDefaults {
+        effectName.lowercased() == "shake" ? shakeDefaults : pulseDefaults
+    }
+
     public static func compute(left: [Float], right: [Float], mode: Int,
                                freqMin: Float, freqMax: Float,
                                bounds: SIMD2<Float>, power: Float, multiply: Float,

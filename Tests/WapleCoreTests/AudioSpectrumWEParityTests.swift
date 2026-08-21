@@ -42,6 +42,59 @@ final class AudioSpectrumWEParityTests: XCTestCase {
         XCTAssertEqual(seen.count, AudioSpectrum.bandCount, "빈 밴드가 하나도 없어야 한다")
     }
 
+    /// 32·16 밴드의 **빈 경계**(`docs/re/audio-capture.md` §8.4 표). 축약이 인접 2개씩 MAX 라
+    /// 32밴드 j 는 64밴드 2j·2j+1 의 빈 합집합이고, 16밴드 j 는 64밴드 4j…4j+3 의 합집합이다.
+    ///
+    /// 못 박는 성질은 **하위 구간이 정확히 등간격**이라는 것이다 — 16밴드 0…6 이 각 4빈
+    /// (44.1 kHz·B=640 에서 91.875 Hz), 32밴드 0…13 이 각 2빈. 문서 표가 그 위에 서 있다.
+    /// 등간격의 출처는 별도 규칙이 아니라 `prev+1` 클램프의 1:1 구간(밴드 0…28)이다.
+    func testThirtyTwoAndSixteenBandBinBoundariesMatchTheDocumentedTable() {
+        let B = AudioSpectrum.referenceBinCount           // 640
+        let bandOf = AudioSpectrum.bandOfBin(binCount: B)
+        var lo = [Int](repeating: Int.max, count: 64)
+        var hi = [Int](repeating: Int.min, count: 64)
+        for i in 1..<B {
+            let b = bandOf[i]
+            lo[b] = Swift.min(lo[b], i); hi[b] = Swift.max(hi[b], i)
+        }
+        // `[lo, hi]` 배열로 든다 — Swift 튜플은 `Equatable` 이 아니라 `XCTAssertEqual` 이 안 받는다.
+        func folded(_ group: Int) -> [[Int]] {
+            (0..<(64 / group)).map { j in
+                [(0..<group).map { lo[group * j + $0] }.min()!,
+                 (0..<group).map { hi[group * j + $0] }.max()!]
+            }
+        }
+        let b32 = folded(2), b16 = folded(4)
+        XCTAssertEqual(b32.count, 32); XCTAssertEqual(b16.count, 16)
+
+        // 하위 등간격 구간.
+        for j in 0...13 {
+            XCTAssertEqual(b32[j], [2 * j + 1, 2 * j + 2], "32밴드 \(j) 는 빈 2개")
+        }
+        for j in 0...6 {
+            XCTAssertEqual(b16[j], [4 * j + 1, 4 * j + 4], "16밴드 \(j) 는 빈 4개(등간격 구간)")
+        }
+        // 그 위 — 문서 §8.4 표에서 뽑은 대표 행.
+        XCTAssertEqual(b32[14], [29, 31]);  XCTAssertEqual(b32[15], [32, 40])
+        XCTAssertEqual(b32[31], [564, 639])
+        XCTAssertEqual(b16[7],  [29, 40]);  XCTAssertEqual(b16[8],  [41, 64])
+        XCTAssertEqual(b16[15], [495, 639])
+
+        // 두 해상도 모두 빈 1…639 를 빠짐없이 덮고 겹치지 않는다(DC 빈 0 만 제외).
+        for table in [b32, b16] {
+            XCTAssertEqual(table[0][0], 1)
+            XCTAssertEqual(table[table.count - 1][1], B - 1)
+            for k in 1..<table.count { XCTAssertEqual(table[k][0], table[k - 1][1] + 1) }
+        }
+
+        // 등간격의 실제 폭 — 문서가 적은 91.875 Hz(= 4 × 22.96875).
+        let binWidth = AudioSpectrum.referenceRate / Double(AudioSpectrum.referenceFFTLength)
+        XCTAssertEqual(binWidth * 4, 91.875, accuracy: 1e-9)
+        // 선언 기본값 frequencymin=0 / frequencymax=1 이 덮는 대역(§8.4 의 따름정리).
+        XCTAssertEqual(Double(b16[0][0]) * binWidth, 22.96875, accuracy: 1e-9)
+        XCTAssertEqual(Double(b16[1][1] + 1) * binWidth, 206.71875, accuracy: 1e-9)
+    }
+
     /// 원본의 상한 주파수 — bin 639 × (44100/1920).
     func testTopFrequencyMatchesOriginal() {
         XCTAssertEqual(AudioSpectrum.topFrequency, 14677.03125, accuracy: 1e-6)
