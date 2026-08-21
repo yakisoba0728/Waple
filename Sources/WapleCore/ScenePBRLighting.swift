@@ -218,8 +218,17 @@ public extension SceneLight3D {
 /// | 레거시(비 PBR) | `generic`/`generic2` | `common_fragment.h:68` `ComputeLightSpecular` | `saturate((r-d)/r)^2` (diffuse) · `^1` (스페큘러) |
 ///
 /// V1/V0 는 `#require LightingV1` 스니펫(엔진이 문자열로 조립 — wallpaper64.exe
-/// 0x140168000–0x14016b154, 조각 문자열 0x14048be50–0x14048cfd0) 대 `PerformLighting_Deprecated`
+/// **0x140169140–0x14016b0d4**, 조각 문자열 0x14048be50–0x14048cfd0) 대 `PerformLighting_Deprecated`
 /// (generic3.frag:87-166) 로 갈린다. 우리 스톡 메시 셰이더는 V1 만 이식했다.
+///
+/// ⛔️ **정정(2026-08-21)**: 종전 표기 `0x140168000–0x14016b154` 는 **양쪽 끝이 다 틀렸다**.
+/// `primary()` 실측으로 0x140168000 은 앞 함수(`0x140167e10–0x140169138`) 안이고, 0x14016b154 는
+/// 뒤 함수(`0x14016b0e0–0x14016c3f8` — 라이팅 스니펫이 아니라 전처리기 디렉티브 파서
+/// `^\s*#\s*([a-z]+)\b\s*(.*)` 0x14048d048)의 안이다. 생성기 본체는 정확히
+/// **0x140169140–0x14016b0d4** 다(진입 `LIGHTING` 콤보 조회 0x1401691b8 · `LightingV1` 이름 비교
+/// 0x1401691f5 · 머리 문자열 0x14048c070 방출 · 꼬리 `\treturn light;\n}` 0x14048ce30 · `ret` 0x14016b0cc).
+/// HLSL 판 라이트 배열은 또 다른 함수 `0x1400f5cb0–0x1400f8520` 이다. 전문은
+/// `docs/re/scene-lighting.md` §2.1/§8.
 enum SceneWELightMath {
     /// V1 유한광 감쇠 지수의 밑에 더하는 하한. HLSL 레인 원문 상수
     /// (`common_pbr_2.h:266` `pow(falloff + 1.17549435e-38, exponent)` — `#if HLSL` 가지).
@@ -384,5 +393,159 @@ public extension SceneLight3D {
         public static let volumetricsExponent: Float = 1
         public static let cascadeDistances = SIMD3<Float>(3, 10, 100)
         public static let lightSourceSize: Float = 0
+    }
+}
+
+// MARK: - `general.lightconfig` 소비 — 슬롯 예산 (2026-08-21 x86 재확인)
+
+/// `lightconfig` 예산이 관장하는 **V1 레인** 라이트 종류. `Scene3DLightKind`(WapleRender, MSL
+/// `LightU.shadow.z` 와 rawValue 를 공유)와 달리 이쪽은 **씬 문자열 → V1 레인 여부** 판정이
+/// 목적이라 Metal 비의존이고, 그래서 여기(WapleCore)에 둔다 — 리눅스 코어 테스트가 규약을 못박는다.
+///
+/// ## WE 실측: 문자열 표는 **5 엔트리**이고 `"point"` 는 V1 이 아니다
+/// 정적 초기화 `0x14025e853`–`0x14025e9d0`(저장소 `0x1404e9cf0`, stride `0x28`, 값은 엔트리+0x20):
+/// `"point"`→**5**(`0x14025e931`) · `"lpoint"`→0(BSS 0) · `"lspot"`→1(`0x14025e979`) ·
+/// `"ltube"`→2(`0x14025e99d`) · `"ldirectional"`→3(`0x14025e9c9`). 표에 없는 문자열은 생성자
+/// 기본값 `5`(`0x140190486` `mov byte [rdi+0x2c0], 5`)로 남는다.
+///
+/// V1 유니폼 패커(`0x140190c80`–`0x1401964b8`)는 `[obj+0x2c0]` 를 읽어(`0x1401910f2`) 0/1/2/3 만
+/// 처리하고 **4·5 는 통째로 버린다**(`0x140191114` `cmp eax,1` / `jne 0x14019318c`). 즉 타입 5
+/// (`"point"` 와 미지 문자열 전부)는 `lightconfig` 슬롯을 **먹지 않고** 레거시 4슬롯 레인
+/// (`0x14025d1f6`, `g_LightsColorRadius[4]`)으로 간다.
+///
+/// **그래서 `init?(weLightType:)` 은 `l` 접두 4종만 받는다.** Waple 의 `Scene3DLightKind(type:)` 은
+/// 접두 없는 `"point"`/`"spot"`/`"tube"`/`"directional"` 도 관용으로 받아 V1 근사로 그리는데
+/// (레거시 Blinn 레인을 이식하지 않아 "빛 없음" 보다 낫다는 기존 정책), 그 관용을 **예산에까지
+/// 들이면** `lightconfig` 를 가진 씬의 레거시 라이트가 통째로 사라져 화면이 검어질 수 있다.
+/// 예산은 WE 가 실제로 버리는 것만 버린다 — 레거시 레인은 종전 그대로 통과시킨다.
+public enum SceneLightSlotKind: Equatable, CaseIterable {
+    case point, spot, tube, directional
+
+    /// scene.json `"light"` 문자열 → V1 레인 종류. **레거시/미지 타입은 nil**(위 주석 참조).
+    public init?(weLightType: String) {
+        switch weLightType.lowercased() {
+        case "lpoint": self = .point
+        case "lspot": self = .spot
+        case "ltube": self = .tube
+        case "ldirectional": self = .directional
+        default: return nil
+        }
+    }
+}
+
+/// `general.lightconfig` → 종류별/섀도우별 **슬롯 예산**. 저작 씬만 상한이 되고, 미저작(nil)은
+/// 모든 `take` 가 성공한다(= 종전 폴백, 비트동일).
+///
+/// ## WE 실측 규약 (근거 VA — 2026-08-21 재확인)
+/// 1. **파스**: 9키가 `[engine+0x121C]` 한 워드에 니블/2비트로 OR 된다. 폭 초과는 **클램프가 아니라
+///    절단**이다 — `and eax,0xF` 뒤 `or [rcx+0x121c],eax`(point `0x140187b7a`), spot `shl 4`
+///    (`0x140187bab`), tube `shl 8`(`0x140187bd7`), directional `shl 0xc`(`0x140187c03`);
+///    2비트 계열은 `and eax,3` 뒤 spotcookie `shl 0x12`(`0x140187c32`), spotshadowcookie
+///    `shl 0x14`(`0x140187c66`), spotshadow `shl 0x10`(`0x140187c93`), directionalshadow
+///    `shl 0x16`(`0x140187cb9`), pointshadow `shl 0x18`(`0x140187d00`). 즉 `{"point":16}` 은
+///    WE 에서 **0**, `{"point":17}` 은 **1** 이다. 절단은 `SceneLightConfig.parse` 가 이미 한다.
+/// 2. **콤보**: 세터 `0x1401a5c40`–`0x1401a6c5d` 가 그 워드를 잘라 9 콤보를 무조건 세운다
+///    (point `and 0xF` `0x1401a5e44` … pointshadow `shr 0x18` `0x1401a6220`). **9키 ↔ 9콤보 1:1,
+///    변환 없음.**
+/// 3. **셰이더 퍼뮤테이션**: 콤보 값이 배열 길이이자 루프 상한이다. V0 레인은 평문으로 남아 있어
+///    직접 읽을 수 있다 — `uniform vec4 g_LPoint_Color[LIGHTS_POINT];`(generic3.frag:64) +
+///    `for (uint l = 0u; l < CASTU(LIGHTS_POINT); ++l)`(:90). V1 레인은 셰이더 파일에 본문이 없고
+///    생성기 `0x140169140`–`0x14016b0d4` 가 **완전 언롤**로 조립한다(`\tconst uint i = <상수>u;`
+///    `0x14048c298`). 어느 쪽이든 **값 = 슬롯 수**다.
+/// 4. **섀도우는 가산이 아니라 분할**: point 루프가 `ebx=0`→`LIGHTS_POINT_SHADOW`(`0x140169d23`)로
+///    섀도우 블록을, 이어서 `ebx`→`LIGHTS_POINT`(`0x140169d42`)로 무섀도우 블록을 찍는다.
+///    `{"point":1,"pointshadow":1}` 은 라이트 **1개**이고 그게 캐스터라는 뜻이다.
+/// 5. **초과분은 드롭**: 유니폼 패커가 종별 잔여 카운터를 `test/je` 로 보고 0 이면 라이트를 통째로
+///    버린다(point `[rsp+0x60]` `0x14019325f`, spot `[rbp-0x64]` `0x140192dbf`,
+///    tube `[rbp-0x68]` `0x140192a19`, directional `[rbp-0x28]` `0x14019111d`). 섀도우 예산은 별도
+///    카운터라(point `[rsp+0x6c]` `0x14019332b`, directional `[rbp+0x24]` `0x14019353a`) 소진되면
+///    **그림자만 잃고 셰이딩은 남는다**(`0x140193331` 의 `je` 는 프로젝션 기록만 건너뛴다).
+/// 6. **소비는 가시성 판정 뒤**(`IsVisible` `0x1401910d6` → 종 분기 `0x1401910f2` → `test/je`).
+///
+/// ## 우리 쪽 의도적 차이 셋
+/// 1. 미저작 씬을 WE 처럼 "V1 라이트 0개"(`0x140190ca8` `test r9d,r9d; je`)로 만들지 **않는다**.
+///    `arsenal`(ambientcolor 완전 검정)이 새까매지고 레거시 Blinn 레인을 이식하지 않았다.
+/// 2. 소비 시점을 유한성/반경 가드 뒤로 미룬다(WE 는 그 가드가 없어 순서가 무의미).
+/// 3. 셰이더 배열이 8 고정이라 **줄이는 방향만** 반영한다(늘리는 쪽은 `docs/re/scene-lighting.md` §9).
+///
+/// spot/tube 섀도우 예산은 여기서 다루지 않는다 — tube 는 WE 정본이 무섀도우(스니펫 `0x14048c9e0`
+/// 의 마지막 인자가 리터럴 `1.0`)이고 spot 섀도우는 Waple 미이식이라 호출부가 애초에 후보로 안 준다.
+public struct SceneLightSlotBudget: Equatable {
+    /// nil = 미저작(`general.lightconfig` 부재/비객체) → 상한 없음(종전 폴백).
+    private var authored: Bool
+    private var point: Int
+    private var spot: Int
+    private var tube: Int
+    private var directional: Int
+    private var pointShadow: Int
+    private var directionalShadow: Int
+
+    /// `config == nil` 이면 모든 `take`/`takeShadow` 가 성공한다(= 종전 폴백, 비트동일).
+    public init(_ config: SceneLightConfig?) {
+        guard let config else {
+            authored = false
+            point = 0; spot = 0; tube = 0; directional = 0
+            pointShadow = 0; directionalShadow = 0
+            return
+        }
+        authored = true
+        point = config.point
+        spot = config.spot
+        tube = config.tube
+        directional = config.directional
+        pointShadow = config.pointShadow
+        directionalShadow = config.directionalShadow
+    }
+
+    /// 남은 슬롯 조회(테스트/진단용 — 소비하지 않는다). 미저작이면 nil.
+    public func remaining(_ kind: SceneLightSlotKind) -> Int? {
+        guard authored else { return nil }
+        switch kind {
+        case .point: return point
+        case .spot: return spot
+        case .tube: return tube
+        case .directional: return directional
+        }
+    }
+
+    /// 남은 섀도우 슬롯 조회(소비하지 않는다). 미저작이면 nil. spot/tube 는 항상 0.
+    public func remainingShadow(_ kind: SceneLightSlotKind) -> Int? {
+        guard authored else { return nil }
+        switch kind {
+        case .point: return pointShadow
+        case .directional: return directionalShadow
+        case .spot, .tube: return 0
+        }
+    }
+
+    /// 종류별 슬롯 하나를 소비한다. 남은 슬롯이 없으면 false(= WE 가 그 라이트를 버리는 자리).
+    public mutating func take(_ kind: SceneLightSlotKind) -> Bool {
+        guard authored else { return true }
+        switch kind {
+        case .point: return Self.consume(&point)
+        case .spot: return Self.consume(&spot)
+        case .tube: return Self.consume(&tube)
+        case .directional: return Self.consume(&directional)
+        }
+    }
+
+    /// 섀도우 슬롯 하나를 소비한다. 실패해도 라이트 자체는 남는다(셰이딩 유지, 그림자만 상실).
+    /// tube/spot 은 WE 에도 섀도우 판이 없어 항상 false.
+    public mutating func takeShadow(_ kind: SceneLightSlotKind) -> Bool {
+        switch kind {
+        case .spot, .tube: return false
+        case .point:
+            guard authored else { return true }
+            return Self.consume(&pointShadow)
+        case .directional:
+            guard authored else { return true }
+            return Self.consume(&directionalShadow)
+        }
+    }
+
+    private static func consume(_ slot: inout Int) -> Bool {
+        guard slot > 0 else { return false }
+        slot -= 1
+        return true
     }
 }

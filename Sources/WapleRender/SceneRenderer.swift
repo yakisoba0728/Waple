@@ -1085,6 +1085,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var is3D = false
     var has3DScripts = false
     var scene3DLights: [SceneLight3D] = []
+    /// 씬 `general.lightconfig`(`SceneDocument.lightConfig`). **nil = 미저작** — 그때는 종전
+    /// first-`Scene3DLighting.maximumLights` 폴백 그대로라 비트동일이다(동봉 172 씬 중 저작은
+    /// `modeleditor`/`particleelementpreviews/collisionmodel` **2건**뿐이고, 그 둘은 저작 카운트가
+    /// 실제 라이트 수와 같아 예산을 켜도 결과가 안 바뀐다 — `docs/re/scene-lighting.md` §6.3).
+    /// 소비는 `Scene3DLighting.resolveLights(_:nodes:config:)` → `SceneLightSlotBudget`(WapleCore).
+    var scene3DLightConfig: SceneLightConfig? = nil
     var scene3DAmbient = SIMD3<Float>(repeating: 0)
     var scene3DSkylight = SIMD3<Float>(repeating: 0)
     var nodes3D: [Node3D] = []                 // scene order(계층 합성 입력)
@@ -2286,6 +2292,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         camera3D = nil; is3D = false; has3DScripts = false; scene3DFog = Scene3DFog()  // F745
         ortho3DHybrid = false  // F721: 하이브리드 상태 리셋(마운트 재사용)
         scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero
+        scene3DLightConfig = nil   // 마운트 재사용 시 이전 씬 예산 잔류 방지(미저작 씬이 종전 폴백으로 복귀)
         nodes3D = []; meshRenderables = []; billboards = []; billboardDefs = []; cameraScripts = []
         text3DControllers = []
         eval3DOrder = []; draw3DOrder = []
