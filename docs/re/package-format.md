@@ -16,7 +16,8 @@
 | `scene.pkg` vs `scene.json` | 우선순위 다툼이 **없다.** `project.json` 의 `file` 이 단독 결정자고, `.pkg` 는 그 파일이 **디스크에 없을 때만** 시도하는 폴백이다(`0x14011e330`–`0x14011e3f9`) |
 | `project.json` `type` | **읽히지 않는다.** `file`(또는 `dependency`) 확장자로 유도해 `type` 을 **덮어쓴다**(`0x14011e520` → `0x14011e300`) |
 | `contentrating`/`tags`/`visibility`/`approved` | `wallpaper64.exe` 에 문자열조차 **없다** — 런타임이 안 읽는다(`wallpaperui.exe` 전용) |
-| Waple 갭 | 마운트 선택자 1건(고), 타입 유도표 1건(중), 정규화·게이트 3건(저) — §7 |
+| 씬 문서 이름 | `stem(file) + ".json"` 이다 — `filename()` 이 **아니다**(`0x14010e22a`·`0x14010e253`, §4.3.1). 2026-08-21 정정 |
+| Waple 갭 | 마운트 선택자 1건(고), 타입 유도표 1건(중), 정규화·게이트 3건(저) — §7. **2026-08-21 에 5건 처리**, 새 갭 §7.7 1건(저, 미처리) |
 
 ---
 
@@ -254,17 +255,46 @@ TOC 를 다 읽은 뒤:
 
 ### 4.3 마운트 디스패처 `0x14010df40`
 
-`project.json` 의 `file` 을 절대경로화한 문자열(`[rbp+0xb8]`)의 **확장자만** 보고 갈린다.
-`0x140118880` 은 "이 확장자로 끝나는가" 술어다.
+`project.json` 의 `file`(UTF-8 std::string, 3번째 인자)을 `MultiByteToWideChar` → `wstring` →
+`std::filesystem::path` 로 만들어 `[rbp+0x98]` 에 두고(`0x14010df87`–`0x14010dfbc`),
+그 **확장자**를 `[rbp+0xb8]` 에 뽑아(`0x140053f80`, `0x14010dfe1`) 그것만 보고 갈린다.
+
+**[2026-08-21 정정]** `0x140118880` 은 "이 확장자로 **끝나는가**" 가 아니라
+`std::filesystem::path` **동등 비교**다(루트명 비교 → 컴포넌트 순회, `0x1401188ed`·`0x140420ff0`).
+왼쪽 피연산자가 이미 `extension()` 결과라 결과적으로 "확장자가 **정확히** 같은가" 다.
+그 `extension()` 은 wstring→UTF-8 변환 후 **바이트별 ASCII `tolower`**
+(`0x140054262`–`0x140054276`, CRT `tolower` `0x1402bfb1c`)를 돌려 되돌리므로 `SCENE.PKG` 도 잡힌다.
+곧 `.pkg2` 나 `x.notpkg` 는 **안 잡힌다** — 접미사 검사가 아니다.
 
 | 순서 | 조건 | 동작 | VA |
 | --- | --- | --- | --- |
-| 1 | `.gif` 로 끝남 | 플래그 `0x20` 세우고 GIF 씬 경로로 이탈 | `0x14010e0ee`–`0x14010e12c` |
-| 2 | `.pkg` 로 끝남 | `0x140276700`(패키지 적재) | `0x14010e14d`–`0x14010e18a` |
+| 1 | 확장자 == `.gif` | 플래그 `0x20` 세우고 GIF 씬 경로로 이탈 | `0x14010e0ee`–`0x14010e12c` |
+| 2 | 확장자 == `.pkg` | `0x140276700`(패키지 적재) | `0x14010e14d`–`0x14010e18a` |
 | 3 | 그 외 | `0x1402764d0`(**부모 폴더**를 루트로 마운트) | `0x14010e1d1`–`0x14010e20c` |
 
-이후 공통으로 `filename()` 을 씬 문서 이름으로 쓴다(`0x14010e231`–`0x14010e253`).
 **어느 분기도 다른 분기를 되짚지 않는다** — 2번에서 실패하면 에러 코드 5 로 끝난다.
+
+### 4.3.1 씬 문서 이름은 `stem() + ".json"` 이다 — `filename()` 이 아니다
+
+**[2026-08-21 정정]** 종전 서술("이후 공통으로 `filename()` 을 씬 문서 이름으로 쓴다")은 **틀렸다.**
+세 분기가 합류한 뒤 도는 것은 이렇다:
+
+```
+0x14010e22a  lea rcx, [rbp+0x98] ; call 0x14003fc80   ; path::stem()   ← filename() 이 아니다
+0x14010e23e  call 0x140018ce0                          ; wstring → UTF-8 std::string
+0x14010e246  lea rdx, [rip+0x368ac7]                   ; 0x140476d14 ".json"
+0x14010e24d  mov r8d, 5 ; call 0x1400532a0             ; std::string::append(".json", 5)
+```
+
+`0x14003fc80` 이 `stem()` 인 근거: 뒤에서부터 구분자(`/`·`\`)를 걷어내 파일명 구간을 잡고
+(`0x14003fcb4`–`0x14003fced`), 그 안에서 마지막 `.`(`0x2e`)를 찾되 `"."`·`".."` 는 예외로 두는
+(`0x14003fd0e`·`0x14003fd1d`) 표준 `stem` 절차다. 대비군 `0x14003fd90` 은 같은 골격에 확장자
+탐색이 없고 마지막 컴포넌트를 통째로 잘라내는 `parent_path()` 이고, 3번 분기가 그것을 쓴다.
+
+**결과**: `file:"techno.pkg"` 면 WE 는 그 패키지 안에서 **`techno.json`** 을 찾는다.
+`file:"techno.json"` → `techno.json`(같음), `file:"gifscene.json"` → `gifscene.json`(같음).
+곧 `file` 이 `.json` 인 동안에는 `filename()` 과 `stem()+".json"` 이 구별되지 않아 지금까지
+드러나지 않았다 — 설치본+동봉 361건이 전건 `.json`(358) / `.html`(2) / `.exe`(1) 이다.
 
 ---
 
@@ -305,7 +335,8 @@ JSON 값의 타입 태그는 jsoncpp 규약 그대로다 — `[value+8]` 하위 
 
 ### 5.3 확장자 → 타입 분류기 `0x14011e520`
 
-입력 문자열을 `std::filesystem::path` 로 만들어 **확장자를 소문자로** 뽑은 뒤(`0x140053f80`),
+입력 문자열을 `std::filesystem::path` 로 만들어 **확장자를 소문자로** 뽑은 뒤
+(`0x140053f80` — wstring→UTF-8 → 바이트별 ASCII `tolower` `0x140054262`–`0x140054276` → UTF-8→wstring),
 `.rdata` 의 확장자 테이블들과 순서대로 `memcmp` 한다. 테이블은 `[imagebase + i*8 + RVA]` 로 색인된다.
 
 | 순서 | 테이블 RVA | 개수 | 확장자 | 결과 | 매치 VA |
@@ -419,6 +450,32 @@ je   skip
 **하위 호환 폴백**으로 남긴다. `pkgURL(in:)` 은 ③ 전용으로 축소.
 `Sources/WapleCore/WallpaperCompatibilityAnalyzer.swift:654` 의 같은 하드코딩도 같이 따라간다.
 
+> **[2026-08-21 처리됨]** 결정 본체는 `ScenePackage.resolveMountSource(folderURL:fileName:hasDependency:)`
+> 로 옮겼다 — `WapleRender` 는 Metal 전용이라 리눅스에서 빌드가 안 되고, 그러면 이 결정을 재는
+> 테스트가 macOS CI 왕복 없이는 못 돌기 때문이다. `SceneRenderer.swift:1207` 이 그것을 부르고,
+> `SceneRendererResources.pkgURL(in:)` 은 `ScenePackage.legacyPackageURL(in:)` 델리게이트로 축소했다
+> (`SceneRendererPathFallbackTests.testScenePackageDiscoveryIsCaseInsensitive` 가 이 메서드를 직접
+> 부르므로 자리를 지울 수 없다 — 그 테스트는 이 과제의 소유가 아니다).
+> 게이트 ②(string `dependency`)까지 `hasDependency:` 로 옮겼다.
+>
+> **무회귀 실측** — 설치본 + 동봉 `project.json` **361건 전수**로 바꾸기 전/후 결정을 대조했다:
+> **차이 0건**(전건 `.directory`). 근거는 두 가지가 겹친다. ① 361건 전건이 선언한 `file` 이
+> 디스크에 실재한다(부재 0건) → 새 경로는 ①에서 곧장 폴더로 간다. ② 두 루트 9,078 파일에
+> `.pkg` 확장자가 **0개**다 → 종전 선택자도 전건 nil 을 냈다.
+> 재현: 아래 부록 A.5.
+>
+> 종전 대비 답이 **달라질 수 있는** 조합은 셋뿐이고, 방향은 전부 WE 쪽이다.
+> ⑴ 선언 파일이 실재 + 잔존 `.pkg` → 종전 pkg, 지금 폴더(§6 표 2행).
+> ⑵ 선언 파일 부재 + 같은 stem `.pkg` 존재 → 종전 폴더(적용 실패), 지금 pkg.
+> ⑶ 선언 파일이 `scene.pkg`/`gifscene.pkg` 가 **아닌** `.pkg` → 종전 nil, 지금 pkg.
+> 이 세 조합의 코퍼스 도달은 모두 0이다(`.pkg` 자체가 0개).
+>
+> `WallpaperCompatibilityAnalyzer.swift:654` 는 **따라가지 않았다** — 이 과제의 소유 파일이 아니다.
+> 스캐너는 여전히 두 이름을 하드코딩한다. `check_scene_mount_parity.py` 가 재는 "①마운트 형태 ·
+> ②씬 문서 이름" 두 불변식은 그대로 유지되지만(게이트 통과), 스캐너와 렌더러의 **마운트 대상
+> 선택**은 이제 갈려 있다. 갈린 방향은 ⑵⑶에서 스캐너가 더 비관적(= 렌더 가능한 것을 "불가"로
+> 볼 수 있음)이고, ⑴에서는 스캐너가 더 낙관적이다. **`[미해결]`**
+
 ### 7.2 [중] 확장자 → 타입 유도표가 WE 표와 다르다
 
 `Sources/WapleCore/ProjectJSONParser.swift:45`–`49` 의 폴백표는 `json`/`html`,`htm`/`exe`/
@@ -442,6 +499,18 @@ Waple 은 video 로 본다.
 분류돼 있다) **별도 판단**으로 남긴다. 분류 축과 재생 가능 축을 섞지 않도록, 타입 유도용
 확장자 집합은 `VideoFormats.nativeExtensions` 와 **분리**해서 새로 두는 편이 낫다.
 
+> **[2026-08-21 처리됨]** `case "json", "pkg", "gif": type = .scene` 로 1번 표를 채웠다.
+> 기존 가드(`type` 선언 있음 / `preset` 있음 / `dependency` 있음)는 그대로다 — 프리셋 오분류
+> 방지가 목적이고 WE 와의 거리는 그 셋 중 `type` 하나뿐이다.
+> **무회귀**: 설치본+동봉 361건의 `file` 확장자는 `.json` 358 · `.html` 2 · `.exe` 1 이 전부라
+> 새 분기의 도달이 **0건**이다.
+>
+> 안 맞춘 것은 그대로 `[미해결]`: ⑴ 4번 표 7종 vs `VideoFormats.nativeExtensions` 3종
+> (`VideoFormats` 가 이 과제 소유가 아니고, 넓히면 분류 축과 재생 축이 섞인다 — AVFoundation 이
+> 못 여는 `wmv`/`mkv` 를 `.video` 로 보내 실패 지점만 뒤로 민다), ⑵ 6번 이미지 표(WE 자신도
+> 값 5 를 `Unknown` 으로 출력하므로 실질 차이 없음), ⑶ `http(s)://` → Web
+> (`WallpaperPathSecurity` 가 URL 스킴을 거부해 `fileName` 이 nil 이 된다), ⑷ **`type` 우선**.
+
 ### 7.3 [저] 조회 키 정규화가 WE 보다 넓다
 
 `Sources/WapleCore/ScenePackage.swift:111` `normalizedLookupKey` = 역슬래시→슬래시 + Swift
@@ -454,6 +523,17 @@ Waple 은 video 로 본다.
 
 **착지 지점** — 고칠 필요는 낮다. 고친다면 `ScenePackage.swift:112` 에서 `.lowercased()` 를
 ASCII 한정 소문자화로 좁히면 WE 와 동치가 된다.
+
+> **[2026-08-21 처리됨]** `ScenePackage.asciiLowercased(_:)` 로 좁혔다(UTF-8 바이트 중 `0x41..0x5A`
+> 만 `+0x20`). 역슬래시→슬래시 치환은 **그대로 뒀다** — 정확 일치 색인이 먼저 이긴 뒤의 폴백이라
+> 히트만 늘리고 뺏지 않는다.
+>
+> **무회귀 실측**(재현: 부록 A.6): 두 루트 9,078 파일의 경로 컴포넌트 **3,374 종에 비-ASCII 0건**,
+> ASCII 폴딩 ≠ 유니코드 폴딩인 이름 **0건**. 워크샵 코퍼스에서 굳혀 둔 pkg 엔트리 경로
+> (`spec/corpus/workshop-shaders.json`, path 형태 39종)도 갈리는 것 0건 —
+> 대문자 ASCII 를 가진 21종은 두 폴딩이 같은 답을 낸다.
+> 즉 "유니코드 충돌 실사례" 는 여전히 **미관측**이고(§8), 이 정정의 근거는 코퍼스가 아니라
+> 로더 코드다. 반대로 말하면 이 정정이 지금 무언가를 고치는 것도 아니다 — **드리프트를 막는다.**
 
 ### 7.4 [저] 매직·버전 게이트 방향이 반대다
 
@@ -470,6 +550,12 @@ WE 는 정반대다 — 접두를 안 보고 상한 24 를 건다(§2.2).
 **착지 지점** — `ScenePackage.swift:63`–`71`. 주석에 "WE 는 `atoi(magic+4) > 24` 를 거부한다
 (`0x140276964`)"를 적고, 게이트 정책이 **의도적 이탈**임을 명시. 코드 변경은 불필요.
 
+> **[2026-08-21 처리됨]** 주석을 정정했다(코드 무변경). 틀렸던 것은 "프레이밍이 버전 불변" 이라는
+> **결론**이 아니라 그 아래 함의("그러니 WE 도 낙관적으로 받는다") 였다는 점을 명시했다.
+> 두 이탈은 `ScenePackageWEParityTests.testMagicPrefixIsEnforcedUnlikeWE` ·
+> `testNoVersionCeilingUnlikeWE` 가 **양방향으로** 못 박는다 — 접두 게이트를 빼면 전자가,
+> 상한 24 를 넣으면 후자가 깨진다(실측: 각각 테스트 케이스 2건씩 실패).
+
 ### 7.5 [저] `size == 0` 엔트리 처리
 
 WE 는 `size <= 0` 엔트리를 **없는 것으로 보고 디스크 폴백**으로 넘긴다(`0x14027412a`).
@@ -479,12 +565,49 @@ Waple `ScenePackage.data(for:)`(`ScenePackage.swift:96`, 슬라이스는 `:102`)
 
 **착지 지점** — `ScenePackage.swift:96` `data(for:)` 가 `e.size == 0` 이면 `nil` 을 반환.
 
+> **[2026-08-21 처리됨]** `.blob` 분기에만 `guard e.size > 0 else { return nil }` 를 넣었다.
+> **`.directory` 분기에는 넣지 않았다** — WE 의 폴더 마운트(`0x1402764d0`)는 엔트리 표를 만들지
+> 않고 파일을 바로 열므로, 디스크의 진짜 0바이트 파일은 WE 에서도 "0바이트로 열림" 이다.
+> `fromDirectory` 는 엔트리 `size` 를 `fileSize` 로 채우므로, 구분하지 않았다면 0바이트 파일이
+> 있는 언팩 프로젝트에서 **새 회귀**가 났을 자리다.
+> 도달: 0바이트 엔트리를 가진 pkg 는 여전히 미관측(표본 0). 무회귀.
+
+### 7.7 [저, 신규 2026-08-21] `file:"*.pkg"` 일 때 씬 문서 이름이 갈린다
+
+§4.3.1 에서 새로 확정한 것이다. WE 는 마운트 뒤 `stem(file) + ".json"` 을 씬 문서 이름으로 쓴다
+(`0x14010e22a` `path::stem` → `0x14010e253` `std::string::append(".json", 5)`).
+Waple 은 `SceneRenderer.swift` 가 `SceneDocument.parse(sceneFileName:)` 에 `project.fileName`
+**원문**을 넘기고, `SceneDocument.swift:1418` 이 `[sceneFileName, "scene.json", "gifscene.json"]`
+순으로 찾는다.
+
+| `file` | WE 가 여는 문서 | Waple 후보 순서 | 결과 |
+| --- | --- | --- | --- |
+| `scene.json` | `scene.json` | `scene.json` … | 같음 |
+| `techno.json` | `techno.json` | `techno.json` … | 같음 |
+| `scene.pkg` | `scene.json` | `scene.pkg`(miss) → **`scene.json`** | 같음(폴백이 우연히 맞음) |
+| `techno.pkg` | **`techno.json`** | `techno.pkg`(miss) → `scene.json`(miss) → `gifscene.json`(miss) | **`.noScene`** |
+
+마지막 행 하나만 갈린다. **고치지 않았다.** 이유 둘:
+
+1. **도달 0건.** 설치본+동봉 361건 중 `file` 이 `.pkg` 인 것은 0건이다. §7.1 이 새로 열어 준
+   재작성 경로(`file:"techno.json"` 부재 → `techno.pkg`)도 이 문제를 만들지 않는다 —
+   `project.fileName` 은 원문 `techno.json` 그대로라 후보 1번이 맞는다.
+2. **`check_scene_mount_parity.py` 가 `sceneFileName: project.fileName` 리터럴을 불변식으로
+   핀**해 두었다(그 게이트도 `SceneDocument.swift` 도 이 과제의 소유가 아니다). 고치려면
+   게이트의 불변식 정의부터 다시 써야 한다.
+
+고친다면 착지는 `SceneRenderer` 의 `sceneFileName:` 인자 — `fileName` 의 확장자가 `pkg` 일 때만
+`stem + ".json"` 으로 바꾸면 위 표의 다른 세 행은 그대로다. **`[미해결]`**
+
 ### 7.6 이미 맞는 것 (다시 손대지 말 것)
 
 - 헤더 파스 순서·필드 크기·`blobBase` 규약: `ScenePackage.swift:41`–`93`(`blobBase` 는 `:87`)이 §2.1 과 **완전 일치**.
 - 씬 문서 이름을 `project.json` `file` 로 정하는 것: `SceneDocument.swift:1418`. 맞다.
 - 무압축 가정: 맞다.
 - 언팩 폴더 마운트(`fromDirectory`): WE 의 §4.3 3번 분기와 같은 개념. 맞다.
+  (다만 WE 는 `parent_path(file)` 을, Waple 은 프로젝트 폴더를 마운트한다 — `file` 에 하위
+  디렉터리 성분이 있으면 Waple 쪽이 **상위집합**이라 씬 문서 이름도 그대로 풀린다. 361건
+  전건이 디렉터리 성분 없는 파일명이라 도달 0건. 의도적 이탈.)
 
 ---
 
@@ -496,7 +619,9 @@ Waple `ScenePackage.data(for:)`(`ScenePackage.swift:96`, 슬라이스는 `:102`)
 | 동봉 `.pkg` 총 바이트 / 평균 엔트리 수 | **산출 불가**(표본 0). 워크샵 코퍼스 파생치 122.1 은 §1.1 참조 |
 | `PKGV0002` 등 구버전의 프레이밍 차이 | 코드에 버전 분기가 **없으므로** 차이가 없다고 본다. 실물로 확인 못 함 |
 | `key/file/status/name/description/version/options` 매니페스트의 읽기 함수 | **없다**(xref 1건). `.pkg` 와의 관계도 미확인 |
-| 유니코드 정규화 키 충돌 실사례 | 코퍼스 부재로 미확인 |
+| 유니코드 정규화 키 충돌 실사례 | 코퍼스 부재로 미확인. 2026-08-21 재측정에서도 **0건**(경로 컴포넌트 3,374종 전건 ASCII) — 그래서 §7.3 정정은 "고침"이 아니라 **드리프트 차단**이다 |
+| `file:"*.pkg"` 일 때의 씬 문서 이름 | **`[미해결]`** — WE 는 `stem+".json"`, Waple 은 `project.fileName`. §7.7. 도달 0건이고 `check_scene_mount_parity.py` 가 현행 리터럴을 핀한다 |
+| 스캐너(`WallpaperCompatibilityAnalyzer`)의 마운트 선택 | **`[미해결]`** — §7.1 을 렌더러에만 적용했다(소유 파일 밖). 두 쪽의 "이슈 없음 = 렌더 가능" 계약이 `.pkg` 보유 프로젝트에서 갈릴 수 있다. 이 환경 도달 0건(`.pkg` 0개) |
 | `resourceutil64.dll` 등 형제 바이너리의 pkg IO | **없다** — `PKGV`·`.pkg`·`scene.pkg` 전건 0 히트(`resourceutil64.dll` `resourcecompiler64.exe` `wallpaperservice64.exe` `webwallpaper64.exe`). `scenescript64.dll` 에 `.pkg` 1건이 있으나 패키지 IO 로 이어지는 코드는 확인하지 못했다 |
 
 ---
@@ -556,7 +681,15 @@ vdis2.dis(0x140276700, 0x140276bd2)   # 컨테이너 적재
 vdis2.dis(0x140273f50, 0x14027458a)   # VFS openFile (조회 + seek)
 vdis2.dis(0x14011d7d0, 0x14011e51c)   # project.json 리더
 vdis2.dis(0x14011e520, 0x14011e872)   # 확장자 → 타입 분류기
+vdis2.dis(0x14010de40, 0x14010efa2)   # 마운트 디스패처(§4.3 — merged() 로 합친 2조각)
+vdis2.dis(0x140053f80, 0x14005420f)   # path::extension() + ASCII tolower (§4.3)
+vdis2.dis(0x14003fc80, 0x14003fd86)   # path::stem()        (§4.3.1)
+vdis2.dis(0x14003fd90, 0x14003fe73)   # path::parent_path() (§4.3 3번 분기)
 ```
+
+`0x14010df40` 은 `.pdata` 가 2조각으로 쪼개 두었고 `primary()` 가 `0x14010de40` 을 준다 —
+`dis()` 를 `0x14010df40` 에서 시작하면 명령이 어긋난다. 또 이 함수는 vtable 슬롯
+(`0x1404897c0`)으로만 불려 직접 call xref 가 **0건**이다.
 
 `.rdata` 확장자 테이블은 포인터 배열이라 rip-상대 xref 로 안 잡힌다 — 절대 64비트 포인터를
 직접 찾아야 한다:
@@ -580,3 +713,50 @@ for (b, e, u) in FUNCS:
             print(hex(ins.address), hex(primary(ins.address)[0]))
 # -> 0x1400ce7bc 0x1400ce760 / 0x14015dcf8 0x14015c8d0   (둘 다 .tex)
 ```
+
+### A.5 마운트 결정 전/후 361건 대조 (§7.1 무회귀 근거)
+
+`before` = 종전 선택자(`scene.pkg`/`gifscene.pkg` 존재만 본다), `after` = 새 결정
+(`ScenePackage.resolveMountSource` 를 파이썬으로 1:1 포팅. `WallpaperPathSecurity.
+normalizedRelativePath` 의 퍼센트 디코딩·`..` 거부·URL 스킴 거부까지 옮긴다).
+
+```python
+def after(folder, j):
+    rel = norm_rel(j.get("file"))
+    if rel:
+        url = os.path.join(folder, rel)
+        if os.path.isfile(url):                                  # 게이트 ③ 0x14011e34d
+            ext = os.path.splitext(url)[1].lower().lstrip(".")
+            return ("pkg", url) if ext == "pkg" else ("dir", folder)
+        cand = os.path.splitext(url)[0] + ".pkg"                 # 0x14011e368 replace_extension
+        if os.path.isfile(cand): return ("pkg", cand)            # 게이트 ④ 0x14011e3ae
+    p = legacy_pkg(folder)                                       # 하위호환 폴백(WE 에 없음)
+    return ("pkg", p) if p else ("dir", folder)
+```
+
+```
+total projects: 361
+decision differs: 0
+before decisions: Counter({'dir': 361})
+after  decisions: Counter({'dir': 361})
+file missing on disk: 0
+```
+
+**차이가 나는 항목은 0건이다.** 스크립트 전문은 스크래치의 `mountsim.py`.
+
+### A.6 ASCII 폴딩 ≠ 유니코드 폴딩 도달 (§7.3 무회귀 근거)
+
+```python
+def ascii_lower(s):
+    return ''.join(chr(ord(c)+32) if 'A' <= c <= 'Z' else c for c in s)
+names = set()
+for r in roots:
+    for dp, dn, fn in os.walk(r): names.update(fn); names.update(dn)
+print(len(names),
+      sum(any(ord(c) > 127 for c in f) for f in names),
+      sum(ascii_lower(f) != f.lower() for f in names))
+# -> 3374 0 0     (경로 컴포넌트 3,374종 · 비-ASCII 0 · 폴딩 갈림 0)
+```
+
+`spec/corpus/workshop-shaders.json` 의 pkg 엔트리 경로(39종, 그중 대문자 ASCII 보유 21종)도
+갈리는 것 0건이다.

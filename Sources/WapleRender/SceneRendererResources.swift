@@ -163,19 +163,23 @@ extension SceneRenderer {
         return out
     }
 
+    /// **하위호환 폴백 전용으로 축소됨**(2026-08-21, docs/re/package-format.md §7.1).
+    ///
+    /// 종전에는 이것이 마운트 **선택자**였다 — 폴더에 `scene.pkg`/`gifscene.pkg` 가 있으면
+    /// `project.json` 의 `file` 과 무관하게 그것을 열었다. WE 는 `file` 하나로 정하고 `.pkg` 는
+    /// 그 파일이 디스크에 없을 때만 도는 폴백이다(`0x14011e330`–`0x14011e3f9` · 마운트 디스패처
+    /// `0x14010df40`). 그래서 결정 전체가 `ScenePackage.resolveMountSource(...)` 로 갔고,
+    /// 이 두 이름 탐색은 그 결정의 **마지막 단**(선언된 `file` 이 아예 없을 때)으로만 남는다.
+    ///
+    /// 본체를 `ScenePackage.legacyPackageURL(in:)` 로 옮긴 이유는 검증 가능성이다 — 결정 전체가
+    /// WapleCore 에 있어야 리눅스 테스트(`ScenePackageWEParityTests`)가 물린다. WapleRender 는
+    /// Metal 전용이라 리눅스에서 빌드 자체가 안 된다.
+    ///
+    /// 이 자리를 지우지 않는 이유: `SceneRendererPathFallbackTests`
+    /// `testScenePackageDiscoveryIsCaseInsensitive` 가 이 메서드를 직접 부른다(대소문자 보존
+    /// 파일시스템에서 `Scene.pkg` 를 집는지 재는 테스트다). 그쪽은 이 과제의 소유가 아니다.
     func pkgURL(in folder: URL) -> URL? {
-        for name in ["scene.pkg", "gifscene.pkg"] {
-            let u = folder.appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: u.path) { return u }
-        }
-        if let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) {
-            for expected in ["scene.pkg", "gifscene.pkg"] {
-                if let actual = names.first(where: { $0.caseInsensitiveCompare(expected) == .orderedSame }) {
-                    return folder.appendingPathComponent(actual)
-                }
-            }
-        }
-        return nil
+        ScenePackage.legacyPackageURL(in: folder)
     }
 
     /// 텍스처/에셋 바이트 로드: 패키지 우선, 없으면 공유 기본 에셋 디렉터리에서 폴백.
