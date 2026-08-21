@@ -373,10 +373,14 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
     /// (두 핸들러의 SoA 슬롯 전수: 위치 +0x2b0/+0x2b8/+0x2c0 · 속도 +0x2c8/+0x2d0/+0x2d8 ·
     ///  기준 size +0x278(between 만) · CP +0x400 · 시스템 flags +0x20). 즉 아래 `p.frame` 기대치는
     /// 실물 근거가 없다 — `Initializer.mapSequence` 주석의 [근거없음] 항목을 보라.
-    /// 걷어내도 그림은 안 바뀐다(코퍼스 19건이 쓰는 텍스처 5종에 TEXS 가 없다). 다만 그 삭제는
-    /// `TexFramesAndMapSequenceTests.swift`(이 라운드 소유 밖)의 세 테스트를 같이 고쳐야 해서
-    /// 이번엔 미적용이다.
-    func testF630_MapSequenceAxisSelectsPlane() {
+    /// 걷어내도 그림은 안 바뀐다(코퍼스 19건이 쓰는 텍스처 5종에 TEXS 가 없다).
+    ///
+    /// **[2026-08-21 적용]** 그 삭제가 끝났다 — `ParticleSimulator` 의 `case .mapSequence` 는
+    /// 이제 무동작이고 `p.frame` 은 스폰 기본 `-1` 로 남는다. 그래서 이 테스트가 잠그는 것은
+    /// **`def.mapSequenceAxis` 의 파스·보존**이고, `p.frame` 쪽은 "안 건드린다" 를 단언한다.
+    /// 종전 기대치(`0.75 * 8` · `0.5 * 8`)는 근거 없는 값이었다 — 아래 단언에 그대로 적어 둔다.
+    /// 이름도 실제로 잠그는 것에 맞춰 바꿨다(종전 `testF630_MapSequenceAxisSelectsPlane`).
+    func testF630_MapSequenceAxisIsParsedButNotConsumed() {
         let def = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"boxrandom","origin":"1 0 0","distancemax":"0 0 0","rate":100}],
          "initializer":[{"name":"lifetimerandom","min":100,"max":100},
@@ -387,7 +391,7 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
         var sim = ParticleSimulator(def: def, seed: 31)
         let parts = sim.step(0.05)
         XCTAssertFalse(parts.isEmpty)
-        for p in parts { XCTAssertEqual(p.frame, 0.75 * 8, accuracy: 0.001, "Y축 회전(XZ 평면) 각도") }
+        for p in parts { XCTAssertEqual(p.frame, -1, "mapsequence 는 시퀀스 슬롯을 안 만진다(종전 0.75*8)") }
         // axis 부재는 레거시 XY 평면(비트동일)
         let legacy = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"boxrandom","origin":"1 0 0","distancemax":"0 0 0","rate":100}],
@@ -397,7 +401,7 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
         """), material: nil)
         XCTAssertNil(legacy.mapSequenceAxis)
         var sim2 = ParticleSimulator(def: legacy, seed: 31)
-        for p in sim2.step(0.05) { XCTAssertEqual(p.frame, 0.5 * 8, accuracy: 0.001) }
+        for p in sim2.step(0.05) { XCTAssertEqual(p.frame, -1, "종전 0.5*8") }
     }
 
     // MARK: - F631 (S-63): vortex_v2 → 표준 vortex 근사 매핑

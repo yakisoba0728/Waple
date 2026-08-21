@@ -729,10 +729,24 @@ dis(0x1402611f0, 0x14026124e)   # 이벤트 동사 14, 루프,       센티넬 0
 **A.4 파서 저장 오프셋**
 
 ```python
-dis(0x1401ce600, 0x1401ce8a0)   # 0x1401ce600 이 명령 경계임을 먼저 확인할 것
+dis(0x1401ce660, 0x1401ce8a0)   # 시작은 `remapvalue` 게이트의 lea — 명령 경계다
 ```
 
 `mov dword ptr [rsi], eax`(operation) → `[rsi+4]`(input) → `[rsi+8]`(output) → … 순서를 본다.
+범위의 **끝**은 배타적이라 경계가 아니어도 되지만 **시작은 반드시 경계여야 한다**(함정 17).
+
+> **[정정 2026-08-21 · 툼스톤]** 이 재현 줄의 **시작** 주소가 종전에는 명령 내부였다.
+>
+> | 종전 | 실제 명령 경계 | 명령 | 비고 |
+> | --- | --- | --- | --- |
+> | `0x1401ce600` | `0x1401ce660` | `lea rdx, [rip + 0x2c19f1]` → `"remapvalue"` | 종전 값은 `call 0x1401bfab0` 한복판(+1) `[VA-정정]` |
+>
+> 종전 줄에는 "명령 경계임을 먼저 확인할 것" 이라는 헤지가 붙어 있었는데, 확인해 보니
+> 경계가 아니었다. 거기서 뜨면 명령이 통째로 어긋난다 — 브리프 함정 17 과 같은 실패다.
+> 확인 절차: `.pdata` 상의 함수는 `0x1401c5490`–`0x1401d152c` **하나**이므로 그 시작에서
+> 선형으로 내려와 주소 집합에 있는지 보면 된다(종전 값은 없고, 그 앞뒤가
+> `call`(5바이트 `e8` rel32)과 `lea rdx,"maxspeed"` 다). 실제 파스 진입 바로 앞
+> 세 줄은 직전 원소(`capvelocity`)의 꼬리다.
 
 **A.5 핸들러에서 operation 읽기 위치**
 
@@ -1033,8 +1047,11 @@ outputrangemax` 면 폭이 음수가 되어 출력이 `min` 에서 **내려간�
 
 ### 10.8 Waple 대조 — 갈리는 자리 넷
 
-`ParticleSimulator.remapEval` / `remapNormalizeInput` 기준(둘 다 이 과제의 **소유 밖**이라
-이번에 고치지 않았다 — 아래는 정확한 패치안이다).
+`ParticleSimulator.remapEval` / `remapNormalizeInput` 기준.
+
+> **[2026-08-21 갱신] 이 절의 패치안은 §11 에서 실제로 배선됐다.** 아래 표의 "Waple 현재" 는
+> **배선 전** 상태다. 배선 뒤의 값 대조·자산 도달표·A/B 다이제스트는 §11.2 · §11.3 을 보라.
+> D1·D2·D3 은 닫혔고, D4(`square` 의 정확히 0.5)는 동봉 도달 0이라 오라클로만 잠겨 있다.
 
 | # | WE | Waple 현재 | 동봉 도달 |
 | --- | --- | --- | ---: |
@@ -1130,4 +1147,218 @@ for root in ('Sources/WapleRender/Resources/WEAssets',):
                           e.get('flags', '<absent>'), e.get('outputrangemin', '<absent>'), e.get('outputrangemax', '<absent>'))
     print('remapvalue all =', n)   # 12
 PY
+```
+
+---
+
+## 11. [2026-08-21 추가] 배선 — 산식이 시뮬레이터까지 닿게 했다
+
+§10 은 산식을 확정하고 `Sources/WapleCore/RemapOperation.swift`(`RemapValueMath`)로 **뽑기만**
+했다. 그 커밋 뒤에도 `ParticleSimulator.remapEval` 은 옛 식을 그대로 쓰고 있었다 — **주입 ≠ 소비**의
+전형이고, 그 사이를 잡는 테스트가 하나도 없었다. 이 절은 그 배선을 기록한다.
+
+### 11.0 이 절에서 다시 뜬 것 (남의 VA 를 베끼지 않았다 — 함정 16)
+
+전부 `.pdata` 함수 시작에서 **선형으로** 내려와 확인했다(함정 17).
+
+| 사실 | 확인 방법 | 결과 |
+| --- | --- | --- |
+| `flags` 는 `[op+0x1c]` ← `asInt` 직독 | 파서 `0x1401c5490`–`0x1401d152c` 선형 | `operator[]` `0x1401ce829` → `asInt`(`0x140085f70`) `0x1401ce831` → `mov [rsi+0x1c], eax` `0x1401ce83d`. **`isNumeric` 게이트 없음** |
+| `lea "flags"` 는 한 칸 밀려 있다 | 같은 덤프 | `0x1401ce803` 의 `lea` **바로 뒤** `mov [rsi+0x14], eax`(`0x1401ce80a`)는 앞 키 `transformfunction` 의 스토어다 |
+| VM 이 `[r14+0x2c]` 를 **넷** 읽는다 | 오퍼레이터 VM `0x14023fbc0`–`0x14024be38` 선형 후 grep | `0x140244986` · `0x140244996`(opid 19) · `0x140246fc9` · `0x140246fd9`(opid 39) — **그게 전부**. bit2 이상은 죽어 있다 |
+| bit0 / bit1 추출 | 같은 덤프 | bit0 `and r9b,1` `0x1402449a0`; bit1 `shr ecx,1` `0x140244a21` + `and cl,1` `0x140244a2a` |
+| bit0 클램프 자리 | 같은 덤프 | `test r9b,r9b` `0x1402450be`(3성분) / `0x140245105`(스칼라) → `minps` 1.0 `0x14024510a` → `maxps` 0 `0x140245117` |
+| bit1 클램프 자리 | 같은 덤프 | `test cl,cl` `0x140245791` → `minps` `0x140245799` → `maxps` `0x1402457a0`, 값은 `[rbp+0x1e0]`(`0x140245779`) |
+| `none` 이 스케일을 안 곱한다 | 같은 덤프 | `dec`/`cmp eax,5`/`ja 0x140245928`(`0x140245137`–`0x14024513c`) → `0x140245928` 은 `movaps xmm12,[1.0]` 한 줄 뒤 `jmp 0x140245779`. `xmm7`(=t) 무변경 |
+| sine 계수는 π 다 | 같은 덤프 | `movups xmm8,[r14+0x100]` `0x14024497e` → `mulps xmm9,[0x1404836d0]`(=`3.14159274f`) `0x14024498e` → 암에서 `mulps xmm7,xmm9` `0x140245164`, `subps xmm7,[0x1404836c0]`(=`1.5707964f`) `0x140245168` |
+| square 는 최근접짝수, saw 는 **곱하기 전 `t`** 로 부호를 본다 | 같은 덤프 | square: `mulps xmm7,xmm8` `0x140245452` **먼저** → `cmpltps xmm7,xmm10` `0x140245462`(=`u`). saw: `movaps xmm1,xmm7` `0x1402454f2` 로 복사한 뒤 `mulps xmm1,xmm8` `0x1402454f5` → `cmpltps xmm7,xmm10` `0x1402454f9`(=`t`) |
+| `flags` 부재 기본 int 1 | 이미지 전수 `e8`/`e9` rel32 스캔 | `0x1401d8040` 으로 오는 것은 `jmp` **둘뿐**(`0x1401bc91a` 이니셜라이저 · `0x1401c001a` 오퍼레이터). 함수는 `find`(`0x1401d8057`)가 없을 때만 태그 1(`0x1401d8071`) + 값 1(`0x1401d809d`) |
+| 퇴화 폭 센티넬은 두 자리뿐 | `.text` 전체 `c7 /r imm32=0x34000000` 스캔 | `0x1401cae45`(이니셜라이저) · `0x1401cedf3`(오퍼레이터) |
+
+### 11.1 배선 내용
+
+`Sources/WapleCore/ParticleSystem.swift`
+* `RemapSpec` 에 `public let flags: Int` 신설. 파스는 `injectedInt(o, "flags", 1)` — **부재만** 주입하고
+  값이 있으면 `strictInt` 로 읽는다. `strictInt` 는 `NSNumber`(=`__NSCFBoolean`)를 그대로 받으므로
+  `{"flags": true}` → 1 / `false` → 0 이고, 그게 `asInt` 직독의 동작이다(함정 18).
+  문자열은 파티클 규약대로 거부돼 0 이 된다(실물은 태그 4 에서 abort — Waple 은 죽을 수 없다).
+* 두 이니셜라이저에 `flags:` 를 기본값 `RemapValueMath.InjectedDefault.flags`(=1)로 추가 —
+  직접 조립한 def 도 파스 경로와 같은 기본을 받는다.
+
+`Sources/WapleCore/ParticleSimulator.swift`
+* `remapEval` 의 순서를 실물 그대로로: `정규화 → (flags&1) 클램프 → 변환 → 출력 매핑 → (flags&2) 클램프`.
+* `transforminputscale` 을 **변환 암 안으로** 옮겼다(`none` 에서는 곱하지 않는다).
+* 파형 넷을 `RemapValueMath.sine/square/saw/triangle` 호출로 교체.
+* `remapNormalizeInput` 은 이름만 남기고 본문을 `RemapValueMath.normalize` 로 넘겼다
+  (`Float.ulpOfOne == 0x1p-23 == Float(bitPattern: 0x34000000)` — 산술 동일).
+
+### 11.2 도달표 — 어느 자산이 어느 분기를 밟나
+
+범위 라벨: **동봉 `Sources/WapleRender/Resources/WEAssets/`**(json 1,698) ·
+**설치본 `wallpaper_engine/`**(json 2,143, 전건 `assets/` 사본이라 같은 12건).
+**워크샵 코퍼스는 이 컨테이너에 없다 — 미측정이다(0 이 아니다).**
+
+`operator[].remapvalue` **동봉 12건 / 8파일**:
+
+| # | 파일(동봉 기준) | output | transform | scale | flags | Waple 경로 | 밟는 분기 |
+| ---: | --- | --- | --- | ---: | ---: | --- | --- |
+| 1 | `scenes/particleelementpreviews/remapvalue/particles/new_particle_system.json` | color | **부재(none)** | 부재(2.0) | 부재(**1**) | Ex | **D1** + bit0 |
+| 2 | `presets/lightning/particles/presets/thunderbolt.json` | opacity | sine | 6 | **0** | Ex | **D2** + 두 클램프 끔 |
+| 3 | `presets/lightning/previewthunderbolt/…/thunderbolt.json` | opacity | sine | 6 | **0** | Ex | **D2** + 두 클램프 끔 |
+| 4–9 | `presets/rain/**/rain_screen{,_4k,_fast,_fast_4k}.json` ×6 | velocity | simplexnoise | 10 | 부재(**1**) | Ex | 없음(무회귀 — §11.3) |
+| 10–12 | `presets/rain/**/rain_screen{,_4k}.json` ×3 | speed | fbmnoise | 8 | **3** | **레거시** `.remapValue(.speed)` | **닿지 않는다** — §11.4 |
+
+`initializer[].remapinitialvalue` 3건은 Waple 에 시뮬 원소가 없다(파스·보존만) — 도달 0.
+
+**읽을 것 셋.**
+* `flags` 를 **명시**하는 것은 5건뿐이고(`0` ×2 · `3` ×3), 그중 `remapEval` 까지 닿는 것은 **2건**이다.
+* `flags:3`(두 클램프 다 켬) 3건은 확장 키가 없어 레거시 경로에 남아 있다 — 이 라운드의 **[미해결]**.
+* 나머지 7건은 부재 기본 1(= bit0 만)이라, 종전 구현이 `.none` 에서 우연히 맞던 자리와 겹친다.
+
+### 11.3 갈리는 자리 — 값으로
+
+**D1 — `none` 이 `transforminputscale` 을 먹었다.** 도달 1건(#1).
+`inputrangemin:150`/`inputrangemax:200`, 주입 기본 `transforminputscale = 2.0`,
+`outputrangemin:"1 0 0"` → `outputrangemax:"0 0 1"`.
+
+| `raw`(CP1 까지 거리) | WE (x, y, z) | Waple 종전 |
+| ---: | --- | --- |
+| 150 | (1.000, 0, 0.000) | (1.000, 0, 0.000) |
+| 160 | (0.800, 0, 0.200) | (0.600, 0, 0.400) |
+| **175** | **(0.500, 0, 0.500)** | **(0.000, 0, 1.000)** |
+| 190 | (0.200, 0, 0.800) | (0.000, 0, 1.000) |
+| 200 | (0.000, 0, 1.000) | (0.000, 0, 1.000) |
+
+곧 종전 구현은 **구간의 절반에서 이미 포화**해, 프리뷰 씬이 보여 주려던 빨강→파랑 그러데이션의
+뒷절반이 통째로 파랑 단색이었다.
+
+**D2 — sine 주기가 두 배 빨랐다.** 도달 2건(#2·#3). `s = 6`, `input: particlesystemtime` 이라
+가로축은 **초**다. 실물 주기 `2/s = 1/3` 초, 종전 `1/s = 1/6` 초.
+
+| `t`(초) | WE `0.5 − 0.5cos(π·6·t)` | Waple 종전 `0.5 − 0.5cos(2π·frac(6t))` |
+| ---: | ---: | ---: |
+| 0 | 0.0000 | 0.0000 |
+| 1/12 | 0.5000 | **1.0000** |
+| **1/6** | **1.0000** | **0.0000** |
+| 1/4 | 0.5000 | **1.0000** |
+| 1/3 | 0.0000 | 0.0000 |
+| 1/2 | **1.0000** | **0.0000** |
+
+`t = 1/6`·`1/2` 처럼 **봉우리와 골이 정확히 뒤집히는** 자리가 주기마다 생긴다. 번개 깜빡임이
+두 배 빠르고 위상이 반대였다는 뜻이다.
+
+**D3 — 두 클램프가 서로 다른 비트다.** 종전 `RemapSpec` 은 `flags` 를 아예 안 들고 있었고,
+`.none` transform 만 항상 잘랐다(= bit0 을 항상 켠 것과 같고 bit1 은 항상 끈 것과 같다).
+동봉에서 **독립 도달은 0** 이다 — `flags:0` 2건은 D2 와 겹치고(sine 출력이 이미 `[0,1]` 이라
+클램프가 무의미), `flags:3` 3건은 레거시 경로에 있다. 그래서 값 대조는 합성 스펙으로 잠갔다
+(`ParticleRemapFlagsWiringTests.testTheTwoClampBitsAreOrthogonal`): 배치 A(`t` 만 범위 밖)에서
+flags `0≡2`·`1≡3`, 배치 B(출력만 범위 밖)에서 `0≡1`·`2≡3`. 한 비트가 다른 비트 일을 하면
+둘 중 하나가 깨진다.
+
+**D4 — `square` 의 정확히 0.5.** WE 는 `roundps …, 8`(최근접짝수, `0x14024546b`)이라 **0**,
+종전 Waple 은 `f < 0.5 ? 0 : 1` 이라 **1**. **동봉 도달 0건**(`square` 를 쓰는 자산이 없다) —
+`RemapValueMath.square` 쪽 오라클로만 잠근다.
+
+**A/B 실측 — 어느 자산의 그림이 실제로 바뀌나.** 동봉 자산을 60fps × 240스텝 시뮬레이션해
+전 파티클의 `pos`/`vel`/`size`/`alpha`/`color`/`frame` 을 FNV-1a 로 접은 다이제스트
+(seed `0xBADC0DE`, 배선 전 = `HEAD` 코드 / 배선 후 = 이 커밋):
+
+| 자산 | 배선 전 | 배선 후 | 판정 |
+| --- | --- | --- | --- |
+| `presets/rain/particles/presets/rain_screen.json` | `41ce7880027edc33` | `41ce7880027edc33` | **비트동일** |
+| `presets/rain/particles/presets/rain_screen_4k.json` | `a619c9c8887edc33` | `a619c9c8887edc33` | **비트동일** |
+| `presets/rain/particles/presets/rain_screen_fast.json` | `11b78e2156bc24b8` | `11b78e2156bc24b8` | **비트동일** |
+| `presets/lightning/particles/presets/thunderbolt.json` | `f33887fc14684a44` | `f53512aab71c3bf1` | **바뀐다**(D2) |
+| `scenes/particleelementpreviews/remapvalue/…/new_particle_system.json` | `80302fc4e29947a8` | `5766b9040fc9416c` | **바뀐다**(D1) |
+
+곧 화면이 바뀌는 것은 **3파일**(thunderbolt 2 + 프리뷰 1)이고 rain 계열은 전건 무회귀다
+(rain 이 무회귀인 이유는 §11.5). 이 컨테이너에 Metal 이 없어 픽셀 A/B 는 못 했다 —
+시뮬 상태 다이제스트까지가 잰 범위다.
+
+### 11.4 [미해결] `flags` 가 `extKeys` 에 없다 — 넘길 것
+
+`ParticleSystemDef.parse` 의 `remapvalue` 분기는 **확장 키가 하나도 없고 `output` 이
+`velocity`/`speed`** 이면 레거시 `.remapValue` 케이스로 보낸다(시뮬 비트동일 무회귀 경로).
+레거시 케이스에는 클램프 비트를 실을 자리가 **없다** — `inputrangemin`/`inputrangemax` 를
+확장 키로 넣은 것과 **글자 그대로 같은 이유**로 `flags` 도 확장 키여야 한다.
+
+넣지 않은 이유는 근거가 아니라 **소유권**이다. 넣으면 동봉 `output:"speed"` + `flags:3` **3건**이
+레거시에서 Ex 로 옮겨 가고, 그 셋을 이름으로 못박은 테스트 둘이 소유 밖 파일에 있다.
+
+정확한 패치안(3곳):
+
+1. `Sources/WapleCore/ParticleSystem.swift` — `extKeys` 배열에 `"flags"` 추가:
+   ```swift
+   let extKeys = ["input", "operation", "transformoctaves", "flags",
+                  "blendinstart", "blendinend", "blendoutstart", "blendoutend",
+   ```
+2. `Tests/WapleCoreTests/RemapOperationAxesTests.swift` —
+   `testBundledSpeedRemapsStayOnTheLegacyPath` 를 뒤집는다. 기대치 `3` → `0` 이고 이름·주석도
+   "확장 키 `flags` 가 있어 Ex 경로다" 로 바꿔야 한다.
+3. 같은 파일 `testBundledRemapValueAxesCensus` — `census["speed/legacy"] == 3` 을
+   `census["speed/multiply"] == 3` 으로(`operation` 부재 기본이 `.multiply` 라 채널/산술 키가 그렇게 찍힌다),
+   `XCTAssertNil(census["velocity/legacy"])` 옆에 `XCTAssertNil(census["speed/legacy"])` 를 더한다.
+
+**옮겼을 때 그림이 어떻게 바뀌는지**(패치를 넣는 쪽이 알아야 할 것): 그 3건은
+`outputrangemin: -5` / `outputrangemax: 7` 인데 `flags:3` 의 bit1 이 결과를 `[0,1]` 로 자른다.
+곧 실물의 speed 배수는 `[0,1]`(감속 전용)인데 Waple 은 지금 `[−5, 7]` 이라 **빗줄기가 이따금
+거꾸로, 최대 5배 속도로** 흐른다. 배선하면 그 뒤집힘이 사라진다 — 화면이 바뀌는 변경이다.
+
+### 11.5 [의도적 이탈] `input` 부재에서는 bit0 을 걸지 않는다
+
+실물 `input` 부재 기본은 `lifetimefraction`(주입기 `0x1401bfbdf` → `[0x140484e80]`)이라
+`raw ∈ [0,1]` 이고 bit0 클램프가 무해하다. Waple 은 종전 노이즈 경로와의 비트동일 때문에
+`RemapSpec.input == nil` 에 **유계가 아닌** 레거시 클록을 넣는다 —
+`(remapPhase + age) · 0.1`, `remapPhase = sharedRandom · 100 ∈ [0, 100)`.
+여기에 bit0 을 걸면 대부분의 파티클이 스폰 즉시 `t = 1` 에 붙어 **노이즈가 얼어붙는다**
+(동봉 rain 6건이 정확히 그 경로다). 신호 자체가 실물 대응물이 아니므로 클램프도 걸지 않는다.
+
+그래서 §11.2 의 #4–#9 여섯 건은 이 배선으로 **비트동일 무회귀**다.
+근본 갭(=`input` 부재 기본을 `lifetimefraction` 으로 맞추는 일)은 `RemapSpec.input` 주석의
+**[미해결]** 그대로다 — 그것을 고치면 rain 6건의 노이즈 입력이 세계 시계에서 파티클 수명으로
+바뀌므로 별도 A/B 가 필요하다.
+
+### 11.6 이 절이 못 닫은 것
+
+* **[미해결]** §11.4 의 `extKeys` — 소유권 때문에 넘긴다.
+* **[미해결]** 노이즈 둘의 커널 입력. `0.5·n + 0.5` 접기만 실물이고, 위상 솔트 `[op+0x100]` ·
+  옥타브 `[op+0x18]` 을 노이즈 함수에 어떻게 넣는지는 여전히 안 뜯었다(§10.9 그대로).
+* **[미해결]** 3성분 입력 파이프라인. Waple 의 값 파이프라인은 스칼라라 성분마다 다른 `t` 를
+  못 낸다. 동봉 도달 0(§5.4.1).
+* **[미해결]** `rcpps` 근사. Waple 은 정확한 나눗셈을 쓴다 — 재현하지 않는 쪽이 옳다(§10.9).
+
+### 11.7 재현
+
+```python
+from vdis2 import dis
+L = dis(0x14023fbc0, 0x14024a400, show=False)   # 오퍼레이터 VM (.pdata merged 시작)
+print([l for l in L if 'r14 + 0x2c]' in l])     # → 정확히 4줄
+dis(0x1401ce660, 0x1401cf1f1)                   # remapvalue 파스 + 굽기
+dis(0x1401d8040, 0x1401d8111)                   # flags 기본 1 주입 꼬리
+```
+
+```bash
+# 자산 도달표(§11.2) 재생성
+python3 - <<'PY'
+import os, json
+root = 'Sources/WapleRender/Resources/WEAssets'
+for dp, _, fn in os.walk(root):
+    for f in sorted(fn):
+        if not f.endswith('.json'): continue
+        p = os.path.join(dp, f)
+        try: j = json.load(open(p, encoding='utf-8'))
+        except Exception: continue
+        if not isinstance(j, dict): continue
+        for e in (j.get('operator') or []):
+            if isinstance(e, dict) and e.get('name') == 'remapvalue':
+                print(os.path.relpath(p, root), e.get('output'),
+                      e.get('transformfunction', '<absent>'),
+                      e.get('transforminputscale', '<absent>'),
+                      e.get('flags', '<absent>'))
+PY
+```
+
+```bash
+# 배선 회귀 (리눅스 코어)
+scripts/dev/linux-core-tests.sh --filter 'ParticleRemapFlagsWiring|RemapOperationMath|TexFramesAndMapSequence'
 ```

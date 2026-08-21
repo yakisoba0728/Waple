@@ -19,8 +19,9 @@ public struct Particle {
     /// (시트가 있으면 렌더러가 age/frametime 으로 gif 애니).
     /// **[2026-08-21]** 실물에서 이 값을 정하는 것은 `animationmode:"randomframe"`
     /// **하나뿐**이다 — `mapsequence*` 는 **위치** 이니셜라이저라 시퀀스 슬롯(+0x268)을
-    /// 안 만진다(`Initializer.mapSequence` 주석). Waple 의 mapsequence 배선은 걷어낼
-    /// 자리로 표시만 해 뒀다(소유 밖 테스트 파일이 걸려 이번 라운드 미적용).
+    /// 안 만진다(`Initializer.mapSequence` 주석). 종전 Waple 의 `p.frame = t·count` 배선은
+    /// 이 커밋에서 걷어냈고, `TexFramesAndMapSequenceTests` 의 짝 테스트 셋이
+    /// "슬롯이 −1 로 남는다" 를 단언한다.
     public var frame: Float = -1
     public var initialSize: Float = 1
     public var initialAlpha: Float = 1
@@ -1039,10 +1040,14 @@ public struct ParticleSimulator {
         p.pos += emitOrigin   // 자식 인스턴스: 부모 위치(또는 링크 origin) 오프셋. 루트는 0.
         p.uid = nextUID; nextUID += 1
         // F622: animationmode=randomframe — 스폰 시 시퀀스 인덱스 1개 확정(sheetFrameIndex 가
-        // 프레임 수로 접는다). mapsequence 이니셜라이저가 있으면 뒤의 apply 가 덮어써 그쪽이 승.
-        // **[2026-08-21]** 그 덮어쓰기는 실물에 대응이 없다(`case .mapSequence` 의
-        // [근거없음] 주석). 걷어낼 때 이 문장도 같이 지워야 한다 — 동봉·설치 코퍼스의
-        // `mapsequence*` 19건은 전부 animationmode 부재라 지금 겹치는 자산은 0건이다.
+        // 프레임 수로 접는다).
+        //
+        // **[2026-08-21] 이제 이 줄이 시퀀스 슬롯을 정하는 유일한 자리다.** 종전에는 뒤의
+        // `apply(.mapSequence)` 가 `p.frame = t·count` 로 덮어썼는데 그 덮어쓰기에 실물 대응이
+        // 없어 걷어냈다(`case .mapSequence` 주석의 근거 넷). 실물도 같은 모양이다 — 스폰
+        // 프롤로그가 `[rdi+0x48]`(animationmode)을 보고 시퀀스 슬롯 `[rdi+0x268]` 에
+        // 0(`0x14023b4ef`) 또는 파티클 난수(`0x14023b503`)를 쓰고, 그 뒤 어떤 이니셜라이저 암도
+        // 그 슬롯에 **쓰지 않는다**(전수 확인: 쓰는 자리 둘 다 프롤로그, 읽는 자리 하나는 opid 17).
         if def.animationMode == .randomframe { p.frame = rng.range(0, 4096) }
         // 스폰 VM 서두의 무조건 1드로(0x14023b372 → 0x14023b381). 이니셜라이저 디스패치
         // (0x14023b5c0)보다 **먼저**이고 그 사이에 분기가 없다 — `Particle.sharedRandom` 주석 참조.
@@ -1370,56 +1375,44 @@ public struct ParticleSimulator {
             // ③ 곱셈 — 색 기본 (1,1,1) 에서는 대입과 같다.
             p.color *= c
             p.initialColor = p.color
-        case let .mapSequence(count, _, between):
-            // **[근거없음 — 2026-08-21 실측으로 확정. 걷어낼 자리다.]**
-            // 실물 `mapsequencearoundcontrolpoint`(opid 13, 핸들러 0x14023c4cf) /
-            // `mapsequencebetweencontrolpoints`(opid 14, 0x14023ca93)는 **위치 이니셜라이저**이고
-            // 스프라이트 시퀀스 슬롯을 만지지 않는다. 두 핸들러가 참조하는 SoA 슬롯을 전수로 뽑으면
-            // 위치 +0x2b0/+0x2b8/+0x2c0 · 속도 +0x2c8/+0x2d0/+0x2d8 · 기준 size +0x278(between 만) ·
-            // CP 배열 +0x400 · 시스템 flags +0x20 뿐이고 시퀀스 슬롯 **+0x268 은 0회**다
-            // (+0x268 이 시퀀스 슬롯인 근거: 프롤로그 0x14023b4ef/0x14023b503, remap 출력 arm
-            //  0x14023ce8b). 아래 `t → p.frame` 매핑은 실물에 대응이 없다.
+        case .mapSequence:
+            // **[2026-08-21 걷어냄] 종전 이 자리에 `p.frame = t·count` 가 있었고, 근거가 없었다.**
             //
-            // **왜 아직 안 걷었나**: 걷어내면 `Tests/WapleCoreTests/TexFramesAndMapSequenceTests.swift`
-            // 의 세 테스트(`testMapSequenceBetween_projectsOntoSegment` 2.0 /
-            // `…_clampsOutsideSegment` 0 / `testMapSequenceAround_angleToSequence` 4.0)가 깨지는데
-            // 그 파일은 이 라운드의 소유 밖이다. 그림 자체는 안 바뀐다는 것까지는 확인했다 —
-            // 동봉·설치 두 코퍼스에서 `mapsequence*` 선언 19건(17파일)이 쓰는 텍스처 5종
-            // (particle/halo, halo_2, beam/beam_0, beam/beam_2, misc/star_0)에 **TEXS 섹션이 없어**
-            // 렌더러의 `p.frame >= 0` 분기(SceneRendererFrameEncoder:123/:264, SceneRenderer3D:2367)가
-            // 애초에 도달하지 않는다(그 분기는 `if !sys.frames.isEmpty` 안에 있고 `frames` 는
-            // TEXS 에서만 온다). 19건 전부 `animationmode` 부재라 randomframe 경로와도 안 겹친다.
+            // 걷어낸 근거(이번에 `.pdata` 함수 시작부터 선형으로 다시 떴다):
+            //  ① 이니셜라이저 VM 은 `0x14023b340`–`0x14023fbbc` 한 함수이고, 디스패치는
+            //     `movzx eax,[r14]`(`0x14023b5c0`) `dec`(`0x14023b5c4`) →
+            //     점프테이블 `0x14023fa78`(`0x14023b5c9`) → `jmp rax`(`0x14023b5d3`)다.
+            //     그 표에서 **opid 13 암 = `0x14023c4cf`, opid 14 암 = `0x14023ca93`,
+            //     opid 15 암 = `0x14023ce53`** — 곧 두 mapsequence 암은
+            //     `[0x14023c4cf, 0x14023ca93)` 와 `[0x14023ca93, 0x14023ce53)` 다.
+            //  ② 그 두 구간이 만지는 `[rdi+…]` 슬롯을 전수로 세면
+            //     위치 `+0x2b0/+0x2b8/+0x2c0` · 속도 `+0x2c8/+0x2d0/+0x2d8` · CP 배열 `+0x400`
+            //     (+ between 만 기준 size `+0x278` · 시스템 flags `+0x20`)뿐이다.
+            //  ③ **시퀀스 슬롯 `+0x268` 은 그 구간에 0회다.** 이니셜라이저 VM 전체에서 그 슬롯을
+            //     건드리는 자리는 정확히 세 곳이고, 둘은 **스폰 프롤로그**
+            //     (`0x14023b4ef` → 0, `0x14023b503` → 파티클 난수 `[rdi+0x338]` 복사; 게이트는
+            //     `cmp dword ptr [rdi+0x48], r13d` @`0x14023b4e9`), 하나는 **다른 암**
+            //     (opid 17 = `0x14023ce8b`, 그 암은 `+0x268` 을 **읽기만** 한다)이다.
+            //     곧 스폰 이후에 시퀀스 인덱스를 쓰는 이니셜라이저는 **없다** — 실물에서 이 슬롯을
+            //     정하는 것은 `animationmode`(`+0x48`) 하나이고, Waple 의 대응물은
+            //     `spawn` 의 `def.animationMode == .randomframe` 한 줄이다.
+            //  ④ 애초에 `t·count` 라는 **연속값**은 시트 전진의 형태가 아니다. 실물 시트 전진은
+            //     정수 전진이고(이미지 경로는 씬 프레임 카운터로 프레임당 1회 게이트,
+            //     파티클 경로는 셰이더의 `floor(lifetime·numFrames)`),
+            //     `docs/re/sprite-occlusion.md` §10.2/§10.4.3 이 그 전문을 들고 있다.
+            //
+            // **걷어내도 그림은 안 바뀐다**(도달 0): 동봉·설치 두 코퍼스의 `mapsequence*`
+            // 19선언(17파일)이 쓰는 텍스처 5종(particle/halo, halo_2, beam/beam_0, beam/beam_2,
+            // misc/star_0)에 TEXS 섹션이 없어 렌더러의 `p.frame >= 0` 분기가 `if !sys.frames.isEmpty`
+            // 밖에서 이미 막힌다. 19선언 전부 `animationmode` 부재라 randomframe 과도 안 겹친다.
             // 근거 전문은 `Initializer.mapSequence` 주석(ParticleSystem.swift).
             //
-            // **[2026-08-21 재측정]** 도달 0 을 다시 확인했다(관용 파서 census + `parse_tex` 양성
-            // 대조 — 같은 트리 `.tex` 311개 중 52개는 TEXS 를 갖는데 이 다섯만 없다).
-            // 실물 산술은 이 파일 끝의 `MapSequenceBetweenSolver` 가 들고 있고 오라클 27건으로
-            // 잠겨 있다 — 다만 **배선하면 화면이 바뀌므로**(동봉 between 12선언 중 8선언이
-            // `flags & 4` 로 크기까지 줄인다) A/B 캡처 전까지 아래 레거시를 그대로 둔다.
-            //
-            // 시퀀스 위치 t(0..1) → frame = t·count. 시트 폴드(mirror/loop)는 렌더 시 sheetFrameIndex.
-            let t: Float
-            if between {
-                // CP0→CP1 구간 투영(클램프). 구간 퇴화 시 0.
-                let a = s3(def.controlPoints[0]), bb = s3(def.controlPoints[1])
-                let d = bb - a
-                let len2 = simd_length_squared(d)
-                t = len2 > 1e-8 ? max(0, min(1, simd_dot(p.pos - a, d) / len2)) : 0
-            } else {
-                // CP0 기준 각도(0..2π → 0..1).
-                // F630: 실물 "axis"(회전축)로 각도 평면 선택 — 기본 z축=XY 평면(레거시 비트동일).
-                // [보존/추측] 회전 방향(atan2 인자 순서)은 WE 미확정 — 지배 성분 축만 평면을 바꾼다.
-                let rel = p.pos - s3(def.controlPoints[0])
-                let ax = def.mapSequenceAxis.map { s3($0) } ?? SIMD3<Float>(0, 0, 1)
-                let m = simd_abs(ax)
-                let angle: Float
-                if simd_length(ax) < 1e-6 { angle = atan2(rel.y, rel.x) }       // 퇴화 축 → 레거시
-                else if m.y >= m.x, m.y >= m.z { angle = atan2(rel.x, rel.z) }  // Y축 → XZ 평면
-                else if m.x >= m.z { angle = atan2(rel.y, rel.z) }              // X축 → YZ 평면
-                else { angle = atan2(rel.y, rel.x) }                            // Z축 → XY 평면(레거시)
-                t = (angle + .pi) / (2 * .pi)
-            }
-            p.frame = t * max(0, count)
+            // **위치 산식은 여전히 [미배선]이다.** 실물 두 암은 위치를 옮기는데
+            // (`MapSequenceBetweenSolver` 가 그 산술을 들고 오라클 27건으로 잠겨 있다),
+            // 배선하면 **화면이 실제로 바뀌므로**(동봉 between 12선언 중 8선언이 `flags & 4` 로
+            // 크기까지 줄인다) 맥 A/B 캡처 전까지 남긴다. 그때까지 이 케이스는 **무동작**이다 —
+            // 근거 없는 값을 쓰는 것보다 아무것도 안 쓰는 쪽이 실물에 가깝다.
+            break
         case let .positionOffsetRandom(directions, sign, scale, distance, timescale, octaves):
             // fBm 노이즈 변위. **RNG 드로 0** — 실물 핸들러 0x14023c09a 에 난수 호출이 없다
             // (`Initializer.positionOffsetRandom` 주석의 전수 확인). 종전 3드로를 걷어냈다.
@@ -1855,12 +1848,13 @@ public struct ParticleSimulator {
     ///
     /// 역수는 실물의 `rcpps`(12비트 근사)가 아니라 **정확한 나눗셈**을 쓴다 — 헤드리스 결정성이
     /// 우선이고, 기본값(폭 1)에서는 어차피 둘 다 1.0 이라 무회귀가 깨지지 않는다.
+    ///
+    /// **[2026-08-21] 본문을 `RemapValueMath.normalize` 로 넘겼다.** 산술은 글자 그대로 같다
+    /// (`Float.ulpOfOne == 0x1p-23 == Float(bitPattern: 0x34000000)`) — 오라클 대조가 가능한
+    /// 자리에 하나만 두려는 것이고, 이 이름은 호출부(`ParticleInputRangeConeTests` 포함)를 위해 남긴다.
     @inline(__always)
     static func remapNormalizeInput(_ raw: Float, _ spec: RemapSpec) -> Float {
-        let lo = spec.inMin.x
-        var span = spec.inMax.x - lo
-        if span == 0 { span = Float.ulpOfOne }      // 0x1401cedf3 (0x34000000)
-        return (raw - lo) * (1 / span)
+        RemapValueMath.normalize(raw, min: spec.inMin.x, max: spec.inMax.x)
     }
 
     /// `remapValueEx` 중 시뮬레이터가 **실제로 적용하는** 채널.
@@ -1890,9 +1884,20 @@ public struct ParticleSimulator {
         id >= 0 && id < def.controlPoints.count ? s3(def.controlPoints[id]) : SIMD3(0, 0, 0)
     }
 
-    /// remapValueEx **값 산출**(순수 — RNG 無, 스폰 시드 remapPhase 만 참조):
-    /// 입력 신호 → inputcomponent 축약 → transform([0,1]) → 출력 범위 매핑 + blend 창 가중.
+    /// remapValueEx **값 산출**(순수 — RNG 無, 스폰 시드 remapPhase 만 참조).
     /// step/display 양쪽에서 결정적으로 재평가한다.
+    ///
+    /// **[2026-08-21] 순서·산술을 실물 VM opid 19(`0x140244874`–`0x1402459a5`)에 맞췄다.**
+    /// 순수 산술은 `RemapValueMath`(WapleCore)가 들고 오라클 테스트가 잠근다 —
+    /// 여기는 그 함수들을 **부르는 배선**이다.
+    /// ```
+    ///   raw   = 입력 신호([추정] — RemapInput 주석)
+    ///   t     = (raw − inputrangemin) / (inputrangemax − inputrangemin)
+    ///   if (flags & 1) t = clamp01(t)                    ; input 부재는 제외 — 아래 [의도적 이탈]
+    ///   v     = none ? t : wave(t, transforminputscale)  ; none 은 스케일을 곱하지 않는다
+    ///   out   = (outputrangemax − outputrangemin)·v + outputrangemin
+    ///   if (flags & 2) out = clamp01(out)                ; 성분마다
+    /// ```
     ///
     /// **`operation` 은 여기 없다.** 실물도 그렇다 — 값 산출 구간에 `[r14+0x10]` 읽기가 0회다.
     /// 적용 산술은 호출부(`remapCombine`/`remapCombine3`)가 목적지 배열에 대고 건다.
@@ -1923,30 +1928,38 @@ public struct ParticleSimulator {
             raw = simd_length(p.pos)
         }
         // 1b) **입력 범위 정규화**(`inputrangemin`/`inputrangemax`) — 실물이 transform 앞에서 한다.
-        //     `transforminputscale` 은 그 뒤(transform 안)라 곱 순서가 이렇다.
-        let x = Self.remapNormalizeInput(raw, spec) * spec.inputScale
-        // 2) transform → v01 ∈ [0,1]. 노이즈는 remapPhase 솔트로 파티클 탈동기(레거시 동형).
+        //     `subps xmm7,xmm1`(0x1402450fa) + `mulps xmm7,xmm2`(0x1402450fd).
+        var t = Self.remapNormalizeInput(raw, spec)
+        // 1c) **`flags & 1` — 정규화 직후의 t 클램프.** 게이트는 `and r9b,1`(0x1402449a0) →
+        //     `test r9b,r9b`(0x140245105), 클램프는 `minps` 1.0(0x14024510a) → `maxps` 0(0x140245117).
+        //     **모든 transform 앞에서 한 번**이다 — 종전 Waple 은 `.none` 에서만 잘랐다(문서 §10.8 D3).
+        //
+        //     **[의도적 이탈] `input` 부재에서는 걸지 않는다.** 실물의 `input` 부재 기본은
+        //     `lifetimefraction`(주입기 0x1401bfbdf)이라 raw ∈ [0,1] 이고 이 클램프가 무해하다.
+        //     Waple 은 종전 노이즈 경로와의 비트동일 때문에 `input: nil` 에 **유계가 아닌**
+        //     레거시 클록((remapPhase+age)·0.1, remapPhase ∈ [0,100))을 넣는데, 거기에 이 클램프를
+        //     걸면 age 가 조금만 지나도 t 가 1 에 붙어 **파형이 얼어붙는다**(동봉 rain 6건이 그 경로다).
+        //     신호 자체가 실물 대응물이 아니므로 클램프도 걸지 않는다 — 갭은 `RemapSpec.input`
+        //     주석의 **[미해결]** 그대로다.
+        if spec.flags & 1 != 0, spec.input != nil { t = RemapValueMath.clamp01(t) }
+        // 2) transform → v01. **`transforminputscale` 은 변환 암 안에서만 곱해진다** —
+        //    `none`(과 어휘 밖 센티넬)은 `ja 0x140245928`(0x14024513c)로 디스패치를 통째로 건너뛰고
+        //    그 자리는 곧장 출력 매핑(0x140245779)으로 뛴다. 곧 `v = t` 이고 스케일이 안 걸린다.
+        //    (종전 Waple 은 정규화 직후에 곱해 `none` 에서도 램프가 `s` 배 가팔랐다 — 문서 §10.8 D1.)
+        //    파형 넷의 산술 근거는 `RemapValueMath` 주석(암 VA 포함).
         let v01: Float
         switch spec.transform {
-        case .none:
-            v01 = max(0, min(1, x))
-        case .some(.triangle):
-            let f = x - x.rounded(.down)
-            v01 = 1 - abs(2 * f - 1)
-        // [추정] 아래 셋은 위 triangle 이 세운 가족 규약(단위 주기 frac(x), 출력 [0,1], f=0 에서 0)의
-        // 일관된 완성이다. 실물 파형 계산은 이 오퍼레이터 핸들러(op 0x13 → 0x140244874) 안에 없고
-        // 파서가 따로 발행하는 값 공급자 레코드 쪽이라 아직 못 뜯었다 — RemapTransform 주석 참조.
-        case .some(.sine):
-            let f = x - x.rounded(.down)
-            v01 = 0.5 - 0.5 * cosf(2 * .pi * f)
-        case .some(.saw):
-            v01 = x - x.rounded(.down)
-        case .some(.square):
-            v01 = (x - x.rounded(.down)) < 0.5 ? 0 : 1
-        case .some(.simplexnoise):
-            v01 = remapNoiseOctaves(1, x, SIMD3(p.remapPhase, 0, 0))   // [추정] 값노이즈 근사
-        case .some(.fbmnoise):
-            v01 = remapNoiseOctaves(spec.octaves, x, SIMD3(p.remapPhase, 0, 0))
+        case .none:                 v01 = t                                                  // 0x140245928
+        case .some(.sine):          v01 = RemapValueMath.sine(t, inputScale: spec.inputScale)
+        case .some(.square):        v01 = RemapValueMath.square(t, inputScale: spec.inputScale)
+        case .some(.saw):           v01 = RemapValueMath.saw(t, inputScale: spec.inputScale)
+        case .some(.triangle):      v01 = RemapValueMath.triangle(t, inputScale: spec.inputScale)
+        // 노이즈 둘은 마지막 접기(`0.5·n + 0.5`)만 실물이고 **커널 입력은 여전히 [추정]**이다
+        // (위상 솔트 `[op+0x100]`·옥타브 `[op+0x18]` 을 어떻게 넣는지 안 뜯었다 — 문서 §10.9).
+        // 스케일 곱은 실물처럼 **암 안에서** 건다.
+        case .some(.simplexnoise):  v01 = remapNoiseOctaves(1, t * spec.inputScale, SIMD3(p.remapPhase, 0, 0))
+        case .some(.fbmnoise):      v01 = remapNoiseOctaves(spec.octaves, t * spec.inputScale,
+                                                            SIMD3(p.remapPhase, 0, 0))
         }
         // 3) **없다.** 종전에 여기 있던 `operation` 단항 셰이핑(`subtract` → `v = 1 − v01`)은
         //    반증됐다 — VM 핸들러의 값 산출 구간(0x140244874–0x1402459a5)은 `operation`
@@ -1964,8 +1977,21 @@ public struct ParticleSimulator {
         //  ③ 활성화 게이트(0.01/0.99)가 없었다. 실물은 탈락하면 가중 코드를 아예 안 돈다.
         // 유도·게이트·런타임 수식은 `BlendWindow` 주석에 적었다.
         let w = spec.blendWindow.weight(lifeFraction: n)
+        // 5) **출력 범위 매핑 + `flags & 2`.** `out = 폭·v + min`
+        //    (`mulps` 0x140245783 · `addps` 0x140245788). 폭은 파스 시각의 **순수 뺄셈**이라
+        //    `min > max` 면 음수가 되어 출력이 min 에서 내려간다 — 동봉 프리뷰 씬이 실제로
+        //    `"1 0 0"` → `"0 0 1"` 이다(성분별 폭 (−1, 0, +1)).
+        //    bit1 클램프는 그 **직후**이고(`test cl,cl` 0x140245791 → `minps` 1.0 0x140245799 →
+        //    `maxps` 0 0x1402457a0) **성분마다** 건다. 페이드 가중은 그보다 뒤(호출부)라
+        //    **가중 전의 값**이 잘린다(변종 opid 39 의 0x140247f50–0x140247f73 이 같은 모양).
         let mn = s3(spec.outMin), mx = s3(spec.outMax)
-        return (mn + (mx - mn) * v, w)
+        var out = mn + (mx - mn) * v
+        if spec.flags & 2 != 0 {
+            out = SIMD3(RemapValueMath.clamp01(out.x),
+                        RemapValueMath.clamp01(out.y),
+                        RemapValueMath.clamp01(out.z))
+        }
+        return (out, w)
     }
 
     // MARK: - dtScaled
