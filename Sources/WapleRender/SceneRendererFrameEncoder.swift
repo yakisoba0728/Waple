@@ -2027,8 +2027,13 @@ extension SceneRenderer {
             }
             var fboTex: [MTLTexture] = []
             for (i, spec) in fboSpecs.enumerated() {
-                let w = spec.fixedWidth ?? max(1, baseW / spec.scale)
-                let h = spec.fixedHeight ?? max(1, baseH / spec.scale)
+                // W-FIT(2026-08-21): `fit:N` 은 N×N 정사각이 **아니다** — "긴 변을 N 으로, 종횡비
+                // 보존, 확대 금지"(원본 `0x1401eb2cc`–`0x1401eb381`, 전문은
+                // `EffectManifest.FBO.fittedBox`). 1920×1080 dst 에서 `fit:256` = 256×144.
+                // `fit` 미선언 FBO 는 아래 종전 식 그대로다(무회귀).
+                let box = spec.fittedBox(baseWidth: baseW, baseHeight: baseH)
+                let w = box?.width ?? spec.fixedWidth ?? max(1, baseW / spec.scale)
+                let h = box?.height ?? spec.fixedHeight ?? max(1, baseH / spec.scale)
                 if spec.unique {
                     var held = uniqueStore.textures[i]
                     if let t = held, t.width != w || t.height != h || t.pixelFormat != spec.pixelFormat {
@@ -2218,7 +2223,12 @@ extension SceneRenderer {
                           fboSpecs[sp.source].pixelFormat == fboSpecs[sp.target].pixelFormat,
                           fboSpecs[sp.source].scale == fboSpecs[sp.target].scale,
                           fboSpecs[sp.source].fixedWidth == fboSpecs[sp.target].fixedWidth,
-                          fboSpecs[sp.source].fixedHeight == fboSpecs[sp.target].fixedHeight else {
+                          fboSpecs[sp.source].fixedHeight == fboSpecs[sp.target].fixedHeight,
+                          // W-FIT: `fit` 은 dst 를 알아야 치수가 되므로 봉투 값도 같아야 한다.
+                          // (`fixedWidth/fixedHeight` 는 `fit` 봉투를 되비추므로 대부분 같이
+                          // 걸리지만, `width` 만 선언한 쪽과 `fit` 만 선언한 쪽이 우연히 같은
+                          // 수를 가지면 위 둘만으로는 못 가린다.)
+                          fboSpecs[sp.source].fit == fboSpecs[sp.target].fit else {
                         WapleLog.warn("[Waple] swap 대상의 규격이 달라 건너뛴다(포맷/크기 불일치)")
                         continue
                     }

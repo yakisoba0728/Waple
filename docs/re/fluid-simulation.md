@@ -28,9 +28,14 @@
    읽는 텍스처와 쓰는 텍스처가 겹치는 자리가 없다.
 2. **`fit` 은 정사각이 아니다.** `0x1401eb2f8`–`0x1401eb37b` 이 **긴 변을 N 에 맞추고 종횡비를
    보존하며 확대는 하지 않는다**. 즉 1920×1080 레이어에서 `fit:256` 은 **256×144** 다.
-   Waple 은 `fit` 을 N×N 정사각으로 읽는다(`EffectManifest.swift:400`) — 그래서 속도장 텍셀이
+   Waple 은 `fit` 을 N×N 정사각으로 읽었고(`EffectManifest.swift:400`) 그래서 속도장 텍셀이
    화면에서 정사각이 아니게 되고, `aspect = g_Texture0Resolution.y/.x` 가 0.5625 대신 **1.0**
-   이 된다. 이 하나가 이 이펙트에서 가장 큰 그림 차이다(§6-W1).
+   이 됐다 — 이 이펙트에서 가장 큰 그림 차이였다.
+   **2026-08-21 착지**: `EffectManifest.FBO.fittedBox` 가 규약 전문을 담고 두 소비처
+   (`SceneRendererFrameEncoder.swift:2034-2036` 할당 · `SceneRendererResources.swift:1214-1216`
+   `texRes`)가 그것으로 푼다. `scale` 상호작용(§1.3.1)과 입력 출처(§1.3.2)도 함께 확정했다.
+   회귀 표면 실측: 동봉+설치본 FBO 선언 112건 중 `fit` 보유 **28건**(이펙트 2종), 그중
+   실제로 치수가 바뀌는 것은 `cursorripple` 뿐이다(§6-W1 표).
 3. **`functions` 는 죽은 코드도 에디터 UI 도 아니다** — 씬 스크립트 API
    `IEffect.executeMaterialFunction(name)` 의 대상 테이블이고, 그 선언은 WE 가 배포하는
    `ui/dist/monaco/autocomplete/lib.sceneScript.d.ts:1295` 에 공개돼 있다. **워크샵 저작자용**이다.
@@ -139,9 +144,57 @@ createRenderTarget(W', H', scale, name, format, 0x1b, wrap, 1)   # 0x1401eba0b
 전부가 `Δx = Δy = 1 텍셀` 을 가정한 유한차분이고, 이류(advection)는 속도를 텍셀/초로
 해석해 UV 로 되돌린다. `fit` 이 종횡비를 보존하는 이유가 정확히 이것이다.
 
-`fit` 과 `scale` 이 **둘 다** 있을 때의 상호작용은 **[미해결]** — 이 이펙트에는 그런 FBO 가
-없고(`fit` 6장은 `scale` 미선언, `scale` 3장은 `fit` 미선언), `scale` 은 위 크기 계산과 별도로
-`createRenderTarget` 의 4번째 인자로 넘어가(`0x1401eb9d4`) 내부에서 처리된다.
+#### 1.3.1 `fit` × `scale` — **[해결, 2026-08-21]** 경쟁이 아니라 합성이다
+
+종전 이 절은 상호작용을 `[미해결]` 로 남겼다. 렌더타깃 쪽을 마저 뜯어 확정한다.
+
+`scale` 은 위 크기 계산에 **전혀 참여하지 않는다**. 레코드의 `+0x0c` 바이트를 그대로 읽어
+(`0x1401eb97d`) 스택 슬롯에 얹고(`0x1401eb98a`), 생성 호출의 **4번째 인자**로 넘긴다
+(`0x1401eb9d4` → `0x1401eba0b`). 나눗셈은 **렌더타깃 생성자**가 한다:
+
+```
+RT::RT(this, w, h, scale, …)                    # 0x1400d2c60
+  [this+0x18] = (u16) w                          # 0x1400d2c9c   "full" 폭
+  [this+0x1a] = (u16) h                          # 0x1400d2ca7   "full" 높이
+  [this+0x1c] = scale                            # 0x1400d2cb2
+  [this+0x14] = (u16) max(2, w / scale)          # 0x1400d2ca1 idiv → 0x1400d2cbc cmovg → 0x1400d2cc4
+  [this+0x16] = (u16) max(2, h / scale)          # 0x1400d2cc9 idiv → 0x1400d2cd3 cmovg → 0x1400d2ce4
+```
+
+리사이즈 경로도 같은 식이다 — `0x140161f40`–`0x140161fa5` 가 `+0x18/+0x1a` 에 새 full 을
+쓰고 `+0x1c` 의 scale 로 나눠 `+0x14/+0x16` 을 다시 만든다(하한 2 동일, `0x140161f83`).
+그리고 실제 텍스처 폭은 `+0x14` 에서 온다(`0x140161fb9`가 텍스처 객체 `+0x20` 에 싣는다).
+
+즉 **최종 텍스처 = `max(2, W'/scale) × max(2, H'/scale)`** 이고 `fit:256, scale:2` 는
+긴 변 128 이다. 배타 관계가 아니다.
+
+**코퍼스 도달은 0이다** — 동봉+설치본 `effect.json` 의 FBO 선언 112건(동봉 55 + 설치본 57) 중 `fit`+`scale`
+동시 선언 0건, `width|height`+`scale` 도 0건(census: 이 문서 부록 A 의 재현 절차).
+그래서 이 규약은 **워크샵 저작에서만** 관측될 수 있다.
+
+> **하한 2 에 대한 Waple 의 의도적 편차.** Waple 은 하한을 1 로 둔다. 2 로 올리려면
+> `fit` 미선언 FBO 의 종전 `max(1, dst/scale)` 까지 같이 움직여야 하는데(무회귀 규약 위반),
+> 두 값이 갈리는 구간은 "한 축이 1 이하로 떨어지는 dst" 뿐이라 코퍼스 도달이 0이다.
+
+#### 1.3.2 `fit` 의 입력은 무엇인가 — **화면이 아니라 이펙트 dst 서피스**
+
+`(W0,H0)` 는 이펙트 객체의 가상 호출 `[vtable+0x128]`(`0x1401ea5b1`)이 채우는 int2 이고,
+`max(4, ·)` 로 하한이 걸린다(`0x1401ea5e4`·`0x1401ea606`). **같은 `(W0,H0)` 가 이펙트
+자신의 핑퐁 렌더타깃(`this+0x2c8`/`+0x2d0`)을 만든다** — `0x1401eb0dd`(W0) ·
+`0x1401eb09e`(H0) → `0x1401eb0e5` 호출, scale 인자는 1 이다. 그 결과가 `0x1401eb0f8` 에서
+`this + idx*8 + 0x2c8` 에 저장된다. 핑퐁 쌍이 곧 이펙트 체인의 dst 이므로,
+`fit` 의 기준은 **이 이펙트가 그려 넣는 서피스**다. 전화면 framebuffer 레이어에서는
+화면 해상도와 같아지지만 그건 우연이고, 부분 레이어에서는 레이어 크기다.
+Waple 의 대응값은 빌드 시점 `effW/effH`(레이어 크기, `isFrameBuffer` 면 프로젝션 크기,
+`SceneRendererResources.swift:369-412`)와 프레임 시점 `dst` 크기다.
+
+#### 1.3.3 `width`/`height` 는 `fit` 의 **입력**을 갈아치운다
+
+`0x1401eb2e3`/`0x1401eb2f4` 는 선언된 `width`/`height` 를 `W`/`H` 에 넣고, 그 뒤 `fit`
+분기는 **그 값들로** major 를 고른다. 즉 `{"fit":256,"width":1024,"height":512}` 는 dst 를
+전혀 보지 않고 256×128 이 된다. 세 값이 u16 필드(`0x1401e7804`·`0x1401e7834`·`0x1401e7857`,
+미선언 `0xffff`)라 **`> 0x1000`(4096)이면 미선언 취급**이라는 점도 여기서 나온다
+(`0x1401eb2dc`·`0x1401eb2ec`·`0x1401eb2fd`). 도달 0건.
 
 ### 1.4 패스 20개 — 전개표
 
@@ -989,7 +1042,7 @@ float amt = smoothstep(size, 0.0, length(delta));      // edge0 > edge1 → 중�
 | 15 | `g_Frametime` / `g_Time` | 프레임 델타 / 경과 | `eng.timeAndPad.w` / `.x` | 지원(캡처는 1/30 고정) | `GLSLTranslator.swift:1408` |
 | 16 | `g_PointerPosition{,Last}` · `g_PointerState` | 커서 UV(y-down) · 버튼 힘 | `eng.timeAndPad.yz` · `pointerLastAndPad.xy/.z` | **지원** | `GLSLTranslator.swift:1405-1411` · `SceneRenderer.swift:785-788` |
 | 17 | `g_EffectTextureProjectionMatrixInverse` | 레이어 배치의 역투영 | `float4x4(1.0)` | **부분** — 전화면·무회전이면 정답(§5.1), 회전/부분 레이어는 임펄스가 어긋난다 | `GLSLTranslator.swift:1421` |
-| 18 | `g_TextureNResolution` | `(paddedW,paddedH,imgW,imgH)` | fbo 는 `(w,h,w,h)` | 규약 일치(이 이펙트의 슬롯은 전부 렌더타깃이라 패딩 없음). **다만 값은 W1 때문에 틀린다** — `fit` FBO 슬롯에서 `(256,256,…)` 이 실려 `aspect`/`texelSize` 가 어긋난다 | `SceneRendererResources.swift:1185-1195` |
+| 18 | `g_TextureNResolution` | `(paddedW,paddedH,imgW,imgH)` | fbo 는 `(w,h,w,h)` | 규약 일치(이 이펙트의 슬롯은 전부 렌더타깃이라 패딩 없음). 종전엔 값이 W1 때문에 틀렸다 — `fit` FBO 슬롯에 `(256,256,…)` 이 실려 `aspect`/`texelSize` 가 어긋났다. **2026-08-21 착지**: `fit` 갈래가 `fittedBox` 로 풀린다(1920×1080 이면 `(256,144,256,144)`) | `SceneRendererResources.swift:1206-1221` |
 | 19 | 샘플러 어노테이션 `"default"`(`util/noise`, `gradient/gradient_fire`) | 자산 로드 | `t.textureDefaults[slot]` 폴백 + 이펙트 로컬 루트 | **지원**, 두 자산 모두 동봉에 존재 | `SceneRendererResources.swift:1226` |
 | 20 | `mul(v,M)` HLSL 순서 | 행벡터 | `(b*a)` | 지원 | `GLSLTranslator.swift:1633-1636` |
 | 21 | `inverse(mat3)`(common_perspective.h, `#if HLSL`) | HLSL 분기 컴파일 | `HLSL=1` 시딩 + `inverse→we_inverse` 리네임. 헤더 정의는 `inverse` 이름 그대로 방출되고 호출부만 `we_inverse` 로 가므로 **중복 정의 없음**(헤더 쪽은 죽은 함수) | 지원 | `ShaderPreprocessor.swift:38` · `GLSLTranslator.swift:1587,1943,2001` |
@@ -999,11 +1052,12 @@ float amt = smoothstep(size, 0.0, length(delta));      // edge0 > edge1 → 중�
 
 ### 6.2 판정 — 이걸 지금 로드하면
 
-**돈다. 다만 두 군데가 틀리고 한 조건에서 통째로 폴백한다.**
+**돈다. 다만 한 군데가 틀리고 한 조건에서 통째로 폴백한다.**
+(W1 은 **2026-08-21 착지** — 아래는 무엇이 왜 틀렸었는지의 기록 + 회귀 표면 실측이다.)
 
-**W1 (P0) `fit` 종횡비 — 조용히 틀린 그림.**
-`EffectManifest.swift:399-402` 이 `fixedW = clampedFixed(f["fit"]); fixedH = fixedW` 로
-정사각을 만든다. 1920×1080 에서 WE 는 **256×144**, Waple 은 **256×256**. 귀결 넷 —
+**W1 (P0) `fit` 종횡비 — 조용히 틀린 그림. [해결 2026-08-21]**
+종전 `EffectManifest.swift:399-402` 이 `fixedW = clampedFixed(f["fit"]); fixedH = fixedW` 로
+정사각을 만들었다. 1920×1080 에서 WE 는 **256×144**, Waple 은 **256×256**. 귀결 넷 —
 
 1. `aspect = g_Texture0Resolution.y/.x` 가 **0.5625 대신 1.0**. 염료 에미터(§5.4)의 원이
    **가로로 16:9 만큼 늘어난다**. 중력(`constantSpeed.y *= aspect`)도 세로 성분이 1.78배 세진다.
@@ -1013,14 +1067,42 @@ float amt = smoothstep(size, 0.0, length(delta));      // edge0 > edge1 → 중�
 3. 커서 임펄스 반경도 `v_PointerUV.w = (H/W)·60/CI` 가 1·60/CI 가 되어 **세로로 찌그러진다**.
 4. 메모리: 256×144 → 256×256 은 속도/압력/발산/컬 6장에서 1.78배(작은 절대량이라 무해).
 
-착지: `EffectManifest.swift:399-402` 을 dst 비례 계산으로 옮기거나(파스 시점엔 dst 를 모르므로)
-`FBO` 에 `fitBox: Int?` 를 새로 두고 소비처
-`SceneRendererFrameEncoder.swift:2030-2031` · `SceneRendererResources.swift:1186-1190`
-두 곳에서 `W0>=H0 ? (min(fit,W0), H0*W'/W0) : (W0*H'/H0, min(fit,H0))` 로 푼다
-(절삭은 `Int(Float)` = 0 방향, `0x1401eb33b` 의 `cvttss2si` 와 같게). `width`/`height` 명시가
-있으면 그것이 `W0/H0` 를 대신한다는 점(§1.3 의사코드)도 함께 옮겨야 한다.
-`fit` 보유 동봉 이펙트는 `fluidsimulation` 6장 + `cursorripple` 2장(`fit:512`)이므로
-회귀 표면이 좁다.
+**실제 착지 모양.** `FBO` 가 `fit`/`declaredWidth`/`declaredHeight` 셋을 **따로** 들고
+(파스 시점엔 dst 를 모르므로 치수로 접을 수 없다), 규약 전문은
+`EffectManifest.FBO.fittedBox(baseWidth:baseHeight:)` 주석에 VA 와 함께 있다.
+`fit` 이 없으면 그 함수가 `nil` 을 돌려 **소비처가 종전 경로를 그대로 탄다** — 이게 무회귀의
+핵심 장치다. 소비처는 둘:
+
+* `SceneRendererFrameEncoder.swift:2034-2036` — 실제 텍스처 할당(프레임 시점 `dst` 기준).
+* `SceneRendererResources.swift:1214-1216` — `g_TextureNResolution`(빌드 시점 `effW/effH` 기준).
+  `fit` 미선언 갈래는 **한 글자도 안 건드렸다**. 특히 scale 갈래는 정수 바닥이 아니라
+  부동소수 나눗셈(`lh/s`)이라, 정수화하면 dst 가 scale 로 나누어떨어지지 않는 모든 씬에서
+  값이 움직인다. 그건 별건이고 이 커밋의 범위가 아니다.
+
+`fixedWidth`/`fixedHeight` 는 하위호환 표현으로 남겼고 `fit` 만 있는 FBO 에서는 **정사각
+봉투**를 되비춘다 — 그것을 치수로 쓰면 W1 이 되살아나므로 함정을
+`EffectFboFitTests.testLegacyFixedSizeMirrorsTheEnvelopeNotTheResult` 가 지킨다.
+
+**회귀 표면 전수(동봉 + 설치본 `wallpaper_engine/assets`, FBO 선언 112건 실측).**
+`fit` 보유는 **28건 = 이펙트 2종**이고 나머지 82건은 `fit` 미선언이라 **전건 종전 그대로**다.
+
+| 이펙트 / FBO | `fit` | dst | 종전(정사각) | 새 규약 | 그림이 바뀌나 |
+|---|---:|---|---|---|---|
+| `fluidsimulation` `_rt_SmokeVelocity1/2`·`Pressure1/2`·`Divergence`·`Curl` (6장 ×2트리 ×본체/preview = 24건) | 256 | 1920×1080 | 256×256 | **256×144** | **예** |
+| 〃 | 256 | 2560×1440 | 256×256 | **256×144** | **예** |
+| 〃 | 256 | 1080×1920 | 256×256 | **144×256** | **예** |
+| 〃 | 256 | 256×256 (**동봉 preview 씬**) | 256×256 | 256×256 | 아니오 |
+| `cursorripple` `_rt_EightBuffer1/2` (2장 ×2트리 = 4건) | 512 | 1920×1080 | 512×512 | **512×288** | **예** |
+| 〃 | 512 | 256×256 (**동봉 preview 씬**) | 512×512 | **256×256** (확대 금지) | **예** |
+| `glitter` `_rt_GlitterTiles` (`width`/`height` 256×256, 4건) | — | 임의 | 256×256 | 256×256 | 아니오 |
+| 나머지 82건(`scale` 또는 무선언) | — | 임의 | `dst/scale` | `dst/scale` | 아니오 |
+
+**출하 자산이 실제로 마운트하는 씬에서 바뀌는 건 하나뿐이다.** `scene.json` 전수 355개
+(동봉 + 설치본)에서 `fit` 보유 이펙트를 쓰는 자리는 **4건**이고 전부 두 이펙트의
+`preview/scene.json`(256×256 정사각 레이어 + 256×256 오르토)이다. 그중
+`fluidsimulation` 은 정사각이라 **불변**이고, `cursorripple` 은 확대 금지가 걸려
+**512×512 → 256×256** 으로 바뀐다. 즉 **동봉 도달 그림 변화 = 1이펙트 × 2FBO × 2트리**.
+1920×1080 워크샵 콘텐츠에서의 개선(위 표 1·2·5행)은 코퍼스에 자산이 없어 **수치로만** 남긴다.
 
 **W2 (P1) `LIGHTING=1` → 이펙트 통째 폴백.**
 `ShaderPreprocessor.swift:274-329` 가 `#require` 줄을 **소비**하는 것까지는 실물과 같지만
@@ -1066,10 +1148,11 @@ float amt = smoothstep(size, 0.0, length(delta));      // edge0 > edge1 → 중�
 | vorticity(vert) | **중상** | `g_EffectTextureProjectionMatrixInverse` 실값이 필요하다(W3). `mul` 인자 순서, `.xyw` 스위즐 뒤 원근 나눗셈, 두 번의 y-플립 — **한 군데만 틀려도 임펄스가 화면 반대편에 찍힌다**. 검증은 "커서 위치에 힘이 생기는가" 라는 눈 판정뿐이라 디버깅이 비싸다 |
 | advection (velocity + dye, 같은 셰이더) | **중상** | `DYE` 로 갈리는 두 인스턴스 + `RENDERING` 3분기 × `POINTEMITTER`/`LINEEMITTER` × `COLLISIONMASK`/`DYEEMITTER`/`PERSPECTIVE`. 그리고 **`g_Texture0Resolution` 이 염료 패스에서도 속도 해상도**라는 규약을 놓치면 이류 거리가 2배 틀린다. `smoothstep(edge0>edge1)` 역방향 호출을 "고치지 않는" 규율도 필요 |
 | combine | **상** | 셋이 겹친다: ① `BLENDMODE` 33종(`common_blending.h` 전체) ② `#require LightingV1` 코드 생성 + 라이트 배열 피드(= W2, 이 리포에서 가장 큰 미착지 블록) ③ `RENDERING==3` 의 `ddx`/`ddy` 화면공간 미분(이펙트 체인 안에서 dst 해상도 기준이라 스케일드 FBO 와 섞이면 규약이 흔들린다). 게다가 유일하게 MVP 를 쓰는 패스다 |
-| **자원 관리 전체** | **중** | `unique` 8장 지속 + swap + `fit` 종횡비 + 포맷별 타깃. Waple 은 이미 대부분 갖췄고 남은 건 W1 하나다 |
+| **자원 관리 전체** | **중** | `unique` 8장 지속 + swap + `fit` 종횡비 + 포맷별 타깃. **2026-08-21 로 전건 착지**(W1 포함) |
 
-가장 싼 착지 순서: **W1(fit) → W3(투영행렬) → W2(LightingV1)**.
-W1 은 순수 산술이라 리눅스 레인에서 단위 테스트로 닫히고, 그림 개선폭이 가장 크다.
+가장 싼 착지 순서는 **W1(fit) → W3(투영행렬) → W2(LightingV1)** 이었다.
+W1 은 순수 산술이라 리눅스 레인에서 단위 테스트로 닫히고 그림 개선폭이 가장 커서 먼저 갔다
+(2026-08-21, `Tests/WapleCoreTests/EffectFboFitTests.swift` 11케이스). **남은 것은 W3 → W2** 다.
 
 ---
 
