@@ -10,7 +10,8 @@ import WapleCore
 /// **±0.5 소스 텍셀**(소스 2×2 박스)이고 **가우시안 패스는 없다**. 가장 깊은 두 업샘플 단은 BICUBIC.
 /// 종전 구현과의 차이 5건(추출 ±1.0 텍셀 · 레벨별 blur13 h/v · 단일탭 업샘플 · 단일탭 합성 ·
 /// 최상위 가중 반전)은 **오차 부호가 서로 반대라 상쇄**되고 있었다 — 그래서 한 건씩 고치면
-/// 회귀한다(정본 spec/engine/hdr-bloom.json: doNotFixPiecemeal). 한 단위로 교체했다.
+/// 회귀한다(정본 spec/engine/hdr-bloom.json: `filterShapeDeviations.orderingConstraint`).
+/// 한 단위로 교체했다.
 /// 소스가 작아 8단이 안 되면 min(8, 허용 mip 수)로 클램프, 2단 미만은 거부(호출부의 단일레벨
 /// HDRBloomPass 폴터). strength/scatter 캘리브는 HDRBloomPass 와 동일.
 struct HDRBloomPyramidParameters: Equatable {
@@ -195,6 +196,20 @@ final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
 
     /// 소스가 허용하는 피라미드 레벨 수(1/2 부터 1×1 까지 halving)와 요청값의 min.
     /// 호출부는 이 값만큼 levels/scratches 쌍을 할당하면 된다(2 미만이면 인코드 거부).
+    ///
+    /// **[2026-08-21] WE 와 산식이 다르다 — 확인했으나 이 레인에서 미반영.**
+    /// WE 는 `_rt_{2<<i}FrameBuffer` 생성 루프에서 **min(W,H)** 를 계속 반으로 나누며
+    /// 0 이 되기 전까지만 센다(`cmovg r14d,r12d` 0x14017f363 → `sar eax,1` 0x14017f376 →
+    /// `jle` 0x14017f37d → `inc [rsi+0x310c]` 0x14017f383, 루프 상한 `cmp ebx,8` 0x14017f541)
+    /// = `min(8, floor(log2(min(W,H))))`. 여기 구현은 `w > 1 || h > 1` 이라 **max 기준**
+    /// `ceil(log2(max(W,H)))` 를 센다.
+    ///
+    /// 짧은 변이 256 이상이면 WE 쪽이 이미 상한 8 에 걸려 양쪽이 같은 값을 낸다 — 실화면
+    /// 크기에서는 차이가 없고, 갈리는 것은 짧은 변 < 256 인 소스뿐이다(64×32 → WE 5, 여기 6).
+    /// N 은 `normalizedStrength` 의 지수로 곧장 들어가므로 틀리면 **강도가 통째로 틀린다.**
+    /// 고치지 않은 이유는 하나뿐이다 — 기대치가 박힌
+    /// `Tests/WapleRenderTests/HDRBloomTests.swift:370`(64×32 → 6)이 이 레인 소유가 아니다.
+    /// 정본: spec/engine/hdr-bloom.json `engine.bloom.hdr.levelCountRule`.
     static func levelCount(requested: Int, sourceWidth: Int, sourceHeight: Int) -> Int {
         var count = 1
         var w = max(1, sourceWidth / 2)
