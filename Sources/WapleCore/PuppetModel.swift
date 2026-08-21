@@ -31,13 +31,20 @@ public struct PuppetModel: Equatable {
 
     public struct Key: Equatable {
         public let position: SIMD3<Float>
-        public let angles: SIMD3<Float>   // 라디안 추정(z 회전 위주)
+        /// 오일러 3축 — **파일 바이트 순서 그대로**(키 +0x0c, +0x10, +0x14)이고 그 의미는 (Z, Y, X) 다.
+        /// (x,y,z) 이름은 저장 순서일 뿐 축 이름이 아니다. WE 로더가 이 셋을 반각(0.5f @ 0x1404926c0)
+        /// 으로 sin/cos 해 `Rz(+0x0c)·Ry(+0x10)·Rx(+0x14)` 쿼터니언을 굽는다
+        /// (0x140264188–0x1402642ae). 해석은 `PuppetPose.rotationQuaternion` 단일 소스.
+        /// 단위는 라디안(반각 계수가 0.5f 이지 π/360 이 아니다).
+        public let angles: SIMD3<Float>
         public let scale: SIMD3<Float>
     }
 
     public struct Animation: Equatable {
         public let name: String
-        public let mode: String           // loop | mirror | single (실측: "mirror")
+        /// 재생 모드. WE 가 실제로 인식하는 값은 `stricmp` 로 "mirror" / "single" 둘뿐이고
+        /// 나머지(빈 문자열·"loop"·"clamp" 포함)는 전부 loop 다 — 0x1401a8c71 / 0x1401a8c87.
+        public let mode: String
         public let fps: Float
         public let lengthFrames: Int
         public let tracks: [[Key]]        // 본 인덱스별 키 배열(프레임당 1키), 빈 배열 = 정적 본
