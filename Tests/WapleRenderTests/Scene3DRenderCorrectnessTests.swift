@@ -10,6 +10,29 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         try ScenePackage.parse(encodePkg(files))
     }
 
+    /// [2026-08-21] `renderer.billboards[i]` 를 **절대 직접 인덱싱하지 않는다.**
+    ///
+    /// `build3D` 는 셰이더 라이브러리 컴파일이 실패하면 조용히 조기 return 한다(NSLog 만 남긴다).
+    /// 그러면 `billboards` 가 비고, 직접 인덱싱하던 자리에서 `Index out of range` **트랩**이 나
+    /// **테스트 프로세스가 통째로 죽는다** — 그 뒤 스위트가 아예 안 돌아 실행 수 census 까지
+    /// 같이 빨개지고, 로그 끝에 스택 없는 `ContiguousArrayBuffer.swift:692` 한 줄만 남는다.
+    /// 실측: MSL 주석 한 줄이 깨졌던 run 32448054603 에서 정확히 이 일이 났다.
+    /// `XCTAssertEqual(count, 2)` 를 앞에 둬도 소용없다 — 단언은 실행을 멈추지 않는다.
+    ///
+    /// 그래서 인덱싱을 `throws` 로 바꾼다. 실패는 **그 테스트 하나**로 국한되고, 메시지가
+    /// "셰이더가 안 지어졌다" 를 그대로 말한다.
+    private func billboard(_ renderer: SceneRenderer, _ index: Int,
+                           file: StaticString = #filePath, line: UInt = #line) throws -> Any {
+        let all = renderer.billboards
+        guard index < all.count else {
+            XCTFail("billboards[\(index)] 없음 — 실제 \(all.count)개. build3D 가 셰이더 컴파일 실패로 "
+                    + "조기 return 했을 때 나는 모양이다(로그의 `mesh shader compile failed` 확인).",
+                    file: file, line: line)
+            throw XCTSkip("billboards 비어 있음")
+        }
+        return all[index]
+    }
+
     private func mirrorValue<T>(_ value: Any, _ label: String, as type: T.Type) -> T? {
         Mirror(reflecting: value).children.first { $0.label == label }?.value as? T
     }
@@ -62,13 +85,13 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         renderer.build3D(doc: doc, package: package, device: device)
 
         XCTAssertEqual(renderer.billboards.count, 2, "solid and _rt_ billboard layers must not be dropped")
-        let solid = renderer.billboards[0]
+        let solid = try billboard(renderer, 0)
         let angle = try XCTUnwrap(mirrorValue(solid, "angleZ", as: Float.self))
         XCTAssertEqual(angle, 0.7853982, accuracy: 1e-6)
         XCTAssertEqual(mirrorValue(solid, "depthTest", as: Bool.self), false)
         XCTAssertEqual(mirrorValue(solid, "depthWrite", as: Bool.self), false)
         XCTAssertEqual(mirrorValue(solid, "effects", as: [SceneRenderer.EffectGPU].self)?.count, 1)
-        XCTAssertEqual(mirrorValue(renderer.billboards[1], "isFrameBuffer", as: Bool.self), true)
+        XCTAssertEqual(mirrorValue(try billboard(renderer, 1), "isFrameBuffer", as: Bool.self), true)
     }
 
     /// W4b-③: 2D buildEffectChain 의 WAPLE_EFFECT_SKIP(파리티 이분 스위치)가 3D 빌보드 경로엔 없어서
@@ -99,7 +122,7 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         baseline.projW = Float(doc.projectionWidth)
         baseline.projH = Float(doc.projectionHeight)
         baseline.build3D(doc: doc, package: package, device: device)
-        XCTAssertEqual(mirrorValue(baseline.billboards[0], "effects", as: [SceneRenderer.EffectGPU].self)?.count, 1,
+        XCTAssertEqual(mirrorValue(try billboard(baseline, 0), "effects", as: [SceneRenderer.EffectGPU].self)?.count, 1,
                        "unset WAPLE_EFFECT_SKIP must not change existing behavior")
 
         // 이름 일치 — 3D 경로도 2D 와 동형으로 해당 이펙트를 빌드에서 제외해야 한다.
@@ -110,7 +133,7 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         skipped.projW = Float(doc.projectionWidth)
         skipped.projH = Float(doc.projectionHeight)
         skipped.build3D(doc: doc, package: package, device: device)
-        XCTAssertEqual(mirrorValue(skipped.billboards[0], "effects", as: [SceneRenderer.EffectGPU].self)?.count, 0,
+        XCTAssertEqual(mirrorValue(try billboard(skipped, 0), "effects", as: [SceneRenderer.EffectGPU].self)?.count, 0,
                        "WAPLE_EFFECT_SKIP=tint must filter the named effect out of the 3D billboard build")
     }
 
