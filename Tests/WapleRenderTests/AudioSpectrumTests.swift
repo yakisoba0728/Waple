@@ -32,7 +32,7 @@ final class AudioSpectrumTests: XCTestCase {
 
     /// 창 누적기가 FFT 길이가 아니라 **창 길이**로 잡혀야 제로패딩이 성립한다.
     func testProviderWindowIsTwoThirdsOfFFTLength() {
-        XCTAssertEqual(AudioSpectrum.windowLength(fftLength: 2048), 1366)
+        XCTAssertEqual(AudioSpectrum.windowLength(fftLength: 2048), 1365)   // 1366 → 1365: 절삭이 몫이 아니라 차에 걸린다(0x1400d149b-0x1400d14a0)
         XCTAssertLessThan(AudioSpectrum.windowLength(fftLength: 2048), 2048,
                           "창이 FFT 길이와 같으면 제로패딩이 0 이다")
     }

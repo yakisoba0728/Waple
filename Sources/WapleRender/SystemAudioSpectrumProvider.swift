@@ -5,6 +5,15 @@ import Foundation
 @preconcurrency import ScreenCaptureKit
 import AVFoundation
 import Accelerate
+import WapleCore
+
+/// 창 누적기는 `WapleCore` 로 옮겼다 — 캡처 API 가 하나도 안 들어가는 순수 값 타입인데
+/// macOS 전용 모듈에 있어서 리눅스 테스트가 못 봤다. 여기서는 재수출만 하므로 호출부와
+/// 기존 테스트(`AudioInputPipelineTests`)는 그대로다. 같은 관례가
+/// `Sources/WapleRender/AudioSpectrum.swift` 에도 있다.
+public typealias AudioWindowAccumulator = WapleCore.AudioWindowAccumulator
+/// 무음 게이트 순수 판정부도 같은 이유로 `WapleCore` 에 있다.
+public typealias AudioCaptureGate = WapleCore.AudioCaptureGate
 
 protocol AudioSpectrumProviding: AnyObject {
     var onFrame: (([Float]) -> Void)? { get set }
@@ -37,6 +46,12 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
     private let fftSize = 2048
     /// 캡처 **요청** 샘플레이트(`SCStreamConfiguration.sampleRate`, 아래 startCapture).
     ///
+    /// **원본은 레이트를 요청하지 않는다.** `IAudioClient::GetMixFormat`(`0x1400cf5ab`)이 준
+    /// 공유모드 믹스 포맷을 그대로 쓰고, 거기서 `nSamplesPerSec`(`0x1400cf5e4`)와
+    /// `nChannels`(`0x1400cf5d3`)를 읽어 N·B 를 정한다. 요구는 `wBitsPerSample == 32`
+    /// 하나뿐인데(`0x1400cf5bb`) 그마저 어기면 로그만 남기고 진행한다. 우리가 48000 을
+    /// **요청**하는 것은 SCStream API 규약 차이일 뿐이고, 진실원이 실측 포맷이라는 점은 같다.
+    ///
     /// 요청일 뿐 보장이 아니다 — 실제로 들어온 버퍼의 레이트는 `Self.sampleRate(of:)` 가 포맷
     /// 기술자에서 읽고, 이 상수는 **그게 없을 때의 폴백**으로만 쓴다. 44.1 kHz 로 오는 장치에서
     /// 48000 을 가정하면 `AudioSpectrum.binCount` 가 B 를 627 로 잡는데 정답은 683 이라
@@ -55,7 +70,7 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
     // running 은 메인 스레드(start/stop)와 코어 팬아웃(waple.audio 콜백 큐)에서 동시 접근 — lock 으로 직렬화.
     private let lock = NSLock()
     private var running = false
-    // 채널별 링버퍼(파일 말미 AudioWindowAccumulator) — 패킷을 누적해 FFT 창이 찰 때만 분석한다.
+    // 채널별 링버퍼(WapleCore.AudioWindowAccumulator) — 패킷을 누적해 FFT 창이 찰 때만 분석한다.
     // process(waple.audio 큐)/stop(메인) 양쪽에서 접근 — running 과 같은 lock 으로 보호.
     private var accumulator: AudioWindowAccumulator
 
@@ -64,7 +79,9 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
         let setup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
         fftSetup = setup
         // X-⑩: 창은 FFT 길이가 아니라 **원본의 창 규약** `N − N/3` 이다(0x1400d1491-0x1400d14a0).
-        // 나머지 1/3 은 제로패딩이고 오버랩은 없다(FFT 직후 카운터를 0 으로 리셋).
+        // 나머지 1/3 은 패딩이고 오버랩은 없다(FFT 직후 `xor r13d, r13d` — 0x1400d1e21).
+        // 원본은 그 패딩을 0 이 아니라 무음값 127 로 채우는데(0x1400d141d), 상수항이 bin 0 에만
+        // 떨어지므로 소비 빈 1..B-1 에서는 우리의 0 패딩과 정확히 등가다.
         // 종전엔 창 = FFT 길이라 패딩이 0 이었다 — 응답 지연이 1.5배였고 격자 보간도 없었다.
         accumulator = AudioWindowAccumulator(windowSize: AudioSpectrum.windowLength(fftLength: fftSize))
         super.init()
@@ -89,7 +106,7 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
         lock.lock()
         if !running { lock.unlock(); return }
         running = false
-        accumulator.reset()   // 미완성 창 잔여는 세션을 넘기지 않는다(엔진도 재구성 시 캐리 리셋 — FUN_1400d0380:184-185)
+        accumulator.reset()   // 미완성 창 잔여는 세션을 넘기지 않는다(엔진도 무음/실패 경로에서 캐리 리셋 — `0x1400d1f58`)
         lock.unlock()
         SharedAudioCaptureCore.shared.remove(self)   // 마지막 구독자가 나가면 코어가 스트림을 닫는다
     }
@@ -101,10 +118,15 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
 
     /// 코어가 팬아웃한 원시 오디오 버퍼 처리(구 SCStreamOutput 콜백 본체).
     /// internal: 같은 파일의 SharedAudioCaptureCore 가 호출.
-    /// WE 2.8.42 AudioProcessor 규약: 패킷을 채널별로 누적(carry uVar14=local_3a0 — FUN_1400d0380:260-274·:425)
-    /// 해 정확히 창 크기에 도달할 때만 FFT(:449 `(uint)uVar14 == uVar18`). hop = 창 크기(겹침 없음)는 추정 —
-    /// 디컴파일에 오버랩 흔적이 없고 창 소비 후 캐리가 리셋된다(:184-185). 구 콜백마다-제로패드/절단은 폐기
-    /// (짧은 버퍼의 제로패드가 스펙트럼을 오염시켰다). 창이 차기 전엔 onFrame 을 부르지 않는다.
+    /// WE 2.8.42 AudioProcessor 규약: 패킷을 채널별로 누적해 정확히 창 크기 `W` 에 닿을 때만
+    /// FFT 한다(`0x1400d1b6b` 의 `cmp r13d, edi`). **겹침 없음은 이제 추정이 아니다** — FFT 커밋
+    /// 직후 채움 카운터를 0 으로 되돌리는 `xor r13d, r13d` 를 확인했다(`0x1400d1e21`, 무음 경로는
+    /// `0x1400d1f58`). 구 콜백마다-제로패드/절단은 폐기(짧은 버퍼의 제로패드가 스펙트럼을 오염시켰다).
+    /// 창이 차기 전엔 onFrame 을 부르지 않는다.
+    ///
+    /// 원본과 한 군데 다르다: 원본은 창이 찬 뒤 남은 프레임을 **버린다**(`ReleaseBuffer` 가 소비량이
+    /// 아니라 패킷 전체를 반납한다 — `0x1400d1b19`). 그래서 원본의 실효 홉은 창이 아니라 폴 간격
+    /// 33 ms 이고 매 폴마다 ~4 ms 를 잃는다. 우리는 푸시 콜백이라 버릴 이유가 없어 전량 캐리한다.
     func process(sampleBuffer: CMSampleBuffer) {
         guard isRunning() else { return }
         guard let (l, r) = Self.stereoSamples(from: sampleBuffer) else { return }
@@ -117,10 +139,12 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
         for (wl, wr) in windows { analyzeWindow(left: wl, right: wr, sampleRate: rate) }
     }
 
-    /// 창 1개(채널별 fftSize 샘플)를 분석해 onFrame 디스패치. 무음 게이트 통과 창은 0 스펙트럼 공급
-    /// (엔진도 무음 시 0 커밋 — FUN_1400d0380:419-424 플래그, :444-445 `func_0x000140421870(*param_1,0,0x200)`).
-    /// ⚠️ FUN_1400d0380 은 Ghidra 주소공간 — 원본 바이너리에서는 `0x1400d02b0`(−0xD0).
-    /// 사유와 전수 분류는 `spec/engine/decompilation-provenance.json`.
+    /// 창 1개(채널별 fftSize 샘플)를 분석해 onFrame 디스패치. 무음 게이트가 문 창은 0 스펙트럼 공급
+    /// — 엔진도 무음이면 출력 128 float 을 통째로 memset 한다(`0x1400d1f5b`, 폭 `0x200`).
+    /// 엔진은 그 밖에도 **패킷이 1,000 ms 동안 한 건도 안 오면** 같은 memset 을 한다
+    /// (`0x1400d14ac` 의 `comiss xmm7, 1000.0`). 우리는 폴링이 아니라 푸시 콜백이라 그 타이머가
+    /// 없다 — 캡처가 끊기면 마지막 스펙트럼이 남는데, 소비단(`AudioSpectrumProcessor`)의 엔벨로프
+    /// 감쇠가 그 자리를 덮으므로 별도 워치독을 두지 않았다.
     private func analyzeWindow(left l: [Float], right r: [Float], sampleRate: Double) {
         guard let setup = fftSetup else { feedZeros(); return }
         guard let out = Self.analyzeWindow(l: l, r: r, fftSize: fftSize, log2n: log2n, setup: setup,
@@ -153,17 +177,23 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
         return Array((bands(l) + bands(r)).prefix(128)).map { $0 * volume }
     }
 
-    /// 창 피크(채널 합산). 엔진은 raw 샘플의 부호 있는 최댓값을 0 바닥으로 잰다
-    /// (FUN_1400d0380:378-417 — fVar24=0.0 시작, 부호 있는 max). 절댓값이 아님에 주의.
+    /// 창 피크. **채널 0(왼쪽)만** 본다 — 원본이 stride 를 `nChannels · 4` 로 잡고
+    /// 프레임마다 첫 채널 하나만 훑기 때문이다(`0x1400d1a36` stride · `0x1400d1a95` `maxss`).
+    /// 부호 있는 최댓값을 0 바닥으로 재고 절댓값이 아니다.
+    ///
+    /// **종전엔 L·R 둘 다 봤다.** 그러면 하드 우측 팬 신호에서 판정이 갈린다(원본은 무음,
+    /// 우리는 통과). 기본 threshold 가 0(비활성)이라 실사용 회귀는 없지만 파리티는 파리티다.
+    /// 판정 자체는 `WapleCore.AudioCaptureGate` 에 있고(리눅스 테스트 가능) 여기는 위임이다.
     static func windowPeak(_ l: [Float], _ r: [Float]) -> Float {
-        max(0, max(l.max() ?? 0, r.max() ?? 0))
+        _ = r   // 원본이 채널 0 만 재므로 오른쪽은 게이트에 안 들어간다(위 주석).
+        return AudioCaptureGate.windowPeak(l)
     }
 
-    /// 무음 게이트 판정(순수). 엔진 활성 조건 threshold > FLT_EPSILON(FUN_1400d0380:376 —
-    /// `fVar27(FLT_EPSILON) < *(param_1+2)`), 활성 시 창 피크 < threshold 이면 무음(:419-424).
-    /// 기본 threshold 0 이면 항상 비활성(무회귀).
+    /// 무음 게이트 판정(순수). 엔진 활성 조건 `threshold > FLT_EPSILON`(`0x1400d1a1b`),
+    /// 활성 시 창 피크 < threshold 이면 무음(`0x1400d1ad6`). 기본 threshold 0 이면 항상 비활성.
+    /// 본체는 `WapleCore.AudioCaptureGate` — 여기는 호출부 호환용 위임이다.
     static func isSilenced(peak: Float, threshold: Float) -> Bool {
-        threshold > Float.ulpOfOne && peak < threshold
+        AudioCaptureGate.isSilenced(peak: peak, threshold: threshold)
     }
 
     /// 무음 공급(권한 거부/캡처 실패 폴백). 코어가 실패를 구독자 전원에 브로드캐스트할 때도 호출한다.
@@ -177,7 +207,7 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
     /// 포맷 기술자가 없거나 값이 비유한/비양수면 nil — 호출자가 요청값(`captureSampleRateHz`)으로 폴백한다.
     ///
     /// **창 길이는 다시 계산하지 않아도 된다.** `AudioSpectrum.windowLength(fftLength:)` 는 fftSize
-    /// 하나만 보므로(2048 → 1366) 레이트와 무관하고, 따라서 `accumulator` 를 다시 만들 이유가 없다.
+    /// 하나만 보므로(2048 → 1365) 레이트와 무관하고, 따라서 `accumulator` 를 다시 만들 이유가 없다.
     /// 레이트에 의존하는 것은 소비 빈 수 B 뿐인데(48 kHz→627, 44.1 kHz→683), 그건 static
     /// `analyzeWindow` 가 창마다 `AudioSpectrum.binCount(fftLength:sampleRate:)` 로 다시 잡고
     /// 밴드 표·틸트 표도 `AudioSpectrum.spectrum` 이 그 B 에서 매번 다시 만든다 — 캐시가 없으므로
@@ -193,6 +223,9 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
 
     /// 스테레오 채널별 샘플: non-interleaved(버퍼 2개) → 각 버퍼, interleaved(1버퍼 2채널) → 짝/홀 분리,
     /// 모노 → (mono, mono). 반환 (L, R). 절단 없이 패킷 전체 — 창 맞춤은 누적 버퍼(AudioWindowAccumulator)가 담당.
+    /// 원본은 모노 입력이면 **오른쪽 밴드를 0 으로 둔다**(`0x1400d1e92` 의 `cmovge` 가 소스 오프셋을
+    /// 0 으로 잡아 우 배열이 memset 상태로 남는다). 우리는 좌를 복제한다 — 소비단이 L/R 을 평균하므로
+    /// 원본 쪽이 오히려 모노에서 −6 dB 다. 의도적 이탈이고 `docs/re/audio-capture.md` §4 #9 에 적었다.
     private static func stereoSamples(from sampleBuffer: CMSampleBuffer) -> ([Float], [Float])? {
         var sizeNeeded = 0
         guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
@@ -243,7 +276,10 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
     /// log2n/setup 은 fftSize 와 정합해야 함(fftSize 는 2의 거듭제곱). samples 는 fftSize 로
     /// 제로패딩(짧으면)·절단(길면)된다 — 라이브 경로는 누적 버퍼가 정확히 fftSize 창만 넘기므로
     /// 이 패딩/절단은 테스트 등 일회성 호출자용 방어다.
-    /// WE 2.8.42 는 캡처 샘플에 윈도우(테이퍼)를 적용하지 않는다(디컴파일 FUN_1400d0380:285-308) —
+    /// WE 2.8.42 는 캡처 샘플에 윈도우(테이퍼)를 적용하지 않는다. 적재 루프의 샘플당 연산은
+    /// `mulss`(127)·`addss`(127)·`divss` 셋뿐이고 **계수 테이블 인덱싱이 한 번도 없다**
+    /// (`0x1400d15d4`-`0x1400d15f1`) — `.rdata` 에 해닝/블랙먼 계수를 역산할 대상 자체가 없다.
+    /// 유일한 "창" 은 길이 자르기 `W = int(N − N/3)`(`0x1400d1491`-`0x1400d14a0`)다.
     /// 구 Hann 창 제거로 진폭이 약 2배(Hann coherent gain 0.5 상쇄)가 되는 것은 의도된 방향.
     static func magnitudes(from samples: [Float], fftSize: Int,
                            log2n: vDSP_Length, setup: FFTSetup) -> [Float] {
@@ -286,56 +322,6 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
     }
 }
 
-/// 채널별 링버퍼 — 콜백 패킷을 누적해 정확히 windowSize 개가 채워질 때만 창을 방출한다
-/// (hop = 창 크기, 겹침 없음). WE 2.8.42 AudioProcessor 도 패킷을 캐리(uVar14=local_3a0)에 누적해
-/// 창 도달 시에만 FFT 한다(FUN_1400d0380:260-274 누적·:425 캐리 갱신·:449 `(uint)uVar14 == uVar18` 창 판정).
-/// hop=창 크기는 추정 — 디컴파일에 오버랩 흔적이 없고 창 소비 후 캐리가 리셋된다(:184-185).
-/// 제로패드 없음 — 창 미만 잔여는 다음 패킷에 이어진다.
-struct AudioWindowAccumulator {
-    let windowSize: Int
-    private var bufL: [Float] = []
-    private var bufR: [Float] = []
-
-    init(windowSize: Int) {
-        self.windowSize = windowSize
-        bufL.reserveCapacity(windowSize * 2)
-        bufR.reserveCapacity(windowSize * 2)
-    }
-
-    /// 아직 창을 이루지 못한 잔여 샘플 수(진단/테스트용).
-    var pendingCount: Int { bufL.count }
-
-    /// 패킷(L/R 동일 길이)을 누적하고, 채워진 완전 창을 선두부터 모두 방출(0개 이상, 순서 보존).
-    mutating func append(left l: [Float], right r: [Float]) -> [(left: [Float], right: [Float])] {
-        bufL.append(contentsOf: l)
-        bufR.append(contentsOf: r)
-        // F840: 길이 어긋남 정렬. 종전에는 잔여 길이가 갈리면 짧은 쪽이 영원히 창을 못 채워
-        // 긴 쪽이 무한 증가한다(캡처 세션 내내 누적 = OOM). 어긋난 시점에서 이미 L/R 동일 길이
-        // 계약이 깨진 것이므로 긴 쪽의 꼬리(최신 샘플)를 버려 다시 맞춘다 — 앞쪽 정렬은 보존된다.
-        if bufL.count != bufR.count {
-            let aligned = min(bufL.count, bufR.count)
-            bufL.removeLast(bufL.count - aligned)
-            bufR.removeLast(bufR.count - aligned)
-        }
-        var out: [(left: [Float], right: [Float])] = []
-        // F840: 종전 조건은 bufL 만 봤는데 removeFirst(windowSize) 는 bufR 에도 걸린다 —
-        // stereoSamples 가 r.isEmpty 만 특수 처리하므로 **길이가 다른** 스테레오 패킷
-        // (non-interleaved 버퍼 두 개의 mDataByteSize 가 갈리는 경우)이 오면 트랩이었다.
-        while bufL.count >= windowSize && bufR.count >= windowSize {
-            out.append((Array(bufL.prefix(windowSize)), Array(bufR.prefix(windowSize))))
-            bufL.removeFirst(windowSize)
-            bufR.removeFirst(windowSize)
-        }
-        return out
-    }
-
-    /// 미완성 창 잔여 폐기(캡처 세션 경계 — 엔진 재구성 시 캐리 리셋 FUN_1400d0380:184-185 대응).
-    mutating func reset() {
-        bufL.removeAll(keepingCapacity: true)
-        bufR.removeAll(keepingCapacity: true)
-    }
-}
-
 /// 앱 레벨 오디오 입력 설정(UserDefaults 백 — scene.json 파스가 아님. WE 도 앱/설정 레벨 어휘:
 /// audioinputvolume/audioinputthreshold, strings/json-keys.txt:424-425). 설정 UI 배선은 범위 밖.
 /// 키 관례는 `waple.fitMode`/`waple.maxFPS` 등 기존 설정 키(`kr.yaki.waple` 도메인)를 따른다.
@@ -343,7 +329,7 @@ public enum AudioInputSettings {
     static let thresholdKey = "waple.audioInputThreshold"
     static let volumeKey = "waple.audioInputVolume"
 
-    /// 무음 게이트 임계값 — 창 피크 < threshold 이면 그 창은 0 스펙트럼(FUN_1400d0380:376-424).
+    /// 무음 게이트 임계값 — 창 피크 < threshold 이면 그 창은 0 스펙트럼(`0x1400d1a1b`-`0x1400d1ad9`).
     /// 기본 0 = 비활성(무회귀; 엔진 활성 조건 threshold > FLT_EPSILON 의 판정은 isSilenced 가 담당).
     public static var threshold: Float {
         get { UserDefaults.standard.object(forKey: thresholdKey) == nil ? 0 : UserDefaults.standard.float(forKey: thresholdKey) }
