@@ -167,6 +167,23 @@ jobs:
       - name: Canon regenerability
         run: python3 scripts/spec/check_canon_generator_keys.py
 
+      # 위 게이트의 **명시된 구멍**을 메운다 — 그 게이트는 키 집합만 보고 값은 안 본다.
+      #
+      # 정본은 손으로 고칠 수 있고(생성기가 코퍼스를 요구해 이 레인에서 못 돌 때가 특히 그렇다),
+      # 손으로 고친 문장이 생성기에 안 들어가면 **재생성이 그 정정을 되돌린다.** 키는 그대로이므로
+      # 형제 게이트는 초록이고, 축소 가드도 키가 안 사라졌으니 초록이다. 아무도 재생성을 시도하지
+      # 않으면 영영 안 드러난다.
+      #
+      # 실제로 두 건이 그 상태였다(이 게이트를 만들며 발견): `waple.gap.strictJSON` 의 `note` 는
+      # 정본만 갭 해소에 맞춰 시제를 과거로 고쳐 뒀고, `waple.gap.composeAndConditions` 의
+      # `갭 아님` 은 정본만 `replacementkey` 가 `fafcd21` 로 소비된다고 고쳐 뒀다.
+      #
+      # 값이 **리터럴인 키만** 본다(f-string·변수는 코퍼스가 있어야 알 수 있다). 비교 못 한 값의
+      # 내역을 화면에 찍어 그물 크기를 숨기지 않고, 대조 건수 하한으로 "패턴이 안 맞아 0건 대조로
+      # 통과" 를 막는다. selftest 를 먼저 돈다.
+      - name: Canon regenerability (values)
+        run: python3 scripts/spec/check_canon_generator_values.py
+
       # 자산 JSON 관용 파스의 **도달**과 **배선**을 함께 본다.
       #
       # WE 는 jsoncpp 의 allowComments/allowTrailingCommas 를 둘 다 켠다(0x140091fe2·0x1400920b3).
