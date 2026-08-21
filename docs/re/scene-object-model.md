@@ -34,6 +34,9 @@
 | 13 | `text.spacing` | 디스크립터 타입 1 = **vec2** | `float(obj["spacing"])` 로 스칼라 파스 | §2 · §12 |
 | 14 | `effects[]` 드롭 | 엔진은 `visible:false` 여도 **붙이고** 렌더에서 게이트 | 파스에서 드롭(스크립트 있는 것만 보존) | §10 |
 | 15 | `objects[].config` | **엔진이 안 읽는다**(`"config"` 조회 사이트 0). `passthrough`/`autosize`/`solidlayer`/`projectlayer`/`instanced` 는 `objects[].image` 가 가리키는 **모델 JSON 루트**의 키다 | `obj["config"]` 를 읽어 같은 플래그를 채운다 — 동봉 4건은 결과가 같지만 **경로가 다르다** | §2.1 정정 |
+| 16 | `objects[].scale` z · `angles` x·y | 공통 디스크립터가 **둘 다 vec3**(태그 2, `+0x134`/`+0x140`) | **[2026-08-21 닫음]** `SceneLayer`/`SceneTextLayer` 가 `scaleZ`·`angleX`·`angleY` 로 보존(파스 전용) | §12.1 |
+| 17 | `text` 의 `parallaxDepth` | **공통** 오브젝트 디스크립터의 vec2 키(`+0x170`, 태그 1) — 타입별 키가 아니다 | **[2026-08-21 닫음]** `SceneTextLayer.parallaxDepth` 파스. **렌더 소비는 아직** — §12.1.4 | §12.1 |
+| 18 | `general.orthogonalprojection.width`/`height` | **둘 다** 태그 1..3 일 때만 읽고, 아니면 두 스토어를 모두 건너뛴다(`0x140187572`–`0x14018758a` → `0x140187602`) | **[2026-08-21 닫음]** `numericInt` 전부-아니면-전무 게이트. 종전 `lenientInt` 는 `{"width":true}` → 1×1 | §12.1 |
 
 ---
 
@@ -980,6 +983,102 @@ WE 도 `file` 이 문자열이 아니면 스킵하므로 이 점은 우연히 �
 
 **갭이 아닌 것**(확인해 둔다): `depth` · `particlesrc` · `variants` — WE 도 안 읽으므로
 Waple 이 안 읽는 것이 맞다. `instanceoverride.id` 무시도 맞다(§5.3).
+
+---
+
+## 12.1 [2026-08-21 닫음] 트랜스폼 성분 소실 3건 + 텍스트 `parallaxDepth`
+
+이 절은 §12 의 갭 표와 같은 축이지만 **이번 라운드에서 파스까지 닫은 것**만 모은다.
+넷 다 근거를 이 세션에서 직접 다시 떴다(브리프 함정 16 — 인계 문서의 VA 를 베끼지 않았다).
+
+### 12.1.1 공통 오브젝트 디스크립터 표의 타입 태그 — 직접 재확인
+
+등록부는 `0x1401e0530`–`0x1401e1389`(`merged()`) 한 함수이고, 한 항목은
+`[rbx+0x30]`=**타입 태그** · `[rbx+0x34]`=멤버 오프셋 · `[rbx+0x68]`=이름 순으로 굽힌다.
+**이름 `lea` 는 그 항목의 태그 스토어보다 앞에 나오고, 다음 항목의 이름 `lea` 가 현재 항목의
+태그 스토어 사이에 끼어 들어온다**(예: `0x1401e129a` 의 `"disablepropagation"` 이
+`"solid"` 의 오프셋 스토어와 태그 스토어 사이에 있다). 순진하게 덤프하면 한 칸 밀린다.
+
+| 키 | 이름 `lea` | 멤버 | 태그 스토어 | 태그 | 성분 |
+|---|---|---|---|---:|---:|
+| `origin` | `0x1401e05d2` | `+0x128` (`0x1401e05f8`) | `0x1401e0629` | 2 | 3 |
+| `scale` | `0x1401e06a3` | `+0x134` (`0x1401e06c6`) | `0x1401e06ea` | 2 | 3 |
+| `angles` | `0x1401e0759` | `+0x140` (`0x1401e0795`) | `0x1401e07ae` | 2 | 3 |
+| `parallaxDepth` | `0x1401e082f` | `+0x170` (`0x1401e0848`) | `0x1401e085a` | **1** | **2** |
+| `name` | `0x1401e11d0` | `+0x1d8` (`0x1401e11ed`) | `0x1401e1203` | 5 | (string) |
+| `solid` / `disablepropagation` | `0x1401e1272` / `0x1401e131a` | `+0x120` bit | `0x1401e12a8` / `0x1401e1350` | 6 | (bit) |
+
+타입 태그 ↔ 성분 수 사전(등록기 `0x140176742`–`0x140176771`, `docs/re/property-animation.md` §7):
+**1→2 · 2→3 · 3→4 · 4→1**. 즉 `origin`/`scale`/`angles` 는 vec3, `parallaxDepth` 는 vec2 다.
+씬스크립트 d.ts 도 같은 말을 한다 — `ILayer.origin/angles/scale: Vec3`(:2028·:2033),
+`ILayer.parallaxDepth: Vec2`(:2039), 그리고 `ILayer extends ITextLayer`(:2020)이므로
+**텍스트 오브젝트도 같은 표면**이다.
+
+### 12.1.2 닫은 것
+
+| 자리 | 종전 | 지금 | 도달(동봉 172씬 / 설치본 186씬) |
+|---|---|---|---|
+| `SceneLayer.scale` z | 버림 | `SceneLayer.scaleZ`(기본 1) | **7 / 24** (이미지 4 / 21 + shape 쿼드 3 / 3) |
+| `SceneTextLayer.scale` z | 버림 | `SceneTextLayer.scaleZ` | 텍스트 **3 / 5** |
+| `angles` x·y | 버림 | `angleX`/`angleY`(기본 0) | 레이어·텍스트 **0 / 0** |
+| `SceneTextLayer.parallaxDepth` | 필드 없음 | `parallaxDepth`(기본 (1,1)) | 텍스트 **3 / 3**(전건 `"1.000 1.000"` = 기본값) |
+
+**인계 수치 정정 2건.**
+① "동봉 71 / 설치본 92 오브젝트가 `s s s` 형태" 는 **텍스트를 뺀** z≠1 오브젝트 수다
+(텍스트를 넣으면 74 / 97). 그리고 그중 실제로 값을 잃던 것은 `SceneLayer`
+**7 / 24**(이미지 4 / 21 + shape 쿼드 3 / 3)와 `SceneTextLayer` **3 / 5** 뿐이다 — 파티클(`scale3D`) · 모델
+(`SceneObject3D.scale`) · 그룹 노드(`SceneNode3D.scale`)는 이미 `Vec3` 이라 소실이 없었다.
+(shape 쿼드는 동봉·설치본 각 3개뿐이고 **전건이 3성분 `scale`, z≠1** 이다 — lightshafts 프리뷰
+1.20791 / 2.03800 / 2.09076.)
+② "전건 균일값이라 2D 렌더는 무영향" 의 **전건 균일값은 사실이 아니다**.
+`presets/rain/previewperspective` 파티클 `"0.500 0.500 0.100"`,
+설치본 `projects/defaultprojects/razer_bedroom` 모델 `"1.65900 1.48800 3.95800"` ·
+`"220.10500 123.08000 146.04300"`, `dino_run` 이미지 `"10.82100 0.50000 0.50000"` 처럼
+z 가 x·y 와 다른 저작이 실재한다. **결론(2D 렌더 무영향)은 맞지만 근거가 틀렸다** —
+무영향인 이유는 "균일값이라서" 가 아니라 **2D 정사영 경로가 z 스케일을 애초에 안 읽어서**다.
+`angles` x·y 도 마찬가지다: 두 코퍼스에서 x 또는 y 가 0 이 아닌 오브젝트는 1 / 7 건인데
+**전건이 light(1/1) · model(0/3) · particle(0/3)** 이라 이미 `Vec3` 을 들고 있던 타입이고,
+`SceneLayer`/`SceneTextLayer` 도달은 **0 / 0** 이다.
+
+### 12.1.3 왜 `Vec3` 으로 넓히지 않고 별 필드인가
+
+`scale`/`angleZ` 는 `composeParentTransforms` · `composeLayerTransforms3D` ·
+`composeTextParentTransforms` · `composeLightParentTransforms` 와 렌더 인코더까지
+`Vec2`/`Float` 로 흐르는 소비처 다수다. 타입을 넓히면 **`WapleRender` 소유 파일이 함께
+움직인다**(이 세션에 `SceneRenderer.swift` 는 다른 에이전트가 동시 편집 중이다).
+`SceneLayer.originZ`(2026 이전 라운드)가 이미 같은 문제를 **별 필드**로 풀어 두었고,
+그 필드도 부모 체인 합성에서 **월드로 굽히지 않는다**(합성 4함수가 `origin`/`scale`/`angleZ`
+만 되쓴다). 새 세 필드도 같은 규약 — **로컬 값 그대로 남는다.**
+소비가 붙을 때 합성 규약(부모 z 스케일 누적 여부)을 함께 정하면 된다.
+
+### 12.1.4 넘길 것 — 텍스트 `parallaxDepth` **렌더** 소비 (`Sources/WapleRender/` 소유)
+
+씬스크립트 표면은 이미 닫혀 있다 — 같은 세션의 `SceneRenderer.swift` 클러스터가
+`SceneScriptLayerDescriptor` 에 `d.parallaxDepth = SIMD2(text.parallaxDepth.x, text.parallaxDepth.y)`
+(`SceneRenderer.swift:313` 인근)와 `scale: SIMD3(…, text.scaleZ)` ·
+`angles: SIMD3(text.angleX, text.angleY, text.angleZ)` 를 이미 배선했다.
+**남은 것은 그림 쪽 하나뿐이다.**
+
+`SceneRendererFrameEncoder.swift:1668`(`encodeText`):
+
+```swift
+-        var depth = SIMD2<Float>(1, 1)
++        // W-V②: 텍스트도 공통 오브젝트 디스크립터의 `parallaxDepth`(`+0x170`, 태그 1 = vec2,
++        // 등록 `0x1401e082f`)를 갖는다 — 이미지(`:550`/`:1438`)·파티클(`:1734`/`:1785`)과 같은
++        // 규약으로 `v_main` buffer 2 에 싣는다. 동봉·설치본 텍스트는 전건 `"1.000 1.000"` 이라
++        // 가중이 항등이고, `cameraparallax` 미보유 씬은 `camOffset == 0` 이라 어차피 비트동일이다.
++        var depth = SIMD2<Float>(t.def.parallaxDepth.x, t.def.parallaxDepth.y)
+```
+
+`v_main` 은 이미 `float2 p = (v.xy + cameraOffset * parallaxDepth + shakeOffset) * aspectScale`
+(`QuadShaders.swift:17`)라 셰이더는 손댈 필요가 없다. 무회귀 근거: 두 재현 코퍼스의 텍스트
+`parallaxDepth` 는 **동봉 3 / 설치본 3 건이고 전건 `"1.000 1.000"`** 이며, 그 세 씬
+(`presets/clock/preview3dclock` · `presets/clock/previewclock` · `presets/countdown/previewcountdown`)
+은 `cameraparallax` 를 켜지 않는다. 값이 갈리는 것은 워크샵뿐이다
+(1,597 중 956 저작 · `cameraparallax` 활성 56씬 안에서 482 실효 · 그중 269 이 0 · 184 가 음수).
+
+호버 히트테스트(`SceneRenderer.hoverParallaxShift`, `:553`)도 이미지 레이어만 시차 보정을
+하고 텍스트는 대상 목록에 없다 — 텍스트에 포인터 스코프가 생기면 같이 봐야 한다. **[미해결]**
 
 ---
 
