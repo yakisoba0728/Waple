@@ -14,6 +14,8 @@
 | --- | --- |
 | [RELEASING.md](RELEASING.md) | 태그 push → `release.yml` → `Waple.dmg` 자동 배포 절차, 서명·공증 현황 |
 | [snapshot-regression.md](snapshot-regression.md) | 씬 170종 픽셀 스냅샷 회귀 게이트(`WapleCompat --capture`/`--compare`). 렌더러를 건드렸다면 이걸 돌린다 |
+| [dev/re-methodology.md](dev/re-methodology.md) | **RE 방법론** — 실제로 당한 함정 26개(바이너리 16 · 정본 5 · Swift/CI 4)와 검증 규율(격리 검증 · 빌드 락 · 무엇이 실제로 검사되는가 · 돌연변이). **WE 를 실측하기 전에 읽는다** |
+| [dev/linux-typecheck.md](dev/linux-typecheck.md) | 리눅스에서 `WapleRender`/테스트/`WapleCompatCore` 를 타입체크하는 법과 그 커버·한계. 맥이 없을 때의 유일한 그물 |
 | [../spec/README.md](../spec/README.md) | **WE 2.8.42 정본** — 바이너리·코퍼스·포맷·엔진 심볼·에셋. 근거 필수, 재측정 스크립트 동반 |
 | [../spec/golden/snapshot/README.md](../spec/golden/snapshot/README.md) | 커밋된 스냅샷 기준선과 읽을 때의 주의 3건 |
 | [we-parity-2026-08-16.md](we-parity-2026-08-16.md) | **WE 실기 대비 파리티 첫 정량 측정** — 골든이 못 재는 축(Waple↔WE). 7종 중 1종만 구별불가 |
