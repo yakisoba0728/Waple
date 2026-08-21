@@ -637,4 +637,151 @@ final class PropertyAnimationOptionsTests: XCTestCase {
         XCTAssertFalse(noisy.startPaused)
         XCTAssertTrue(noisy.events.isEmpty)
     }
+
+    // MARK: - ⑩ 키프레임 `step` 은 **핸들 두 개를 통째로 삼킨다**
+
+    /// 실물 키프레임 파서는 `step` 이 서면 핸들 블록을 **건너뛴다**:
+    /// ```
+    /// 0x1401a8fd1  xorps xmm9/xmm7/xmm8/xmm6      ; backX·backY·frontX·frontY 를 0 으로 깔고
+    /// 0x1401a8fe8  test sil, sil                  ; step ?
+    /// 0x1401a8fed  mov  r13d, 4                   ;   flags = bit2 **하나만**
+    /// 0x1401a8ff3  jmp  0x1401a910a               ;   back/front 블록 두 개를 통째로 건너뜀
+    /// ```
+    /// 저장부(0x1401a9127–0x1401a9148)가 그대로 굽으므로 step 키프레임은 항상
+    /// `{frame, value, flags=4, backX=backY=frontX=frontY=0}` 이다 — bit0(back enabled)·
+    /// bit1(front enabled) 둘 다 **서지 않는다**.
+    ///
+    /// **관측 자리는 이 키프레임의 오른쪽 구간이다.** step 은 자기 왼쪽 구간을 계단으로 만드니
+    /// 그쪽에서는 핸들이 어차피 안 쓰인다. 하지만 `front` 는 다음 구간의 P1 을 정한다 —
+    /// 종전 Waple 은 step 키프레임의 `front` 를 그대로 담아 **다음 구간이 원본과 다른 곡선**이 됐다.
+    ///
+    /// 코퍼스 도달 0(`step` 키는 애니 7블록 38키프레임 어디에도 없다 — 2026-08-21 전수).
+    func testStepKeyframeSuppressesBothHandlesAndFlattensNextSegment() throws {
+        let anim = try parseJSON("""
+        {"animation": {
+          "c0": [{"frame": 0,  "value": 10.0},
+                 {"frame": 30, "value": 20.0, "step": true,
+                  "front": {"enabled": true, "x": 1, "y": 40},
+                  "back":  {"enabled": true, "x": -1, "y": -40}},
+                 {"frame": 60, "value": 30.0, "back": {"enabled": false, "x": -1, "y": 0}}],
+          "options": {"fps": 30, "length": 60, "mode": "single"}}}
+        """)
+        let stepKF = anim.tracks[0][1]
+        XCTAssertTrue(stepKF.step)
+        XCTAssertFalse(stepKF.frontEnabled, "step 이면 front 는 읽히지 않는다(flags bit1 미설정)")
+        XCTAssertFalse(stepKF.backEnabled, "step 이면 back 도 읽히지 않는다(flags bit0 미설정)")
+        XCTAssertEqual(stepKF.frontX, 0, "핸들 좌표는 진입부 xorps 의 0 으로 남는다")
+        XCTAssertEqual(stepKF.frontY, 0)
+        XCTAssertEqual(stepKF.backX, 0)
+        XCTAssertEqual(stepKF.backY, 0)
+        // 왼쪽 구간은 종전과 같이 계단이다.
+        XCTAssertEqual(anim.value(component: 0, atTime: 29.0 / 30, base: 0), 10, accuracy: 1e-5)
+        // 오른쪽 구간: P1 = P0(front 삼켜짐) · P2 = P3(k2.back disabled) 라 x·y 가 같은 u 다항식을
+        // 타서 **정확히 선형**이 된다 — frame 45 는 정확히 중점 25.
+        // step 이 front 를 삼키지 않으면 P1 = (45, 60) 이라 여기서 25 가 나올 수 없다.
+        XCTAssertEqual(anim.value(component: 0, atTime: 45.0 / 30, base: 0), 25, accuracy: 0.02,
+                       "step 키프레임의 front 가 삼켜져 다음 구간이 선형")
+        XCTAssertEqual(anim.value(component: 0, atTime: 37.5 / 30, base: 0), 22.5, accuracy: 0.02)
+        XCTAssertEqual(anim.value(component: 0, atTime: 52.5 / 30, base: 0), 27.5, accuracy: 0.02)
+    }
+
+    /// `step` 이 **거짓**일 때는 핸들이 살아 있어야 한다 — 위 억제가 무조건 걸리면 이게 깨진다.
+    func testNonStepKeyframeKeepsItsHandles() throws {
+        let anim = try parseJSON("""
+        {"animation": {
+          "c0": [{"frame": 0,  "value": 10.0},
+                 {"frame": 30, "value": 20.0, "step": false,
+                  "front": {"enabled": true, "x": 1, "y": 40},
+                  "back":  {"enabled": true, "x": -1, "y": -40}},
+                 {"frame": 60, "value": 30.0, "back": {"enabled": false, "x": -1, "y": 0}}],
+          "options": {"fps": 30, "length": 60, "mode": "single"}}}
+        """)
+        let kf1 = anim.tracks[0][1]
+        XCTAssertFalse(kf1.step)
+        XCTAssertTrue(kf1.frontEnabled)
+        XCTAssertEqual(kf1.frontY, 40, accuracy: 1e-6)
+        XCTAssertTrue(kf1.backEnabled)
+        XCTAssertEqual(kf1.backY, -40, accuracy: 1e-6)
+        XCTAssertNotEqual(anim.value(component: 0, atTime: 45.0 / 30, base: 0), 25, accuracy: 1.0,
+                          "핸들이 살아 있으면 다음 구간은 선형이 아니다")
+    }
+
+    // MARK: - ⑪ 구간 왼쪽 끝점에 정확히 앉으면 곡선을 풀지 않는다
+
+    /// `0x1401a9d0f  cmp r9d, ebx` / `je 0x1401a9ec0` → `mov eax, [r10+r11-0x18]` (= kf[i-1].value).
+    /// step 분기(0x1401a9d18)와 **같은 타깃**이다. 단조 X(u) 면 이분법도 u≈0 으로 수렴해 결과가
+    /// 같지만, `front.x` 가 음수라 X(u) 가 구간 **앞으로 튀어나가는** 저작에서는 이분법이 다른
+    /// 근을 잡아 값이 완전히 달라진다. 동봉 코퍼스는 `front.x` 가 전수 양수(1 · 0.50833333)라
+    /// 도달 0 이지만, 실물이 곡선을 아예 풀지 않는 자리를 Waple 만 푸는 것은 근거가 없다.
+    func testExactLeftEndpointSkipsCurveSolveEvenWithBackswingHandle() {
+        // fps 1 로 두어 atTime 이 프레임과 1:1 — frame 10 에 정확히 앉는다.
+        let track = [
+            PropertyKeyframe(frame: 0, value: 0, frontEnabled: false, frontX: 0, frontY: 0,
+                             backEnabled: false, backX: 0, backY: 0),
+            // front.x = -2 → P1x = 10 + 0.5·30·(-2) = -20 (구간 왼쪽 밖) → X(u) 가 비단조.
+            PropertyKeyframe(frame: 10, value: 100, frontEnabled: true, frontX: -2, frontY: 60,
+                             backEnabled: false, backX: 0, backY: 0),
+            PropertyKeyframe(frame: 40, value: 200, frontEnabled: false, frontX: 0, frontY: 0,
+                             backEnabled: false, backX: 0, backY: 0),
+        ]
+        let anim = PropertyAnimation(tracks: [track], fps: 1, length: 40, mode: "single", relative: false)
+        XCTAssertEqual(anim.value(component: 0, atTime: 10, base: 0), 100, accuracy: 1e-4,
+                       "왼쪽 끝점 프레임 = 그 키프레임 값(곡선을 풀지 않는다)")
+        // 구간 안쪽은 여전히 곡선이다 — 위 단락이 구간 전체를 상수로 만들지 않았다는 확인.
+        XCTAssertNotEqual(anim.value(component: 0, atTime: 25, base: 0), 100, accuracy: 1.0)
+        // 오른쪽 끝점은 종전대로 마지막 키프레임 값.
+        XCTAssertEqual(anim.value(component: 0, atTime: 40, base: 0), 200, accuracy: 1e-4)
+    }
+
+    // MARK: - ⑫ 숫자 자리의 태그 게이트 — 불리언은 숫자가 아니다
+
+    /// 애니 스키마에서 숫자를 읽는 여덟 자리는 전부 `dec eax; cmp eax,2; ja` 로 **태그 1..3만**
+    /// 통과시킨다(`value`/`frame` 0x1401a8e73·0x1401a8e83 · 핸들 `x`/`y` 0x1401a904c·0x1401a9069·
+    /// 0x1401a90d9·0x1401a90f4 · `options.length`/`fps` 0x1401a9714·0x1401a9723 ·
+    /// `events[].frame` 0x1401a9511). 태그 5(bool)는 전부 탈락이다.
+    ///
+    /// 리눅스 Foundation 은 `true` 를 `NSNumber` 로 주고 `as? Double` 이 **1.0** 을 돌린다
+    /// (실측). 게이트가 없으면 `{"x": true}` 가 핸들 좌표 1.0 이 되어 곡선이 휜다 —
+    /// `wraploop: 1` 이 true 로 새던 것과 **같은 부류의 반대 방향** 누수다.
+    /// 코퍼스 도달 0(여덟 자리 값 타입 census 전건 int/float).
+    func testBooleanIsNotANumberInAnyNumericSlot() throws {
+        // ① 핸들 좌표: bool 은 0 으로 떨어진다 → 곡선이 휘지 않는다(원본과 **정확히 일치**).
+        let boolHandle = try parseJSON("""
+        {"animation": {
+          "c0": [{"frame": 0, "value": 0.0, "front": {"enabled": true, "x": true, "y": true}},
+                 {"frame": 30, "value": 30.0}],
+          "options": {"fps": 30, "length": 30, "mode": "loop"}}}
+        """)
+        XCTAssertTrue(boolHandle.tracks[0][0].frontEnabled, "enabled 는 진짜 bool 이라 켜진다")
+        XCTAssertEqual(boolHandle.tracks[0][0].frontX, 0, "`\"x\": true` 는 태그 5 → 0")
+        XCTAssertEqual(boolHandle.tracks[0][0].frontY, 0)
+        XCTAssertEqual(boolHandle.value(component: 0, atTime: 15.0 / 30, base: 0), 15, accuracy: 1e-3,
+                       "좌표가 0 이면 P1 = P0 — 선형")
+        // ② events[].frame: bool 이면 그 항목만 드롭(원본도 `jne` 로 항목만 건너뛴다).
+        let boolEvent = try parseJSON("""
+        {"animation": {
+          "c0": [{"frame": 0, "value": 0.0}, {"frame": 30, "value": 30.0}],
+          "options": {"fps": 30, "length": 30, "mode": "loop",
+                      "events": [{"name": "bad", "frame": true}, {"name": "ok", "frame": 10}]}}}
+        """)
+        XCTAssertEqual(boolEvent.events.map { $0.name }, ["ok"], "frame 이 bool 인 마커는 드롭")
+        // ③ options.fps/length: bool 이면 부재와 같은 관용 기본값으로 떨어진다(원본은 애니 드롭).
+        let boolOpts = try parseJSON("""
+        {"animation": {
+          "c0": [{"frame": 0, "value": 0.0}, {"frame": 30, "value": 30.0}],
+          "options": {"fps": true, "length": true, "mode": "loop"}}}
+        """)
+        XCTAssertEqual(boolOpts.fps, 30, "부재 기본값 30 — `true` 를 1.0 으로 읽지 않는다")
+        XCTAssertEqual(boolOpts.length, 30, "부재 기본값 = 마지막 키프레임 프레임")
+        // ④ 진짜 숫자는 그대로다 — 게이트가 숫자까지 막지 않는다.
+        let numeric = try parseJSON("""
+        {"animation": {
+          "c0": [{"frame": 0, "value": 0.0, "front": {"enabled": true, "x": 1, "y": 50}},
+                 {"frame": 30, "value": 30.0}],
+          "options": {"fps": 15, "length": 30, "mode": "loop"}}}
+        """)
+        XCTAssertEqual(numeric.fps, 15)
+        XCTAssertEqual(numeric.tracks[0][0].frontX, 1, accuracy: 1e-6)
+        XCTAssertEqual(numeric.tracks[0][0].frontY, 50, accuracy: 1e-6)
+    }
 }

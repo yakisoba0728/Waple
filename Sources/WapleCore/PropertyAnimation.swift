@@ -24,6 +24,13 @@ public struct PropertyKeyframe: Equatable {
     /// (평가기 VA 0x1401a9d18 `test byte ptr [r10+r11+8], 4` — 읽는 쪽이 오른쪽 키프레임의 flags).
     /// 동봉·설치본 자산 도달 0(애니 블록 7개 전수 미기재)이지만 에디터가 저작한다
     /// (`beziermode === 'step'` → `keyframe.step = true`).
+    ///
+    /// - Important: 실물 파서는 `step` 이 서면 **핸들을 아예 읽지 않는다**(0x1401a8fe8 →
+    ///   `mov r13d, 4` 0x1401a8fed → `jmp 0x1401a910a`). 그래서 `PropertyAnimation.parse` 가
+    ///   내놓는 step 키프레임은 항상 `frontEnabled == backEnabled == false` 이고 네 좌표가 0 이다.
+    ///   생성자는 이 불변식을 강제하지 않는다 — `wrapLooped` 의 덮기 경로가 실물처럼
+    ///   "flags bit0 만 지우고 bit2·핸들 잔존값은 보존" 하는지 테스트가 직접 조립해 확인하기
+    ///   때문이다(실물 0x1401a9b66 `and eax, 0xfffffffe`).
     public let step: Bool
 
     public init(frame: Float, value: Float, frontEnabled: Bool, frontX: Float, frontY: Float,
@@ -152,6 +159,17 @@ public struct PropertyAnimation: Equatable {
 
     /// 구간 탐색은 **반개구간** `k1.frame <= frame < k2.frame` 이다(VA 0x1401a9cd8–0x1401a9ce9).
     /// 닫힌구간으로 잡으면 `frame == k2.frame` 일 때 step 키프레임이 한 프레임 늦게 튄다.
+    ///
+    /// 경계 세 자리는 실물과 명령 단위로 대조했다(2026-08-21 재검증, 클러스터 K):
+    /// - `frame <= kf[0].frame` → `kf[0].value` (VA 0x1401a9cb8 `cmp ebx,[r10]` / `jg` 로
+    ///   "첫 키프레임보다 크지 않으면" 그 자리에서 `[r10+4]` 를 돌려준다).
+    /// - `frame >= kf[n-1].frame` → `kf[n-1].value` (탐색 인덱스가 `count` 까지 올라간 뒤
+    ///   VA 0x1401a9cf5 `jg 0x1401a9ec7` → `imul rax,(i-1),0x1c` → `[r10+rax+4]`).
+    ///   키프레임 1개짜리 트랙은 두 분기가 같은 값을 준다.
+    /// - 키프레임 0개 트랙은 WE 가 **0.0** 을 돌려준다(VA 0x1401a9bfd `cmp [rcx],rax` → `xorps`).
+    ///   Waple 은 `value(component:)` 에서 base 를 유지한다 — c0..c3 누락 채널을 빈 트랙으로
+    ///   자리만 지키는 관용(파스 주석 참조)과 짝이라 여기서 0 을 돌리면 그 관용이 무의미해진다.
+    ///   동봉·설치본 코퍼스 도달 0(트랙 20개 전수가 키프레임 2개).
     private func evaluate(track: [PropertyKeyframe], frame: Float) -> Float {
         if frame <= track[0].frame { return track[0].value }
         guard let last = track.last else { return 0 }
@@ -159,6 +177,13 @@ public struct PropertyAnimation: Equatable {
         for i in 1..<track.count {
             let k1 = track[i - 1], k2 = track[i]
             guard k1.frame <= frame, frame < k2.frame else { continue }
+            // 왼쪽 끝점에 정확히 앉으면 곡선을 풀지 않고 그 값이다(VA 0x1401a9d0f
+            // `cmp r9d, ebx` → `je 0x1401a9ec0` → `mov eax,[r10+r11-0x18]` = kf[i-1].value).
+            // step 분기와 **같은 타깃**이다. WE 는 정수 프레임만 평가해서 이 분기가 키프레임마다
+            // 매번 걸리지만, Waple 은 연속 프레임이라 정확히 맞을 때만 걸린다. 단조 X(u) 에서는
+            // 이분법이 어차피 u≈0 으로 수렴해 같은 값이고, `front.x < 0` 처럼 X(u) 가 구간 앞으로
+            // 튀어나가는 저작에서만 갈린다(동봉 코퍼스 front.x 전수 양수 — 도달 0).
+            if k1.frame == frame { return k1.value }
             // step: 오른쪽 키프레임의 flags bit2 가 구간 전체를 왼쪽 값으로 고정(VA 0x1401a9d18).
             if k2.step { return k1.value }
             return segment(k1, k2, frame: frame)
@@ -375,11 +400,51 @@ public struct PropertyAnimation: Equatable {
     }
 
     /// 바인딩 딕셔너리 {"animation": {...}, "value": ...} → PropertyAnimation. 형식 이상 → nil.
+    ///
+    /// **스키마 전집합**(2026-08-21 클러스터 K 재측정 — 동봉 트리 + 설치본 `assets/`·`projects/`
+    /// JSON **3,655개** 전수, JSONC(주석·후행 콤마) 관용 파서로 파스 실패 0):
+    /// `"animation"` 객체는 **14블록**(동봉 7 + `assets/` 7, 두 트리 같은 집합 · `projects/` 0),
+    /// 파일 6개. 애니 객체 키는 `c0`(7/7) · `options`(7/7) · `c1`(6/7) · `c2`(6/7) ·
+    /// `relative`(1/7, bool `true`) 뿐이고 **`c3` 는 0** 이다.
+    /// `options` 키는 `fps`·`length`·`mode`·`wraploop` **넷뿐**이고
+    /// (`fps` = 20×4/30×2/15×1 · `length` = 60×6/30×1 · `mode` = loop 6/mirror 1 ·
+    ///  `wraploop` = `true` 2/`null` 5), **`random`·`startpaused`·`events` 는 0/7** 이다.
+    /// 키프레임 키는 `frame`(i32 ×38) · `value`(×38) · `front`(×38) · `back`(×38) ·
+    /// `lockangle`(×38) · `locklength`(×38) — **`step` 은 0** 이다.
+    /// 핸들 키는 `enabled`(bool ×76) · `x`(×76) · `y`(×76) · `magic`(bool ×56).
+    ///
+    /// 파서가 실제로 읽는 키는 이 전집합의 **부분집합**이다. 옵션 파서(0x1401a96b0)가
+    /// `Json::Value::find` 하는 것은 정확히 여섯 — `length`(0x1401a96d2) · `fps`(0x1401a96f8) ·
+    /// `mode`(0x1401a9744) · `random`(0x1401a9777) · `startpaused`(0x1401a979d) ·
+    /// `wraploop`(0x1401a97c3) 이고, `events` 는 **옵션 파서 안이 아니라** 바인딩 파서가
+    /// 같은 `options` 노드에서 따로 찾는다(0x1401a57a3, 태그 6 배열일 때만 0x1401a9410 호출).
+    /// 키프레임 파서(0x1401a8ce0)는 `value`·`frame`·`back`·`front`·`enabled`·`x`·`y`·`step`
+    /// 여덟만 읽는다. 따라서 **`lockangle`·`locklength`·`magic` 은 파스되지 않는다** —
+    /// 세 문자열은 `wallpaper64.exe`·`scenescript64.dll`·`resourceutil64.dll`·
+    /// `cloneextensions64.dll`·`resourcecompiler64.exe`·`diagnostics64.exe` **어디에도 없다**
+    /// (ASCII·UTF-16LE 전수 검색 0건 — `beziermode` 도 마찬가지다). 에디터 JS 전용이다.
     public static func parse(_ binding: [String: Any]) -> PropertyAnimation? {
         guard let a = binding["animation"] as? [String: Any] else { return nil }
         // 공용 유한-검사 파서(Double/Int 만 — 키프레임 규약). NaN/Inf/Float 범위 밖 → nil → 바인딩 드롭.
         // (종전 로컬 구현은 isFinite 미검사였으나 JSON 표준상 NaN/Inf 리터럴 불가라 실입력 도달 희박.)
-        func f(_ v: Any?) -> Float? { strictFloat(v) }
+        //
+        // **불리언은 숫자가 아니다.** 애니 스키마에서 숫자를 읽는 자리는 여덟이고 전부
+        // `movzx eax,[X+8]; dec eax; cmp eax,2; ja` 로 **jsoncpp 태그 1..3(int/uint/real)만**
+        // 통과시킨다 — `value`/`frame`(0x1401a8e73 / 0x1401a8e83) · 핸들 `x`/`y` 네 자리
+        // (0x1401a904c · 0x1401a9069 · 0x1401a90d9 · 0x1401a90f4) · `options.length`/`fps`
+        // (0x1401a9714 / 0x1401a9723) · `events[].frame`(0x1401a9511). 태그 5(bool)는 전부 탈락이다.
+        // 그런데 리눅스 Foundation 은 `bool` 도 `NSNumber` 로 주고 `as? Double` 이 **1.0 을
+        // 돌려준다**(실측: `{"a":true}` → `strictFloat` == `Optional(1.0)`, `as? Int` == `Optional(1)`).
+        // `isJSONBool` 게이트가 없으면 `{"x": true}` 가 핸들 좌표 1.0 이 되어 원본(0)과 갈린다.
+        // 이 게이트를 붙이면 갈림이 어떻게 닫히는지는 자리마다 다르다:
+        //   · 핸들 `x`/`y`, `events[].frame` → **원본과 정확히 일치**(전자는 0, 후자는 항목 드롭).
+        //   · `value`/`frame`, `options.length`/`fps` → 원본은 각각 "그 키프레임만 건너뜀"·
+        //     "애니 전체 드롭" 이고 Waple 은 "애니 드롭"·"기본값(30 / 마지막 프레임)" 이라 여전히
+        //     다르지만, 적어도 **불리언을 숫자로 읽지는 않는다**(이 파일이 이미 택한 관용 정책과 일관).
+        // 동봉·설치본 코퍼스 도달 **0** — 위 여덟 자리의 값 타입 census 가 전건 int/float 이다
+        // (`frame` int×38 · `value` int11/float27 · 핸들 `x` int52/float24 · `y` int46/float30 ·
+        //  `fps` int×7 · `length` int×7 · `events` 0건). 그래서 코퍼스 위에서 **비트 동일**이다.
+        func f(_ v: Any?) -> Float? { EffectManifest.isJSONBool(v) ? nil : strictFloat(v) }
         // **애니 스키마의 bool 여섯 자리는 전부 `cmp byte ptr [..+8], 5` 로 jsoncpp 태그를 먼저
         // 보지만, 검사가 실패했을 때 무엇이 되는지는 두 부류로 갈린다.** 종전 주석은 여섯을 한
         // 덩어리로 묶고 "태그 5 아니면 전부 false" 라고 적었는데 **틀렸다**(2026-08-21 재검증에서
@@ -441,16 +506,34 @@ public struct PropertyAnimation: Equatable {
             var out: [PropertyKeyframe] = []
             for k in list {
                 guard let frame = f(k["frame"]), let value = f(k["value"]) else { return nil }
-                let front = k["front"] as? [String: Any]
-                let back = k["back"] as? [String: Any]
+                // step: 이 키프레임이 오른쪽인 구간을 계단으로(파스 VA 0x1401a8f56–0x1401a8fb2).
+                let step = b(k["step"])
+                // **step 이 서면 WE 는 핸들을 아예 읽지 않는다** — `test sil,sil`(0x1401a8fe8) 이
+                // 참이면 `mov r13d, 4`(0x1401a8fed) 로 flags 를 bit2 **하나만** 세우고
+                // `jmp 0x1401a910a` 로 `back`/`front` 블록 두 개를 통째로 건너뛴다. 네 좌표는
+                // 진입부의 `xorps xmm6/7/8/9`(0x1401a8fd1–0x1401a8fdc)가 깔아 둔 0 으로 남고,
+                // flags 의 bit0(back)·bit1(front)도 서지 않는다. 즉 저장된 키프레임은
+                // `{frame, value, flags=4, 0,0,0,0}` 이다(저장부 0x1401a9127–0x1401a9148).
+                //
+                // **관측 가능한 자리는 이 키프레임의 *오른쪽* 구간이다.** step 은 자기 왼쪽 구간을
+                // 계단으로 만드니 그쪽에선 핸들이 어차피 안 쓰이지만, `front` 는 **다음 구간**
+                // `[k_step, k_next]` 의 P1 을 정한다. 종전 Waple 은 step 키프레임의 `front` 를
+                // 그대로 담아 그 다음 구간이 원본과 다른 곡선이 됐다.
+                // `back` 은 이 키프레임이 트랙의 **마지막**이고 `wraploop` 이 켜졌을 때만 드러난다 —
+                // 덮기 경로가 flags bit0 만 지우고 backX/backY 는 남기기 때문이다(0x1401a9b66).
+                // (동봉·설치본 코퍼스 도달 **0** — `step` 키는 애니 7블록 38키프레임 어디에도 없다.
+                //  에디터는 `beziermode === 'step'` 으로 저작한다.)
+                // (`nil` 을 흘리면 `handleEnabled` 가 disabled 를, `f(nil?[…])` 가 0 을 준다 —
+                //  실물의 "안 읽는다" 와 필드 단위로 같은 결과다.)
+                let front = step ? nil : k["front"] as? [String: Any]
+                let back = step ? nil : k["back"] as? [String: Any]
                 out.append(PropertyKeyframe(
                     frame: frame, value: value,
                     frontEnabled: handleEnabled(front),
                     frontX: f(front?["x"]) ?? 0, frontY: f(front?["y"]) ?? 0,
                     backEnabled: handleEnabled(back),
                     backX: f(back?["x"]) ?? 0, backY: f(back?["y"]) ?? 0,
-                    // step: 이 키프레임이 오른쪽인 구간을 계단으로(파스 VA 0x1401a8f56–0x1401a8fb2).
-                    step: b(k["step"])))
+                    step: step))
             }
             // WE 는 **정렬하지 않고** `frame <= 직전 frame` 인 키프레임을 버린다(VA 0x1401a8fc1
             // `cmp eax, [rsp+0xe8]` / `jle`, 초기 비교값 -1 → frame < 0 도 탈락). Waple 은 정렬로

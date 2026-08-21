@@ -1,5 +1,53 @@
 import Foundation
 
+/// 사용자 프로퍼티의 `condition`(표시 조건식) 평가기.
+///
+/// **문법의 정체는 AngularJS 표현식이다** — 그리고 그 파서를 이번에 실물에서 직접 떴다
+/// (2026-08-21 클러스터 K). WE 의 브라우저 UI 가 `evalCondition = function(e){ return ….$eval(e, …) }`
+/// 로 평가하고(`ui/dist/scripts/scripts.js` **byte** @106657 편집기 · @375400 프로퍼티 목록 ·
+/// @613938 플러그인 설정), 그 `$eval` 이 부르는 파서는 번들된 AngularJS **1.6.10**
+/// (`ui/dist/scripts/vendor.js`, `full:"1.6.10"` @byte 98389)의 재귀하강 파서다.
+/// 우선순위 사슬은 `vendor.js` byte @167616 부터 그대로 읽힌다:
+/// ```
+/// assignment     → ternary ( "=" assignment )?
+/// ternary        → logicalOR ( "?" expression ":" expression )?
+/// logicalOR      → logicalAND ( "||" logicalAND )*                     ; 좌결합 반복
+/// logicalAND     → equality  ( "&&" equality )*
+/// equality       → relational ( ("=="|"!="|"==="|"!==") relational )*  ; @167616
+/// relational     → additive ( ("<"|">"|"<="|">=") additive )*          ; @167789
+/// additive       → multiplicative ( ("+"|"-") multiplicative )*        ; @167960
+/// multiplicative → unary ( ("*"|"/"|"%") unary )*                      ; @168124
+/// unary          → ("+"|"-"|"!") unary | primary                       ; @168262
+/// ```
+/// `wallpaper64.exe` 쪽에는 이 식을 평가하는 자리가 없다 — `condition` 은 **설정 패널의 표시
+/// 여부**이지 렌더 파이프라인 입력이 아니다. Waple 도 같은 자리에서만 쓴다
+/// (`PropertyDecoration.visibleIndices` → `PropertyEditorView`, 그리고 분석기
+/// `WallpaperCompatibilityAnalyzer` 의 `canEvaluate` 경고).
+///
+/// **아래 파서가 실물과 갈리는 지점**(전부 설치본 코퍼스 도달 0 — `condition` 문자열 22건 /
+/// 고유 16종 전수 확인, 아래 §도달 참조. 고치지 않은 이유는 각 항목에 적었다):
+///
+/// 1. **equality 와 relational 이 한 레벨이고 반복하지 않는다.** `parseComparison` 은 여덟 연산자를
+///    한 묶음으로 보고 **한 번만** 소비한다. 그래서 Angular 가 `(a==b)==c` 로 읽는 `a == b == c`,
+///    `(a>b)==c` 로 읽는 `a > b == c`, `a == (b>c)` 로 읽는 `a == b > c` 를 Waple 은 **파스 실패**
+///    (`nil`)로 흘린다 → `isVisible` 은 관용적으로 **표시**한다. 실패 방향이 "숨김" 이 아니라
+///    "표시" 라 조건식을 못 읽어도 토글이 사라지지는 않는다. 코퍼스 도달 0(비교 연산자가 둘 이상
+///    연쇄하는 조건이 22건 중 0건 — `&&` 로만 이어진다).
+/// 2. **`+ - * / %` 와 단항 `+`/`-` 가 없다.** 토크나이저가 미지 연산자를 만나면 `failed` 로
+///    전체를 파스 실패시킨다(부분 평가로 엉뚱한 확정을 내는 것보다 안전). 코퍼스 도달 0.
+/// 3. **`==` 와 `===` 를 구분하지 않는다.** `equals()` 가 먼저 `number()` 로 양변을 수치화하므로
+///    `'1' === 1` 이 **true** 다(JS/Angular 는 `false`). 반대로 느슨한 쪽도 완전하지는 않다 —
+///    `'' == 0` 은 JS 가 `true` 인데 여기서는 `Double("")` 이 nil 이라 `false` 다.
+///    코퍼스 도달 0: `===`/`!==` 를 쓰는 12건은 전건 좌변이 문자열 프로퍼티이고 우변이 문자열
+///    리터럴 또는 `true`/`false` 라 두 규약이 같은 답을 낸다.
+/// 4. **`&&`/`||` 가 피연산자가 아니라 `Bool` 을 돌려준다.** Angular 는 JS 처럼 피연산자를
+///    돌려주지만, 이 평가기의 최종 소비는 `truthy` 하나뿐이라 관측 차이가 없다.
+///
+/// **도달**(설치본 전수, 2026-08-21 재측정 — 동봉 트리 0건 · `assets/` 0건 · `projects/` **22건**):
+/// 고유 16종은 `'1'`×4 · `scene.value !== 'cartoon' && scene.value !== 'ram'`×3 ·
+/// `effect.value.startsWith('rainbow') === false`×2 · `'0'` · `''` · `style.value=='1'` ·
+/// `rainbowscheme.value` · `showbottom.value > 0` · `effect.value === 'visor'` ·
+/// `effect.value.endsWith(…) === true` 계열 7종이다. 전건이 위 문법 부분집합 안에 들어온다.
 public enum PropertyConditionEvaluator {
     public static func isVisible(_ property: WallpaperProperty, in properties: [WallpaperProperty]) -> Bool {
         guard let condition = property.condition?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -371,6 +419,14 @@ private struct Parser {
         return lhs
     }
 
+    /// AngularJS 1.6.10 은 여기를 **두 레벨**로 나누고 각각 좌결합으로 **반복**한다
+    /// (`equality → relational (…)*` @vendor.js byte 167616 · `relational → additive (…)*` @167789).
+    /// 여기는 여덟 연산자를 한 레벨로 묶고 **한 번만** 소비한다 — 연쇄하면 남은 토큰 때문에
+    /// `parser.isAtEnd` 가 거짓이 되어 조건 전체가 파스 실패(`nil`)로 떨어지고, 호출부는
+    /// 관용적으로 **표시**한다. 실물 코퍼스 22건에 비교 연산자 연쇄가 0건이라 도달 0 이다
+    /// (타입 선언 주석 §1). 고치려면 두 레벨로 갈라 while 루프를 씌우면 되지만, 그러면
+    /// `canEvaluate` 가 지금 false 를 돌리는 입력에서 true 로 바뀌어 분석기 경고
+    /// (`WallpaperCompatibilityAnalyzer`)와 `DeepScan` 집계가 함께 움직인다 — 이 레인 밖이다.
     private mutating func parseComparison() -> ConditionValue? {
         guard let lhs = parsePrimary() else { return nil }
         guard case .op(let op)? = peek(), ["==", "===", "!=", "!==", ">", "<", ">=", "<="].contains(op) else {
@@ -434,6 +490,11 @@ private struct Parser {
         }
     }
 
+    /// **`==` 와 `===` 를 같은 것으로 본다.** 양변을 먼저 `number()` 로 수치화해 비교하므로
+    /// `'1' === 1` 이 true 다(Angular/JS 는 strict 라 false). 반대로 `'' == 0` 은 JS 가 true 인데
+    /// 여기서는 `Double("")` 이 nil 이라 false 다 — 느슨한 쪽도 JS 규약 그대로는 아니다.
+    /// 코퍼스 도달 0(타입 선언 주석 §3). 실물 조건은 전건 "문자열 프로퍼티 vs 문자열 리터럴"
+    /// 또는 "bool vs bool" 이라 두 규약이 같은 답을 낸다.
     private func equals(_ lhs: ConditionValue, _ rhs: ConditionValue) -> Bool {
         if let l = number(lhs), let r = number(rhs) { return l == r }
         switch (lhs, rhs) {

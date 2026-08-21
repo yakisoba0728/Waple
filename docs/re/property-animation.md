@@ -28,6 +28,9 @@
 | 16 | `wraploop` × `mode` | **직교** — 런타임에 모드 게이트가 없다(§2.4) | (해당 없음) | 도달 0(`true` 2블록 다 `loop`) | 확인 + 테스트로 못박음 |
 | 17 | `options` 블록 부재 | 태그 7 아니면 애니 **전체 드롭**(0x1401a56a6/0x1401a96bb) | 빈 딕셔너리로 관용 | 도달 0 | 유지 + 주석 |
 | 18 | 핸들 `enabled` **폴라리티** | 객체이기만 하면 기본 **enabled** — 끄는 건 진짜 bool `false` 뿐(0x1401a8ebb back / 0x1401a8f1c front) | 미커밋 변경이 옵션용 게이트를 걸어 **반대로** 만들었다 | 도달 0(핸들 76/76 명시 bool) | **반증 + 되돌림** |
+| 19 | `step` 이 서면 **핸들을 안 읽는다** | `mov r13d,4`(0x1401a8fed) → `jmp 0x1401a910a` 로 back/front 블록 두 개를 통째로 건너뛴다 — flags bit0·bit1 미설정, 좌표 넷 전부 0 | `step` 만 담고 핸들은 그대로 파스 → **step 키프레임의 오른쪽 구간이 다른 곡선** | 도달 0(`step` 키 0/38 키프레임) · 합성 반례에서 40.535 ↔ 25.000 | **수정**(2026-08-21 클러스터 K) |
+| 20 | 구간 **왼쪽 끝점 정확 일치** | 곡선을 풀지 않고 `kf[i-1].value`(0x1401a9d0f `cmp r9d,ebx` → `je 0x1401a9ec0`) | 항상 이분법으로 풀었다 | 도달 0(코퍼스 `front.x` 전수 양수라 X(u) 단조) · 합성 반례에서 166.081 ↔ 100.000 | **수정**(동상) |
+| 21 | **숫자 자리의 태그 게이트** | 숫자 여덟 자리 전부 태그 **1..3만** 통과(`dec eax; cmp eax,2; ja`) — bool(태그 5)은 탈락 | 리눅스 Foundation 이 `true` 를 `NSNumber` 로 줘서 `as? Double` == **1.0** → `{"x":true}` 가 좌표 1.0, `{"fps":true}` 가 1fps | 도달 0(여덟 자리 값 타입 census 전건 int/float) | **수정**(동상 — `isJSONBool` 게이트) |
 
 ---
 
@@ -35,6 +38,16 @@
 
 동봉 트리 + 설치본(`assets/`, `projects/`) 전체 JSON 을 훑어 `"animation"` 객체를 전수 수집했다.
 **애니 블록 7개 / 파일 6개**가 전부다(동봉 트리와 설치본이 같은 집합).
+
+> **재측정(2026-08-21, 클러스터 K).** 위 수치를 독립적으로 다시 떴다. 파일 수는
+> 동봉 1,698 + `assets/` 1,698 + `projects/` 259 = **3,655**. 그중 **63개가 표준 JSON 이
+> 아니다** — `//` 줄주석과 후행 콤마를 쓰는 `effect.json` 27 · `preset.json` 4(양 트리 ×2) +
+> `projects/…/glass.json` 1. `json.load` 로 그냥 훑으면 이 63개가 조용히 빠지므로
+> **JSONC 관용 파서**(문자열 인식 주석 스트리퍼 + 후행 콤마 제거)로 다시 훑었다:
+> 파스 실패 **0**, `"animation"` 객체 **14개**(동봉 7 + `assets/` 7, `projects/` 0) — 같은 수다.
+> 확인차 확장자를 가리지 않고 `grep -rl '"animation"'` 도 돌렸는데 두 트리에서 위 6파일뿐이고
+> `projects/` 히트 1건은 Unity 의 `UnityEngine.AnimationModule.xml` 이라 무관하다.
+> 즉 **63개 비표준 JSON 안에 숨은 애니 블록은 없다**.
 
 ```
 animation 블록 키 : c0×7  options×7  c1×6  c2×6  relative×1        (c3 는 0)
@@ -109,6 +122,25 @@ non-preview** 이고 같은 파일이다 —
   아니면 `back.enabled` → `|= 1` + `back.x/y` 읽기, `front.enabled` → `|= 2` + `front.x/y` 읽기.
   disabled 면 x/y 는 **0 으로 남는다**(0x1401a8fd1 의 `xorps` 초기화).
   두 `enabled` 는 **부재·비-bool 이 true** 다 — §2.5 의 폴라리티 표를 볼 것.
+
+> **[2026-08-21 수정] 이 문단은 문서에만 있었고 코드에는 없었다.** `PropertyAnimation.parse` 가
+> `step` 을 담으면서 `front`/`back` 도 그대로 담고 있었다. `step` 은 자기 **왼쪽** 구간을
+> 계단으로 만드니 그쪽에서는 핸들이 안 쓰이지만, `front` 는 **오른쪽 구간의 P1** 을 정하고
+> `back` 은 `wrapLooped` 끝점 back 의 부호반전 소스다. 그래서 종전 Waple 은 step 키프레임
+> 바로 다음 구간이 실물과 다른 곡선이었다. 합성 반례(`step` 키프레임에 `front{x:1,y:40}`,
+> 다음 키프레임 `back.enabled=false`)에서 frame 45 값이 **40.535366 ↔ 25.000000** 으로 갈린다.
+> 지금은 `step` 이 서면 `front`/`back` 딕셔너리를 `nil` 로 흘려 실물과 필드 단위로 맞춘다.
+> 코퍼스 도달 0(`step` 키는 애니 7블록 38키프레임 어디에도 없다).
+> 잠금: `PropertyAnimationOptionsTests` ⑩ 두 건(억제 / 비-step 보존).
+>
+> 실물 파서가 읽는 키가 여덟(`value`·`frame`·`back`·`front`·`enabled`·`x`·`y`·`step`)뿐이라는
+> 것은 이번에 `lea rdx,[rip+…]` 문자열 인자를 함수 범위 전체에서 세어 재확인했다.
+> `lockangle`/`locklength`/`magic` 은 xref 0 이 아니라 **문자열 자체가 없다** — ASCII·UTF-16LE
+> 전수 검색으로 `wallpaper64.exe` · `scenescript64.dll` · `resourceutil64.dll` ·
+> `cloneextensions64.dll` · `resourcecompiler64.exe` · `diagnostics64.exe` **여섯 바이너리 모두
+> 0건**이다(`beziermode` 도 같다). 함정 13("바이너리 하나 ≠ WE")을 닫아 둔다.
+> 참고로 `resourcecompiler64.exe` 에는 `wraploop`·`smoothing`·`stiffness` 가 있다 —
+> 퍼펫/카메라경로 쪽 옵션이고 프로퍼티 애니와는 다른 자리다.
 
 키프레임 구조체(28바이트, 저장부 0x1401a9127–0x1401a9148):
 
@@ -292,6 +324,22 @@ Waple 쪽 사고는 반대 방향에서 같은 자리였다. Foundation 의 `JSO
 (`"true"`·`null` 은 nil 이라 우연히 맞았다). 그래서 `EffectManifest.isJSONBool`
 (`NSNumber.objCType == "c"`)로 먼저 가른다.
 
+> **[2026-08-21] 같은 누수가 반대 방향으로도 있었다.** `{"a": true}` 를 `strictFloat` 에
+> 넣으면 리눅스에서 `Optional(1.0)` 이 나온다(`as? Double` == `Optional(1.0)` · `as? Int` ==
+> `Optional(1)` — 이 문서 작성 중 실측). 그런데 애니 스키마에서 **숫자를 읽는 여덟 자리**는
+> 전부 `movzx eax,[X+8]; dec eax; cmp eax,2; ja` 로 **태그 1..3(int/uint/real)만** 통과시킨다:
+> `value`(0x1401a8e73) · `frame`(0x1401a8e83) · 핸들 `x`/`y` 네 자리(0x1401a904c · 0x1401a9069 ·
+> 0x1401a90d9 · 0x1401a90f4) · `options.length`(0x1401a9714) · `options.fps`(0x1401a9723) ·
+> `events[].frame`(0x1401a9511). 태그 5 는 전부 탈락이다.
+> 게이트를 붙이기 전 Waple 은 `{"front":{"x":true}}` 를 좌표 1.0 으로, `{"fps":true}` 를
+> **1 fps**(= 30배 느린 재생)로 읽었다. 지금은 `f()` 가 `isJSONBool` 을 먼저 본다.
+> 자리별로 원본과의 거리는 다르다 — 핸들 `x`/`y` 와 `events[].frame` 은 **정확히 일치**하고
+> (전자는 0, 후자는 항목 드롭), `value`/`frame` 과 `options.length`/`fps` 는 원본이 각각
+> "그 키프레임만 건너뜀"·"애니 전체 드롭" 이라 여전히 다르다(이 문서 §2.3 표의 관용 정책 유지).
+> 코퍼스 도달 0 — 여덟 자리 값 타입 census 가 전건 int/float 이다
+> (`frame` int×38 · `value` int11/float27 · `x` int52/float24 · `y` int46/float30 ·
+>  `fps` int×7 · `length` int×7 · `events` 0건). 잠금: `PropertyAnimationOptionsTests` ⑫.
+
 **코퍼스 도달 0** — 애니 7블록의 bool 값을 전수 타입 census 하면 `wraploop` null×5 / bool×2,
 `front`/`back` 의 `enabled` 는 **양면 합쳐 bool×76**(키프레임 38 × 2면, 전부 진짜 bool)이고
 `step`·`random`·`startpaused` 는 아예 없다. 숫자·문자열로 적힌 bool 도, `enabled` 를 생략한
@@ -366,13 +414,35 @@ Waple 구현은 두 부류를 갈라 옮겼다 — `PropertyAnimation.parse` 의
 구간 결정(0x1401a9cb4–0x1401a9d0a):
 
 ```
+키프레임 0개                    → 0.0                        ; 0x1401a9bfd `cmp [rcx],rax` → `xorps`
 frame <= kf[0].frame            → kf[0].value
 kf[i-1].frame <= frame < kf[i].frame  → 구간 [i-1, i]        ; 반개구간
-i 가 끝까지 가면                → kf[count-1].value
+i 가 끝까지 가면                → kf[count-1].value          ; 0x1401a9cf5 `jg 0x1401a9ec7`
 구간 안에서:
    kf[i-1].frame == frame       → kf[i-1].value              ; 0x1401a9d0f
-   kf[i].flags & 4 (step)       → kf[i-1].value              ; 0x1401a9d18
+   kf[i].flags & 4 (step)       → kf[i-1].value              ; 0x1401a9d18 (같은 타깃 0x1401a9ec0)
 ```
+
+**경계 세 자리의 Waple 대조**(2026-08-21 클러스터 K):
+
+| 경계 | WE | Waple | 조치 |
+|---|---|---|---|
+| 키프레임 0개 | **0.0** | `value(component:)` 앞 가드가 **base 유지** | 유지 + 주석 — 누락 채널을 빈 트랙으로 자리만 지키는 관용(WE 는 캐스케이드로 채널을 버린다)과 **짝**이다. 자리를 지켜 놓고 0 을 돌리면 없는 채널이 0 으로 눌린다. 도달 0(트랙 20개 전수 키프레임 2개) |
+| 키프레임 1개 | 두 분기가 같은 값 | 같음 | 확인 + 테스트 |
+| 왼쪽 끝점 정확 일치 | 곡선을 **안 푼다** | 항상 이분법으로 풀었다 | **수정** — `front.x < 0` 처럼 X(u) 가 구간 앞으로 튀어나가면 이분법이 **다른 근**을 잡는다. 합성 반례 **166.081 ↔ 100.000**. 도달 0(코퍼스 `front.x` = 1 · 0.50833333 전수 양수) |
+| 중복 시각 | 파스에서 버린다(0x1401a8fc1 `jle`) | 정렬로 관용 → 평가기까지 들어옴 | 유지 — 반개구간 탐색이 **마지막 중복**을 왼쪽 끝점으로 잡는다(테스트로 못박음). 도달 0 |
+
+`frame` 인자는 **`int`** 다(`movsxd rbp, edx`). Waple 이 연속 `Float` 를 넘기므로 위 "정확 일치"
+분기는 WE 에서는 키프레임마다 매번, Waple 에서는 정확히 맞을 때만 걸린다(§5).
+
+**"정확 일치" 단락이 동봉 코퍼스를 바꾸지 않는 이유(실측).** 코퍼스 핸들 76개의 좌표 분포는
+`x` = {1:26, −1:26, 0.50833333:12, −0.50833333:12} · `y` = **{0:46, −0.0:30}** 이다.
+`y` 가 전건 0 이므로 모든 구간에서 `P1y = P0y` · `P2y = P3y` 이고, 그러면
+`y(u) = v0 + (v1−v0)·(3u²−2u³)` 라 `u → 0` 에서 **정확히 `v0`** 다(Float32 에서도 보정항이
+ulp 아래다). 게다가 `front.x` 가 전건 양수, `back.x` 가 전건 음수라 `X(u)` 가 구간 안에서
+**단조**여서 이분법도 어차피 `u ≈ 2⁻²⁵` 로 수렴한다. 두 조건이 겹쳐 코퍼스 위에서는
+**비트 동일**이고, 갈리려면 `front.x < 0`(비단조) **또는** `front.y ≠ 0`(끝점 접선 이동)이
+있어야 한다 — 둘 다 코퍼스 도달 0.
 
 제어점 조립(0x1401a9d24–0x1401a9d8c). `dx = kf[i].frame − kf[i-1].frame`:
 
@@ -504,7 +574,17 @@ UTF-8 이라 두 값이 최대 238 만큼 다르므로 `grep -b` 로는 재현�
    적는데, 동봉 트리에서 `"animation"` 키가 딕셔너리인 자리는 **전 트리 통틀어 7건**뿐이다
    (2026-08-21 전수 census). 그 수치는 다른 코퍼스(워크샵)에서 온 것으로 보인다 — 이 레인 밖이라
    손대지 않았지만, 동봉 도달을 그 숫자로 읽으면 안 된다.
-5. `PropertyAnimation` 에 `wrapLoop` 필드가 생겼다. 라운드트립 걱정은 **지금은 없다** —
+5. **[미해결] `fps <= 0` / `length <= 0` 은 "드롭" 이 아니라 "정지" 로 흐른다.** WE 는 둘 다
+   `init` 에서 false 를 돌려(0x1401a8c21 `comiss xmm2, xmm1` → `jae` · 0x1401a8c43) 호출부가
+   애니를 통째로 버리므로 **바인딩의 정적 `value` 가 그대로 쓰인다**. Waple 은 `"fps": 0` 이면
+   `frame = t·0 = 0` 으로 굳고 `"length": 0` 이면 `max(0, min(frame, 0))` 으로 굳어
+   **첫 키프레임 값에 고정**된다 — 정적 `value` 가 아니라 키프레임 0 이다.
+   §2.3 표의 "부재" 관용(30fps / 마지막 키프레임 길이)과는 다른 사안이다: 부재가 아니라
+   **명시된 퇴화 값**이고, 원본은 그걸 "애니 없음" 으로 읽는다. 고치려면 `parse` 가
+   `fps <= 0 || length <= 0` 에서 `nil` 을 돌리면 되고 그러면 원본과 **정확히 같아진다**
+   (호출부가 `anims[key]` 를 세우지 않아 정적 `value` 로 떨어진다). 도달 0(코퍼스 `fps` = 15/20/30,
+   `length` = 30/60)이라 이번 라운드의 무회귀 예산에서 뺐다 — 다음에 이 레인을 열 때 첫 항목.
+6. `PropertyAnimation` 에 `wrapLoop` 필드가 생겼다. 라운드트립 걱정은 **지금은 없다** —
    `Sources/` 전체에서 `"animation"` 을 **쓰는**(직렬화하는) 자리가 0건이고
    `ProjectJSONBuilder.swift` 는 12행짜리로 애니를 다루지 않는다(2026-08-21 실측).
    애니를 다시 내보내는 자리가 생기면 그때 `options.wraploop` 를 함께 써야 한다 —
@@ -528,6 +608,27 @@ UTF-8 이라 두 값이 최대 238 만큼 다르므로 `grep -b` 로는 재현�
 로컬 객체가 **프로퍼티 객체 자체**라 조건식이 `foo.value` 로 값을 읽는다 — Waple 이 `.value`
 접미사를 떼는 규약의 근거다. 바이너리 쪽은 `condition` 문자열(`0x140474a60`)을 바인딩 파서가
 읽어 보관만 하고(0x1401a4f11), 평가는 UI(JS) 몫이다.
+
+**그 `$eval` 이 부르는 파서를 이번에 직접 떴다**(2026-08-21 클러스터 K). 번들된 AngularJS 는
+**1.6.10** 이고(`ui/dist/scripts/vendor.js`, `se={full:"1.6.10",major:1,minor:6,dot:10,
+codeName:"crystalline-persuasion"}` @**byte** 98389), 재귀하강 파서의 우선순위 사슬이
+@byte 167616 부터 그대로 읽힌다:
+
+```
+assignment     → ternary ( "=" assignment )?
+ternary        → logicalOR ( "?" expression ":" expression )?
+logicalOR      → logicalAND ( "||" logicalAND )*                      ; 좌결합 **반복**
+logicalAND     → equality  ( "&&" equality )*
+equality       → relational ( ("=="|"!="|"==="|"!==") relational )*   ; @167616
+relational     → additive ( ("<"|">"|"<="|">=") additive )*           ; @167789
+additive       → multiplicative ( ("+"|"-") multiplicative )*         ; @167960
+multiplicative → unary ( ("*"|"/"|"%") unary )*                       ; @168124
+unary          → ("+"|"-"|"!") unary | primary                        ; @168262
+```
+
+즉 **equality 와 relational 이 서로 다른 레벨**이고 둘 다 **좌결합으로 반복**한다.
+(위 `scripts.js` 오프셋은 종전 판이 **문자** 오프셋으로 적었다 — 여기 `vendor.js` 오프셋은
+**바이트**다. `scripts.js` 바이트로는 `evalCondition` 이 106657 · 375400 · 613938 이다.)
 
 브라우저 경로에는 정규화가 하나 더 있다: `l.condition = l.condition.replace("$","")` — **첫 `$` 하나**를
 지운다(@88419). 에디터 경로에는 없다. Waple 은 이 정규화를 하지 않는다(설치본 코퍼스 도달 0).
@@ -554,14 +655,31 @@ UTF-8 이라 두 값이 최대 238 만큼 다르므로 `grep -b` 로는 재현�
 값 없이(`[:]`) 문법 가능 여부만 묻는 경로를 살리기 위한 것이고, `replaceIncludes` 가 부재를
 "어느 리터럴과도 불일치" 로 접는 것과 같은 방향이다.
 
-### 7.4 남은 어긋남(고치지 않음, 도달 0)
+### 7.4 남은 어긋남(고치지 않음, 도달 0 — 2026-08-21 재검증 + 테스트로 못박음)
 
-- **`==` vs `===`**: Waple 은 둘을 같게 본다(양쪽이 수로 읽히면 수 비교). JS 는 `===` 가 타입까지 본다.
-  실물 코퍼스에서 `'1'` 대 `1` 같은 교차 타입 비교는 어느 쪽으로 읽어도 결과가 같다.
-- **산술 연산자**: Waple 의 토크나이저는 `+ - * / %` 를 만나면 조건 **전체를 파스 실패**로 돌린다
-  (부분 평가 금지 — 의도된 설계). Angular 는 지원한다. 코퍼스 도달 0.
-- **비교 연산의 결합**: Waple 의 `parseComparison` 은 비결합이라 `a > b == c` 를 파스 실패로 낸다.
-  Angular 는 `(a>b) == c`. 코퍼스 도달 0.
+§7.1 의 실물 사슬과 한 줄씩 대조했다. 셋 다 **설치본 조건 22건 / 고유 16종에 도달 0** 이고,
+지금은 `PropertyConditionEvaluatorTests` 가 "현재 이렇게 동작한다" 를 잠가 둔다
+(문법을 Angular 에 맞추면 그 테스트들이 깨져야 한다 — 그때 의도적으로 갱신할 것).
+
+- **비교 연산의 레벨·결합**: Angular 는 `equality`(@167616)와 `relational`(@167789)이 **두 레벨**이고
+  각각 **좌결합 반복**이다. Waple 의 `parseComparison` 은 여덟 연산자를 한 레벨로 묶고 **한 번만**
+  소비한다. 그래서 `a == b == c`(Angular `(a==b)==c`) · `a > b == c`(`(a>b)==c`) ·
+  `a == b > c`(`a == (b>c)`)를 전부 **파스 실패(nil)** 로 흘린다.
+  실패 방향이 "숨김" 이 아니라 **"표시"** 라 조건을 못 읽어도 토글이 사라지지는 않는다.
+  코퍼스 22건에 비교 연산자 연쇄는 **0건**(전부 `&&` 로만 이어진다).
+  고치려면 두 레벨로 갈라 `while` 을 씌우면 되지만, 그러면 `canEvaluate` 가 지금 false 인 입력에서
+  true 가 되어 `WallpaperCompatibilityAnalyzer` 경고와 `DeepScan` 집계가 함께 움직인다.
+- **산술 연산자**: `additive`(@167960) · `multiplicative`(@168124) · 단항 `+`/`-`(@168262)가
+  Waple 에 없다. 토크나이저가 미지 연산자를 만나면 조건 **전체를 파스 실패**로 돌린다
+  (부분 평가 금지 — 의도된 설계). 코퍼스 도달 0.
+- **`==` vs `===`**: Waple 은 둘을 같게 본다 — `equals()` 가 먼저 양변을 `number()` 로 수치화한다.
+  그래서 `'1' === 1` 이 **true**(JS 는 false)다. 느슨한 쪽도 JS 그대로는 아니다 — `'' == 0` 은
+  JS 가 true 인데 `Double("")` 이 nil 이라 **false** 다. 실물에서 `===`/`!==` 를 쓰는 12건은
+  전건 "문자열 프로퍼티 vs 문자열 리터럴" 또는 "bool vs bool" 이라 두 규약이 같은 답을 낸다.
+- **갈리지 않는 것**(확인해서 못박음): 단항 `!` 은 Angular 와 똑같이 비교보다 **강하게** 묶인다
+  (`unary → … unary` @168262 ↔ `parsePrimary` 자기재귀). `n=2` 에서
+  `!n.value == 1` → `(!2)==1` = **false**(`!(2==1)` 로 묶였다면 true).
+  `&&`/`||` 가 피연산자 대신 `Bool` 을 돌려주는 것도 최종 소비가 `truthy` 하나라 관측 차이가 없다.
 
 ---
 

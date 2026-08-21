@@ -126,4 +126,76 @@ final class PropertyConditionEvaluatorTests: XCTestCase {
         XCTAssertEqual(PropertyConditionEvaluator.evaluate(
             "scene.value !== 'cartoon' && scene.value !== 'ram'", values: values), false)
     }
+
+    // MARK: - AngularJS 1.6.10 문법과 갈리는 자리 (전부 실물 코퍼스 도달 0)
+    //
+    // 문법의 정체와 우선순위 사슬은 실물에서 직접 떴다 — `ui/dist/scripts/vendor.js`
+    // (`full:"1.6.10"` @byte 98389)의 재귀하강 파서 @byte 167616 이하:
+    //   logicalOR → logicalAND → **equality**(@167616) → **relational**(@167789)
+    //             → additive(@167960) → multiplicative(@168124) → unary(@168262) → primary
+    // UI 가 그 파서를 `$eval` 로 부른다(`scripts.js` @byte 106657 · 375400 · 613938).
+    //
+    // 아래 셋은 "지금 이렇게 동작한다" 를 못박는 것이지 "이게 옳다" 가 아니다.
+    // 문법을 Angular 에 맞추면 이 테스트들이 깨져야 한다 — 그때 **의도적으로** 갱신해라.
+
+    /// §1 — equality/relational 이 한 레벨이고 반복하지 않는다.
+    /// Angular 는 `a == b == c` 를 `(a==b)==c` 로 읽는다. 여기서는 남은 토큰 때문에
+    /// `isAtEnd` 가 거짓이 되어 **파스 실패(nil)** 다 → `isVisible` 은 관용적으로 표시한다.
+    /// 실물 조건 22건에 비교 연산자 연쇄는 0건이다(전부 `&&` 로만 이어진다).
+    func testComparisonChainsAreParseFailuresNotAngularLeftAssociation() {
+        let values: [String: PropertyValue] = ["a": .number(1), "b": .number(1), "c": .bool(true)]
+        for chain in ["a.value == b.value == c.value",
+                      "a.value > b.value == c.value",
+                      "a.value == b.value > b.value"] {
+            XCTAssertNil(PropertyConditionEvaluator.evaluate(chain, values: values),
+                         "\(chain): 연쇄는 파스 실패로 흘린다(Angular 는 좌결합 반복)")
+            XCTAssertFalse(PropertyConditionEvaluator.canEvaluate(chain),
+                           "\(chain): 분석기가 '평가 불가' 경고를 내야 한다")
+        }
+        // 실패 방향은 "숨김" 이 아니라 "표시" 다 — 조건을 못 읽어도 토글이 사라지지 않는다.
+        let prop = WallpaperProperty(key: "x", type: "bool", value: .bool(true), order: 0,
+                                     condition: "a.value == b.value == c.value")
+        XCTAssertTrue(PropertyConditionEvaluator.isVisible(prop, in: [prop]))
+    }
+
+    /// §2 — 산술 연산자(`+ - * / %`)와 단항 부호가 없다. 토크나이저가 미지 연산자를 만나면
+    /// 부분 평가 대신 전체를 파스 실패로 흘린다. 실물 코퍼스 도달 0.
+    func testArithmeticOperatorsAreParseFailures() {
+        let values: [String: PropertyValue] = ["a": .number(3), "b": .number(4)]
+        for expr in ["a.value + b.value > 5", "a.value * 2 == 6", "a.value % 2 == 1"] {
+            XCTAssertNil(PropertyConditionEvaluator.evaluate(expr, values: values), expr)
+        }
+    }
+
+    /// §3 — `==` 와 `===` 를 구분하지 않는다. `equals()` 가 먼저 수치화하므로
+    /// `'1' === 1` 이 **true**(JS/Angular 는 strict 라 false)이고, 거꾸로 `'' == 0` 은
+    /// JS 가 true 인데 여기서는 `Double("")` 이 nil 이라 false 다.
+    /// 실물 `===`/`!==` 12건은 전건 "문자열 vs 문자열 리터럴" 또는 "bool vs bool" 이라 도달 0.
+    func testStrictAndLooseEqualityAreNotDistinguished() {
+        let values: [String: PropertyValue] = ["s": .string("1"), "e": .string("")]
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("s.value === 1", values: values), true,
+                       "JS 라면 false — 수치화 후 비교라 true 다")
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("s.value == 1", values: values), true,
+                       "느슨한 쪽은 JS 와 같은 답")
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("e.value == 0", values: values), false,
+                       "JS 라면 true — `Double(\"\")` 이 nil 이라 false 다")
+        // 코퍼스가 실제로 쓰는 모양(문자열 vs 문자열 리터럴)은 두 규약이 같은 답을 낸다.
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("s.value === '1'", values: values), true)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("s.value !== '2'", values: values), true)
+    }
+
+    /// `!` 는 Angular 와 **같이** 비교보다 강하게 묶인다(`unary` 레벨 @vendor.js byte 168262 —
+    /// `unary → ("+"|"-"|"!") unary | primary`). 여기가 갈리지 **않는다**는 것을 못박는다.
+    ///
+    /// `n = 2` 가 두 묶음을 가르는 조합이다:
+    /// `(!2) == 1` → `false == 1` → 0 == 1 → **false** / `!(2 == 1)` → `!false` → **true**.
+    func testUnaryNotBindsTighterThanComparisonLikeAngular() {
+        let values: [String: PropertyValue] = ["n": .number(2)]
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("!n.value == 1", values: values), false,
+                       "(!2) == 1 — `!(2 == 1)` 로 묶였다면 true 였다")
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("!(n.value == 1)", values: values), true,
+                       "괄호로 묶으면 반대")
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("!!n.value", values: values), true,
+                       "단항은 자기재귀 — Angular 도 `unary → … unary`")
+    }
 }

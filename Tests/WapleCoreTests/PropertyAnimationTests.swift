@@ -242,7 +242,11 @@ final class PropertyAnimationTests: XCTestCase {
         }
     }
 
-    // MARK: - options.wraploop (VA 0x1401a98b0–0x1401a9b90 · 호출부 0x1401a5762)
+    // MARK: - options.wraploop (VA 0x1401a98b0–0x1401a9bb3 · 호출부 0x1401a5762)
+    //
+    // 함수 끝은 `ret` @0x1401a9ba6 이고 그 뒤에 noreturn 스텁 둘(0x1401a9ba7 · 0x1401a9bad)이
+    // 붙는다. 종전 주석이 적던 `0x1401a9b90` 은 xmm 복원 라벨이지 함수 끝이 아니다
+    // (2026-08-21 `merged()` + 디스어셈으로 재확인).
 
     /// 실물 `maintaindistancebetweencontrolpoints/scene.json` 형태: length 60 인데 키프레임은 0/30.
     /// wraploop 이면 frame 60 에 "첫 키프레임과 같은 값" 키프레임이 붙어 후반이 되돌아온다.
@@ -310,6 +314,9 @@ final class PropertyAnimationTests: XCTestCase {
     func testWrapLoopDisabledFrontYieldsDisabledBack() {
         let track = [kf(0, 5, enabled: false), kf(20, 7)]
         let out = PropertyAnimation.wrapLooped(track, lengthFrames: 40)
+        // 개수를 먼저 못박는다 — 붙이기 경로가 죽으면 아래 `out[2]` 가 인덱스 트랩으로 죽어
+        // 변이 계수가 "실패" 대신 "크래시" 로 기록된다(be7a3c0 회고에서 지적된 자리).
+        XCTAssertEqual(out.count, 3, "frame 40 끝점이 붙는다")
         XCTAssertFalse(out[2].backEnabled)
         XCTAssertEqual(out[2].value, 5)
     }
@@ -341,6 +348,44 @@ final class PropertyAnimationTests: XCTestCase {
         XCTAssertEqual(anim.value(component: 0, atTime: 30.0 / 30, base: 0), 20, accuracy: 1e-5, "경계에서 전환")
         XCTAssertEqual(anim.value(component: 0, atTime: 45.0 / 30, base: 0), 25, accuracy: 0.02,
                        "다음 구간은 step 이 아니라 정상 보간")
+    }
+
+    // MARK: - 트랙 경계 조건 (평가기 VA 0x1401a9bc0)
+
+    /// 실물 평가기의 세 경계를 못박는다.
+    /// - 키프레임 0개: WE 는 **0.0**(0x1401a9bfd `cmp [rcx],rax` → `xorps xmm0,xmm0`).
+    ///   Waple 은 `value(component:)` 의 앞 가드가 **base 유지**로 흘린다 — c0..c3 누락 채널을
+    ///   빈 트랙으로 자리만 지키는 관용(WE 는 캐스케이드로 채널을 통째 버린다)과 짝이다.
+    ///   두 관용은 함께여야 뜻이 통한다: 자리를 지켜 놓고 0 을 돌리면 없는 채널이 0 으로 눌린다.
+    ///   코퍼스 도달 0(트랙 20개 전수 키프레임 2개).
+    /// - 키프레임 1개: 왼쪽 분기(0x1401a9cb8)와 오른쪽 분기(0x1401a9ec7)가 같은 값을 준다.
+    /// - 중복 시각: WE 는 파스에서 `frame <= 직전` 을 버려(0x1401a8fc1 `jle`) 애초에 못 만든다.
+    ///   Waple 은 정렬로 관용하므로 평가기까지 살아 들어온다 — 반개구간 탐색이 **마지막 중복**을
+    ///   왼쪽 끝점으로 잡는다(앞의 것들은 `frame < k2.frame` 이 거짓이라 전부 건너뛴다).
+    func testTrackBoundaryCases() {
+        // 0개 트랙 — 자리만 지키는 채널.
+        let empty = PropertyAnimation(tracks: [[], [kf(0, 1, enabled: false), kf(10, 2, enabled: false)]],
+                                      fps: 30, length: 10, mode: "loop", relative: false)
+        XCTAssertEqual(empty.value(component: 0, atTime: 0.1, base: 77), 77, "빈 트랙은 base 유지")
+        XCTAssertEqual(empty.value(component: 9, atTime: 0.1, base: 77), 77, "범위 밖 성분도 base 유지")
+        XCTAssertEqual(empty.value(component: 1, atTime: 5.0 / 30, base: 0), 1.5, accuracy: 1e-4)
+        // 1개 트랙 — 어느 시각이든 그 값.
+        let one = PropertyAnimation(tracks: [[kf(10, 42)]], fps: 30, length: 60,
+                                    mode: "single", relative: false)
+        for t: Float in [0, 10.0 / 30, 1.0, 2.0] {
+            XCTAssertEqual(one.value(component: 0, atTime: t, base: 5), 42, accuracy: 1e-6,
+                           "키프레임 1개 트랙은 t=\(t) 에서도 그 값")
+        }
+        // 중복 시각 — 마지막 중복이 왼쪽 끝점이 된다.
+        let dup = PropertyAnimation(
+            tracks: [[kf(0, 0, enabled: false), kf(10, 5, enabled: false),
+                      kf(10, 50, enabled: false), kf(20, 100, enabled: false)]],
+            fps: 1, length: 20, mode: "single", relative: false)
+        XCTAssertEqual(dup.value(component: 0, atTime: 10, base: 0), 50, accuracy: 1e-4,
+                       "frame 10 은 [10,20) 구간의 왼쪽 끝점 — 중복 중 마지막 값")
+        XCTAssertEqual(dup.value(component: 0, atTime: 15, base: 0), 75, accuracy: 0.02)
+        XCTAssertEqual(dup.value(component: 0, atTime: 5, base: 0), 2.5, accuracy: 0.02,
+                       "앞 구간은 첫 중복까지 정상 보간")
     }
 
     // MARK: - mode 문자열 규약 (stricmp — VA 0x1401a8c78/0x1401a8c91)
