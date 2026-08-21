@@ -313,6 +313,12 @@ jobs:
           echo "executed=${EXECUTED} skipped=${SKIPPED}"
 
           # [2026-08-19] 트립와이어. 이제 정상 범위를 안다.
+          # [2026-08-21 세 번째] 실측 갱신: executed **2877** / skipped 47 / 실패 0
+          # (run 32454065734 · 커밋 131feaa, debug·release 두 잡이 같은 수). 하한을 2825 → 2877.
+          # +52 의 출처(badbe68 ↔ 131feaa 정적 개수 차, 합계가 정확히 52):
+          #   SceneGeneralKeysTests +26 · PropertyAnimationOptionsTests +21 · ParallaxControllerTests +5.
+          # 정적 개수도 badbe68 에서 2825, 131feaa 에서 2877 로 실행 수와 일치한다.
+          #
           # [2026-08-21 두 번째] 실측 갱신: executed **2825** / skipped 47 / 실패 0
           # (run 32450029939 · 커밋 badbe68, debug·release 두 잡이 같은 수). 하한을 2627 → 2825.
           # 래칫 규약(하한 = 직전 실측치)대로다.
@@ -354,8 +360,8 @@ jobs:
             exit 1
           fi
           # 테스트 수는 늘기만 한다(줄면 파일이 빠졌거나 번들이 안 실렸다는 뜻).
-          if [ "${EXECUTED:-0}" -lt 2825 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 2825 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
+          if [ "${EXECUTED:-0}" -lt 2877 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 2877 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
             exit 1
           fi
 
