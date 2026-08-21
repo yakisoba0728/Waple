@@ -65,9 +65,33 @@ public struct ScenePackage {
         // 보여주듯 관측된 모든 버전에서 컨테이너 프레이밍(entry_count/index/data 레이아웃)이 불변이라,
         // 값 게이트가 추가 검증을 사지 못한다(대비: Model3D.swift 의 MDLV 는 버전마다 메시 바이트
         // 레이아웃이 실제로 달라 미목격 버전을 의도적으로 거부한다 — 두 정책은 상충이 아니라 포맷별
-        // 실제 위험 차이를 반영한다). 구조 검증(정확히 "PKGV"+4 ASCII 숫자)만 유지하고 값 범위 게이트는
-        // 생략한다 — 단 "버전"이므로 PKGV0100 이상 미래 버전도 낙관적으로 파싱을 시도한다는 뜻이며,
-        // 종전 주석의 "관측 1~24, 99까지 허용" 식 안전 여백과는 성격이 다르다.
+        // 실제 위험 차이를 반영한다).
+        //
+        // [2026-08-21 정정 — docs/re/package-format.md §2.2·§7.4] 위 문단의 결론(프레이밍이 버전
+        // 불변)은 엔진 코드로도 맞다(`0x140276980` 이후 버전 분기가 없다). **틀린 것은 그 아래
+        // 함의였다** — "그러니 WE 도 낙관적으로 받는다" 는 사실이 아니고, 이 게이트는 두 방향 모두
+        // WE 와 반대다. 실물 로더(`0x140276941`–`0x140276967`):
+        //
+        //     call ReadLengthPrefixedString(stream, &magic, maxLen=8)   ; 0x140276941
+        //     cmp  qword [rbp+0xf], 4 ; jbe skip                        ; 0x140276946  len>4 일 때만 검사
+        //     call atoi(magic.c_str() + 4)                              ; 0x14027695f
+        //     cmp  eax, 0x18 ; jle ok                                   ; 0x140276964  **24 초과면 거부**
+        //
+        // ① **접두 비교가 없다.** ASCII `PKGV` 는 `wallpaper64.exe` 전역에서 **0건**이다(대비:
+        //    `TEXV0005`·`MDLV0023` 은 각각 `0x14048b910`·`0x140492318` 에 리터럴로 있고 `memcmp`
+        //    로 비교된다 — 즉 "매직을 안 두는 포맷" 이라는 판정이지 검사 누락이 아니다).
+        //    `atoi` 규약상 `"XXXX0023"` 도 통과하고, 길이 ≤4 면 버전 검사 자체를 건너뛴다.
+        // ② **상한 24 를 건다.** `PKGV0025` 이상은 `"Cannot open %s, version %i not supported."`
+        //    (`0x1404922e8`)로 거부된다.
+        //
+        // 그럼에도 **코드는 그대로 둔다 — 의도적 이탈이다.** 근거 둘:
+        //   · 엄격한 쪽(접두 강제)은 이 리포의 신뢰 경계 정책과 맞고, 잃는 것이 관측되지 않는다.
+        //     이 환경의 실물 표본이 0개라 "접두가 다른 pkg" 는 가설일 뿐이다(§1.1: 두 루트
+        //     9,078 파일 전건에서 `PKGV` 매직 0건, `.pkg` 확장자 0건).
+        //   · 관대한 쪽(상한 없음)은 프레이밍이 버전 불변이라는 위 결론의 직접 귀결이다. 상한을
+        //     넣으면 미래 버전에서 **파싱 가능한 파일을 거부**하게 되고, 그 대가로 얻는 것은
+        //     WE 와 같은 에러 메시지뿐이다.
+        // 두 이탈 모두 `ScenePackageWEParityTests` 가 **의도임을 못 박아** 둔다(우연한 회귀와 구분).
         guard magic.range(of: "^PKGV[0-9]{4}$", options: .regularExpression) != nil else {
             throw ScenePackageError.malformed
         }
@@ -98,6 +122,23 @@ public struct ScenePackage {
         guard let e else { return nil }
         switch storage {
         case .blob(let blob, let blobBase):
+            // [2026-08-21 — §4.2·§7.5] **`size <= 0` 엔트리는 "없음"과 같다.** VFS 조회
+            // (`0x140273f50`)는 해시 히트 직후 `cmp dword [rbx+0x34], 0` / `jle`(`0x14027412a`)
+            // 로 크기를 한 번 더 보고, 0 이하면 **못 찾은 것과 같은 자리**(`0x140274161`)로 빠져
+            // 마운트된 디렉터리에서 실제 파일을 연다. 즉 0바이트 엔트리는 열림이 아니라 폴백이다.
+            //
+            // 종전 Waple 은 빈 `Data` 를 **성공**으로 돌려줬고, 그걸 받은
+            // `SceneRendererResources.probeAssetData` 가 `.data(빈 것)` 으로 보고 공유
+            // (base-assets) 폴백을 건너뛰었다 — WE 라면 공유 자산으로 채워질 자리가 0바이트로
+            // 굳는다. 여기서 `nil` 을 내면 그 폴백 사슬이 그대로 이어진다.
+            //
+            // **`.directory` 백엔드에는 적용하지 않는다.** 폴더 마운트(`0x1402764d0`)는 엔트리
+            // 표를 만들지 않고 파일을 바로 열므로, 디스크의 진짜 0바이트 파일은 WE 에서도
+            // "0바이트로 열림" 이다. 아래 `.directory` 분기가 그대로 읽어 빈 `Data` 를 낸다.
+            //
+            // 도달: 0바이트 엔트리를 가진 pkg 는 관측하지 못했다(이 환경 실물 표본 0개). 즉
+            // 이 가드는 무회귀이고, 근거는 코퍼스가 아니라 로더 코드다.
+            guard e.size > 0 else { return nil }
             let start = blob.startIndex + blobBase + e.offset
             return blob.subdata(in: start ..< start + e.size)
         case .directory(let root):
@@ -108,8 +149,31 @@ public struct ScenePackage {
         }
     }
 
+    /// C `tolower` 와 **바이트별로 같은** 소문자화. UTF-8 연속 바이트(0x80 이상)는 손대지 않는다.
+    ///
+    /// WE 는 엔트리 이름을 적재할 때(`0x140276ac0`–`0x140276ad6`)도, 조회 키를 정규화할 때
+    /// (`0x140274000`–`0x140274015`)도 `movsx ecx, byte [..]` → CRT `tolower`(`0x1402bfb1c`) 를
+    /// 바이트마다 돈다. 그 CRT 함수의 빠른 경로는 `lea eax,[rcx-0x41] ; cmp eax,0x19 ; ja` —
+    /// 곧 **`'A'..'Z'` 만 +0x20** 이고, 부호확장된 0x80 이상 바이트는 무부호 비교에서 탈락해
+    /// 원본 그대로 다시 쓰인다. 확장자 소문자화(`0x140054262`–`0x140054276`)도 같은 루프다.
+    ///
+    /// Swift `.lowercased()` 는 **유니코드 전체 케이스 매핑**이라 키릴 `И`·그리스 `Σ`·터키
+    /// `İ`(→ 2 스칼라로 늘어남)까지 접는다. 그러면 WE 에서 **서로 다른** 두 엔트리가 Waple
+    /// 에서만 같은 정규화 키로 충돌해 먼저 온 것이 이긴다(`init` 의 `normalizedIndex`).
+    ///
+    /// 도달 실측(2026-08-21): 두 루트 9,078 파일의 경로 컴포넌트 **3,374 종에 비-ASCII 0건**,
+    /// ASCII 폴딩과 유니코드 폴딩이 갈리는 이름 **0건**. 워크샵 코퍼스에서 뽑아 둔 pkg 엔트리
+    /// 경로(`spec/corpus/workshop-shaders.json`)도 갈리는 것 0건이다(대문자 보유 21건은 두
+    /// 폴딩이 동일 결과). 즉 이 정정은 **무회귀**이고, 근거는 코퍼스가 아니라 로더 코드다.
+    ///
+    /// - Note: 역슬래시→슬래시 치환은 WE 에 **없다**. 다만 이건 정확 일치(`entryByName`)가
+    ///   먼저 이긴 뒤의 폴백 색인이라 히트만 늘리고 뺏지 않으므로 그대로 둔다(§7.3).
+    static func asciiLowercased(_ s: String) -> String {
+        String(decoding: s.utf8.map { $0 >= 0x41 && $0 <= 0x5A ? $0 &+ 0x20 : $0 }, as: UTF8.self)
+    }
+
     private static func normalizedLookupKey(_ name: String) -> String {
-        name.replacingOccurrences(of: "\\", with: "/").lowercased()
+        asciiLowercased(name.replacingOccurrences(of: "\\", with: "/"))
     }
 
     /// 엔트리 목록으로부터 패키지를 조립(파싱 결과와 동일 구조). 테스트/리패킹용.
@@ -163,5 +227,133 @@ public struct ScenePackage {
         }
         guard !entries.isEmpty else { return nil }
         return ScenePackage(entries: entries, storage: .directory(root: root))
+    }
+}
+
+// MARK: - 마운트 대상 결정 (WE 파리티)
+
+/// 씬을 **무엇으로 마운트할지**의 결정. `ScenePackage.resolveMountSource(...)` 의 결과다.
+public enum SceneMountSource: Equatable {
+    /// 이 `.pkg` 컨테이너를 연다(`ScenePackage.parse`).
+    case package(URL)
+    /// 프로젝트 폴더를 통째로 마운트한다(`ScenePackage.fromDirectory`).
+    case directory
+}
+
+extension ScenePackage {
+    /// 종전(2026-08-21 이전) Waple 의 마운트 선택자 — `scene.pkg`/`gifscene.pkg` **이름 두 개**를
+    /// 하드코딩해 찾는다. 이제는 `resolveMountSource` 의 **마지막 폴백**으로만 쓴다(§7.1 ③).
+    ///
+    /// 왜 지우지 않는가: `project.json` 의 `file` 이 없거나(361건 중 0건) 경로 검사에 걸려
+    /// 정규화가 nil 을 내는 경우, 결정 근거가 아예 사라진다. 그때 종전 동작으로 떨어지는 편이
+    /// "적용 실패" 보다 낫다. WE 에는 이 폴백이 **없다**(WE 는 `file` 이 없으면 프리셋 병합
+    /// 경로로 가고, 거기서도 못 정하면 실패한다 — `0x14011d9e1`).
+    public static func legacyPackageURL(in folder: URL) -> URL? {
+        let fm = FileManager.default
+        for name in ["scene.pkg", "gifscene.pkg"] {
+            let u = folder.appendingPathComponent(name)
+            if fm.fileExists(atPath: u.path) { return u }
+        }
+        // 대소문자 보존 파일시스템(리눅스·case-sensitive APFS)에서 `Scene.pkg` 같은 표기를 살린다.
+        if let names = try? fm.contentsOfDirectory(atPath: folder.path) {
+            for expected in ["scene.pkg", "gifscene.pkg"] {
+                if let actual = names.first(where: { $0.caseInsensitiveCompare(expected) == .orderedSame }) {
+                    return folder.appendingPathComponent(actual)
+                }
+            }
+        }
+        return nil
+    }
+
+    /// **`project.json` 의 `file` 이 마운트 대상을 정한다** — `.pkg` 의 존재가 아니라(§6·§7.1).
+    ///
+    /// 종전 Waple 은 폴더에 `scene.pkg`/`gifscene.pkg` 가 **있으면 무조건** 그것을 열었다.
+    /// WE 규칙과 세 군데에서 갈렸고, 그중 하나는 관측 가능한 적용 실패였다:
+    ///
+    /// | 상황 | WE | 종전 Waple |
+    /// | --- | --- | --- |
+    /// | `file:"scene.json"` + 잔존 `scene.pkg` | `scene.json`(폴더) | `scene.pkg` → **다른 씬** |
+    /// | `file:"techno.json"` 부재 + `techno.pkg` 존재 | `techno.pkg` | 폴더 → `.noScene` → **적용 실패** |
+    /// | `file:"scene.pkg"` 부재 + `scene.json` 존재 | 실패 | `scene.json` 으로 성공(더 관대) |
+    ///
+    /// 실물 절차는 두 함수에 걸쳐 있다.
+    ///
+    /// **① `project.json` 리더 `0x14011d7d0`** 가 `file` 을 폴더 기준 절대경로로 정규화해
+    /// 되써 넣고(`0x14011d9e1`·`0x14011deb4`), 그 뒤 `.pkg` 재작성을 시도한다
+    /// (`0x14011e330`–`0x14011e3f9`). 게이트가 **넷이고 순서가 있다**:
+    ///
+    ///     cmp  dword [rdi+4], 1        ; ① 유도 타입이 Scene 일 때만          0x14011e330
+    ///     jne  skip
+    ///     call 0x14011e880             ; ② json["dependency"] 가 string(tag 4) 이면 skip
+    ///     test al, al ; jne skip       ;    (0x14011e894 find + 0x14011e8c5 cmp [rax+8],4)
+    ///     call 0x140018f30             ; ③ is_regular_file(<file 절대경로>) 면 skip  0x14011e34d
+    ///     test al, al ; jne skip
+    ///     ... replace_extension("pkg") ; 0x14011e368 "pkg"(점 없음) + 0x140060d90
+    ///     call 0x140018f30             ; ④ 바꾼 경로가 실제 파일일 때만       0x14011e3ae
+    ///     je   skip
+    ///     ... json["file"] = <그 .pkg 절대경로>                              0x14011e3f2
+    ///
+    /// **② 마운트 디스패처 `0x14010df40`** 는 그렇게 확정된 `file` 을 `std::filesystem::path` 로
+    /// 만들어(`0x14010dfbc`) **확장자만** 보고 갈린다. 확장자는 `0x140053f80` 이 뽑아 바이트별
+    /// ASCII `tolower`(`0x140054262`–`0x140054276`)로 접은 것이다:
+    ///
+    /// | 순서 | 조건 | 동작 | VA |
+    /// | --- | --- | --- | --- |
+    /// | 1 | `.gif` | 플래그 `0x20` 세우고 GIF 씬 경로로 이탈 | `0x14010e0ee`–`0x14010e12c` |
+    /// | 2 | `.pkg` | `0x140276700`(패키지 적재) | `0x14010e14d`–`0x14010e18a` |
+    /// | 3 | 그 외 | `0x1402764d0`(**부모 폴더**를 루트로 마운트) | `0x14010e1d1`–`0x14010e20c` |
+    ///
+    /// **어느 분기도 다른 분기를 되짚지 않는다** — 2번에서 실패하면 에러 코드 5 로 끝난다.
+    ///
+    /// 이 함수는 ①의 ②③④와 ②의 2·3번을 그대로 옮긴다. ①의 게이트 ①(타입 Scene)은 호출자가
+    /// 이미 만족한다 — 씬 렌더러 마운트 경로에서만 부른다.
+    ///
+    /// **의도적 이탈 3건**(전부 이 코퍼스 도달 0건):
+    ///   · `.gif` 전용 분기가 없다. Waple 에는 GIF 씬 경로 자체가 없으므로 폴더 마운트로 떨어진다
+    ///     (종전과 같다). 설치본+동봉 361건 중 `file` 이 `.gif` 인 것은 0건이다.
+    ///   · 3번 분기에서 **부모 폴더가 아니라 프로젝트 폴더**를 마운트한다. `file` 에 하위 디렉터리가
+    ///     끼면(`"sub/scene.json"`) WE 는 `sub/` 만, Waple 은 그 상위까지 본다 — Waple 이 상위집합이라
+    ///     씬 문서 이름(`sub/scene.json`)도 그대로 풀린다. 361건 전건이 디렉터리 성분 없는 파일명이다.
+    ///   · 마지막 폴백 `legacyPackageURL` 은 WE 에 없다(위 주석).
+    ///
+    /// **[미해결]** `file` 이 명시적으로 `*.pkg` 일 때 WE 가 여는 **씬 문서 이름**은 `filename()`
+    /// 이 아니라 `stem() + ".json"` 이다(`0x14010e22a` `path::stem` → `0x14010e253`
+    /// `std::string::append(".json", 5)`). 곧 `file:"techno.pkg"` 면 안에서 `techno.json` 을 찾는다.
+    /// Waple 은 `SceneDocument.parse(sceneFileName:)` 에 `project.fileName`(= `"techno.pkg"`)을
+    /// 넘기고 `scene.json`/`gifscene.json` 으로만 폴백하므로 그 한 경우에 `.noScene` 이 된다.
+    /// 고치지 않은 이유: `check_scene_mount_parity.py` 가 `sceneFileName: project.fileName` 리터럴을
+    /// **고정 불변식으로 핀**해 두었고(그 게이트는 이 과제 소유가 아니다), 도달이 0건이다 —
+    /// 설치본·동봉 361건 중 `file` 이 `.pkg` 인 것은 0건이고, ①의 재작성 경로는 `project.fileName`
+    /// 이 원문 `.json` 그대로라 영향이 없다.
+    ///
+    /// - Parameters:
+    ///   - folderURL: 프로젝트 폴더.
+    ///   - fileName: `project.json` 의 `file`(이미 `WallpaperPathSecurity.normalizedRelativePath`
+    ///     를 통과한 상대 경로). nil 이면 곧장 마지막 폴백으로 간다.
+    ///   - hasDependency: `project.json` 이 문자열 `dependency` 를 선언했는가 — 게이트 ②.
+    ///     WE 는 jsoncpp 타입 태그 4(string)만 본다(`0x14011e8c5`). Waple 의 `WallpaperProject`
+    ///     `dependency` 는 경로 검사를 한 번 더 거치므로, 검사에 걸린 문자열은 여기서 `false` 로
+    ///     보인다 — 361건 중 `dependency`/`preset` 보유가 **0건**이라 도달하지 않는다.
+    public static func resolveMountSource(folderURL: URL,
+                                          fileName: String?,
+                                          hasDependency: Bool = false) -> SceneMountSource {
+        let fm = FileManager.default
+        func isRegularFile(_ url: URL) -> Bool {
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: url.path, isDirectory: &isDir) && !isDir.boolValue
+        }
+        if let declared = WallpaperPathSecurity.containedFileURL(fileName, root: folderURL) {
+            // ③ 선언된 파일이 실재하면 그것이 단독 결정자다 — `.pkg` 를 찾아보지도 않는다.
+            if isRegularFile(declared) {
+                return asciiLowercased(declared.pathExtension) == "pkg" ? .package(declared) : .directory
+            }
+            // ②④ 없을 때만, 그리고 `dependency` 가 없을 때만 stem 을 `.pkg` 로 바꿔 본다.
+            if !hasDependency {
+                let sibling = declared.deletingPathExtension().appendingPathExtension("pkg")
+                if isRegularFile(sibling) { return .package(sibling) }
+            }
+        }
+        if let legacy = legacyPackageURL(in: folderURL) { return .package(legacy) }
+        return .directory
     }
 }

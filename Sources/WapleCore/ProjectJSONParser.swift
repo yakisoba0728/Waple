@@ -40,10 +40,37 @@ public enum ProjectJSONParser {
         // "라이브러리엔 보이는데 적용하면 아무것도 안 뜨는" 상태가 된다는 것이다. `preset`/
         // `dependency` 가 없으면 진짜 프리셋이 아니므로 확장자로 추론한다. 두 키 가드가 프리셋
         // 오분류를 막는다(무회귀).
+        //
+        // [2026-08-21 — docs/re/package-format.md §5.3·§7.2] 실물 분류기 `0x14011e520` 은 확장자를
+        // 소문자로 뽑아(`0x140053f80` + 바이트별 ASCII `tolower` `0x140054262`–`0x140054276`)
+        // `.rdata` 의 표들과 순서대로 `memcmp` 한다. 1번 표 `0x140483850` 이 **`.json` `.pkg` `.gif`
+        // 세 개**를 담고 셋 다 **1 = Scene** 으로 간다(`0x14011e673` 색인, `0x14011e7a5` 매치).
+        // 종전 표에는 `pkg`/`gif` 가 없어서 `type` 을 생략한 채 `file:"scene.pkg"` 를 쓰는 프로젝트가
+        // `.preset` 으로 남았고 — 그건 위 문단이 말한 바로 그 "라이브러리엔 보이는데 적용하면
+        // 아무것도 안 뜨는" 상태다. 두 확장자를 1번 표대로 채운다.
+        //
+        // **의도적으로 안 맞춘 것 4건**(전부 설치본+동봉 361건 도달 0건 — `file` 확장자는
+        // `.json` 358 · `.html` 2 · `.exe` 1 이 전부다):
+        //   · 4번 표 `0x140483810` 은 `.mp4 .wmv .avi .m4v .mov .webm .mkv` 7개인데 여기는
+        //     `VideoFormats.nativeExtensions`(= `mp4 m4v mov`) 3개다. 넓히면 **분류 축과 재생 축이
+        //     섞인다** — AVFoundation 이 못 여는 `wmv`/`mkv` 를 `.video` 로 분류해 VideoRenderer 로
+        //     보내는 셈이고, 실패 지점만 뒤로 밀린다. 분류용 집합을 따로 두는 게 옳은 수선이나
+        //     `VideoFormats` 는 이 과제 소유가 아니다. `[미해결]`
+        //   · 6번 표 `0x1404837e0`(`.png .bmp .jpeg .jpg .jfif`)은 enum 값 5 로 가는데, WE 자신도
+        //     5 를 캐논 문자열로 옮기지 못해 `Unknown` 으로 출력한다(`0x14011e864`→`0x14011e2e9`).
+        //     `.preset` 으로 남기는 현행과 실질 차이가 없다.
+        //   · 5번(문자열이 `http://`·`https://` 로 시작 → Web, `0x140018980`)은
+        //     `WallpaperPathSecurity` 가 URL 스킴을 애초에 거부하므로 `fileName` 이 nil 이 된다.
+        //   · `.htm` 은 WE 표에 **없다**(1번~4번 어디에도). Waple 이 더 관대한 쪽이라 그대로 둔다.
+        //
+        // **`type` 을 먼저 읽는 것 자체가 WE 와 다르다**(§5.1: WE 는 `type` 을 입력으로 쓰지 않고
+        // 유도 결과로 **덮어쓴다** — `0x14011e300`). 곧 WE 는 `{"type":"video","file":"scene.json"}`
+        // 을 Scene 으로 본다. 여기를 맞추면 `type` 에 의존해 분류돼 있는 워크샵 코퍼스 전체의
+        // 분류가 바뀌므로 **별도 판단으로 남긴다**. `[미해결]`
         if type == .preset, obj["preset"] == nil, obj["dependency"] == nil,
            let file = obj["file"] as? String {
             switch (file as NSString).pathExtension.lowercased() {
-            case "json": type = .scene
+            case "json", "pkg", "gif": type = .scene
             case "html", "htm": type = .web
             case "exe": type = .application
             case let ext where VideoFormats.nativeExtensions.contains(ext): type = .video

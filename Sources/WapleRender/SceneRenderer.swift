@@ -1201,10 +1201,29 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         hdrBloomPass = nil
         // G-E3-01: 씬은 `.pkg` 로도, **언팩 폴더**로도 온다. WE 2.8.42 설치본 실측: `projects/` 의
         // 기본 배경 19종 + 템플릿 2종이 전부 언팩이고 `.pkg` 는 0개다. 에디터가 만드는 로컬
-        // 프로젝트도 언팩이다. pkg 를 우선하되(워크샵 배포본이 그 형태), 없으면 폴더를 그대로
-        // 마운트한다. 폴더 백엔드는 지연 파일 읽기라 38 MB 짜리 기본 프로젝트를 통째로 메모리에
-        // 올리지 않는다(ScenePackage.fromDirectory 주석 참조).
-        let pkgURL = pkgURL(in: project.folderURL)
+        // 프로젝트도 언팩이다. 폴더 백엔드는 지연 파일 읽기라 38 MB 짜리 기본 프로젝트를 통째로
+        // 메모리에 올리지 않는다(ScenePackage.fromDirectory 주석 참조).
+        //
+        // [2026-08-21 정정 — docs/re/package-format.md §6·§7.1] 종전 이 줄은 `pkgURL(in:)` 으로
+        // **파일 존재**를 보고 골랐다("pkg 를 우선하되"). WE 는 그렇게 하지 않는다 —
+        // `project.json` 의 `file` 이 단독 결정자고 `.pkg` 는 그 파일이 디스크에 **없을 때만** 도는
+        // 폴백이다. 갈리는 지점과 결과는 `ScenePackage.resolveMountSource(...)` 주석에 표로 적었다.
+        // 가장 나쁜 쪽은 `file:"techno.json"` 이 없고 `techno.pkg` 만 있을 때로, 종전에는
+        // `pkgURL` 이 nil → 폴더 마운트 → `techno.json` 없음 → `.noScene` 이라 **적용 자체가 실패**했다.
+        //
+        // 무회귀 근거: 설치본+동봉 `project.json` **361건 전수**로 바꾸기 전/후 결정을 대조했고
+        // **차이 0건**이다(전건 `.directory`). 361건 모두 `file` 이 디스크에 실재하고, 두 루트
+        // 9,078 파일에 `.pkg` 는 0개라 종전 선택자도 전건 nil 을 냈기 때문이다.
+        let mountSource = ScenePackage.resolveMountSource(
+            folderURL: project.folderURL,
+            fileName: project.fileName,
+            hasDependency: project.dependency != nil
+        )
+        let pkgURL: URL?
+        switch mountSource {
+        case .package(let url): pkgURL = url
+        case .directory: pkgURL = nil
+        }
         var data = Data()
         if let pkgURL {
             do {
@@ -1227,7 +1246,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 package = try WapleProfiler.time("pkgParse") { try ScenePackage.parse(data) }
             } else {
                 guard let folderPackage = WapleProfiler.time("dirScan", { ScenePackage.fromDirectory(project.folderURL) }) else {
-                    NSLog("%@", "[Waple] scene mount: no scene.pkg/gifscene.pkg and no readable files in \(project.folderURL.path)")
+                    // 결정은 이미 `resolveMountSource` 가 내렸다 — 여기까지 왔다는 건 "폴더 마운트"
+                    // 였는데 폴더에 읽을 파일이 하나도 없다는 뜻이다(종전 메시지는 `.pkg` 두 이름을
+                    // 들먹여 원인을 잘못 가리켰다).
+                    NSLog("%@", "[Waple] scene mount: nothing to mount for file=\(project.fileName ?? "<none>") in \(project.folderURL.path)")
                     throw RendererError.assetMissing
                 }
                 package = folderPackage
