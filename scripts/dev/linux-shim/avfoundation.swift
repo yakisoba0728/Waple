@@ -287,6 +287,16 @@ open class AVPlayerItemVideoOutput {
 ///        open func replaceCurrentItem(with item: AVPlayerItem?) }`
 open class AVPlayer {
     public enum ActionAtItemEnd: Int { case advance = 0, pause = 1, none = 2 }
+    /// 실제: `public enum AVPlayer.TimeControlStatus: Int { case paused,
+    ///        waitingToPlayAtSpecifiedRate, playing }`
+    /// [2026-08-21] `--tests` 가 요구한 표면 — `VideoRendererLifecycleTests:73` 이
+    /// `XCTAssertEqual(player.timeControlStatus, .paused)` 로 정지 상태를 단언한다.
+    /// `XCTAssertEqual` 이 `Equatable` 을 요구하므로 **반드시 붙어야 한다**
+    /// (`MTLCommandBufferStatus` 때와 같은 함정이다).
+    public enum TimeControlStatus: Int, Equatable {
+        case paused = 0, waitingToPlayAtSpecifiedRate = 1, playing = 2
+    }
+    public var timeControlStatus: TimeControlStatus { .paused }
     public var currentItem: AVPlayerItem? { nil }
     public var rate: Float = 0
     public var isMuted: Bool = false

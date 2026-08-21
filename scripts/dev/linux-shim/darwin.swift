@@ -20,6 +20,15 @@
 // 이 심으로는 `count` 산술의 정합을 검증할 수 없다(타입만 맞는다). 그 산술이 맞는지는
 // macOS 실행만이 답한다.
 
+// ⚠️ **`#if canImport(Darwin)` 을 뒤집는다.** 이 심이 `-I $MODS` 에 들어가 있으면 그 조건이
+// 리눅스에서도 **참**이 된다. 지금은 `--compat` 대상(`Sources/WapleCompatCore/**` ·
+// `Tests/WapleCompatCoreTests/**` · `Tests/WapleSnapshotTests/**` · `Tests/WapleRenderTests/**`)에
+// `canImport(Darwin)` 을 쓰는 파일이 **0건**이라 무해하지만, 생기면 조용히 macOS 가지를
+// 타입체크하게 된다(실행이 아니라 타입체크라 결과가 뒤집히지는 않지만, 검사 대상이 바뀐다).
+// 참고로 `Tests/WapleCoreTests/AssetJSONLenientTests.swift` 가 그 조건을 쓰는데, 그 파일은
+// `scripts/dev/linux-core-tests.sh` 의 임시 패키지에서 돌고 거기엔 이 심이 없다 — 그래서
+// 리눅스 가지를 정상적으로 탄다. 두 하네스의 모듈 경로를 섞지 마라.
+
 public typealias natural_t = UInt32
 public typealias integer_t = Int32
 public typealias mach_msg_type_number_t = UInt32
