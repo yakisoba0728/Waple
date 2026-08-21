@@ -675,11 +675,21 @@ operation: parsedOperation ?? .remap,     // → ?? .multiply
   bit0 = 정규화 입력 `t` 를 `[0,1]` 로 클램프(`and r9b,1`@`0x1402449a0`,
   `minps`/`maxps`@`0x14024510a`·`0x140245117`), bit1 = **outputrange 매핑 뒤의 최종 값**을
   `[0,1]` 로 클램프(`shr ecx,1`@`0x140244a21` → `[rbp+0x1e0]` → `test cl,cl`@`0x140245791`·
-  `0x14024596a`). 상위 비트는 안 봤다. 기본값이 `1` 이라는 것과, `rain_screen` 의
+  `0x14024596a`). 기본값이 `1` 이라는 것과, `rain_screen` 의
   `flags:3` + `outputrange −5..7` 조합이 배수를 `[0,1]` 로 가둔다는 것까지가 관측이다.
   **Waple 은 `flags` 를 아예 파스하지 않는다** — 별건이고 이 문서의 판정과 독립이다.
-- **`transformfunction` 파형의 실제 모양.** §5 는 `operation` 만 다뤘다. `sine`/`square`/`saw`
-  의 위상은 여전히 `RemapTransform` doc 주석의 `[추정]` 그대로다.
+  → **[2026-08-21 해소]** "상위 비트는 안 봤다" 를 §10.3 이 닫았다: 두 핸들러 모두
+  `[r14+0x2c]` 를 **정확히 두 번** 읽고(`0x140244986`·`0x140244996` / `0x140246fc9`·
+  `0x140246fd9`) bit0·bit1 만 뽑는다 — **bit2 이상은 죽어 있다.** 기본 1 의 출처도
+  공유 주입 꼬리 `0x1401d8040`(`0x1401d8071` 타입 int · `0x1401d809d` 값 1)로 못박았고,
+  거기로 뛰어드는 자리는 `0x1401bc91a`·`0x1401c001a` 둘뿐이다.
+- **`transformfunction` 파형의 실제 모양.** §5 는 `operation` 만 다뤘다.
+  → **[2026-08-21 해소]** §10.4 가 실측으로 닫았다. 디스패치는 **핸들러 안**에 있고
+  (`0x14024512c`–`0x140245144`, 6항 점프 테이블 `0x14024bc9c`), 종전의 "파서가 따로
+  발행하는 값 공급자 레코드" 추정은 **틀렸다.** `sine` 은 `0.5 − 0.5·cos(π·s·t)` 로
+  주기가 `2/s` 이고(`RemapTransform` doc 주석의 `[추정]` 은 주기를 **2배 빠르게** 잡았다),
+  `square`/`saw`/`triangle` 은 그 주석의 추정과 일치한다(`square` 의 정확한 0.5 만 갈린다 —
+  실물은 최근접짝수 반올림이라 **0**). `none` 은 `transforminputscale` 을 **곱하지 않는다.**
 - **`rotation`/`angularspeed` 가 z 전용인 이유.** 핸들러가 `[rsi+0x290]`·`[rsi+0x2a8]` 만
   건드리는 것은 확정이지만, 그것이 "2D 경로라 z 만" 인지 "이 채널의 정의가 z" 인지는 안 봤다.
 - **실행 대조 없음.** §7 의 구별 실험은 전부 정적 관측이다.
@@ -762,3 +772,362 @@ PY
 **A.9 에셋 도수** — `WEAssets` 만 훑고 파일 sha256 로 사본을 지운 뒤
 `operator[]`/`initializer[]` 에서 `name in {remapvalue, remapinitialvalue}` 인 원소를 센다.
 결과가 `remapvalue` all 12 · unique 10 이면 `spec/assets/particle-corpus.json` 과 맞는 것이다.
+
+---
+
+## 10. [2026-08-21 추가] 값 산출식 전문 — 범위·클램프·역방향
+
+§5 는 `operation`(적용 산술)만 다뤘다. 이 절은 그 **앞** 구간, 곧 입력 신호가 값이 되기까지의
+산술을 전부 못박는다: 입력 범위 정규화 · `flags` 클램프 · `transformfunction` 파형 ·
+출력 범위 매핑 · 역방향 범위(min > max) · 퇴화 범위(min == max).
+
+### 10.0 결론 — 성분 c ∈ {x, y, z} 마다
+
+```
+span_c = inputrangemax_c − inputrangemin_c            ; 파스 시각 (vec3 sub 0x14005f0a0 @0x1401ceaf0)
+if (span_c == 0.0f) span_c = 0x34000000               ; = 2^-23 ≈ 1.1920929e-07  (@0x1401cedf3)
+rcp_c  = rcpps(span_c)                                ; ★ 12비트 근사, 정확한 나눗셈이 아니다 (@0x1401cee47)
+outSpan_c = outputrangemax_c − outputrangemin_c       ; 파스 시각 (@0x1401cedbb) — 클램프·부호보정 없음
+
+;--- 런타임 (VM opid 19 핸들러) ------------------------------------------------
+t_c = (in_c − inputrangemin_c) · rcp_c                ; subps @0x1402450fa · mulps @0x1402450fd
+if (flags & 1)  t_c = max(0, min(t_c, 1))             ; minps @0x14024510a → maxps @0x140245117
+v_c = transform(t_c, transforminputscale)             ; 점프 테이블 0x14024bc9c, §10.4
+out_c = outSpan_c · v_c + outputrangemin_c            ; mulps @0x140245783 · addps @0x140245788
+if (flags & 2)  out_c = max(0, min(out_c, 1))         ; minps @0x140245799 → maxps @0x1402457a0
+```
+
+여기서 얻어지는 판정 넷:
+
+1. **클램프는 `flags` 두 비트로만 켜진다.** bit0 은 정규화 직후의 `t`, bit1 은 출력 매핑
+   **직후**의 최종값. 그 밖의 클램프는 없다.
+2. **역방향 범위는 특수 처리가 아예 없다.** `inputrangemin > inputrangemax` 면 `span < 0` →
+   `rcp < 0` → `t` 가 감소 함수가 될 뿐이다. `outputrangemin > outputrangemax` 면
+   `outSpan < 0` → 출력이 `outputrangemin` 에서 내려간다. 어디에도 `abs`·min/max 스왑·
+   부호 검사가 없다(§10.2, §10.5).
+3. **퇴화 입력 범위(min == max)만 특수 처리가 있다.** 정확히 `0.0f` 일 때만 `2^-23` 으로
+   치환되어 `rcp ≈ 2^23` 이 되고, 사실상 `inputrangemin` 에서의 계단 함수가 된다.
+   출력 범위에는 나눗셈이 없으므로 그런 치환도 없다.
+4. **`transforminputscale` 은 `transformfunction: none` 에서 곱해지지 않는다.**
+   `none`(그리고 어휘 밖 센티넬)은 변환 디스패치를 통째로 건너뛰어 `v = t` 가 된다(§10.4).
+
+### 10.1 레코드 오프셋 — 두 방향으로 교차 확인
+
+파서는 `rsi`(=레코드), VM 은 `r14` 를 쓰는데 **`op = r14 + 0x10`** 이다(레코드 앞 0x10 은
+VM 헤더). 그 어긋남을 모르면 표가 통째로 한 칸 밀린다. 확인은 양방향으로 했다 —
+파서의 스토어와 VM 의 로드가 같은 필드를 가리키는지:
+
+| `op+` (파서 `rsi+`) | VM `r14+` | 뜻 | 파서 근거 | VM 근거 |
+| --- | --- | --- | --- | --- |
+| `0x10` | `0x20` | `outputcomponent` | `0x1401ce7cf` | — |
+| `0x14` | `0x24` | `transformfunction` | `0x1401ce80a` | `0x14024512c` |
+| `0x18` | `0x28` | `transformoctaves` | `0x1401cf0f7` | `0x140245252` |
+| **`0x1c`** | **`0x2c`** | **`flags`** | `0x1401ce83d` | `0x140244986`·`0x140244996` |
+| `0x20`/`0x30`/`0x40` | `0x30`/`0x40`/`0x50` | `inputrangemin` x/y/z | `0x1401cee1a`… | `0x14024499b`… |
+| `0x50`/`0x60`/`0x70` | `0x60`/`0x70`/`0x80` | `rcp(span)` x/y/z | `0x1401cee4a`… | `0x1402449ae`… |
+| `0x80`/`0x90`/`0xa0` | `0x90`/`0xa0`/`0xb0` | `outputrangemin` x/y/z | `0x1401cee7a`… | `0x1402449c0`… |
+| `0xb0`/`0xc0`/`0xd0` | `0xc0`/`0xd0`/`0xe0` | **`outputrange` 폭** x/y/z | `0x1401ceeb0`… | `0x1402449c8`… |
+| `0xe0`/`0xe4`/`0xe8`/`0xec` | — | `outputcontrolpoint0/1` 쌍 | `0x1401cef00`… | — |
+| `0xf0` | `0x100` | `transforminputscale`(브로드캐스트) | `0x1401cf0c5` | `0x14024497e` |
+
+> **함정 16 실사례(다시).** 파서에서 `lea rdx, "flags"`(`0x1401ce803`)는 **직전 키
+> (`transformfunction`)의 스토어 앞**에 스케줄돼 있다. `lea` 바로 뒤의
+> `mov dword ptr [rsi+0x14], eax`(`0x1401ce80a`)는 `flags` 가 아니라 `transformfunction` 이고,
+> `flags` 는 그 다음 `asInt`(`0x1401ce831`) → `mov dword ptr [rsi+0x1c], eax`(`0x1401ce83d`)다.
+> 같은 어긋남이 `transforminputscale`/`transformoctaves` 쌍에도 있다
+> (`lea "transformoctaves"` `0x1401cf0b7` 뒤의 `movups [rsi+0xf0]` `0x1401cf0c5` 는
+> **`transforminputscale`** 이다).
+
+### 10.2 입력 범위 — 파스 시각에 굽는다
+
+```
+0x1401ceaf0  call 0x14005f0a0                 ; span = inputrangemax − inputrangemin (vec3)
+0x1401cedd1  ; i = 0..2 루프
+0x1401cede0  ucomiss xmm0, xmm13              ; xmm13 = 0
+0x1401cede4  jp   0x1401cedf9                 ; NaN → 치환 안 함
+0x1401cede6  jne  0x1401cedf9                 ; ≠ 0 → 치환 안 함
+0x1401cedf3  mov  dword ptr [rax], 0x34000000 ; ★ 정확히 0 일 때만 2^-23
+0x1401cee47  rcpps xmm0, xmm1                 ; ★ 근사 역수
+0x1401cee4a  movups xmmword ptr [rsi+0x50], xmm0
+```
+
+**상수 적재 자리를 셌다(함정 4 — 호출 자리가 아니라).** `0x34000000` 을 즉치로 쓰는
+자리는 이미지 전체에 **정확히 2곳**이고 둘 다 파티클 파스 함수 `0x1401c5490` 안이다:
+
+| VA | 어느 파스 |
+| --- | --- |
+| `0x1401cae45` | `remapinitialvalue`(이니셜라이저) |
+| `0x1401cedf3` | `remapvalue`(오퍼레이터) |
+
+**함의 셋:**
+
+- **`rcpps` 는 근사다.** Newton-Raphson 보정이 뒤따르지 않는다(`0x1401cee47` 다음 명령이
+  곧바로 `movups` 스토어다). 기본 범위 0..1 에서는 `rcp(1.0) = 1.0` 이 정확해 관측이
+  안 갈리지만, `150..200`(폭 50) 같은 자리에서는 마지막 몇 비트가 다르다.
+  Waple 이 정확한 나눗셈을 쓰는 것은 헤드리스 결정성 때문이고, **비트동일은 불가능**하다.
+- **역방향 입력 범위**(`min > max`)는 `span < 0` → `rcp < 0` 이 되어 `t` 가 감소한다.
+  분기도 보정도 없다.
+- **퇴화 입력 범위**(`min == max`)는 `rcp(2^-23) = 2^23` 이라 `t` 가 폭발하고,
+  `flags & 1` 이면 `x < min` → 0 / `x > min` → 1 인 **계단**이 된다.
+  `flags & 1` 이 아니면 그대로 8388608 배가 흘러나간다.
+
+### 10.3 `flags` — 비트 둘뿐이고, 기본값은 1이다
+
+**읽는 자리는 핸들러마다 정확히 둘**이고 그게 전부다:
+
+```
+0x140244986  mov   ecx, dword ptr [r14+0x2c]
+0x140244996  movzx r9d, byte ptr  [r14+0x2c]
+0x1402449a0  and   r9b, 1                 ; bit0 → t 클램프 게이트
+0x140244a21  shr   ecx, 1
+0x140244a2a  and   cl, 1                  ; bit1 → 최종값 클램프 게이트
+0x140244a6b  mov   dword ptr [rbp+0x1e0], ecx
+```
+
+페이드창 변종(opid 39)도 같다: `0x140246fc9` · `0x140246fd9` · `0x140246fe3`.
+**bit2 이상을 읽는 자리는 두 핸들러 어디에도 없다** — 파서도 `[rsi+0x1c]` 를 한 번 쓰기만 하고
+읽지 않는다. 곧 `remapvalue`/`remapinitialvalue` 에 관한 한 **상위 비트는 죽어 있다**.
+(§9 의 "상위 비트는 안 봤다" 를 이것으로 닫는다.)
+
+**부재 기본값 = int 1.** `remapvalue` 주입기(`0x1401bfbb0`–`0x1401c0080`)의 키 목록에는
+`flags` 가 **없다**. 대신 두 주입기가 공유 꼬리로 **점프**해서 거기서 심는다:
+
+```
+0x1401bc91a  jmp 0x1401d8040        ; remapinitialvalue 주입기 0x1401bc4b0 의 꼬리
+0x1401c001a  jmp 0x1401d8040        ; remapvalue        주입기 0x1401bfbb0 의 꼬리
+```
+
+`0x1401d8040` 이 하는 일:
+
+```
+0x1401d8050  lea  rdx, [0x14048f4cc]           ; "flags"
+0x1401d8057  call 0x140087490                  ; Json::Value::find
+0x1401d805f  jne  0x1401d810b                  ; 이미 있으면 아무것도 안 한다
+0x1401d8071  mov  byte ptr [rsp+0x28], 1       ; 임시 Json::Value 의 타입 = 1(intValue)
+0x1401d8088  call 0x140086de0                  ; json["flags"]
+0x1401d809d  mov  qword ptr [rax], 1           ; ★ 값 = 1
+```
+
+**꼬리로 뛰어드는 자리는 위 둘뿐**이다(이미지 전수). 곧 `flags` 기본 1 은 remap 계열 두
+원소에만 적용된다 — 다른 오퍼레이터의 동명 `flags` 와 무관하다.
+
+그리고 파스는 `asInt`(`0x140085f70` @`0x1401ce831`) 직독이라 **`isNumeric` 게이트가 없다**
+— 브리프 함정 18 그대로, `"flags": true` 는 1로 들어온다.
+
+기본 1 의 뜻: **`t` 는 기본으로 `[0,1]` 로 잘리고, 출력은 기본으로 안 잘린다.**
+동봉 자산이 정확히 그 규약에 기대고 있다 — `rain_screen` 의 `simplexnoise` 항목은
+`flags` 를 안 쓰면서 `outputrangemin: "-100 -50 0"`/`outputrangemax: "100 -500 0"` 을
+쓴다(출력 클램프가 켜져 있으면 전부 죽는다). 같은 파일의 `fbmnoise` 항목만
+`flags: 3` 으로 **둘 다** 켜고 `-5..7` 을 `[0,1]` 로 가둔다.
+
+### 10.4 `transformfunction` — 파형 넷을 실측했다 (§9 의 [추정] 해소)
+
+문자열 포인터 표 `0x140484e00` 을 다시 떠서 어휘 순서를 확정했다(NULL 종단):
+
+| 값 | 문자열 VA | 이름 |
+| ---: | --- | --- |
+| 0 | `0x14047709c` | `none` |
+| 1 | `0x140491fc0` | `sine` |
+| 2 | `0x140491fc8` | `square` |
+| 3 | `0x140491f84` | `saw` |
+| 4 | `0x140491f88` | `triangle` |
+| 5 | `0x140491f98` | `simplexnoise` |
+| 6 | `0x140491fa8` | `fbmnoise` |
+| 7 | (NULL) | 표 끝 → 센티넬 8 |
+
+디스패치는 **핸들러 안에** 있다(종전 문서의 "핸들러 밖 값 공급자 레코드" 추정은 틀렸다):
+
+```
+0x14024512c  mov  eax, dword ptr [r14+0x24]     ; transformfunction
+0x140245137  dec  eax
+0x140245139  cmp  eax, 5
+0x14024513c  ja   0x140245928                   ; 0(none) 과 ≥7(센티넬) → 변환 없음
+0x140245144  mov  ecx, dword ptr [rdx+rax*4+0x24bc9c]   ; 6항 점프 테이블 0x14024bc9c
+```
+
+`0x140245928` 은 `movaps xmm12, [1.0]` 하나 하고 곧장 출력 매핑(`0x140245779`)으로 뛴다 —
+**`v = t` 이고 `transforminputscale` 을 곱하지 않는다.**
+
+여섯 암과 산술(모두 `s = transforminputscale`, `u = s·t`, `xmm15 = 0.5` @`0x14023fd64`):
+
+| 값 | 이름 | 암 VA | 산술 |
+| ---: | --- | --- | --- |
+| 1 | `sine` | `0x140245150` | `0.5·sin(π·s·t − π/2) + 0.5` = **`0.5 − 0.5·cos(π·s·t)`** |
+| 2 | `square` | `0x14024544a` | `roundEven(u − trunc(u)) + (u < 0 ? 1 : 0)` = `frac(u) > 0.5 → 1, else 0`(정확히 0.5 는 **0**) |
+| 3 | `saw` | `0x1402454ea` | `(u − trunc(u)) + (t < 0 ? 1 : 0)` = `frac(u)` |
+| 4 | `triangle` | `0x140245578` | `1 − \|2·frac(\|u\|) − 1\|` |
+| 5 | `simplexnoise` | `0x14024562a` | `0.5·noise + 0.5` |
+| 6 | `fbmnoise` | `0x1402457ad` | `0.5·fbm(octaves) + 0.5` |
+
+근거(각 암의 결정적 명령):
+
+* **sine** — `mulps xmm7, xmm9`(`0x140245164`)에서 `xmm9 = transforminputscale · π`
+  (`0x14024498e` 가 `[0x1404836d0]` = `3.14159274f` 를 곱해 만든다), 이어
+  `subps xmm7, [0x1404836c0]`(`0x140245168`, `1.5707964f` = π/2).
+  그 뒤는 Cephes `sinf` 의 벡터 인라인이다 — 4/π `0x1404836a0` = `1.27323949f`,
+  DP1 `0x1404836b0` = `-0.78515625f`, DP2 `0x140483710` = `-2.4187565e-4f`,
+  DP3 `0x140483700` = `-3.7748951e-8f` 가 전부 그 상수다. 마지막
+  `mulps xmm6, xmm15`(`0x140245245`) + `addps xmm6, xmm15`(`0x140245249`) 가 `[0,1]` 로 접는다.
+  **주기는 `t` 기준 `2/s` 다** — `π·s·t` 이지 `2π·s·t` 가 아니다.
+* **square** — `roundps xmm0, xmm7, 0xb`(`0x140245456`, 0xb = 0방향 절사 + 정밀도예외억제) →
+  `subps`(`0x14024545f`) → `cmpltps xmm7, xmm10`(`0x140245462`, `xmm10 = 0` @`0x140244892`) →
+  `andps` 1.0(`0x140245467`) → `roundps xmm2, xmm1, 8`(`0x14024546b`, 8 = 최근접짝수) →
+  `addps`(`0x140245471`). **최근접짝수라 `frac(u)` 가 정확히 0.5 면 0 이다.**
+* **saw** — 부호 검사가 `u` 가 아니라 **곱하기 전의 `t`** 를 본다
+  (`0x1402454f5` 에서 `xmm1 = t·s` 를 따로 만들고 `0x1402454f9` 가 `xmm7`(=`t`)을 비교).
+  `s > 0` 이면 결과가 같지만 `s < 0` 이면 square 와 갈린다 — 그대로 옮겨야 하는 비대칭이다.
+* **triangle** — `andps` 절댓값 마스크(`0x140245593`, `0x1402455ab`; 마스크
+  `0x140483790` = `0x7fffffff`), `mulps` 2.0(`0x1402455a4`, `0x1404837b0`),
+  `subps` 1.0(`0x1402455a7`), `subps xmm0(1.0), xmm7`(`0x1402455af`).
+
+### 10.5 출력 범위 매핑 — 그리고 역방향
+
+```
+0x14024576a  movaps xmm12, [0x140483640]        ; (1,1,1,1)
+0x14024577f  movaps xmm0, xmm14                 ; xmm14 = outputrange 폭 x
+0x140245783  mulps  xmm0, xmmword ptr [rsp+0x70]; × v
+0x140245788  addps  xmm0, xmm13                 ; + outputrangemin x
+0x140245791  test   cl, cl                      ; flags bit1
+0x140245799  minps  xmm0, xmm12
+0x1402457a0  maxps  xmm3, xmm0                  ; xmm3 = 0
+```
+
+y·z 레인은 `0x140245935`–`0x140245986` 에 같은 모양으로 한 벌 더 있다(폭
+`[rbp+0x260]`/`[rbp+0x240]`, 최소 `[rbp+0x250]`/`[rbp+0x200]`).
+
+**곧 `out = 폭·v + min` 이고 폭은 파스 시각의 순수 뺄셈이다.** `outputrangemin >
+outputrangemax` 면 폭이 음수가 되어 출력이 `min` 에서 **내려간다**. 그게 실물 자산에
+실재한다 — 동봉 `scenes/particleelementpreviews/remapvalue/…/new_particle_system.json` 이
+`outputrangemin: "1 0 0"` → `outputrangemax: "0 0 1"` 이다(성분별 폭 `(−1, 0, +1)`,
+빨강 → 파랑). 짝인 `remapinitialvalue` 프리뷰는 그 반대(`"0 0 1"` → `"1 0 0"`)다.
+
+### 10.6 페이드창 변종(opid 39)도 같다
+
+`0x140247f50`–`0x140247f73` 이 base 와 글자 그대로 같은 `폭·v + min` → `flags bit1` 클램프이고,
+`t` 클램프 게이트도 `0x140247702`/`0x140247753` 에 있다. **§5.5 의 가중 lerp 는 그 뒤**라
+**클램프는 가중 전의 unweighted 값에 걸린다.**
+
+### 10.7 도달 — `remapvalue` 12건의 키 실측
+
+동봉 `Sources/WapleRender/Resources/WEAssets/**`: `operator[].remapvalue` **12건**,
+`initializer[].remapinitialvalue` **3건**(§2.1 의 all 12 와 일치). 설치본
+`wallpaper_engine/**` 도 같은 12+3 이다(전부 `assets/` 사본 — `projects/` 도달 0).
+**워크샵 코퍼스는 이 컨테이너에 없다 — 미측정이다.**
+
+| 파일(동봉 기준) | `transformfunction` | `transforminputscale` | `flags` | 입력범위 | 출력범위 |
+| --- | --- | ---: | ---: | --- | --- |
+| `scenes/particleelementpreviews/remapvalue/…` | **부재(none)** | **부재(2.0)** | 부재(1) | 150 → 200 | `"1 0 0"` → `"0 0 1"` **(역방향)** |
+| `presets/lightning/particles/presets/thunderbolt.json` | `sine` | 6 | **0** | 부재 | 부재 |
+| `presets/lightning/previewthunderbolt/…/thunderbolt.json` | `sine` | 6 | **0** | 부재 | 부재 |
+| `presets/rain/…/rain_screen.json` ×2(+4k) | `simplexnoise` | 10 | 부재(1) | 부재 | `"-100 -50 0"` → `"100 -500 0"` |
+| `presets/rain/…/rain_screen.json` ×2(+4k) | `fbmnoise` | 8 | **3** | 부재 | −5 → 7 |
+| `presets/rain/…/rain_screen_fast(_4k).json` ×3 | `simplexnoise` | 10 | 부재(1) | 부재 | `"-100 -200 0"` → `"100 -1200 1"` 등 |
+
+읽을 것 셋:
+
+- `transformfunction` **부재**는 12건 중 **1건**뿐이고, 그 1건이 하필 입력범위·역방향
+  출력범위를 둘 다 쓰는 프리뷰 씬이다.
+- `flags` 를 **명시**하는 것은 3종류다: `0`(thunderbolt 2건 — 클램프 전부 끔),
+  `3`(rain fbmnoise 3건 — 둘 다 켬), 나머지는 부재(=1).
+- 출력범위 역방향은 성분 단위로 실재한다(`1 → 0`).
+
+### 10.8 Waple 대조 — 갈리는 자리 넷
+
+`ParticleSimulator.remapEval` / `remapNormalizeInput` 기준(둘 다 이 과제의 **소유 밖**이라
+이번에 고치지 않았다 — 아래는 정확한 패치안이다).
+
+| # | WE | Waple 현재 | 동봉 도달 |
+| --- | --- | --- | ---: |
+| **D1** | `transformfunction: none` → `v = t`, **`transforminputscale` 곱하지 않음**. 클램프는 `flags & 1` 일 때만 | `let x = normalize(raw) * spec.inputScale` 뒤 `case .none: v01 = clamp01(x)` — **항상 곱하고 항상 클램프** | **1건** (프리뷰 씬. `s` 기본 2.0 이라 램프가 2배 가팔라지고 `raw = 175` 에서 이미 포화한다 — 실물은 200) |
+| **D2** | `sine` 주기가 `t` 기준 **`2/s`**(`0.5 − 0.5·cos(π·s·t)`) | `0.5 − 0.5·cos(2π·frac(s·t))` = 주기 `1/s` — **2배 빠르다** | **2건** (thunderbolt + 프리뷰. `s = 6` → 실물 3주기 / Waple 6주기) |
+| **D3** | `flags` 를 파스하고 두 클램프를 그것으로 게이트 | `RemapSpec` 이 `flags` 를 **안 들고 있다**. `.none` 만 항상 클램프, 나머지는 한 번도 안 함 | `flags:0` 2건 · `flags:3` 3건 (다만 D2 와 겹치고, noise 는 이미 `[0,1]` 이라 bit1 만 실효) |
+| **D4** | `square` 의 정확히 0.5 는 **0**(최근접짝수) | `f < 0.5 ? 0 : 1` → 0.5 는 1 | 0건 (동봉에 `square` 없음) |
+
+**정확한 패치안**(소유 클러스터로 넘김):
+
+1. `RemapSpec` 에 `public let flags: Int` 추가, 파스는 `injected(o, "flags", 1)` —
+   **`asInt` 직독이라 불리언도 1/0 으로 받아야 한다**(`JSONNumerics` 의 `lenient*` 사다리).
+2. `remapEval` 의 2단계를 아래로:
+   ```swift
+   var t = Self.remapNormalizeInput(raw, spec)          // 스케일 곱하지 않는다
+   if spec.flags & 1 != 0 { t = max(0, min(1, t)) }     // 0x1402449a0 / 0x14024510a
+   let u = t * spec.inputScale                          // 변환 암에서만 곱한다
+   let v01: Float
+   switch spec.transform {
+   case .none:            v01 = t                       // ★ u 가 아니라 t (0x140245928)
+   case .some(.sine):     v01 = 0.5 - 0.5 * cosf(.pi * u)          // 0x140245164/0x140245168
+   case .some(.square):   let f = u - u.rounded(.towardZero)
+                          v01 = f.rounded(.toNearestOrEven) + (u < 0 ? 1 : 0)
+   case .some(.saw):      let f = u - u.rounded(.towardZero)
+                          v01 = f + (t < 0 ? 1 : 0)     // 부호는 t 로 본다 (0x1402454f9)
+   case .some(.triangle): let a = abs(u); let f = a - a.rounded(.towardZero)
+                          v01 = 1 - abs(2 * f - 1)
+   case .some(.simplexnoise), .some(.fbmnoise): /* 종전대로 */ break
+   }
+   ```
+3. 4단계(출력 매핑) 뒤에 `if spec.flags & 2 != 0 { clamp01 }` 을 성분마다.
+4. 순수 산술은 이미 `Sources/WapleCore/RemapOperation.swift`(이 과제가 신설)에
+   `RemapValueMath` 로 뽑아 두었고 `RemapOperationMathTests` 가 잠근다 — 위 배선은
+   그 함수를 부르면 된다.
+
+### 10.9 이 절이 못 닫은 것
+
+- **[미해결] `rcpps` 근사의 비트동일.** Waple 은 정확한 나눗셈을 쓴다. 폭이 1.0 이 아닌
+  자산(프리뷰 씬 하나)에서 마지막 비트가 갈릴 수 있다. 재현하려면 12비트 근사 테이블을
+  모사해야 하는데 그건 CPU 모델 의존이라 **재현하지 않는 쪽이 옳다.**
+- **[미해결] 3성분 입력 파이프라인.** §5.4.1 과 같은 갭이다. 위 식은 성분마다 독립인데
+  Waple 의 값 파이프라인은 스칼라라 `inputcomponent: all` + vec3 `inputrange*` 를 못 낸다.
+  동봉 도달 0.
+- **[미해결] `simplexnoise`/`fbmnoise` 의 입력 좌표.** `0.5·n + 0.5` 매핑은 확정했지만
+  노이즈 함수에 무엇을 넣는지(위상 솔트 `[op+0x100]`, 옥타브 `[op+0x18]`)는 이 절에서
+  안 뜯었다. Waple 의 `remapNoiseOctaves` 는 여전히 [추정]이다.
+
+### 10.10 재현
+
+```python
+from vdis2 import dis
+dis(0x140244874, 0x1402459a7)   # 값 산출 구간 전문 (정규화 → 클램프 → 변환 → 출력 매핑)
+dis(0x1401ce660, 0x1401cf1f1)   # remapvalue 파스 + 굽기 (양끝 다 명령 경계다 — 함정 17)
+dis(0x1401d8040, 0x1401d810b)   # flags 기본 1 주입 꼬리
+```
+
+```python
+# 변환 점프 테이블 (6항)
+from wpe import pe; import struct
+b = pe.read(0x14024bc9c, 6*4)
+print([hex(0x140000000 + struct.unpack_from('<I', b, i*4)[0]) for i in range(6)])
+# -> 0x140245150 0x14024544a 0x1402454ea 0x140245578 0x14024562a 0x1402457ad
+```
+
+```bash
+# 0x34000000 즉치 스토어가 정말 2곳뿐인지 (상수 적재 자리 세기 — 함정 4)
+python3 - <<'PY'
+import re, sys; sys.path.insert(0,'<scratchpad>')
+from wpe import pe, DATA
+T=[s for s in pe.sections if s['name']=='.text'][0]
+seg=DATA[T['rawptr']:T['rawptr']+T['rawsize']]; va0=pe.imagebase+T['va']
+print([hex(va0+m.start()) for m in re.finditer(rb'\xc7[\x00-\x07\x40-\x47\x80-\x87]\x00\x00\x00\x34', seg)])
+PY
+```
+
+```bash
+# 자산 도수
+python3 - <<'PY'
+import os, json
+for root in ('Sources/WapleRender/Resources/WEAssets',):
+    n = 0
+    for dp, _, fn in os.walk(root):
+        for f in fn:
+            if not f.endswith('.json'): continue
+            try: j = json.load(open(os.path.join(dp, f), encoding='utf-8'))
+            except Exception: continue
+            if not isinstance(j, dict): continue
+            for e in (j.get('operator') or []):
+                if isinstance(e, dict) and e.get('name') == 'remapvalue':
+                    n += 1
+                    print(os.path.relpath(os.path.join(dp, f), root),
+                          e.get('transformfunction', '<absent>'), e.get('transforminputscale', '<absent>'),
+                          e.get('flags', '<absent>'), e.get('outputrangemin', '<absent>'), e.get('outputrangemax', '<absent>'))
+    print('remapvalue all =', n)   # 12
+PY
+```
