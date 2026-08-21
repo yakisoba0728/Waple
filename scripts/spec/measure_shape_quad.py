@@ -291,7 +291,18 @@ def measure_ortho(pe):
         if not m:
             continue
         w, wi, h, hi = (struct.unpack("<I", m.group(i))[0] for i in (1, 2, 3, 4))
-        return {"parseSiteVA": hex(r), "sceneWidthFloatOffset": hex(w),
+        return {"parseSiteVA": hex(r),
+                # **[2026-08-21] `parseSiteVA` 는 명령 주소가 아니다.** `rip_refs` 산출물이라
+                # `lea reg,[rip+d]` 의 **disp32 필드 위치**다(명령 주소는 대개 `−3`). 이 스캐너는
+                # 표준 라이브러리만 쓰므로(디스어셈블러 의존을 만들지 않는 것이 `scripts/re` 규약)
+                # 명령 주소를 낼 수 없다 — 정확한 명령 주소가 필요하면
+                # `scripts/re/va_citations.py`(capstone)가 찍어 준다.
+                # 실측[VA-스캐너위치]: `0x1401874ef` 의 명령은 `0x1401874ec lea rdx,[rip+0x301bcd]` →
+                # `0x1404890c0` = `"orthogonalprojection"`.
+                "parseSiteVA 의 뜻": "rip_refs 산출 — lea reg,[rip+d] 의 disp32 필드 위치이지 "
+                                     "명령 주소가 아니다(명령은 대개 -3). 정확한 명령 주소는 "
+                                     "scripts/re/va_citations.py 가 낸다",
+                "sceneWidthFloatOffset": hex(w),
                 "sceneHeightFloatOffset": hex(h),
                 "ctxWidthIntOffset": hex(wi), "ctxHeightIntOffset": hex(hi)}
     fail("ortho width/height → ctx int 저장 시퀀스를 못 찾았다")

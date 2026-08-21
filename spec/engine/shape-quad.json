@@ -106,6 +106,7 @@
    "id": "shape.contextOrthoIntFields",
    "value": {
     "parseSiteVA": "0x1401874ef",
+    "parseSiteVA 의 뜻": "rip_refs 산출 — lea reg,[rip+d] 의 disp32 필드 위치이지 명령 주소가 아니다(명령은 대개 -3). 정확한 명령 주소는 scripts/re/va_citations.py 가 낸다",
     "sceneWidthFloatOffset": "0x354",
     "sceneHeightFloatOffset": "0x358",
     "ctxWidthIntOffset": "0x84",
