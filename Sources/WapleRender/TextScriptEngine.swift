@@ -27,6 +27,54 @@ public struct SceneScriptLayerDescriptor {
     /// 같은 "systemfont_arial".
     public var font: String
 
+    // ── T-G15 전수: "디스크립터가 실값을 못 받아 API 기본값이 조용히 들어가는" 필드들 ──────────
+    //
+    // 아래 필드는 전부 ① `lib.sceneScript.d.ts` 선언 ② exe 등록부 엔트리 ③ `SceneDocument` 파스
+    // 필드 셋을 모두 갖췄는데도 종전엔 디스크립터에 **자리 자체가 없어서** JS 심의 하드코딩 기본값이
+    // 저작값 대신 보이던 것들이다(G15 = `pointsize` 가 늘 16 이던 것과 같은 부류, `docs/re/
+    // scene-script-api.md` §9). 이니셜라이저 인자로 넣지 않고 `var` 기본값으로 두는 이유는 두 가지다:
+    //   · 기존 호출부(테스트 포함)는 한 글자도 안 바뀌고 기본값이 종전 심 값과 동일해 **무회귀**다.
+    //   · 인자 14개짜리 이니셜라이저가 28개가 되면 호출부에서 위치를 눈으로 못 쫓는다.
+    // 실값 배선은 `SceneRenderer.sceneScriptLayers(from:)`(다른 레인)이 대입으로 채운다.
+
+    /// `IImageLayer.color`(d.ts:1785) / `ITextLayer.color`(d.ts:1586). exe: 이미지 `0x1401ee520`
+    /// 등록부 · 텍스트는 색 계열과 같은 vec3 접근자. 기본 (1,1,1) = 심 하드코딩값과 동일.
+    public var color: SIMD3<Float> = SIMD3<Float>(1, 1, 1)
+    /// `ILayer.parallaxDepth`(d.ts:2039). 종전 심에는 **프로퍼티 자체가 없어** `undefined` 였다.
+    /// 기본 (1,1) — `SceneLayer.parallaxDepth` 파스 폴백과 같다.
+    public var parallaxDepth: SIMD2<Float> = SIMD2<Float>(1, 1)
+    /// `IImageLayer.alignment`(d.ts:1790). exe 등록부 `0x140211070`–`0x140212523`(메서드 23 + 이것)
+    /// 의 유일한 프로퍼티 — 이름 대입 `0x14021114b`, 타입 태그 5(enum/문자열), 멤버 `+0x4b1`.
+    /// 종전 심에 프로퍼티 자체가 없었다. 기본 "center" = `SceneLayer.alignment` 파스 폴백.
+    public var alignment: String = "center"
+    /// `IEffectLayer.perspective`(d.ts:1565) / `IModelLayer.perspective`(d.ts:1916). 심에는 있었지만
+    /// 디스크립터가 안 실어 늘 false 였다. 기본 false = `SceneLayer.perspective` 파스 폴백.
+    public var perspective: Bool = false
+    /// `ITextLayer.horizontalalign`(d.ts:1621) — 기본 "center"(parseText 폴백).
+    public var horizontalAlign: String = "center"
+    /// `ITextLayer.verticalalign`(d.ts:1626) — 기본 "center"(parseText 폴백).
+    public var verticalAlign: String = "center"
+    /// `ITextLayer.anchor`(d.ts:1632) — 기본 "none". WE ctor `0x140256c99` 는 `mov byte [rdi+0x550], al`
+    /// 이고 `al` 은 `0x140256be6` 의 `xor eax,eax` 이후 재대입이 없어 **0** 이다(= enum 0 = "none").
+    public var anchor: String = "none"
+    /// `ITextLayer.padding`(d.ts:1616). **d.ts 는 `Number` 라고 적었지만 실물은 vec2 다** — 텍스트
+    /// 디스크립터 등록 `0x140259421` 이 타입 태그 1(vec2, 형제 키 `spacing` `0x1402594f4` 와 동일)
+    /// 이고 멤버는 `+0x4e8`. 기본 (32,32) — 생성자 `0x140256bbf`/`0x140256bc9`
+    /// (`mov dword [rdi+0x4e8], 0x42000000` · `[rdi+0x4ec]`), `SceneTextLayer.padding` 폴백과 동일.
+    public var padding: SIMD2<Float> = SIMD2<Float>(32, 32)
+    /// `ITextLayer.opaquebackground`(d.ts:1596) — 기본 false.
+    public var opaqueBackground: Bool = false
+    /// `ITextLayer.backgroundcolor`(d.ts:1601) — 기본 (0,0,0).
+    public var backgroundColor: SIMD3<Float> = SIMD3<Float>(0, 0, 0)
+    /// `ITextLayer.limitrows`/`maxrows`(d.ts:1637·1642). `SceneTextLayer.maxRows` 는 nil=무제한이라
+    /// 두 값으로 갈라 싣는다(WE 는 게이트와 값을 따로 등록한다 — `0x140258ff7` · `0x14025966d`).
+    /// 기본 false / 1 — 에디터 기본(`maxrows` 코퍼스 최빈 1)과 심 하드코딩값이 같다.
+    public var limitRows: Bool = false
+    public var maxRows: Int = 1
+    /// `ITextLayer.limitwidth`/`maxwidth`(d.ts:1647·1652) — 위와 같은 규약. 기본 false / 500.
+    public var limitWidth: Bool = false
+    public var maxWidth: Float = 500
+
     public init(name: String, visible: Bool = true, alpha: Float = 1,
                 origin: SIMD3<Float> = SIMD3<Float>(0, 0, 0),
                 scale: SIMD3<Float> = SIMD3<Float>(1, 1, 1),
@@ -161,7 +209,7 @@ public final class SceneScriptContext {
     /// 스크립트가 쥐고 있어도 라이브 트랜스폼을 읽게 하는 연결점(렌더러가 프레임마다 호출).
     /// 디스크립터 배열 순서는 mount 의 __setSceneLayers 와 동일해야 한다(인덱스 정합).
     public func updateSceneLayers(_ layers: [SceneScriptLayerDescriptor]) {
-        context.evaluateScript("__updateSceneLayers(\(Self.layersJSONArray(layers)));")
+        context.evaluateScript("__updateSceneLayers(\(Self.layersJSONArray(layers, full: false)));")
     }
 
     private static func floatArrayLiteral(_ values: [Float]) -> String {
@@ -175,7 +223,12 @@ public final class SceneScriptContext {
         return json
     }
 
-    private static func layersJSONArray(_ layers: [SceneScriptLayerDescriptor]) -> String {
+    /// `full` = 마운트 스냅샷(`__setSceneLayers`)이면 true, 프레임 말 라이브 갱신
+    /// (`__updateSceneLayers`)이면 false. **정적 필드(색·정렬·배경 박스·parallaxDepth 등)는 마운트
+    /// 에만 싣는다** — 프레임마다 다시 실어도 값이 같고, 레이어 수 × 14키만큼 매 프레임 JSON 직렬화
+    /// 비용만 늘기 때문이다(`__updateSceneLayers` 도 그 키를 건드리지 않는다). 라이브 채널
+    /// (`pushLiveSceneLayers`)이 덮어쓰는 것은 visible/alpha/origin/scale/angles 뿐이다.
+    static func layersJSONArray(_ layers: [SceneScriptLayerDescriptor], full: Bool = true) -> String {
         // 단위 경계(2/3): 디스크립터의 angles 는 렌더러 내부 표현인 **라디안**이고 JS 에서 보이는
         // thisLayer/thisScene.layers[].angles 는 **도**다(근거는 evaluateAnglesVec 주석). 마운트
         // (__setSceneLayers)와 프레임 말 갱신(__updateSceneLayers)이 둘 다 이 함수를 지나므로
@@ -183,7 +236,7 @@ public final class SceneScriptContext {
         // origin/scale 은 무단위 — 변환 금지.
         let toDegrees = 180.0 / Double.pi
         let objects = layers.map { l -> [String: Any] in
-            [
+            var o: [String: Any] = [
                 "name": l.name,
                 "visible": l.visible,
                 "alpha": Double(l.alpha),
@@ -202,6 +255,24 @@ public final class SceneScriptContext {
                 "pointsize": Double(l.pointSize),
                 "font": l.font
             ]
+            guard full else { return o }
+            // T-G15: 정적 표면(디스크립터 선언부 주석 참조). 키 이름은 씬 JSON/exe 등록부와 같다.
+            o["color"] = [Double(l.color.x), Double(l.color.y), Double(l.color.z)]
+            o["parallaxDepth"] = [Double(l.parallaxDepth.x), Double(l.parallaxDepth.y)]
+            o["alignment"] = l.alignment
+            o["perspective"] = l.perspective
+            o["horizontalalign"] = l.horizontalAlign
+            o["verticalalign"] = l.verticalAlign
+            o["anchor"] = l.anchor
+            o["padding"] = [Double(l.padding.x), Double(l.padding.y)]
+            o["opaquebackground"] = l.opaqueBackground
+            o["backgroundcolor"] = [Double(l.backgroundColor.x), Double(l.backgroundColor.y),
+                                    Double(l.backgroundColor.z)]
+            o["limitrows"] = l.limitRows
+            o["maxrows"] = l.maxRows
+            o["limitwidth"] = l.limitWidth
+            o["maxwidth"] = Double(l.maxWidth)
+            return o
         }
         guard JSONSerialization.isValidJSONObject(objects),
               let data = try? JSONSerialization.data(withJSONObject: objects),
@@ -491,8 +562,23 @@ public final class TextScriptEngine {
     private var hookFns: [String: JSValue] = [:]
 
     private static let lifecycleFunctionNames = ["init", "applyUserProperties"]
+    /// 실물 훅 표면의 정본은 `scenescript64.dll` 의 이름 포인터 테이블 **`0x1819a3ee0`** 이고,
+    /// 소비자 `0x18164bfa0`–`0x18164e041` 이 `cmp r14, 0x13`(`0x18164c65e`)로 **19회** 돌며 각 이름을
+    /// JS 모듈에서 찾아 `[obj + id*8 + 0x40]` 에 캐시하고 `[obj+0xd8] |= 1<<id`(`0x18164c64a`)로
+    /// 존재 비트마스크를 세운다. id 순서는 그 테이블 순서 그대로다:
+    ///   0 init · 1 update · 2 resizeScreen · 3 destroy · 4 applyUserProperties ·
+    ///   5 applyGeneralSettings · 6 animationEvent · 7 cursorHitTest · 8 cursorEnter · 9 cursorLeave ·
+    ///   10 cursorMove · 11 cursorClick · 12 cursorDown · 13 cursorUp · 14..18 media*Changed 5종.
+    /// (`d.ts` `IComponent` 는 17개만 선언한다 — 6·7 이 빠져 있다. 상세는
+    ///  `docs/re/scene-script-api.md` §9.2 · `docs/re/pointer-interaction.md` §5.1.)
+    ///
+    /// **`cursorHitTest`(id 7)는 일부러 뺀다** — exe 어디에서도 발화되지 않는 죽은 훅이라
+    /// (`pointer-interaction.md` W-13) 수집해 봐야 부를 자리가 없다.
+    /// `resizeScreen`/`destroy`/`applyGeneralSettings` 는 여기서 **수집만** 한다 — 발화원(창 리사이즈,
+    /// 마운트 해제, 앱 설정 변경)은 렌더러 소유라 `hookNames` 로 질의해 `callHook` 하는 배선이 남아 있다.
     static let eventHookNames = ["cursorClick", "cursorDown", "cursorUp", "cursorMove",
                                  "cursorEnter", "cursorLeave", "animationEvent",
+                                 "resizeScreen", "destroy", "applyGeneralSettings",
                                  "mediaPlaybackChanged", "mediaPropertiesChanged", "mediaThumbnailChanged",
                                  "mediaTimelineChanged", "mediaStatusChanged"]
     private static let maxScriptCharacters = 512_000
@@ -2037,15 +2123,27 @@ public final class TextScriptEngine {
             // 종전엔 이 중 text/color/alpha 만 있어 `thisLayer.pointsize` 가 undefined 였다 —
             // 동봉 `presets/clock/preview3dclock` 의 init 이 그 값을 그대로 createLayer 설정에
             // 실어서(`pointsize: thisLayer.pointsize`) 그림자 레이어 글자 크기가 NaN 이 됐다.
-            // 기본값은 SceneDocument 의 텍스트 파스 폴백과 같다(font "systemfont_arial" · pointsize 16
-            // — SceneDocument.swift:1794-1795). 실값은 __setSceneLayers 가 디스크립터로 덮어쓴다.
-            pointsize: 16, font: 'systemfont_arial',
+            // 기본값은 SceneDocument 의 텍스트 파스 폴백과 같다(font "systemfont_arial" ·
+            // **pointsize 32** — `SceneDocument.parseText` 의 `float(obj["pointsize"]) ?? 32`,
+            // 근거는 WE 텍스트 생성자 `0x140256bf2` `mov dword [rdi+0x4e0], 0x42000000`).
+            // 종전 16 은 파스 폴백이 32 로 정정된 뒤 남은 찌꺼기라 어느 쪽 규약도 아니었다(G15 잔여).
+            // 실값은 __setSceneLayers 가 디스크립터로 덮어쓴다.
+            pointsize: 32, font: 'systemfont_arial',
             horizontalalign: 'center', verticalalign: 'center', anchor: 'none',
-            padding: 0, opaquebackground: false, backgroundcolor: new Vec3(0, 0, 0),
+            // padding 은 **vec2 다**(d.ts:1616 의 `Number` 는 선언 오류 — 텍스트 디스크립터 등록
+            // 0x140259421 이 타입 태그 1 = vec2 이고 멤버 +0x4e8, 형제 키 spacing 0x1402594f4 와 동형).
+            // 기본 (32,32) — 생성자 0x140256bbf/0x140256bc9. 종전 `0`(Number)은 형도 값도 틀렸다.
+            padding: new Vec2(32, 32),
+            opaquebackground: false, backgroundcolor: new Vec3(0, 0, 0),
             limitrows: false, maxrows: 1, limitwidth: false, maxwidth: 500,
             // IEffectLayer.perspective / IModelLayer.perspective(d.ts:1565·1916) — 씬 JSON 의 동명 키.
             // createLayer 설정이 실어 보내는 값(preview3dclock 의 `perspective: true`)을 받는 자리.
             perspective: false,
+            // ILayer.parallaxDepth(d.ts:2039, exe 등록 0x1401e0840 타입 태그 1 = vec2, 멤버 +0x170) /
+            // IImageLayer.alignment(d.ts:1790, exe 등록 0x14021114b 타입 태그 5 = enum/문자열, 멤버 +0x4b1) —
+            // 종전 심에 **프로퍼티 자체가 없어** undefined 였다(읽는 스크립트는 NaN/`undefined` 를 그대로
+            // 계산에 실었다). 기본값은 SceneLayer 파스 폴백과 같다.
+            parallaxDepth: new Vec2(1, 1), alignment: 'center',
             getTexture: function(i) { return this.textures[i || 0] || tex; },
             getTextureAnimation: function() { return tex.animation; },
             getAnimation: function() { return tex.animation; },
@@ -2079,6 +2177,17 @@ public final class TextScriptEngine {
             animationLayerCount: 0,   // __setSceneLayers 가 디스크립터 값으로 덮어씀(F708)
             getAnimationLayerCount: function() { return this.animationLayerCount; },
             getEffect: function() { return __noopProxy(); },
+            // T-G15: IEffectLayer.transformAttachmentToTexture(d.ts:1555, exe `0x1401ed0d0`).
+            // 종전 **부재**라 호출 즉시 TypeError 로 스크립트 전체가 죽었다. WE 공식 스니펫
+            // `ui/dist/monaco/snippets/script_project_attachment.js` 와 `..._angle.js` 가
+            //   thisLayer.transformAttachmentToTexture(thisScene.getLayerByID('{{ID}}'), '{{NAME}}')
+            // 형태로 부른다(에디터의 "Project attachment" 바인딩이 그대로 붙여 넣는 형태 —
+            // 공식 스니펫 15개 중 2건 도달). 부착점 본 트랜스폼은 렌더 경로가 쥐고 있어 심에서
+            // 계산할 근거가 없으므로, getEffect/getVideoTexture 와 같은 __noopProxy 규약으로
+            // **죽지만 않게** 한다: 반환 프록시의 `.translation()`/`.angle()` 도 프록시라
+            // floatArray(from:) 가 nil 로 떨어뜨려 "직전 값 유지" = 종전 정적 위치와 같은 그림이다
+            // (identity Mat3 를 돌려주면 origin 이 (0,0) 으로 튀어 오히려 회귀다).
+            transformAttachmentToTexture: function() { return __noopProxy(); },
             // E1(⑤): ILayer.getVideoTexture/getParticleSystem/emitParticles 안전 심 — 종전 부재라
             // 평객체 호출 즉시 TypeError 로 init/update 전체가 죽고(정적 visible=false 레이어가 영구
             // 미표시로 굳는 등) 이후 스크립트 로직이 실행되지 않았다. getEffect 와 동일하게 noopProxy
@@ -2147,6 +2256,7 @@ public final class TextScriptEngine {
             getTransformMatrix: function() { return __mat4Identity(); },   // F707: 루트는 항등
             getAnimationLayerCount: function() { return 0; },              // F708
             getEffect: function() { return __noopProxy(); },
+            transformAttachmentToTexture: function() { return __noopProxy(); },   // T-G15(__makeLayer 와 동일 규약)
             getVideoTexture: function() { return __noopProxy(); },        // E1(⑤)
             getParticleSystem: function() { return __noopProxy(); },
             emitParticles: function() { return root; },
@@ -2166,11 +2276,15 @@ public final class TextScriptEngine {
     // 모르는 키는 그대로 얹는다(WE 도 설정 객체의 미지 키를 오브젝트 필드로 남긴다 — 스크립트가
     // 직후에 그 이름으로 읽는 경우가 있어 버리면 undefined 가 된다).
     var __wapleLayerConfigVec3 = { origin: 1, angles: 1, scale: 1, color: 1, backgroundcolor: 1 };
-    var __wapleLayerConfigVec2 = { size: 1, parallaxDepth: 1 };
-    var __wapleLayerConfigNumber = { alpha: 1, pointsize: 1, padding: 1, maxrows: 1, maxwidth: 1 };
+    // T-G15: padding 은 Number 가 아니라 vec2 다(디스크립터 등록 0x140259421 타입 태그 1 —
+    // __makeLayer 의 padding 주석 참조). 숫자 하나가 오면 Vec2 생성자가 두 성분에 브로드캐스트하는데,
+    // 그것이 실물 vec2 주입기(태그 1/2/3 → `movss` 두 번)와 같은 규약이다.
+    var __wapleLayerConfigVec2 = { size: 1, parallaxDepth: 1, padding: 1 };
+    var __wapleLayerConfigNumber = { alpha: 1, pointsize: 1, maxrows: 1, maxwidth: 1 };
     var __wapleLayerConfigBool = { visible: 1, solid: 1, perspective: 1, opaquebackground: 1,
                                    limitrows: 1, limitwidth: 1 };
-    var __wapleLayerConfigString = { text: 1, font: 1, horizontalalign: 1, verticalalign: 1, anchor: 1 };
+    var __wapleLayerConfigString = { text: 1, font: 1, horizontalalign: 1, verticalalign: 1, anchor: 1,
+                                     alignment: 1 };
     function __wapleApplyLayerConfig(l, cfg) {
         for (var k in cfg) {
             if (!Object.prototype.hasOwnProperty.call(cfg, k)) { continue; }
@@ -2315,9 +2429,19 @@ public final class TextScriptEngine {
                 }
                 return n;
             },
+            // d.ts:2138 `getLayerByID(id: String): ILayer` — **문자열이 정본이다**. 씬 JSON 의
+            // objects[].id 는 정수인데, WE 편집기가 "Project attachment" 바인딩으로 붙여 넣는 공식
+            // 스니펫(`ui/dist/monaco/snippets/script_project_attachment.js` · `..._angle.js`)은
+            //   thisScene.getLayerByID('{{ID}}')
+            // 처럼 **따옴표 안에** id 를 심는다. 종전 `__wapleId === id` 는 number === string 이라
+            // 그 형태에서 **항상 null** 이었다(공식 스니펫 15개 중 2건 도달). 문자열화해 비교한다.
+            // __wapleId 0 = "id 미지정" 이라 매칭 대상에서 뺀다(0 을 넘긴 질의가 무명 레이어를 잡으면 안 됨).
             getLayerByID: function(id) {
+                if (id === null || id === undefined) { return null; }
+                var key = String(id);
                 for (var i = 0; i < this.layers.length; i += 1) {
-                    if (this.layers[i].__wapleId === id) { return this.layers[i]; }
+                    var lid = this.layers[i].__wapleId;
+                    if (lid && String(lid) === key) { return this.layers[i]; }
                 }
                 return null;
             },
@@ -2383,6 +2507,22 @@ public final class TextScriptEngine {
         l.animationLayerCount = (typeof d.animationLayerCount === 'number') ? d.animationLayerCount : 0;   // F708
         l.pointsize = __num(d.pointsize, l.pointsize);   // ITextLayer.pointsize(d.ts:1606)
         if (typeof d.font === 'string' && d.font.length > 0) { l.font = d.font; }   // d.ts:1611
+        // T-G15: 마운트 스냅샷에만 오는 정적 표면(layersJSONArray(full:) 주석 참조). 키가 없으면
+        // (= 프레임 말 갱신 경로, 그리고 이 필드를 아직 안 채우는 호출부) 심 기본값 그대로 — 무회귀.
+        if (d.color) { l.color = __vec3FromArray(d.color, [1, 1, 1]); }
+        if (d.parallaxDepth) { l.parallaxDepth = __vec2FromArray(d.parallaxDepth, [1, 1]); }
+        if (typeof d.alignment === 'string' && d.alignment.length > 0) { l.alignment = d.alignment; }
+        if (typeof d.perspective === 'boolean') { l.perspective = d.perspective; }
+        if (typeof d.horizontalalign === 'string' && d.horizontalalign.length > 0) { l.horizontalalign = d.horizontalalign; }
+        if (typeof d.verticalalign === 'string' && d.verticalalign.length > 0) { l.verticalalign = d.verticalalign; }
+        if (typeof d.anchor === 'string' && d.anchor.length > 0) { l.anchor = d.anchor; }
+        if (d.padding) { l.padding = __vec2FromArray(d.padding, [32, 32]); }
+        if (typeof d.opaquebackground === 'boolean') { l.opaquebackground = d.opaquebackground; }
+        if (d.backgroundcolor) { l.backgroundcolor = __vec3FromArray(d.backgroundcolor, [0, 0, 0]); }
+        if (typeof d.limitrows === 'boolean') { l.limitrows = d.limitrows; }
+        if (typeof d.limitwidth === 'boolean') { l.limitwidth = d.limitwidth; }
+        l.maxrows = __num(d.maxrows, l.maxrows);
+        l.maxwidth = __num(d.maxwidth, l.maxwidth);
         return l;
     }
     // F711(S-36): getParent() 가 항상 root 였던 결함 — 디스크립터의 id/parentId(scene.json objects id 체계)로
