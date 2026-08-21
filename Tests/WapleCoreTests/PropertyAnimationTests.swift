@@ -211,4 +211,151 @@ final class PropertyAnimationTests: XCTestCase {
         XCTAssertEqual(PropertyAnimation.firedMarkers(events: ev, length: 96, mode: "single",
                                                       prevF: -1, curF: 1), ["emerge", "surprise_start"])
     }
+
+    // MARK: - 베지어 규약(핸들 x = 0.5×구간 스케일) — VA 0x1401a9d60–0x1401a9e9a
+
+    /// WE 는 `P1x = f0 + 0.5·dx·front.x`, `P2x = f1 + 0.5·dx·back.x` 로 조립한다
+    /// (`mulss xmm8, xmm12(0.5)` @0x1401a9d60 → 0x1401a9d6d/0x1401a9d74 에서 핸들 x 와 곱하고
+    /// 0x1401a9d82/0x1401a9d87 에서 끝점 프레임을 더한다). y 에는 스케일이 없다(0x1401a9e58/0x1401a9e8f).
+    /// 종전 Waple 은 x 도 오프셋 그대로 더해 **완전히 다른 곡선**이었다 — 아래 값이 그 회귀 감시자다.
+    func testBezierHandleXScalesByHalfSegment() {
+        // 저작 기본 핸들(front +1 / back −1), 구간 0→60프레임 · 값 0→100.
+        // WE 규약: P1x = P2x = 30(구간 중점) → 대칭 ease. 종전 규약: P1x=1, P2x=59.
+        let anim = PropertyAnimation(tracks: [[kf(0, 0), kf(60, 100)]],
+                                     fps: 30, length: 60, mode: "single", relative: false)
+        // 참조값은 스크래치패드 `weanim.py`(VA 재현)로 뽑고 이분법 80회로 근을 조인 것이다.
+        XCTAssertEqual(anim.value(component: 0, atTime: 15.0 / 30, base: 0), 10.589254, accuracy: 0.01,
+                       "frame 15 — 종전 규약이면 24.61 이 나온다")
+        XCTAssertEqual(anim.value(component: 0, atTime: 45.0 / 30, base: 0), 89.410746, accuracy: 0.01,
+                       "frame 45 — 종전 규약이면 75.39")
+        XCTAssertEqual(anim.value(component: 0, atTime: 30.0 / 30, base: 0), 50, accuracy: 0.01,
+                       "대칭이라 중점은 두 규약이 같다 — 이 점만으로는 회귀를 못 잡는다")
+    }
+
+    /// 양쪽 핸들 disabled 는 x·y 가 같은 u 다항식을 타므로 **정확히 선형**이다(스케일과 무관).
+    func testDisabledHandlesStayLinearUnderNewScale() {
+        let anim = PropertyAnimation(tracks: [[kf(0, 0, enabled: false), kf(60, 120, enabled: false)]],
+                                     fps: 30, length: 60, mode: "single", relative: false)
+        for f in stride(from: 0, through: 60, by: 5) {
+            XCTAssertEqual(anim.value(component: 0, atTime: Float(f) / 30, base: 0), Float(f) * 2,
+                           accuracy: 0.02, "frame \(f) 선형")
+        }
+    }
+
+    // MARK: - options.wraploop (VA 0x1401a98b0–0x1401a9b90 · 호출부 0x1401a5762)
+
+    /// 실물 `maintaindistancebetweencontrolpoints/scene.json` 형태: length 60 인데 키프레임은 0/30.
+    /// wraploop 이면 frame 60 에 "첫 키프레임과 같은 값" 키프레임이 붙어 후반이 되돌아온다.
+    func testWrapLoopAppendsEndpointEqualToFirstKeyframe() throws {
+        let dict: [String: Any] = [
+            "animation": [
+                "c0": [
+                    ["frame": 0, "value": 436.42032,
+                     "front": ["enabled": true, "x": 1, "y": 0], "back": ["enabled": true, "x": -1, "y": -0.0]],
+                    ["frame": 30, "value": 145.37645,
+                     "front": ["enabled": true, "x": 1, "y": 0], "back": ["enabled": true, "x": -1, "y": -0.0]],
+                ] as [[String: Any]],
+                "options": ["fps": 30, "length": 60, "mode": "loop", "wraploop": true] as [String: Any],
+            ] as [String: Any],
+        ]
+        let anim = try XCTUnwrap(PropertyAnimation.parse(dict))
+        XCTAssertTrue(anim.wrapLoop)
+        XCTAssertEqual(anim.tracks[0].count, 3, "frame 60 끝점이 하나 붙는다")
+        let end = anim.tracks[0][2]
+        XCTAssertEqual(end.frame, 60)
+        XCTAssertEqual(end.value, 436.42032, accuracy: 1e-4, "끝점 값 = 첫 키프레임 값")
+        XCTAssertTrue(end.backEnabled, "첫 키프레임 front 가 enabled 라 끝점 back 도 enabled")
+        XCTAssertEqual(end.backX, -1, accuracy: 1e-6, "back = −front (부호반전 @0x1401a9b58)")
+        XCTAssertEqual(end.backY, 0, accuracy: 1e-6)
+        XCTAssertFalse(end.frontEnabled, "새로 붙인 끝점의 front 는 0/disabled")
+        // 후반(frame 30→60)이 첫 값으로 되돌아온다 — 미적용이면 145.37645 에서 정지했다.
+        XCTAssertEqual(anim.value(component: 0, atTime: 45.0 / 30, base: 0), 290.898385, accuracy: 0.02)
+        XCTAssertEqual(anim.value(component: 0, atTime: 59.0 / 30, base: 0), 435.976007, accuracy: 0.02)
+    }
+
+    /// `"wraploop": null` 은 bool 이 아니라 서지 않는다(VA 0x1401a985d `cmp byte ptr [rbx+8], 5`).
+    /// 설치본 애니 7블록 중 5개가 이 형태다.
+    func testWrapLoopNullDoesNotApply() throws {
+        let dict: [String: Any] = [
+            "animation": [
+                "c0": [["frame": 0, "value": 1.0], ["frame": 30, "value": 0.0]] as [[String: Any]],
+                "options": ["fps": 15, "length": 60, "mode": "loop", "wraploop": NSNull()] as [String: Any],
+            ] as [String: Any],
+        ]
+        let anim = try XCTUnwrap(PropertyAnimation.parse(dict))
+        XCTAssertFalse(anim.wrapLoop)
+        XCTAssertEqual(anim.tracks[0].count, 2, "끝점을 붙이지 않는다")
+        XCTAssertEqual(anim.value(component: 0, atTime: 45.0 / 15, base: 0), 0, accuracy: 1e-4,
+                       "마지막 키프레임 값에서 정지")
+    }
+
+    /// 1단계: `frame > length` 인 꼬리를 버린다(VA 0x1401a9920–0x1401a9959).
+    func testWrapLoopTrimsKeyframesBeyondLength() {
+        let track = [kf(0, 10), kf(20, 20), kf(50, 30), kf(80, 40)]
+        let out = PropertyAnimation.wrapLooped(track, lengthFrames: 40)
+        XCTAssertEqual(out.map { $0.frame }, [0, 20, 40], "50·80 은 버려지고 40 이 붙는다")
+        XCTAssertEqual(out[2].value, 10, "끝점 값 = 첫 키프레임 값")
+    }
+
+    /// 2단계 분기: 마지막 키프레임이 이미 `frame == length` 면 새로 붙이지 않고 덮는다.
+    func testWrapLoopOverwritesExistingEndpointKeyframe() {
+        let track = [kf(0, 10), kf(30, 99)]
+        let out = PropertyAnimation.wrapLooped(track, lengthFrames: 30)
+        XCTAssertEqual(out.count, 2, "덮기 경로 — 개수 불변")
+        XCTAssertEqual(out[1].value, 10, "값만 첫 키프레임 값으로 갈린다")
+        XCTAssertEqual(out[1].backX, -1, accuracy: 1e-6)
+    }
+
+    /// 첫 키프레임 front 가 disabled 면 끝점 back 도 disabled(VA 0x1401a9b66 `and eax, ~1`).
+    func testWrapLoopDisabledFrontYieldsDisabledBack() {
+        let track = [kf(0, 5, enabled: false), kf(20, 7)]
+        let out = PropertyAnimation.wrapLooped(track, lengthFrames: 40)
+        XCTAssertFalse(out[2].backEnabled)
+        XCTAssertEqual(out[2].value, 5)
+    }
+
+    /// 키프레임 1개짜리 트랙은 그대로(VA 0x1401a98dd `cmp rax, 1` / `jbe`).
+    func testWrapLoopKeepsSingleKeyframeTrackUnchanged() {
+        let track = [kf(0, 5)]
+        XCTAssertEqual(PropertyAnimation.wrapLooped(track, lengthFrames: 60), track)
+    }
+
+    // MARK: - step 키프레임 (VA 0x1401a8f56 파스 · 0x1401a9d18 평가)
+
+    /// step 은 **오른쪽 키프레임**의 플래그이고 그 구간 전체를 왼쪽 값으로 고정한다.
+    /// 경계 `frame == 오른쪽.frame` 은 다음 구간이므로 그 지점부터 새 값이다.
+    func testStepKeyframeHoldsLeftValueForWholeSegment() throws {
+        let dict: [String: Any] = [
+            "animation": [
+                "c0": [["frame": 0, "value": 10.0],
+                       ["frame": 30, "value": 20.0, "step": true],
+                       ["frame": 60, "value": 30.0]] as [[String: Any]],
+                "options": ["fps": 30, "length": 60, "mode": "single"] as [String: Any],
+            ] as [String: Any],
+        ]
+        let anim = try XCTUnwrap(PropertyAnimation.parse(dict))
+        XCTAssertTrue(anim.tracks[0][1].step)
+        XCTAssertFalse(anim.tracks[0][0].step, "step 미기재 → false")
+        XCTAssertEqual(anim.value(component: 0, atTime: 15.0 / 30, base: 0), 10, accuracy: 1e-5, "구간 내 고정")
+        XCTAssertEqual(anim.value(component: 0, atTime: 29.0 / 30, base: 0), 10, accuracy: 1e-5, "직전까지 고정")
+        XCTAssertEqual(anim.value(component: 0, atTime: 30.0 / 30, base: 0), 20, accuracy: 1e-5, "경계에서 전환")
+        XCTAssertEqual(anim.value(component: 0, atTime: 45.0 / 30, base: 0), 25, accuracy: 0.02,
+                       "다음 구간은 step 이 아니라 정상 보간")
+    }
+
+    // MARK: - mode 문자열 규약 (stricmp — VA 0x1401a8c78/0x1401a8c91)
+
+    func testModeIsCaseInsensitiveAndUnknownFallsBackToLoop() {
+        let track = [kf(0, 0, enabled: false), kf(30, 30, enabled: false)]
+        // "Mirror" 대문자도 미러다.
+        let mirror = PropertyAnimation(tracks: [track], fps: 30, length: 30, mode: "Mirror", relative: false)
+        XCTAssertEqual(mirror.value(component: 0, atTime: 1.5, base: 0), 15, accuracy: 0.01)
+        // "SINGLE" 대문자도 single(끝 클램프).
+        let single = PropertyAnimation(tracks: [track], fps: 30, length: 30, mode: "SINGLE", relative: false)
+        XCTAssertEqual(single.value(component: 0, atTime: 1.5, base: 0), 30, accuracy: 0.01)
+        // 인식 못 하는 문자열은 flags 0 = loop 다(종전 Waple 은 클램프로 흘렸다).
+        let unknown = PropertyAnimation(tracks: [track], fps: 30, length: 30, mode: "ease", relative: false)
+        XCTAssertEqual(unknown.value(component: 0, atTime: 1.5, base: 0), 15, accuracy: 0.01,
+                       "frame 45 → 랩 15 (클램프였다면 30)")
+    }
 }

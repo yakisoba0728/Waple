@@ -52,7 +52,8 @@ public enum PropertyConditionEvaluator {
             }
             return (g.value, false)
         }
-        let normalized = replaceIncludes(in: condition, values: values)
+        let normalized = replaceStringMethods(in: replaceIncludes(in: condition, values: values),
+                                              values: values)
         guard let tokens = Tokenizer(normalized).tokens() else { return (nil, false) }
         guard !tokens.isEmpty else { return (true, true) }
         var parser = Parser(tokens: tokens, values: values)
@@ -145,6 +146,54 @@ public enum PropertyConditionEvaluator {
             let ref = String(out[refRange])
             let value = value(forReference: ref, values: values)
             out.replaceSubrange(full, with: literals.contains { literalMatches($0, value) } ? "true" : "false")
+        }
+        return out
+    }
+
+    /// `ref.startsWith('x')` / `endsWith` / `includes` → `true`/`false` 로 미리 접는다.
+    ///
+    /// **근거**: `condition` 은 JS 가 아니라 **AngularJS 표현식**이다 — 브라우저 UI 가
+    /// `evalCondition(e) { return scope.$eval(e, currentSelection.properties[location]) }` 로 평가하고
+    /// (`ui/dist/scripts/scripts.js` @106522), 에디터 프로퍼티 목록도 같은 `$eval` 을 쓴다(@375231).
+    /// 그래서 문자열 메서드 호출이 그대로 성립한다.
+    ///
+    /// **도달**: WE 설치본의 실물 `condition` 22건(고유 16종) 중 **9건(고유 8종)** 이 이 형태다
+    /// (`projects/defaultprojects/corsair_collection/project.json` 의
+    /// `effect.value.endsWith('pulse') === true` 류). 종전에는 `effect.value.startsWith` 가 식별자로
+    /// 토큰화된 뒤 남은 `('rainbow')` 때문에 파스 실패 → 조건 무시(항상 표시)로 흘렀다.
+    /// 반대로 이미 지원하던 `[a,b].includes(x)` 배열 형태는 이 코퍼스 도달이 0 이다.
+    ///
+    /// 좌변이 문자열이 아닐 때만 손대지 않는다(JS 에서도 숫자·불리언에는 이 메서드가 없어
+    /// TypeError 다). 좌변이 **부재**면 빈 문자열로 접는다 — `canEvaluate` 가 값 없이(`[:]`)
+    /// 문법 가능 여부만 물어보는 경로를 살리기 위한 것이고, `replaceIncludes` 가 부재를
+    /// "어느 리터럴과도 불일치 = false" 로 접는 것과 같은 방향이다.
+    private static func replaceStringMethods(in condition: String,
+                                             values: [String: PropertyValue]) -> String {
+        let pattern = #"([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\."#
+            + #"(startsWith|endsWith|includes)\(\s*(?:'([^']*)'|"([^"]*)")\s*\)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return condition }
+        var out = condition
+        let nsRange = NSRange(out.startIndex..<out.endIndex, in: out)
+        for match in regex.matches(in: out, range: nsRange).reversed() {
+            guard let full = Range(match.range(at: 0), in: out),
+                  let refRange = Range(match.range(at: 1), in: out),
+                  let opRange = Range(match.range(at: 2), in: out) else { continue }
+            let literalRange = Range(match.range(at: 3), in: out) ?? Range(match.range(at: 4), in: out)
+            guard let litRange = literalRange else { continue }
+            let haystack: String
+            switch value(forReference: String(out[refRange]), values: values) {
+            case .string(let s): haystack = s
+            case .none: haystack = ""
+            case .number, .bool: continue      // JS 에서도 메서드가 없다 — 손대지 않고 파스 실패로 둔다
+            }
+            let literal = String(out[litRange])
+            let result: Bool
+            switch String(out[opRange]) {
+            case "startsWith": result = haystack.hasPrefix(literal)
+            case "endsWith": result = haystack.hasSuffix(literal)
+            default: result = literal.isEmpty || haystack.contains(literal)
+            }
+            out.replaceSubrange(full, with: result ? "true" : "false")
         }
         return out
     }
