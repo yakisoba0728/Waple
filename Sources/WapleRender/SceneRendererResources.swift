@@ -1061,18 +1061,20 @@ extension SceneRenderer {
         //    이 함수의 모집단이 아니다(모델 머티리얼 콤보는 `SceneDocument.parseMaterial` 소관).
         // 즉 이 삭제는 동봉+설치 코퍼스 전건에서 **비트동일**이다.
         //
-        // **[미해결] 남는 틈 두 곳** — 둘 다 `canonical` 도 (선언된 키에 한해서만 접었으므로)
-        // 제대로 막지 못하던 자리라 이번 삭제로 나빠지지 않는다. 코퍼스 도달은 위 실측대로 0.
+        // **[해결 — 같은 라운드]** 종전에 여기 남던 틈 두 곳을 정본대로 막았다. 둘 다 `canonical`
+        // 도 (선언된 키에 한해서만 접었으므로) 제대로 막지 못하던 자리다. 코퍼스 도달은 위
+        // 실측대로 0이라 **이 변경도 동봉+설치 전건 비트동일**이고, 워크샵 대비 잠복 방어다.
         //   ① 이 함수가 돌려준 딕셔너리를 호출부가 `combos["DIRECTDRAW"] == 1` 로 **정확일치**
-        //      조회한다(:810). 워크샵이 `"directdraw":1` 로 저작하면 번역기는 접어서 보는데
-        //      여기만 못 본다.
+        //      조회한다. 워크샵이 `"directdraw":1` 로 저작하면 번역기는 접어서 보는데 여기만
+        //      못 봤다.
         //   ② 아래 `samplerCombos`/`formatComboSlots` 게이트의 `combos[...] == nil` 도 정확일치다.
-        //   정본 수정안: `GLSLTranslator.uppercasedComboKeys` 를 `public` 으로 올리고
-        //   matCombos/scenePass.combos 를 **딕셔너리별로** 접은 뒤 병합하는 것(= 실물의 파스
-        //   시점 접기와 같은 위치). 그 파일은 이번 소유 밖이라 보고서로 넘긴다.
+        // 두 소스 딕셔너리를 **각각** 접은 뒤 병합한다 — 병합 후에 접으면 대소문자만 다른 두 키가
+        // 이미 뭉개진 뒤라 어느 쪽이 이겼는지가 딕셔너리 순서에 좌우된다. 각각 접는 것이 실물의
+        // 파스 시점 `toupper` 루프(`0x14015458c`–`0x1401545aa`, `toupper` `0x1402bfb48`)와 같은
+        // 위치이기도 하다.
         var combos: [String: Int] = [:]
-        for (k, v) in matCombos { combos[k] = v }
-        for (k, v) in scenePass.combos { combos[k] = v }
+        for (k, v) in GLSLTranslator.uppercasedComboKeys(matCombos) { combos[k] = v }
+        for (k, v) in GLSLTranslator.uppercasedComboKeys(scenePass.combos) { combos[k] = v }
         for (slot, comboName) in GLSLTranslator.samplerCombos(frag) where combos[comboName] == nil {
             let sceneBound = slot < scenePass.textureNames.count && scenePass.textureNames[slot] != nil
             let matBound = slot < matTextures.count && matTextures[slot] != nil

@@ -114,8 +114,13 @@ public enum GLSLTranslator {
     /// 관측 대상이므로 **주입 직전**인 번역기 진입에서 접으면 같은 계약이 성립하고, 메모 키도
     /// 함께 정규화되어 `normalmap`/`NORMALMAP` 두 철자가 캐시를 가르지 않는다.
     /// (`resolvePassCombos` 의 `canonical()` 은 선언 이름 집합 안에서만 접던 근사인데, 저작된
-    /// 소문자 15종 중 14종이 어떤 셰이더에도 선언이 없어 대부분 놓치고 있었다. 이제 그 함수는
-    /// 잉여가 된다 — 소유 밖이라 제거는 안 했다. **[미해결]** 정리는 별건.)
+    /// 소문자 15종 중 14종이 어떤 셰이더에도 선언이 없어 대부분 놓치고 있었다.
+    /// **[2026-08-21] 그 함수는 제거됐다** — 동봉+설치본 JSON 3655건 전수로 셰이더 `[COMBO]`
+    /// 선언 68종이 전건 대문자이고 `canonical()` 의 두 모집단에 대문자 아닌 키가 0건임을 보인 뒤,
+    /// 코퍼스 전수 비트동일을 확인하고 지웠다(근거는 그 함수 자리의 주석). 다만 렌더 계층에는
+    /// 반환 딕셔너리를 **정확일치로 조회**하는 자리가 둘 남아 있어, 이 함수를 `public` 으로 노출해
+    /// 렌더 계층이 **딕셔너리별로** 접게 하는 것이 정본이다 — 실물이 접는 자리(JSON 파스 시점
+    /// `toupper` 0x14015458c-0x1401545aa)와 같은 위치다.)
     ///
     /// 충돌 규약: 접었을 때 이미 대문자 철자가 있으면 **대문자 쪽이 이긴다.** 근거는 실물의
     /// `#define` 방출 순서다 — 값 있는 패스 콤보(0x14016c400-0x14016c7fe)를 먼저 쏟고 그 다음
@@ -142,7 +147,7 @@ public enum GLSLTranslator {
     /// `'a'..'z'` 만 −0x20 한다. 콤보 이름은 JSON 키이고 동봉/설치본 전건 ASCII 라 실측 차이는
     /// 없지만, 차이가 나는 입력(워크샵의 비-ASCII 콤보 키)에서는 우리가 더 공격적이다 — 그 경우
     /// 실물도 셰이더의 `#if` 이름과 못 맞추므로 어느 쪽이든 미정의(0)로 같은 결말이다.
-    static func uppercasedComboKeys(_ combos: [String: Int]) -> [String: Int] {
+    public static func uppercasedComboKeys(_ combos: [String: Int]) -> [String: Int] {
         guard combos.keys.contains(where: { $0 != $0.uppercased() }) else { return combos }
         var out: [String: Int] = [:]
         out.reserveCapacity(combos.count)
@@ -214,8 +219,8 @@ public enum GLSLTranslator {
         }
         // 블록 주석은 여기서 제거(`//` 어노테이션은 보존) — `/* uniform ... */` 속 죽은 선언이
         // 줄 단위 선언 파서에 실선언으로 잡히면 usesAudio 오점화(불필요 TCC 프롬프트)/유령 슬롯이 생긴다.
-        let (vsrc, vArrays) = expandArrayVaryings(stripPrecision(stripBlockComments(ShaderPreprocessor.preprocess(vertex, combos: combos, include: include))))
-        let (fsrc, fArrays) = expandArrayVaryings(stripPrecision(stripBlockComments(ShaderPreprocessor.preprocess(fragment, combos: combos, include: include))))
+        let (vsrc, vArrays, vMats) = expandArrayVaryings(stripPrecision(stripBlockComments(ShaderPreprocessor.preprocess(vertex, combos: combos, include: include))))
+        let (fsrc, fArrays, fMats) = expandArrayVaryings(stripPrecision(stripBlockComments(ShaderPreprocessor.preprocess(fragment, combos: combos, include: include))))
 
         // 유니폼/attribute/varying 수집(주석 어노테이션 보존 위해 본문 정리 전에).
         let vUniforms = parseUniforms(vsrc), fUniforms = parseUniforms(fsrc)
@@ -487,6 +492,19 @@ public enum GLSLTranslator {
         for a in vArrays {
             vertBody = "\(a.type.msl) \(a.name)[\(a.count)];\n" + vertBody
             vertBody += "\n" + (0..<a.count).map { "out.\(a.name)_\($0) = \(a.name)[\($0)];" }.joined(separator: "\n")
+        }
+        // 행렬 varying 로컬(같은 규약): frag 는 열 벡터 멤버로 재구성, vert 는 선언 후 말미에 열별로 out 에 복사.
+        // MSL `floatNxM(colVec0, …, colVecN-1)` 은 열 벡터 생성자로 합법이고 열-우선이다
+        // (스펙 2.3.2: "construct a matrix of type T with n columns and m rows from n vectors of type T
+        //  with m components" · "Metal constructs and consumes matrix components in column-major order").
+        // GLSL 도 `m[i]` 가 열이라 `out.<n>_i = <n>[i]` ↔ `<T>(in.<n>_0, …)` 왕복이 성분 보존이다.
+        for m in fMats {
+            let cols = (0..<m.count).map { "in.\(m.name)_\($0)" }.joined(separator: ", ")
+            fragBody = "\(m.type.msl) \(m.name) = \(m.type.msl)(\(cols));\n" + fragBody
+        }
+        for m in vMats {
+            vertBody = "\(m.type.msl) \(m.name);\n" + vertBody
+            vertBody += "\n" + (0..<m.count).map { "out.\(m.name)_\($0) = \(m.name)[\($0)];" }.joined(separator: "\n")
         }
 
         // 파일 스코프 const: vert/frag 합집합(이름 dedupe — 공용 헤더가 양쪽에 인라인되는 경우), 타입/매크로만 치환.
@@ -1166,13 +1184,45 @@ public enum GLSLTranslator {
 
     struct ArrayVarying: Equatable { let type: GLSLType; let name: String; let count: Int }
 
-    /// 배열 varying(`varying vec2 v_TexCoord[13];` — 실물 blur/localcontrast 계열) 처리:
-    /// Metal 은 stage-in/반환 구조체에 배열을 허용하지 않으므로 선언을 스칼라 멤버(v_TexCoord_0..)로 펼친다.
-    /// 본문 접근은 재작성하지 않는다 — main 에 로컬 배열을 놓고(vert: 말미 out 복사, frag: 진입 시 구성)
-    /// 리터럴/변수 인덱스 모두 자연 동작(다운샘플 for-루프 등).
-    static func expandArrayVaryings(_ src: String) -> (source: String, arrays: [ArrayVarying]) {
+    /// 행렬 varying(`varying mat3 v_XForm;`) — 배열과 **같은 이유로** 펼쳐야 한다.
+    /// `column` 은 열 벡터 타입, `count` 는 열 개수(MSL `floatNxM` = N 열 × M 행,
+    /// `m[i]` 가 i 번째 **열**: MSL 스펙 2.3 "A matrix of type floatnxm consists of n floatm vectors").
+    struct MatrixVarying: Equatable { let type: GLSLType; let name: String; let column: GLSLType; let count: Int }
+
+    /// GLSL 행렬 타입 → (열 벡터 타입, 열 개수). 행렬이 아니면 nil.
+    static func matrixVaryingShape(_ t: GLSLType) -> (column: GLSLType, count: Int)? {
+        switch t {
+        case .mat2:   return (.vec2, 2)
+        case .mat3:   return (.vec3, 3)
+        case .mat4:   return (.vec4, 4)
+        case .mat4x3: return (.vec3, 4)   // GLSL mat4x3 = 4열 × 3행 = MSL float4x3
+        default:      return nil
+        }
+    }
+
+    /// 배열 varying(`varying vec2 v_TexCoord[13];` — 실물 blur/localcontrast 계열)과
+    /// 행렬 varying(`varying mat3 v_XForm;` — 실물 cursorripple preview) 처리:
+    ///
+    /// **MSL 은 stage-in/정점 반환 구조체에 배열도 행렬도 허용하지 않는다.** 스펙 인용(2026-06-04 판):
+    /// - 5.2.4: "You cannot use the `stage_in` attribute to declare members of the structure that are
+    ///   packed vectors, **matrices**, structures, bitfields, references or pointers to a type, or
+    ///   **arrays** of scalars, vectors, or matrices."
+    /// - 함수 제약 절: "The return type of a vertex or fragment function cannot include an element that is
+    ///   a packed vector type, **matrix type**, a structure type, a reference, or a pointer to a type."
+    /// `Vary` 는 정점 반환 타입이자 프래그먼트 `[[stage_in]]` 이므로 **양쪽 금지에 다 걸린다.**
+    ///
+    /// 그래서 선언을 스칼라/열-벡터 멤버(`v_TexCoord_0..` / `v_XForm_0..`)로 펼친다.
+    /// 본문 접근은 재작성하지 않는다 — main 에 로컬 배열/행렬을 놓고(vert: 말미 out 복사,
+    /// frag: 진입 시 구성) 리터럴/변수 인덱스와 `mul(v, m)` 이 자연 동작한다.
+    ///
+    /// **한계(배열과 동일)**: 로컬은 main 스코프라 **헬퍼 함수 안의 참조는 못 본다** — 그 경우
+    /// 미정의 식별자가 남아 MSL 컴파일이 실패하고 폴백한다(조용한 오답이 아니라 폴터).
+    /// 동봉 코퍼스에서 행렬 varying 을 헬퍼가 읽는 사례는 0건이다(2026-08-21 실측).
+    static func expandArrayVaryings(_ src: String)
+        -> (source: String, arrays: [ArrayVarying], matrices: [MatrixVarying]) {
         var out: [String] = []
         var arrays: [ArrayVarying] = []
+        var matrices: [MatrixVarying] = []
         for line in src.split(separator: "\n", omittingEmptySubsequences: false) {
             let t = line.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("varying "), t.contains("[") {
@@ -1187,10 +1237,25 @@ public enum GLSLTranslator {
                     for k in 0..<expandedCount { out.append("varying \(toks[0]) \(name)_\(k);") }
                     continue
                 }
+            } else if t.hasPrefix("varying ") {
+                let toks = t.dropFirst("varying ".count).split(separator: ";").first?
+                    .split(separator: " ").map(String.init) ?? []
+                if toks.count >= 2, let type = GLSLType.from(toks[0]),
+                   let shape = matrixVaryingShape(type) {
+                    // `parseVaryings` 와 같은 이름 절단 규약(실물 오타 `v_Size.xy` 관용).
+                    let name = String(toks[1].prefix(while: { $0.isLetter || $0.isNumber || $0 == "_" }))
+                    if !name.isEmpty {
+                        matrices.append(MatrixVarying(type: type, name: name,
+                                                      column: shape.column, count: shape.count))
+                        // 펼친 선언은 **GLSL 철자**로 낸다 — 이후 parseVaryings 가 다시 읽는다.
+                        for k in 0..<shape.count { out.append("varying \(shape.column.rawValue) \(name)_\(k);") }
+                        continue
+                    }
+                }
             }
             out.append(String(line))
         }
-        return (out.joined(separator: "\n"), arrays)
+        return (out.joined(separator: "\n"), arrays, matrices)
     }
 
     private static func packedVec4VaryingCount(name: String, declaredCount: Int, source: String) -> Int? {

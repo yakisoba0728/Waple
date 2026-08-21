@@ -32,6 +32,10 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
         let comboDefaults: [String: Int]
         /// 스윕용 콤보 노브 — `[COMBO]` 기본값 + 인라인 소스의 `#if` 식에 등장하는 대문자 토큰.
         let knobs: [String]
+        /// `#include` 만 인라인한 두 스테이지 합본(조건부 평가 없음). `knobs` 수집에 이미 쓰던 것을
+        /// 재사용하려고 실어 둔다 — 값 스윕(`testNoUntranslatedTokensAtEnumeratedComboValues`)이
+        /// 같은 문자열을 다시 만들면 239쌍 재인라인이라 순수 낭비다.
+        let inlined: String
         let include: (String) -> String?
     }
 
@@ -101,24 +105,25 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
             // WE 가 절대 만들지 않는 조합을 검사하게 된다.
             knobs.subtract(["HLSL", "HLSL_SM40", "HLSL_SM30", "SHADERVERSION", "PLATFORM_ANDROID"])
             out.append(Pair(id: id, vert: v, frag: f, comboDefaults: defaults,
-                            knobs: knobs.sorted(), include: include))
+                            knobs: knobs.sorted(), inlined: inlined, include: include))
         }
         return out
     }
 
     /// `#include` 만 재귀 인라인(조건부 평가 없음) — 노브 수집용이라 조건 분기와 무관해야 한다.
-    private static func inlineIncludes(_ src: String, include: (String) -> String?, depth: Int = 0) -> String {
-        if depth > 8 { return src }
-        var out: [String] = []
-        for line in src.split(separator: "\n", omittingEmptySubsequences: false) {
-            let t = line.trimmingCharacters(in: .whitespaces)
-            if t.hasPrefix("#include"), let a = t.firstIndex(of: "\""), let b = t.lastIndex(of: "\""), a < b {
-                out.append(include(String(t[t.index(after: a)..<b])).map { inlineIncludes($0, include: include, depth: depth + 1) } ?? "")
-            } else {
-                out.append(String(line))
-            }
-        }
-        return out.joined(separator: "\n")
+    ///
+    /// **[2026-08-21 정정] 자체 구현을 버리고 `ShaderPreprocessor.inlinedSource` 로 위임한다.**
+    /// 종전 구현은 `src.split(separator: "\n")` 로 줄을 갈랐는데, Swift 의 `"\r\n"` 은 **단일
+    /// grapheme** 이라 `Character("\n")` 에 안 걸린다(공통 브리프 함정 11). 동봉 셰이더는 `.vert`/
+    /// `.frag`/`.h` **전건이 CRLF** 이므로 파일 전체가 한 "줄" 이 되고, `hasPrefix("#include")` 가
+    /// 거짓이 되어 **헤더가 한 번도 인라인되지 않았다**. 그래서 `knobs` 가 헤더 안에서만 등장하는
+    /// 콤보를 통째로 놓쳤고(= allOn/allOff 스윕이 그 분기를 영원히 안 봤다), 새로 붙인 값 스윕도
+    /// 요구를 76 중 38 밖에 못 모았다(실측 — 이 정정 전후 숫자).
+    ///
+    /// 위임 대상은 번역기 메모 키가 쓰는 바로 그 함수라(`GLSLTranslator._memoizedTranslate`),
+    /// **전처리가 실제로 보게 될 텍스트와 정의상 같다** — 두 벌로 유지하면 또 갈린다.
+    static func inlineIncludes(_ src: String, include: (String) -> String?) -> String {
+        ShaderPreprocessor.inlinedSource(src, include: include)
     }
 
     private static let ifDirectiveRe = try! NSRegularExpression(
@@ -188,6 +193,61 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
         let ns = s as NSString
         return compiled.filter { $0.re.firstMatch(in: s, range: NSRange(location: 0, length: ns.length)) != nil }
             .map { $0.name }
+    }
+
+    // MARK: - stage_in / 정점 반환 구조체 멤버 타입 린트
+
+    /// MSL 이 `[[stage_in]]` 구조체 멤버로 **허용하는** 타입(스칼라·벡터)만. 스펙(2026-06-04 판) 5.2.4:
+    /// "The members of the structure can be: A scalar integer or floating-point value. A vector of
+    /// integer or floating-point values. … **You cannot use the `stage_in` attribute to declare members
+    /// of the structure that are packed vectors, matrices, structures, bitfields, references or pointers
+    /// to a type, or arrays of scalars, vectors, or matrices.**"
+    /// 그리고 함수 제약 절: "The return type of a vertex or fragment function cannot include an element
+    /// that is a packed vector type, **matrix type**, a structure type, a reference, or a pointer to a type."
+    /// `Vary` 는 **정점 반환 타입이자 프래그먼트 `[[stage_in]]`** 이라 두 금지에 다 걸린다.
+    ///
+    /// 왜 별도 린트인가: 위 `untranslated` 는 방출 MSL **전체**를 훑는 토큰 목록이라 이 부류를 못 잡는다.
+    /// `float3x3` 은 유니폼(`EngineU.mvp`)·지역 변수로 **정당하게** 나오므로 전역 금칙어가 될 수 없고,
+    /// GLSL 철자 `mat3` 도 아니라 "matN 타입" 패턴에 안 걸린다. 구조체 **범위**로 봐야만 걸린다.
+    ///
+    /// 실사고(2026-08-21 실측): `varying mat3 v_XForm;`(cursorripple preview, `PERSPECTIVE == 1`)이
+    /// `struct Vary { … float3x3 v_XForm; }` 로 그대로 나가 Metal 컴파일이 확정 실패했다. 종전
+    /// 스윕 3구성이 그 구성을 **실제로 번역했는데도** 초록이었다 — 토큰 목록에 걸릴 것이 없었기 때문이다.
+    static let mslStageInScalarOrVector: Set<String> = [
+        "bool", "short", "ushort",
+        "float", "float2", "float3", "float4",
+        "half", "half2", "half3", "half4",
+        "int", "int2", "int3", "int4",
+        "uint", "uint2", "uint3", "uint4",
+    ]
+
+    /// `struct <name> { … };` 의 멤버 선언을 (선두 타입 토큰, 원문) 으로 뜯는다.
+    static func structMembers(_ structName: String, in msl: String) -> [(type: String, decl: String)] {
+        guard let s = msl.range(of: "struct \(structName) {") else { return [] }
+        guard let e = msl.range(of: "};", range: s.upperBound..<msl.endIndex) else { return [] }
+        var out: [(String, String)] = []
+        for raw in msl[s.upperBound..<e.lowerBound].split(separator: ";") {
+            let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty else { continue }
+            let head = t.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).first.map(String.init) ?? ""
+            out.append((head, t))
+        }
+        return out
+    }
+
+    /// 위반 멤버 목록(비면 적법). `[[position]]` 등 속성은 `;` 로 안 끊기므로 원문에 남아 있어도 무해하다.
+    static func illegalStageInMembers(in msl: String) -> [String] {
+        var bad: [String] = []
+        for name in ["Vary", "VIn"] {
+            for m in structMembers(name, in: msl) {
+                // 배열 멤버(`float2 v[4];`)도 금지 — 속성 `[[…]]` 와 구분하려고 `[[` 를 먼저 지운다.
+                let withoutAttrs = m.decl.replacingOccurrences(
+                    of: "\\[\\[[^\\]]*\\]\\]", with: "", options: .regularExpression)
+                if withoutAttrs.contains("[") { bad.append("\(name).\(m.decl) (배열 멤버)") }
+                if !mslStageInScalarOrVector.contains(m.type) { bad.append("\(name).\(m.decl)") }
+            }
+        }
+        return bad
     }
 
     /// **선언되면 쓰인다** 불변식 — 스테이지 빌트인은 이름만 남고 선언이 빠지는 것이 종전 실패 모드였다.
@@ -261,6 +321,8 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
             guard let t = GLSLTranslator.translate(vertex: p.vert, fragment: p.frag,
                                                    combos: p.comboDefaults, include: p.include) else { continue }
             for name in Self.untranslatedTokens(in: t.msl) { found[name, default: []].insert(p.id) }
+            XCTAssertEqual(Self.illegalStageInMembers(in: t.msl), [],
+                           "\(p.id): Vary/VIn 에 MSL 이 금지하는 멤버 타입이 있다")
             for (sym, attr) in Self.builtinDeclarations where t.msl.contains(sym) {
                 XCTAssertTrue(t.msl.contains(attr),
                               "\(p.id): \(sym) 을 쓰는데 \(attr) 선언이 없다")
@@ -292,6 +354,10 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
                     nilFailed.append(p.id); continue
                 }
                 for name in Self.untranslatedTokens(in: t.msl) { found[name, default: []].insert(p.id) }
+                // `varying mat3`(cursorripple preview, PERSPECTIVE=1)은 **여기서만** 도달한다 —
+                // 선언 기본값이 PERSPECTIVE=0 이라 위 테스트로는 영원히 안 보인다.
+                XCTAssertEqual(Self.illegalStageInMembers(in: t.msl), [],
+                               "\(p.id): 콤보 극단값에서 Vary/VIn 멤버 타입이 MSL 금지 종류다")
             }
         }
         XCTAssertEqual(nilFailed, [], "콤보 극단값에서 번역이 nil 을 냈다")
@@ -300,6 +366,115 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
         for (name, ids) in found {
             XCTAssertEqual(ids, Set(Self.knownGapsSweep[name] ?? []), "\(name) 잔존 셰이더 집합이 바뀌었다")
         }
+    }
+
+    // MARK: - 콤보 *값* 스윕
+
+    /// 위 3구성(기본값·전부 1·전부 0)이 **원리적으로 도달 못 하는** `#if NAME == N`(N≥2) 분기를 덮는다.
+    ///
+    /// 왜 필요한가 — 실측(2026-08-21, 동봉 239쌍): `#if`/`#elif` 의 리터럴 비교 중 세 구성 중
+    /// 어느 것으로도 참이 될 수 없는 (이름, 값) 쌍이 **76종**이고, 그런 분기를 하나라도 가진 셰이더가
+    /// **89쌍(37%)** 이다. 최대 덩어리가 `common_blending.h` 의 `ApplyBlending` 인데
+    /// `#if BLENDMODE == 1..32` 로 32갈래이고 **56쌍**이 그 헤더를 인라인한다. 즉 종전 스윕은
+    /// 블렌드 모드 코드의 대부분을 **한 줄도 번역해 본 적이 없었다** — `BlendVividLightf` 처럼
+    /// 매크로가 매크로를 부르는 3중 체인이 거기 들어 있다.
+    ///
+    /// 비용 통제: (이름, 값) 요구 하나당 **대표 셰이더 하나**만 고르고, 그 셰이더의 선언 기본값에서
+    /// 그 노브 하나만 그 값으로 바꾼다. 76 요구 → 76 번역(대표 20쌍). 전량이면 1,452 번역이다.
+    /// 노브를 하나만 흔드는 이유는 "전부 25" 같은 실물이 만들 수 없는 조합을 피하기 위해서다.
+    ///
+    /// 현재 결과(실측): nil 0건 · 새 미번역 토큰 0종. 즉 지금은 **무결점 확인**이고, 앞으로
+    /// 블렌드/커널/품질 분기를 건드리면 여기서 걸린다.
+    func testNoUntranslatedTokensAtEnumeratedComboValues() throws {
+        guard let root = Self.assetsRoot() else { throw XCTSkip("WAPLE_WE_ASSETS 미지정") }
+        let pairs = Self.collectPairs(root: root).sorted { $0.id < $1.id }
+        XCTAssertGreaterThan(pairs.count, 200, "쌍이 이만큼도 안 나오면 경로가 틀린 것")
+        var claimed = Set<ComboValueReq>()
+        var work: [(pair: Pair, req: ComboValueReq)] = []
+        for p in pairs {
+            for r in Self.unreachableComboValues(p).sorted(by: { ($0.name, $0.value) < ($1.name, $1.value) })
+            where claimed.insert(r).inserted {
+                work.append((p, r))
+            }
+        }
+        // **정확히 못 박는다.** CRLF 인라인이 다시 무동작이 되면(아래 `testIncludeInliningSurvivesCRLF`
+        // 가 잡는 그 결함) 이 수가 76 → 38 로 반토막 난다 — 실제로 그렇게 관측했다.
+        XCTAssertEqual(work.count, 76,
+                       "요구 수가 바뀌었다(자산 갱신 시 함께 고쳐라. 2026-08-21 실측 76): "
+                       + "\(work.map { "\($0.req.name)=\($0.req.value)" }.sorted())")
+        var nilFailed: [String] = []
+        var found: [String: Set<String>] = [:]
+        for (p, r) in work {
+            var combos = p.comboDefaults
+            combos[r.name] = r.value
+            guard let t = GLSLTranslator.translate(vertex: p.vert, fragment: p.frag,
+                                                   combos: combos, include: p.include) else {
+                nilFailed.append("\(p.id)[\(r.name)=\(r.value)]"); continue
+            }
+            for name in Self.untranslatedTokens(in: t.msl) {
+                found[name, default: []].insert("\(p.id)[\(r.name)=\(r.value)]")
+            }
+            XCTAssertEqual(Self.illegalStageInMembers(in: t.msl), [],
+                           "\(p.id)[\(r.name)=\(r.value)]: Vary/VIn 멤버 타입이 MSL 금지 종류다")
+        }
+        XCTAssertEqual(nilFailed, [], "열거된 콤보 값에서 번역이 nil 을 냈다")
+        // `엔진 주입 함수`(PerformLighting_V1)는 foliage4 의 선언 기본값이 `LIGHTING=1` 이라
+        // 이 스윕에서도 그대로 남는다 — 위 `knownGaps` 와 같은 근거의 같은 갭이다.
+        XCTAssertEqual(Set(found.keys), ["엔진 주입 함수"],
+                       "값 스윕에서 새 미번역 토큰이 나왔다: \(found.mapValues { $0.sorted() })")
+        XCTAssertEqual(found["엔진 주입 함수"]?.allSatisfy { $0.hasPrefix("shaders/foliage4[") }, true,
+                       "엔진 주입 함수 잔존처가 바뀌었다: \(found["엔진 주입 함수"]?.sorted() ?? [])")
+    }
+
+    /// **CRLF 인클루드 인라인 못박기.** 동봉 셰이더는 전건 CRLF 인데, Swift 의 `"\r\n"` 은 단일
+    /// grapheme 이라 `split(separator: "\n")` 에 안 걸린다. 이 코퍼스 하네스가 정확히 그 함정에
+    /// 빠져 **헤더를 한 번도 인라인하지 않고** 있었다(2026-08-21 발견). 자산에 의존하지 않는
+    /// 합성 입력으로 못 박는다 — 자산이 어느 날 LF 로 바뀌어도 이 계약은 남아야 한다.
+    func testIncludeInliningSurvivesCRLF() {
+        let header = "// [COMBO] {\"combo\":\"HEADERONLY\",\"default\":0}\r\n#if HEADERONLY\r\nfloat h();\r\n#endif\r\n"
+        let src = "uniform float g_A;\r\n#include \"h.h\"\r\nvoid main() {}\r\n"
+        let inlined = Self.inlineIncludes(src) { $0 == "h.h" ? header : nil }
+        XCTAssertTrue(inlined.contains("HEADERONLY"), "CRLF 소스에서 헤더가 인라인되지 않았다: \(inlined)")
+        XCTAssertFalse(inlined.contains("#include"), "인클루드 줄이 남았다: \(inlined)")
+        XCTAssertTrue(inlined.contains("uniform float g_A"), "본문이 살아 있어야 한다")
+        // 대조군 — LF 소스도 같은 결과(종전 구현이 통과하던 유일한 경우).
+        let lf = Self.inlineIncludes("#include \"h.h\"\nvoid main() {}") { $0 == "h.h" ? "float h();" : nil }
+        XCTAssertTrue(lf.contains("float h();"))
+    }
+
+    struct ComboValueReq: Hashable { let name: String; let value: Int }
+
+    private static let comboCmpRe = try! NSRegularExpression(
+        pattern: "\\b([A-Z][A-Z0-9_]{2,})[ \t]*(==|>=|<=|!=|>|<)[ \t]*([0-9]+)\\b")
+
+    /// `#if`/`#elif` 의 리터럴 비교 중, {선언 기본값, 0, 1} 어느 값으로도 참이 될 수 없는 (이름, 값).
+    static func unreachableComboValues(_ p: Pair) -> Set<ComboValueReq> {
+        var out: Set<ComboValueReq> = []
+        for cond in matches(Self.ifDirectiveRe, in: p.inlined) {
+            // 지시문 꼬리 주석은 잘라낸다(`#if MSDF // SDF scaling` — 실물 msdf 폰트 셰이더).
+            var expr = cond
+            if let c = expr.range(of: "//") { expr = String(expr[..<c.lowerBound]) }
+            let ns = expr as NSString
+            for m in comboCmpRe.matches(in: expr, range: NSRange(location: 0, length: ns.length)) {
+                let name = ns.substring(with: m.range(at: 1))
+                let op = ns.substring(with: m.range(at: 2))
+                guard let v = Int(ns.substring(with: m.range(at: 3))) else { continue }
+                var reachable: Set<Int> = [0, 1]
+                if let d = p.comboDefaults[name] { reachable.insert(d) }
+                func holds(_ x: Int) -> Bool {
+                    switch op {
+                    case "==": return x == v
+                    case "!=": return x != v
+                    case ">=": return x >= v
+                    case "<=": return x <= v
+                    case ">":  return x > v
+                    default:   return x < v
+                    }
+                }
+                if !reachable.contains(where: holds) { out.insert(ComboValueReq(name: name, value: v)) }
+            }
+        }
+        return out
     }
 
     /// **전처리 단계의 지시문 잔재.** 위 두 스윕은 방출 MSL 만 본다 — 그런데 번역기 조립부
@@ -627,5 +802,107 @@ final class GLSLDialectGapTests: XCTestCase {
         let env = GLSLTypeAdapter.Env(vars: ["x": 1], functions: [:], functionParams: [:],
                                       intVars: [], structFields: [])
         XCTAssertEqual(GLSLTypeAdapter.adapt(body: "float y = x % 4;", env: env), "float y = fmod(x, 4.0);")
+    }
+}
+
+/// **행렬 varying 은 stage_in 에 못 들어간다** — 열 벡터로 펼치는 계약을 고정한다.
+///
+/// 왜 별도 클래스인가: 위 전건 스윕은 "동봉 코퍼스에 남아 있나" 를 보고, 여기는 "그래서 어떻게
+/// 번역하기로 했나" 를 고정한다. 스윕만 있으면 `float3x3` 멤버가 **사라지기만 하면** 통과라
+/// (예: varying 을 통째로 떨어뜨려도 초록) 오역도 초록이 된다.
+///
+/// 근거(MSL 스펙 2026-06-04 판):
+/// - 5.2.4 "You cannot use the `stage_in` attribute to declare members of the structure that are
+///   packed vectors, **matrices**, structures, bitfields, references or pointers to a type, or arrays…"
+/// - "The return type of a vertex or fragment function cannot include an element that is a packed
+///   vector type, **matrix type**, a structure type, a reference, or a pointer to a type."
+/// - 2.3 "A matrix of type `floatnxm` consists of n `floatm` vectors" · `m[i]` 는 **열** ·
+///   2.3.2 "construct a matrix of type T with n columns and m rows from n vectors of type T with m
+///   components" · "Metal constructs and consumes matrix components in column-major order".
+final class GLSLMatrixVaryingTests: XCTestCase {
+
+    private func translated(_ glslType: String, body: String = "v_M[0].x") throws -> String {
+        let v = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        varying \(glslType) v_M;
+        void main() {
+            gl_Position = vec4(a_Position, 1.0);
+            v_M = \(glslType)(1.0);
+        }
+        """
+        let f = """
+        varying \(glslType) v_M;
+        void main() { gl_FragColor = vec4(\(body), 0.0, 0.0, 1.0); }
+        """
+        return try XCTUnwrap(GLSLTranslator.translate(vertex: v, fragment: f, combos: [:])).msl
+    }
+
+    /// `struct Vary` 안에 행렬 멤버가 남으면 Metal 이 라이브러리 자체를 못 만든다.
+    func testMat3VaryingBecomesThreeFloat3Members() throws {
+        let msl = try translated("mat3")
+        XCTAssertEqual(GLSLBundledShaderRegressionTests.illegalStageInMembers(in: msl), [])
+        for k in 0..<3 {
+            XCTAssertTrue(msl.contains("float3 v_M_\(k);"), "열 \(k) 멤버가 없다: \(msl)")
+        }
+        XCTAssertFalse(GLSLBundledShaderRegressionTests
+            .structMembers("Vary", in: msl).contains { $0.type == "float3x3" },
+                       "Vary 에 행렬 멤버가 남았다: \(msl)")
+    }
+
+    /// 열 순서 왕복 — vert 는 `m[i]` 를 i 번째 멤버로 내보내고 frag 는 같은 순서로 재구성해야 한다.
+    /// 순서가 어긋나면 **컴파일은 성공하고 그림만 틀린다**(전치된 행렬) — 그래서 명시로 못 박는다.
+    func testMat3VaryingRoundTripsColumnOrder() throws {
+        let msl = try translated("mat3")
+        XCTAssertTrue(msl.contains("float3x3 v_M = float3x3(in.v_M_0, in.v_M_1, in.v_M_2);"),
+                      "frag 재구성이 열 순서대로가 아니다: \(msl)")
+        for k in 0..<3 {
+            XCTAssertTrue(msl.contains("out.v_M_\(k) = v_M[\(k)];"), "vert 열 \(k) 복사가 없다: \(msl)")
+        }
+        XCTAssertTrue(msl.contains("float3x3 v_M;"), "vert 로컬 선언이 없다: \(msl)")
+    }
+
+    /// `mat4x3` = **4열 × 3행**(MSL `float4x3` 과 같은 규약) — 열은 3성분이다.
+    /// 실물 `shaders/base/model_vertex_v1.h:10` 의 `uniform mat4x3 g_Bones[…]` 와 같은 타입.
+    func testMat4x3VaryingUsesFourThreeComponentColumns() throws {
+        let msl = try translated("mat4x3", body: "v_M[3].x")
+        XCTAssertEqual(GLSLBundledShaderRegressionTests.illegalStageInMembers(in: msl), [])
+        XCTAssertTrue(msl.contains("float4x3 v_M = float4x3(in.v_M_0, in.v_M_1, in.v_M_2, in.v_M_3);"), msl)
+        for k in 0..<4 { XCTAssertTrue(msl.contains("float3 v_M_\(k);"), "열 \(k): \(msl)") }
+    }
+
+    /// 대조군 — 벡터 varying 은 종전 그대로 손대지 않는다(무회귀의 형태).
+    func testVectorVaryingIsUntouched() throws {
+        let v = """
+        attribute vec3 a_Position;
+        varying vec3 v_M;
+        void main() { gl_Position = vec4(a_Position, 1.0); v_M = a_Position; }
+        """
+        let f = """
+        varying vec3 v_M;
+        void main() { gl_FragColor = vec4(v_M, 1.0); }
+        """
+        let msl = try XCTUnwrap(GLSLTranslator.translate(vertex: v, fragment: f, combos: [:])).msl
+        XCTAssertTrue(msl.contains("float3 v_M;"))
+        XCTAssertFalse(msl.contains("v_M_0"), "벡터 varying 을 쪼개면 안 된다: \(msl)")
+    }
+
+    /// 실물 확인 — `effects/cursorripple/preview/…/cursorripple_apply_force` 의 `PERSPECTIVE == 1`.
+    /// 이것이 동봉 239쌍 중 행렬 varying 을 가진 **유일한** 셰이더다(비-preview 판은 같은 줄이
+    /// `//varying mat3 v_XForm;` 로 주석 처리돼 있다 — WE 저작자가 직접 껐다).
+    func testBundledCursorRipplePreviewIsLegalAtPerspectiveOne() throws {
+        guard let root = GLSLBundledShaderRegressionTests.assetsRoot() else { throw XCTSkip("WAPLE_WE_ASSETS 미지정") }
+        let pairs = GLSLBundledShaderRegressionTests.collectPairs(root: root)
+        let id = "effects/cursorripple/preview/shaders/effects/cursorripple_apply_force"
+        let p = try XCTUnwrap(pairs.first { $0.id == id }, "동봉 자산에서 \(id) 를 못 찾았다")
+        var combos = p.comboDefaults
+        XCTAssertEqual(combos["PERSPECTIVE"], 0, "선언 기본값이 0 이라 이 결함은 기본 구성에서 안 보인다")
+        combos["PERSPECTIVE"] = 1
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: p.vert, fragment: p.frag,
+                                                       combos: combos, include: p.include))
+        XCTAssertEqual(GLSLBundledShaderRegressionTests.illegalStageInMembers(in: t.msl), [])
+        XCTAssertTrue(t.msl.contains("float3x3 v_XForm = float3x3(in.v_XForm_0, in.v_XForm_1, in.v_XForm_2);"),
+                      "frag 가 열 벡터에서 행렬을 복원해야 한다")
+        XCTAssertTrue(t.msl.contains("out.v_XForm_2 = v_XForm[2];"), "vert 가 열을 내보내야 한다")
     }
 }
