@@ -6,34 +6,34 @@
    "id": "linkedLibs.sourcePaths",
    "value": {
     "DirectXMath": {
-     "C:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.26100.0\\um\\DirectXMathMatrix.inl": "0x476680"
+     "C:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.26100.0\\um\\DirectXMathMatrix.inl": "0x476680 (VA 0x140477880)"
     },
     "ffts": {
-     "D:\\dev\\we\\windows\\src\\ffts\\src\\ffts_static.c": "0x48a040"
+     "D:\\dev\\we\\windows\\src\\ffts\\src\\ffts_static.c": "0x48a040 (VA 0x14048b240)"
     },
     "glm": {
-     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_mat3x3.inl": "0x485850",
-     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_mat4x4.inl": "0x476c70",
-     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_vec2.inl": "0x48db80",
-     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_vec3.inl": "0x476bf0",
-     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_vec4.inl": "0x476b20",
-     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\gtc\\matrix_access.inl": "0x4857d0",
-     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\gtc\\quaternion.inl": "0x48fe80"
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_mat3x3.inl": "0x485850 (VA 0x140486a50)",
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_mat4x4.inl": "0x476c70 (VA 0x140477e70)",
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_vec2.inl": "0x48db80 (VA 0x14048ed80)",
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_vec3.inl": "0x476bf0 (VA 0x140477df0)",
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_vec4.inl": "0x476b20 (VA 0x140477d20)",
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\gtc\\matrix_access.inl": "0x4857d0 (VA 0x1404869d0)",
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\gtc\\quaternion.inl": "0x48fe80 (VA 0x140491080)"
     },
     "json": {
-     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson/document.h": "0x4881d0",
-     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\encodings.h": "0x4762f0",
-     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\internal/stack.h": "0x476000",
-     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\internal\\../allocators.h": "0x488330",
-     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\internal\\pow10.h": "0x4756a0",
-     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\reader.h": "0x475f60",
-     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\stream.h": "0x4763a0",
-     "D:\\dev\\we\\windows\\src\\json\\src\\json_reader.cpp": "0x483f00",
-     "D:\\dev\\we\\windows\\src\\json\\src\\json_value.cpp": "0x477440",
-     "D:\\dev\\we\\windows\\src\\json\\src\\json_writer.cpp": "0x4776a0"
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson/document.h": "0x4881d0 (VA 0x1404893d0)",
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\encodings.h": "0x4762f0 (VA 0x1404774f0)",
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\internal/stack.h": "0x476000 (VA 0x140477200)",
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\internal\\../allocators.h": "0x488330 (VA 0x140489530)",
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\internal\\pow10.h": "0x4756a0 (VA 0x1404768a0)",
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\reader.h": "0x475f60 (VA 0x140477160)",
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\stream.h": "0x4763a0 (VA 0x1404775a0)",
+     "D:\\dev\\we\\windows\\src\\json\\src\\json_reader.cpp": "0x483f00 (VA 0x140485100)",
+     "D:\\dev\\we\\windows\\src\\json\\src\\json_value.cpp": "0x477440 (VA 0x140478640)",
+     "D:\\dev\\we\\windows\\src\\json\\src\\json_writer.cpp": "0x4776a0 (VA 0x1404788a0)"
     },
     "wallpaper": {
-     "D:\\dev\\we\\windows\\src\\wallpaper\\src\\wallpaper\\videowallpaper.cpp": "0x487370"
+     "D:\\dev\\we\\windows\\src\\wallpaper\\src\\wallpaper\\videowallpaper.cpp": "0x487370 (VA 0x140488570)"
     }
    },
    "status": "확정",
@@ -41,7 +41,7 @@
     {
      "kind": "binary",
      "ref": "wallpaper64.exe (WE 2.8.42 원본, sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes)",
-     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋 · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
+     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋과 VA · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
     }
    ]
   },
@@ -49,23 +49,23 @@
    "id": "linkedLibs.assertions",
    "value": {
     "glm": {
-     "(i) >= 0 && (i) < (this->length())": "0x476ba0",
-     "index >= 0 && index < m.length()": "0x485780",
-     "index >= 0 && index < m[0].length()": "0x48d210"
+     "(i) >= 0 && (i) < (this->length())": "0x476ba0 (VA 0x140477da0)",
+     "index >= 0 && index < m.length()": "0x485780 (VA 0x140486980)",
+     "index >= 0 && index < m[0].length()": "0x48d210 (VA 0x14048e410)"
     },
     "DirectXMath": {
-     "NearZ > 0.f && FarZ > 0.f": "0x476730",
-     "!XMScalarNearEqual(FarZ, NearZ, 0.00001f)": "0x476770",
-     "!XMScalarNearEqual(FovAngleY, 0.0f, 0.00001f * 2.0f)": "0x4767d0",
-     "!XMScalarNearEqual(AspectRatio, 0.0f, 0.00001f)": "0x476840"
+     "NearZ > 0.f && FarZ > 0.f": "0x476730 (VA 0x140477930)",
+     "!XMScalarNearEqual(FarZ, NearZ, 0.00001f)": "0x476770 (VA 0x140477970)",
+     "!XMScalarNearEqual(FovAngleY, 0.0f, 0.00001f * 2.0f)": "0x4767d0 (VA 0x1404779d0)",
+     "!XMScalarNearEqual(AspectRatio, 0.0f, 0.00001f)": "0x476840 (VA 0x140477a40)"
     },
     "json": {
-     "IsBool()": "0x488240",
-     "IsArray()": "0x488258",
-     "IsObject()": "0x488270"
+     "IsBool()": "0x488240 (VA 0x140489440)",
+     "IsArray()": "0x488258 (VA 0x140489458)",
+     "IsObject()": "0x488270 (VA 0x140489470)"
     },
     "ffts": {
-     "N == 32": "0x48a0a0"
+     "N == 32": "0x48a0a0 (VA 0x14048b2a0)"
     }
    },
    "status": "확정",
@@ -73,7 +73,7 @@
     {
      "kind": "binary",
      "ref": "wallpaper64.exe (WE 2.8.42 원본, sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes)",
-     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋 · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
+     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋과 VA · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
     }
    ]
   },
@@ -82,81 +82,1098 @@
    "value": {
     "왜 따로 재는가": "위 sourcePaths/assertions 는 UTF-16LE 전용이다. 그 근거가 MSVC 어서션의 __FILE__ 이고, 그게 wide 인 이유는 `_wassert` 를 쓰는 **C++ 라이브러리**이기 때문이다. 즉 이 방법은 **C 라이브러리를 원리적으로 못 본다** — 그쪽은 narrow 문자열만 남긴다.",
     "[2026-08-20 자기정정]": "이 문서가 함정 ⑨('ASCII-only 검색이 거짓 부재를 만든다')를 세워 놓고 **반대 방향으로 같은 실수**를 하고 있었다. 아래 넷은 UTF-16LE 스캔에 한 건도 안 걸린다(utf16leHits 전부 0) — 정본이 '서드파티 전수' 라고 적으면서 넷을 통째로 빠뜨렸다.",
+    "[2026-08-21 두 번째 자기정정]": "그 수정도 여전히 **문자열 스캔**이었다. 문자열이 아예 없는 라이브러리(msdfgen·Perlin Simplex Noise)는 이 표에도 못 들어온다 — `linkedLibs.stringlessLibs` 가 그 부류를 맡는다. lz4 는 이번에 여기 추가됐지만 걸린 문자열이 WE 자신의 실패 메시지 한 줄이라 동정의 본체는 역시 코드 지문 쪽이다.",
     "libraries": {
      "harfbuzz": {
-      "role": "텍스트 셰이핑. 정적 링크(코드 대역이 .text 후반 상당 부분).",
+      "role": "텍스트 셰이핑. 정적 링크(코드 대역이 .text 후반 상당 부분). 셰이퍼 목록에 `directwrite` 가 있고 PE 임포트에 DWrite.dll 이 있다.",
       "markers": {
        "harfbuzz ": {
-        "ascii": "0x46f5a0",
+        "ascii": "0x46f5a0 (VA 0x1404707a0)",
         "utf16le": null
        },
        "buffer verify error: clusters are not monotone.": {
-        "ascii": "0x46f5b0",
+        "ascii": "0x46f5b0 (VA 0x1404707b0)",
         "utf16le": null
        },
        "struct hb_shape_plan_t *__cdecl hb_shape_plan_create2": {
-        "ascii": "0x470430",
+        "ascii": "0x470430 (VA 0x140471630)",
+        "utf16le": null
+       },
+       "HB_SHAPER_LIST": {
+        "ascii": "0x4706d0 (VA 0x1404718d0)",
+        "utf16le": null
+       },
+       "directwrite": {
+        "ascii": "0x456858 (VA 0x140457a58)",
         "utf16le": null
        }
       },
       "utf16leHits": 0
      },
      "freetype": {
-      "role": "폰트 래스터. 모듈 19종 등록(truetype·cff·type1·pcf·bdf·sdf·ot-svg …).",
+      "role": "폰트 래스터. 등록 모듈은 아래 `modules` 에서 실제로 센다(종전 정본의 '19종' 은 그 수를 재는 코드가 없는 숫자였다). `ot-svg` 는 2.12.0 도입이라 **버전 하한 2.12**.",
       "markers": {
        "FREETYPE_PROPERTIES": {
-        "ascii": "0x435800",
+        "ascii": "0x435800 (VA 0x140436a00)",
         "utf16le": null
        },
        "resource.frk/": {
-        "ascii": "0x435710",
+        "ascii": "0x435710 (VA 0x140436910)",
         "utf16le": null
        },
        ".AppleDouble/": {
-        "ascii": "0x435730",
+        "ascii": "0x435730 (VA 0x140436930)",
+        "utf16le": null
+       },
+       "ot-svg": {
+        "ascii": "0x4355fc (VA 0x1404367fc)",
+        "utf16le": null
+       },
+       "truetype": {
+        "ascii": "0x435620 (VA 0x140436820)",
+        "utf16le": null
+       },
+       "psnames": {
+        "ascii": "0x44faa0 (VA 0x140450ca0)",
         "utf16le": null
        }
       },
-      "utf16leHits": 0
+      "utf16leHits": 0,
+      "modules": {
+       "truetype": "0x435620 (VA 0x140436820)",
+       "type1": "0x435614 (VA 0x140436814)",
+       "type42": "0x43567c (VA 0x14043687c)",
+       "t1cid": "0x43560c (VA 0x14043680c)",
+       "cff": "0x43561c (VA 0x14043681c)",
+       "sfnt": "0x43ab54 (VA 0x14043bd54)",
+       "pfr": "0x43e190 (VA 0x14043f390)",
+       "winfonts": "0x43ea10 (VA 0x14043fc10)",
+       "pcf": "0x43ecfc (VA 0x14043fefc)",
+       "bdf": "0x43ecf4 (VA 0x14043fef4)",
+       "psaux": "0x43bb3c (VA 0x14043cd3c)",
+       "psnames": "0x44faa0 (VA 0x140450ca0)",
+       "pshinter": "0x43bb18 (VA 0x14043cd18)",
+       "autofitter": "0x439f10 (VA 0x14043b110)",
+       "smooth": "0x4506b8 (VA 0x1404518b8)",
+       "raster": null,
+       "sdf": "0x450968 (VA 0x140451b68)",
+       "bsdf": "0x45096c (VA 0x140451b6c)",
+       "ot-svg": "0x4355fc (VA 0x1404367fc)",
+       "gzip": null,
+       "lzw": null,
+       "bzip2": null
+      },
+      "moduleCount": 18
      },
      "zlib": {
-      "role": "inflate 전용(1.3.1). deflate 없음 — FreeType ftgzip.c 동봉분으로 보인다[추정].",
+      "role": "inflate 전용(1.3.1). deflate 없음 — FreeType ftgzip.c 동봉분으로 보인다[추정]. FreeType 이 번들 zlib 을 1.3.1 로 올린 것이 2.13.3 이라, 맞다면 FreeType 도 2.13.3 이상이다[추정]. 아래 freetype.modules 에 `gzip` 이 없는 것과 모순되지 않는다 — ftgzip.c 는 **등록 모듈이 아니라** 스트림 함수(FT_Gzip_Uncompress)라 모듈 이름 표에 안 나온다.",
       "markers": {
        " inflate 1.3.1 Copyright 1995-2024 Mark Adler ": {
-        "ascii": "0x451308",
+        "ascii": "0x451308 (VA 0x140452508)",
         "utf16le": null
        }
       },
       "utf16leHits": 0
      },
      "wuffs": {
-      "role": "이미지·JSON 코덱(google/wuffs). `#png:`/`#json:`/`#gzip:` 상태 문자열이 고유 규약. 라이브러리 이름 문자열 자체는 없어 동정은 **강한 추정**이다.",
+      "role": "이미지·JSON 코덱(google/wuffs). `#png:`/`#json:`/`#gzip:` 상태 문자열이 고유 규약. 라이브러리 이름 문자열 자체는 없어 동정은 **강한 추정**이다. 어느 코덱이 컴파일됐는지는 아래 `statusPrefixes` 에서 실제로 센다 — GIF 디코드도 여기다(CGif 가 아니다).",
       "markers": {
        "wuffs_aux::DecodeJson: no match": {
-        "ascii": "0x478020",
+        "ascii": "0x478020 (VA 0x140479220)",
         "utf16le": null
        },
        "#png: internal error: zlib decoder did not exhaust its input": {
-        "ascii": "0x478678",
+        "ascii": "0x478678 (VA 0x140479878)",
         "utf16le": null
        },
        "#gzip: bad encoding flags": {
-        "ascii": "0x4790f0",
+        "ascii": "0x4790f0 (VA 0x14047a2f0)",
+        "utf16le": null
+       }
+      },
+      "utf16leHits": 0,
+      "statusPrefixes": {
+       "base": {
+        "count": 28,
+        "firstAt": "0x481200 (VA 0x140482400)"
+       },
+       "bmp": {
+        "count": 5,
+        "firstAt": "0x47dff0 (VA 0x14047f1f0)"
+       },
+       "bzip2": {
+        "count": 10,
+        "firstAt": "0x47de18 (VA 0x14047f018)"
+       },
+       "cbor": {
+        "count": 4,
+        "firstAt": "0x47d930 (VA 0x14047eb30)"
+       },
+       "deflate": {
+        "count": 18,
+        "firstAt": "0x479430 (VA 0x14047a630)"
+       },
+       "gif": {
+        "count": 7,
+        "firstAt": "0x479240 (VA 0x14047a440)"
+       },
+       "gzip": {
+        "count": 5,
+        "firstAt": "0x4790f0 (VA 0x14047a2f0)"
+       },
+       "json": {
+        "count": 9,
+        "firstAt": "0x478eb0 (VA 0x14047a0b0)"
+       },
+       "lzw": {
+        "count": 3,
+        "firstAt": "0x479318 (VA 0x14047a518)"
+       },
+       "nie": {
+        "count": 4,
+        "firstAt": "0x478990 (VA 0x140479b90)"
+       },
+       "png": {
+        "count": 15,
+        "firstAt": "0x478678 (VA 0x140479878)"
+       },
+       "tga": {
+        "count": 4,
+        "firstAt": "0x478330 (VA 0x140479530)"
+       },
+       "wbmp": {
+        "count": 2,
+        "firstAt": "0x478298 (VA 0x140479498)"
+       },
+       "zlib": {
+        "count": 7,
+        "firstAt": "0x4788a0 (VA 0x140479aa0)"
+       }
+      },
+      "statusPrefixCount": 14
+     },
+     "lz4": {
+      "role": ".pkg/.tex 압축 해제. 문자열은 WE 자신의 실패 메시지뿐이고 라이브러리 이름은 없다.",
+      "markers": {
+       "LZ4 error.": {
+        "ascii": "0x4851f8 (VA 0x1404863f8)",
         "utf16le": null
        }
       },
       "utf16leHits": 0
      }
     },
-    "총계": "UTF-16LE 경로로 잡히는 5종 + ASCII 로만 잡히는 4종 = 9종",
-    "남은 한계": "이 목록도 **하드코딩 마커**다. 새 라이브러리가 들어오면 여전히 못 잡는다. 구조적으로 닫으려면 문자열이 아니라 코드 지문(고유 상수·함수 시그니처)으로 가야 하는데 그건 별건이다."
+    "총계": "UTF-16LE 경로로 잡히는 5종(WE 자체 트리 `wallpaper` 포함, `json` 은 RapidJSON+JsonCpp 병존) + ASCII 로 잡히는 5종 + 문자열 없이 코드 지문으로만 잡히는 3종",
+    "남은 한계": "이 목록도 **하드코딩 마커**다. 새 라이브러리가 들어오면 여전히 못 잡는다. 2026-08-21 에 그물을 하나 더 걸었다 — WE 자신의 귀속 페이지에 **모르는 이름이 생기면 실패**한다(`linkedLibs.vendorAttribution`). 완전히 닫히지는 않는다: 귀속 페이지에 안 적힌 라이브러리는 여전히 안 보인다."
    },
    "status": "확정",
    "evidence": [
     {
      "kind": "binary",
      "ref": "wallpaper64.exe (WE 2.8.42 원본, sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes)",
-     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋 · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
+     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋과 VA · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
+    }
+   ]
+  },
+  {
+   "id": "linkedLibs.stringlessLibs",
+   "value": {
+    "왜 이 항목이 있는가": "문자열 스캔이 원리적으로 못 보는 부류가 있다 — 로그도 어서션도 없는 헤더/소스 몇 개짜리 C++ 라이브러리. **msdfgen 은 wallpaper64.exe 에 자기 이름을 한 글자도 남기지 않는다**(`msdfgen` ASCII·UTF-16LE 양쪽 0건). 그래서 .rdata 에 구워진 고유 상수·표와 그것을 쓰는 함수 VA 로 동정한다.",
+    "검증 방식": "데이터 지문은 **기대 히트수**와 다르면, 코드 지문은 그 VA 의 선두 바이트가 다르면 스크립트가 정본을 쓰지 않고 죽는다. 근거가 엉뚱한 곳을 가리키는 것이 근거가 없는 것보다 나쁘다는 이 리포의 반복된 교훈을 코드 지문에도 적용했다.",
+    "이름 검색을 읽는 법": "아래 nameSearches 는 **라이브러리 이름 자체**를 양쪽 인코딩으로 찾은 결과다. msdfgen 은 다섯 토큰 전부 0건이다 — 이 문서가 코드 지문으로 가야 했던 이유가 이 줄에 있다. 나머지 셋의 히트는 라이브러리 이름이 아니다: `simplexnoise` @VA 0x140491f98 과 `fbmnoise` @VA 0x140491fa8 은 파티클 **remap 오퍼레이터 이름**이고(같은 표에 remap·multiply·triangle·average 가 나란히 있다), `LZ4` 는 WE 자신의 실패 메시지 `\"LZ4 error.\"` 다.",
+    "nameSearches": {
+     "msdfgen": {
+      "msdfgen": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "Chlumsky": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "Chlumský": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "MSDFgen": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "multi-channel signed distance": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "perlin-simplex-noise": {
+      "SimplexNoise": {
+       "ascii": [
+        "0x490d98 (VA 0x140491f98)"
+       ],
+       "utf16le": []
+      },
+      "Rombauts": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "simplexnoise1234": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "Gustavson": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "gustavson-perm-sse": {
+      "permMod12": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "simplex": {
+       "ascii": [
+        "0x490d98 (VA 0x140491f98)"
+       ],
+       "utf16le": []
+      }
+     },
+     "lz4": {
+      "LZ4_decompress": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "lz4.c": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "Yann Collet": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "LZ4": {
+       "ascii": [
+        "0x4851f8 (VA 0x1404863f8)"
+       ],
+       "utf16le": []
+      }
+     }
+    },
+    "dataFingerprints": {
+     "msdfgen": {
+      "solveCubicNormed 1/9": {
+       "bytes": "1cc7711cc771bc3f",
+       "len": 8,
+       "va": [
+        "0x140492738"
+       ],
+       "hits": 1,
+       "expected": 1
+      },
+      "solveCubicNormed 1/54": {
+       "bytes": "682fa1bd84f6923f",
+       "len": 8,
+       "va": [
+        "0x140492718"
+       ],
+       "hits": 1,
+       "expected": 1
+      },
+      "solveCubicNormed 2*M_PI": {
+       "bytes": "182d4454fb211940",
+       "len": 8,
+       "va": [
+        "0x1404927f8"
+       ],
+       "hits": 1,
+       "expected": 1
+      },
+      "symmetricalTrichotomy 2.875": {
+       "bytes": "0000000000000740",
+       "len": 8,
+       "va": [
+        "0x1404927c0"
+       ],
+       "hits": 1,
+       "expected": 1
+      },
+      "symmetricalTrichotomy 1.4375": {
+       "bytes": "000000000000f73f",
+       "len": 8,
+       "va": [
+        "0x140492798"
+       ],
+       "hits": 1,
+       "expected": 1
+      },
+      "Shape::normalize CORNER_DOT_EPSILON-1": {
+       "bytes": "e90b21e7fdffefbf",
+       "len": 8,
+       "va": [
+        "0x1404929c8"
+       ],
+       "hits": 1,
+       "expected": 1
+      },
+      "ErrorCorrectionConfig 1.11111111111111111": {
+       "bytes": "721cc7711cc7f13f",
+       "len": 8,
+       "va": [
+        "0x140485040",
+        "0x140485048",
+        "0x140492788",
+        "0x140492f20",
+        "0x140492f28"
+       ],
+       "hits": 5,
+       "expected": 5
+      }
+     },
+     "perlin-simplex-noise": {
+      "perm[256] (이 중 0x140484f40 이 Rombauts 판)": {
+       "bytes": "97a0895b5a0f830dc95f6035c2e907e1…",
+       "len": 256,
+       "va": [
+        "0x1404833a0",
+        "0x1404834a0",
+        "0x140484f40"
+       ],
+       "hits": 3,
+       "expected": 3
+      },
+      "noise(x) 0.395f": {
+       "bytes": "713dca3e",
+       "len": 4,
+       "va": [
+        "0x1404926b0"
+       ],
+       "hits": 1,
+       "expected": 1
+      },
+      "noise(x,y) 45.23065f": {
+       "bytes": "30ec3442",
+       "len": 4,
+       "va": [
+        "0x1404928c8"
+       ],
+       "hits": 1,
+       "expected": 1
+      },
+      "noise(x,y) 2*G2 = 0.4226497f": {
+       "bytes": "8c65d83e",
+       "len": 4,
+       "va": [
+        "0x1404926b4"
+       ],
+       "hits": 1,
+       "expected": 1
+      }
+     },
+     "gustavson-perm-sse": {
+      "permMod12[512]": {
+       "bytes": "0704050706030b01090b000502050709…",
+       "len": 512,
+       "va": [
+        "0x1404831a0"
+       ],
+       "hits": 1,
+       "expected": 1
+      },
+      "perm[512]": {
+       "bytes": "97a0895b5a0f830dc95f6035c2e907e1…",
+       "len": 512,
+       "va": [
+        "0x1404833a0"
+       ],
+       "hits": 1,
+       "expected": 1
+      }
+     }
+    },
+    "codeSites": {
+     "msdfgen": {
+      "edgeColoringSimple": {
+       "va": "0x140283500",
+       "head": "4c8944241848894c24085553",
+       "verified": true,
+       "why": "2.875 @VA 0x1404927c0 · 1.4375 @VA 0x140492798 를 쓴다"
+      },
+      "solveCubic#1": {
+       "va": "0x140286990",
+       "head": "488bc4488950105341544157",
+       "verified": true,
+       "why": "1e6 임계 @VA 0x140492870 · 1/9 · 1/54 · 27.0"
+      },
+      "solveCubic#2": {
+       "va": "0x140288460",
+       "head": "488bc4f20f11582053565741",
+       "verified": true,
+       "why": "같은 상수 조합의 두 번째 인스턴스(다른 번역 단위)"
+      },
+      "WE 폰트 MSDF 아틀라스 빌더": {
+       "va": "0x1401ae080",
+       "head": "4c894c24204c894424184889",
+       "verified": true,
+       "why": "0x1401af40e 에서 angleThreshold 3.0 을 싣고 0x1401af41a 에서 edgeColoringSimple 을 부른다. 0x1401af111 이 -0.999999(=CORNER_DOT_EPSILON-1)"
+      }
+     },
+     "perlin-simplex-noise": {
+      "noise(float x)": {
+       "va": "0x14027b090",
+       "head": "4883ec18f30f101d547f2100",
+       "verified": true,
+       "why": "perm[256] @VA 0x140484f40 · grad = 1.0f+(h&7) · 0.395f"
+      },
+      "noise(float x, float y)": {
+       "va": "0x14027b170",
+       "head": "488bc44881eca80000000f28",
+       "verified": true,
+       "why": "F2 @VA 0x1404926a4 · G2 @VA 0x140492680 · 45.23065f"
+      },
+      "fractal(octaves, x)": {
+       "va": "0x14027b4b0",
+       "head": "488bc44881ec980000000f29",
+       "verified": true,
+       "why": "옥타브 루프(lacunarity·persistence) — 라이브러리 상위 API"
+      }
+     },
+     "gustavson-perm-sse": {
+      "simplex3D SoA #1": {
+       "va": "0x1400fc220",
+       "head": "488bc4488950104889480853",
+       "verified": true,
+       "why": "F3 @VA 0x1404835e0 · G3 @VA 0x140483600 · 0.6f @VA 0x140483620 · &255 @VA 0x140483630 · perm/permMod12 를 [reg+base+0x4833a0] 로 색인"
+      },
+      "simplex3D SoA #2": {
+       "va": "0x1400fd010",
+       "head": "488bc4488958184889501048",
+       "verified": true,
+       "why": "같은 상수 조합"
+      }
+     },
+     "lz4": {
+      "LZ4_decompress_safe": {
+       "va": "0x14014c160",
+       "head": "488954241048894c24085648",
+       "verified": true,
+       "why": "src==NULL||dstCapacity<0 → -1, srcSize==1&&*src==0 → 0 가드가 LZ4 1.9.x 원문 그대로. 호출부 0x1400ce7bc 가 실패 시 'LZ4 error.' @VA 0x1404863f8 를 찍는다"
+      }
+     }
+    },
+    "msdfgen": {
+     "무엇": "Viktor Chlumsky 의 multi-channel signed distance field 생성기. WE 는 이걸로 폰트 아틀라스를 **런타임에** 굽는다.",
+     "왜 런타임인가": "동봉 폰트 자산이 전부 .ttf/.otf 아웃라인이고 미리 구운 MSDF 아틀라스가 하나도 없다(`Sources/WapleRender/Resources/WEAssets/fonts/`). 소비 쪽 셰이더는 있다 — `shaders/font.frag` 의 `median(r,g,b)` 와 `ScreenPxRange()`, 그리고 `materials/fonts/basefont_msdf.json` 등 MSDF 콤보 머티리얼 4종. 즉 **생성기는 바이너리 안에 있어야 한다.**",
+     "버전": "정확한 릴리스 태그는 바이너리에 없다(버전 문자열 자체가 없다). 코드 지문으로 하한만 말할 수 있다 — `Shape::normalize()` 의 `MSDFGEN_CORNER_DOT_EPSILON-1`(= -0.999999) 과 `MSDFGEN_DEFAULT_MIN_DEVIATION_RATIO`(= 1.11111111111111111), 그리고 `solveCubic` 의 `1e6` 임계(옛 판은 `1e-14` 였다)가 모두 있다. 연도 근거는 설치본 라이선스 사본의 'Copyright (c) 2014 - 2025 Viktor Chlumsky' 뿐이다.",
+     "언제 들어왔나": "설치본 변경 이력 REV 4319 'Added msdfgen for advanced font rendering.' (라이선스는 REV 4344 에 추가)."
+    },
+    "perlin-simplex-noise": {
+     "무엇": "Sebastien Rombauts 의 SimplexNoise.cpp — Stefan Gustavson 의 simplexnoise1234 를 C++ 로 옮긴 것. 라이선스 페이지의 이름이 'Perlin Simplex Noise' 다.",
+     "왜 Rombauts 판으로 보는가": "① 순열표가 512가 아니라 **256**이다(Gustavson 원본은 512를 굽고 `perm[i & 0xff]` 로 읽는다). ② 1D 스케일이 `0.395f`, 2D 스케일이 `45.23065f` — Gustavson 원본의 `40.0f` 가 아니다. ③ `fractal(octaves, …)` 옥타브 API 가 함께 있다. 라이선스 사본의 'Copyright (c) 2012-2014 Sebastien Rombauts' 와 일치한다.",
+     "버전": "미상 — 태그도 버전 문자열도 없다. 저작권 연도 2012-2014 만 남아 있다.",
+     "어디에 쓰이나": "perm[256] @VA 0x140484f40 바로 앞이 파티클 remap 오퍼레이터 이름 문자열들을 가리키는 포인터 표이고(→ `remap` @VA 0x140491f6c), 그 표에 `simplexnoise`·`fbmnoise` 가 들어 있다. 같은 번역 단위로 보이므로 파티클 remap 의 노이즈 변환이 소비처다[추정]. 옥타브 API(fractal)가 함께 링크된 것이 `fbmnoise` 와 맞아떨어진다."
+    },
+    "gustavson-perm-sse": {
+     "무엇": "같은 Perlin/Gustavson 순열표의 **두 번째 사본**. 이쪽은 512바이트이고 앞에 `permMod12[512]` 가 붙는 'Simplex noise demystified' 배치다.",
+     "누구 것인가": "라이선스 페이지에 대응 항목이 없고, 변경 이력이 REV 4135 'New 2D simplex SSE noise generator.' / REV 4136 'Moving SSE utilities into separate library.' 라고 적는다. 그래서 **서드파티가 아니라 WE 자신의 SSE 이식**으로 본다 — 공용인 것은 공개 도메인 순열표뿐이다[추정].",
+     "실제 코드": "SoA(레인 4개) 3D simplex 두 벌. F3=1/3 · G3=1/6 · 감쇠 0.6f · `&255` 마스크를 __m128 상수로 굽고, `[reg + imagebase + 0x4833a0]`(perm) 과 `+0x4831a0`(permMod12) 로 색인한다 — 변경 이력은 2D 라고 적지만 상수는 3D 것이다. 스칼라 경로(perlin-simplex-noise)와 **두 벌이 공존**한다."
+    },
+    "lz4": {
+     "무엇": "Yann Collet 의 LZ4. `.pkg`/`.tex` 압축 해제 경로.",
+     "왜 문자열로 안 잡혔나": "바이너리에 `LZ4` 를 담은 문자열은 WE 자신이 찍는 `\"LZ4 error.\"` 한 줄뿐이다. 라이브러리 자체는 문자열을 안 남긴다.",
+     "버전": "미상 — 변경 이력 REV 3981 'Updated LZ4.' 만 있고 번호가 없다."
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0)",
+     "note": "문자열이 아니라 .rdata 의 고유 상수·표 바이트열과 함수 선두 바이트로 동정한다. VA 는 imagebase 0x140000000 기준."
+    },
+    {
+     "kind": "file",
+     "ref": "WE 2.8.42 설치본 (/home/user/Waple-wallpaper-source/wallpaper_engine) bin/licenses/licenses_main.html · ui/dist/scripts/scripts.js",
+     "note": "WE 자신의 서드파티 귀속 페이지와 REV 변경 이력. 제품 전체 목록이라 wallpaper64.exe 밖의 항목이 절반 이상이다 — 대조군으로만 쓴다."
+    }
+   ]
+  },
+  {
+   "id": "linkedLibs.notLinked",
+   "value": {
+    "규칙": "부재를 주장하려면 **어떤 인코딩으로 어떤 패턴을 돌렸는지**를 함께 적어야 한다. 이 항목은 그 규칙을 처음부터 지킨 것이다 — 아래는 전부 ASCII·UTF-16LE 양쪽으로 대소문자 무시 검색한 결과이고, 히트 목록이 비어 있는 것이 근거다.",
+    "무엇을 뜻하지 않는가": "'WE 제품에 없다' 가 아니라 **'wallpaper64.exe 안에 없다'** 다. V8·CEF·FreeImage·jc_voronoi 는 플러그인 DLL 에 있고, OpenCV·Assimp·Compressonator·nQuant 는 에디터 쪽으로 보인다 — 귀속 페이지에는 전부 적혀 있다.",
+    "probes": {
+     "libpng": {
+      "libpng": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "png_create_read_struct": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "png_sig_cmp": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "libjpeg-turbo": {
+      "libjpeg": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "jpeg_start_decompress": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "jpeg_read_header": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "libwebp": {
+      "libwebp": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "WebPDecode": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "VP8L": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "Ogg/Vorbis": {
+      "OggS": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "vorbis": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "Xiph.Org": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "Opus": {
+      "libopus": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "opus_decode": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "FLAC": {
+      "fLaC": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "FLAC__stream": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "mpg123/minimp3/libmad": {
+      "mpg123": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "minimp3": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "mad_synth": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "OpenSSL/BoringSSL": {
+      "OpenSSL": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "BoringSSL": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "SSL_CTX_new": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "curl": {
+      "libcurl": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "curl_easy_perform": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "SQLite": {
+      "SQLite": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "sqlite3_open": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "Lua": {
+      "lua_State": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "lua_pcall": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "AngelScript": {
+      "AngelScript": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "asIScriptEngine": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "Bullet": {
+      "btRigidBody": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "btCollisionShape": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "BulletCollision": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "Box2D": {
+      "b2World": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "b2Fixture": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "Box2D": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "Assimp": {
+      "assimp": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "aiScene": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "Chromium/CEF": {
+      "chromium": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "cef_": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "CefBrowser": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "V8": {
+      "v8::": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "V8 version": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "SDL": {
+      "SDL_Init": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "libSDL": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "SDL2": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "brotli": {
+      "brotli": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "BrotliDecoderDecompress": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "zstd": {
+      "zstd": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "ZSTD_decompress": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "xxhash": {
+      "xxhash": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "XXH3_": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "XXH64": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "nlohmann/json": {
+      "nlohmann": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "json.hpp": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "fmt/spdlog": {
+      "fmt::": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "spdlog": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "Steamworks SDK": {
+      "SteamAPI_Init": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "ISteamUser": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "steam_api64": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "Detours": {
+      "DetourAttach": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "DetourTransactionBegin": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "DirectXTex": {
+      "DirectXTex": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "ScratchImage": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "libsamplerate/r8brain/soxr": {
+      "libsamplerate": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "r8brain": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "soxr": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "FreeImage": {
+      "FreeImage_": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "FIBITMAP": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "LodePNG": {
+      "lodepng": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "unexisting error": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "Poly2Tri": {
+      "poly2tri": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "EdgeEvent": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "collinear points": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "CGif": {
+      "cgif_": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "CGIF_": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "FastNoise 2": {
+      "FastNoise": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "OpenSimplex2": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "DomainWarp": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "OpenCV": {
+      "opencv": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "cv::Mat": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "AMD Compressonator": {
+      "Compressonator": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "CMP_ConvertTexture": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "SFML": {
+      "SFML": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "sf::Render": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "triangleraster": {
+      "triangleraster": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "Josh A. Beam": {
+       "ascii": [],
+       "utf16le": []
+      }
+     },
+     "jc_voronoi": {
+      "jcv_diagram": {
+       "ascii": [],
+       "utf16le": []
+      },
+      "jc_voronoi": {
+       "ascii": [],
+       "utf16le": []
+      }
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본, sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes)",
+     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋과 VA · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
+    }
+   ]
+  },
+  {
+   "id": "linkedLibs.vendorAttribution",
+   "value": {
+    "왜 대조군인가": "WE 가 직접 만든 서드파티 고지 페이지다. 우리 하드코딩 목록이 조용히 낡는 것을 **WE 자신의 문서로** 감시한다 — 페이지에 이 스크립트가 모르는 이름이 생기면 `unknownNames` 에 쌓이고 화면에 경고가 뜬다.",
+    "왜 그대로 못 베끼는가": "제품 전체(에디터·UI·플러그인 DLL 포함) 목록이라 wallpaper64.exe 에 안 들어 있는 것이 절반 이상이다. 그래서 이름마다 바이너리 판정을 붙여 둔다.",
+    "names": [
+     "LodePNG",
+     "JsonCpp",
+     "GLM",
+     "CEF",
+     "FFTS",
+     "AMD Compressonator SDK",
+     "Assimp",
+     "FreeImage",
+     "LZ4 - Fast LZ compression algorithm",
+     "Perlin Simplex Noise",
+     "The MIT License (MIT)",
+     "FastNoise 2",
+     "MIT License",
+     "SFML 2",
+     "Monaco Editor",
+     "FreeType2",
+     "HarfBuzz",
+     "OpenCV",
+     "V8",
+     "Bodymovin",
+     "RapidJSON",
+     "Wuffs",
+     "triangleraster",
+     "nQuant.cs",
+     "nQuant.cs/nQuant.Master/BitmapUtilities.cs",
+     "nQuant.cs/nQuant.Master/BlueNoise.cs",
+     "nQuant.cs/nQuant.Master/GilbertCurve.cs",
+     "nQuant.cs/nQuant.Master/PnnQuantizer.cs",
+     "CGif",
+     "WebGL-Fluid-Simulation",
+     "Poly2Tri",
+     "Photoshop Blend Functions",
+     "GLSL hash",
+     "GLSL noise",
+     "Voronoi JCash",
+     "glsl-rotate",
+     "SDF CPU Computation",
+     "msdfgen"
+    ],
+    "verdicts": {
+     "LodePNG": "미도달 — `lodepng`/`unexisting error` 0건. PNG 디코드는 Wuffs 다.",
+     "JsonCpp": "정적 링크 — src\\json\\src\\json_*.cpp 경로 3건.",
+     "GLM": "정적 링크 — 경로 7건 + 어서션 3건.",
+     "CEF": "미도달 — 별도 프로세스/DLL(WPEDesktopCEFWindow 창 클래스만 있다).",
+     "FFTS": "정적 링크 — ffts_static.c + 어서션 `N == 32`.",
+     "AMD Compressonator SDK": "미도달 — `Compressonator`/`CMP_ConvertTexture` 0건.",
+     "Assimp": "미도달 — `assimp`/`aiScene` 0건(모델은 .mdl 자체 포맷).",
+     "FreeImage": "플러그인 DLL — resourceutil64.dll 의 GetProcAddress 이름 `FreeImageBits` @VA 0x1404781a8 · `SaveRGBAToJPEG` @VA 0x140478198 만 있다.",
+     "LZ4 - Fast LZ compression algorithm": "정적 링크 — LZ4_decompress_safe @VA 0x14014c160.",
+     "Perlin Simplex Noise": "정적 링크 — perm[256] @VA 0x140484f40, 0.395f/45.23065f.",
+     "The MIT License (MIT)": "(라이선스 제목 행 — 라이브러리 이름이 아니다)",
+     "FastNoise 2": "미도달 — `FastNoise`/`OpenSimplex2`/`DomainWarp` 0건.",
+     "MIT License": "(라이선스 제목 행 — 라이브러리 이름이 아니다)",
+     "SFML 2": "미도달 — `SFML`/`sf::Render` 0건.",
+     "Monaco Editor": "에디터 UI(JS) — 바이너리 밖.",
+     "FreeType2": "정적 링크 — FREETYPE_PROPERTIES + 등록 모듈(수는 asciiOnly.libraries.freetype.moduleCount 에서 실측).",
+     "HarfBuzz": "정적 링크 — `harfbuzz ` 배너 + HB_SHAPER_LIST.",
+     "OpenCV": "미도달 — `opencv`/`cv::Mat` 0건.",
+     "V8": "플러그인 DLL — scenescript64.dll @VA 0x1404864d8.",
+     "Bodymovin": "에디터 UI(JS) — 바이너리 밖.",
+     "RapidJSON": "정적 링크 — 경로 7건 + 어서션 3건(JsonCpp 와 **병존**).",
+     "Wuffs": "정적 링크 — wuffs_aux + 상태 접두사(수는 asciiOnly.libraries.wuffs.statusPrefixCount 에서 실측).",
+     "triangleraster": "미도달 — `triangleraster`/`Josh A. Beam` 0건.",
+     "nQuant.cs": "에디터(C#) — 바이너리 밖.",
+     "nQuant.cs/nQuant.Master/BitmapUtilities.cs": "에디터(C#) — 바이너리 밖.",
+     "nQuant.cs/nQuant.Master/BlueNoise.cs": "에디터(C#) — 바이너리 밖.",
+     "nQuant.cs/nQuant.Master/GilbertCurve.cs": "에디터(C#) — 바이너리 밖.",
+     "nQuant.cs/nQuant.Master/PnnQuantizer.cs": "에디터(C#) — 바이너리 밖.",
+     "CGif": "미도달 — `cgif_`/`CGIF_` 0건. GIF **디코드**는 Wuffs, 인코드는 에디터 쪽이다.",
+     "WebGL-Fluid-Simulation": "셰이더·자산 — 바이너리 밖.",
+     "Poly2Tri": "미도달 — `poly2tri`/`EdgeEvent`/`collinear points` 0건.",
+     "Photoshop Blend Functions": "셰이더·자산 — 바이너리 밖.",
+     "GLSL hash": "셰이더·자산 — 바이너리 밖.",
+     "GLSL noise": "셰이더·자산 — 바이너리 밖(Ashima/Gustavson GLSL, CPU 쪽과 별개다).",
+     "Voronoi JCash": "플러그인 DLL — cloneextensions64.dll 의 `CreateVoronoiFacets` @VA 0x140477b68.",
+     "glsl-rotate": "셰이더·자산 — 바이너리 밖.",
+     "SDF CPU Computation": "미판정 — 고유 문자열도 고유 상수도 못 찾았다. FreeType 의 `sdf`/`bsdf` 모듈이 별도로 있어 구분이 안 된다.",
+     "msdfgen": "정적 링크 — solveCubicNormed 1/9·1/54, symmetricalTrichotomy 2.875·1.4375."
+    },
+    "unknownNames": [],
+    "changelog": {
+     "REV 4351": [
+      "Added msdfgen deps to android."
+     ],
+     "REV 4344": [
+      "Added msdfgen license."
+     ],
+     "REV 4319": [
+      "Added msdfgen for advanced font rendering."
+     ],
+     "REV 4260": [
+      "Updated V8 to 14.0."
+     ],
+     "REV 4156": [
+      "Updated fontawesome to 6.7.2."
+     ],
+     "REV 4136": [
+      "Moving SSE utilities into separate library."
+     ],
+     "REV 4135": [
+      "New 2D simplex SSE noise generator."
+     ],
+     "REV 4130": [
+      "Updated JSONcpp  to 1.9.6."
+     ],
+     "REV 4090": [
+      "Updated GLM to 10.1."
+     ],
+     "REV 3981": [
+      "Updated LZ4."
+     ]
+    },
+    "버전이 여기서만 나오는 것들": {
+     "JsonCpp": "REV 4130 'Updated JSONcpp  to 1.9.6.'",
+     "GLM": "REV 4090 'Updated GLM to 10.1.' (원문 표기 그대로. GLM 1.0.1 로 읽는 것이 자연스럽지만 바이너리에 버전 문자열이 없어 **미판정**이다.)",
+     "LZ4": "REV 3981 'Updated LZ4.' — 번호 없음.",
+     "msdfgen": "REV 4319 'Added msdfgen for advanced font rendering.' — 번호 없음. 라이선스 사본 저작권 연도가 '2014 - 2025'.",
+     "zlib": "여기가 아니라 **바이너리**에 있다 — `inflate 1.3.1 Copyright 1995-2024 Mark Adler`. 이 문서에서 버전 문자열이 바이너리에 있는 유일한 항목이다."
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "WE 2.8.42 설치본 (/home/user/Waple-wallpaper-source/wallpaper_engine) bin/licenses/licenses_main.html · ui/dist/scripts/scripts.js",
+     "note": "WE 자신의 서드파티 귀속 페이지와 REV 변경 이력. 제품 전체 목록이라 wallpaper64.exe 밖의 항목이 절반 이상이다 — 대조군으로만 쓴다."
     }
    ]
   },
@@ -173,7 +1190,7 @@
     {
      "kind": "binary",
      "ref": "wallpaper64.exe (WE 2.8.42 원본, sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes)",
-     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋 · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
+     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋과 VA · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
     }
    ]
   },
@@ -189,6 +1206,7 @@
     ],
     "rule": "바이너리 부재를 주장하려면 **어떤 인코딩으로 어떤 명령을 돌렸는지**를 함께 적을 것.",
     "[2026-08-20] 이 규칙을 이 문서가 스스로 어겼다": "위 규칙을 세워 놓고 정작 자기는 UTF-16LE 만 돌려서 harfbuzz·freetype·zlib·wuffs 를 통째로 놓쳤다(linkedLibs.asciiOnly 참조). 규칙은 대칭이다 — **어느 한쪽 인코딩만 돌린 결과로 부재를 주장하지 마라.**",
+    "[2026-08-21] 두 번째로 어겼다 — 이번엔 '문자열' 자체가 그물이었다": "인코딩을 양쪽 다 돌려도 **문자열을 안 남기는 라이브러리**는 못 본다. msdfgen 은 자기 이름을 한 글자도 안 남기는데 폰트 렌더 경로의 중심이었고, Perlin Simplex Noise(Rombauts)·LZ4 도 같은 부류였다. 셋 다 정본에 없었다. 규칙을 한 번 더 넓힌다 — **문자열 0건은 부재의 근거가 아니다.** 고유 상수·구운 표·함수 지문까지 돌린 결과여야 한다(linkedLibs.stringlessLibs).",
     "propagatedInto": "Waple 로 전파된 것은 docs/handoff-2026-08-17.md:176,234 두 줄뿐이었고 정정했다. spec/ 정본은 같은 검사를 전수 통과했다."
    },
    "status": "확정",
@@ -196,7 +1214,12 @@
     {
      "kind": "binary",
      "ref": "wallpaper64.exe (WE 2.8.42 원본, sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes)",
-     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋 · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
+     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋과 VA · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0)",
+     "note": "문자열이 아니라 .rdata 의 고유 상수·표 바이트열과 함수 선두 바이트로 동정한다. VA 는 imagebase 0x140000000 기준."
     }
    ]
   }
