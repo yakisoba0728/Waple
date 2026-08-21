@@ -255,4 +255,51 @@ final class SimplexNoiseTests: XCTestCase {
         XCTAssertEqual(SimplexNoise.fastFloor(-1), -1)
         XCTAssertEqual(SimplexNoise.fastFloor(-1.5), -2)
     }
+
+    // MARK: 1D — remapvalue transformfunction
+
+    /// 골든은 이식한 Swift 가 아니라 **디스어셈블리만 보고 파이썬으로 짠 float32 레퍼런스**에서
+    /// 뽑았다(perm 은 `0x140484f40` 실물 덤프). 커널: `t = 1 − x²` → `t⁴ · grad1` 두 코너 합 ×0.395.
+    func testSnoise1Goldens() {
+        XCTAssertEqual(SimplexNoise.snoise1(0.5), 0.437431663274765, accuracy: 1e-5)
+        XCTAssertEqual(SimplexNoise.snoise1(1.5), 0.1874707043170929, accuracy: 1e-5)
+        XCTAssertEqual(SimplexNoise.snoise1(-0.25), -0.555988609790802, accuracy: 1e-5)
+        XCTAssertEqual(SimplexNoise.snoise1(3.7), 0.16896086931228638, accuracy: 1e-5)
+        XCTAssertEqual(SimplexNoise.snoise1(12.34), 0.2993937134742737, accuracy: 1e-5)
+        XCTAssertEqual(SimplexNoise.snoise1(-8.9), -0.22812537848949432, accuracy: 1e-5)
+        XCTAssertEqual(SimplexNoise.snoise1(0.125), 0.36984220147132874, accuracy: 1e-5)
+        XCTAssertEqual(SimplexNoise.snoise1(55.3), 0.7810297608375549, accuracy: 1e-5)
+        XCTAssertEqual(SimplexNoise.snoise1(1000.75), -0.46823829412460327, accuracy: 1e-5)
+    }
+
+    /// 정수 격자점에서는 두 코너의 `t` 가 각각 1·0 이 되고 `x0 = 0` 이라 정확히 0 이다.
+    func testSnoise1IsZeroOnIntegerLattice() {
+        for i in -5...5 { XCTAssertEqual(SimplexNoise.snoise1(Float(i)), 0, accuracy: 1e-6) }
+    }
+
+    /// `grad1` 은 upstream 그대로다 — `1 + (h & 7)`, `h & 8` 이면 부호 반전(0x14027b102).
+    /// 2D 의 `grad2` 가 `0x3C` 로 갈리는 것과 달리 여기는 갈리지 않는다는 것을 못박는다.
+    func testGrad1MatchesUpstreamRule() {
+        for h in 0...15 {
+            let expected = (h & 8 != 0 ? -1 : 1) * Float(1 + (h & 7))
+            XCTAssertEqual(SimplexNoise.grad1(UInt8(h), 1), expected, accuracy: 0,
+                           "grad1(\(h)) 규칙이 어긋났다")
+        }
+    }
+
+    /// 유계성 — 실물 스케일 0.395 는 upstream 과 같아서 봉우리가 ±1 에 못 미친다(≈0.94).
+    /// 2D 처럼 스케일이 고쳐진 게 아니라는 사실 자체를 고정한다.
+    func testSnoise1StaysUnderOneWithUpstreamScale() {
+        var peak: Float = 0
+        for i in -2000...2000 { peak = max(peak, abs(SimplexNoise.snoise1(Float(i) / 97))) }
+        XCTAssertGreaterThan(peak, 0.9)
+        XCTAssertLessThan(peak, 1.0, "0.395 스케일이면 ±1 에 못 미쳐야 한다")
+    }
+
+    /// 극단 입력 무트랩(`fold` 가 정의역을 접는다).
+    func testSnoise1SurvivesExtremeInputs() {
+        for x in [Float.nan, .infinity, -.infinity, 1e38, -1e38, 0] {
+            XCTAssertTrue(SimplexNoise.snoise1(x).isFinite, "snoise1(\(x)) 가 비유한")
+        }
+    }
 }

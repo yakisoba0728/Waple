@@ -1199,8 +1199,11 @@ public struct ParticleSimulator {
             // (`xmm12` @0x14023c0d4), 주파수는 2 배씩(`addss xmm6,xmm6`), 마지막에 진폭합으로
             // 나눈다(0x14023c178 등).
             //
-            // 노이즈 커널 자체는 다르다 — 실물은 Perlin 순열표(0x140484f40)를 쓰는 2인자 노이즈
-            // (0x14027b170)이고 여기는 값노이즈다. 커널 이식은 별건이다.
+            // [2026-08-21] 커널을 실물로 갈았다 — `snoise2`(0x14027b170), 순열표 0x140484f40.
+            // 이 핸들러(0x14023c09a)에서 나가는 `0x14027b170` 호출은 정확히 3곳
+            // (0x14023c140 · 0x14023c1a0 · 0x14023c210 — 축마다 하나)이고, 바이너리 전체를 훑어도
+            // 그 함수의 호출부는 이 셋뿐이다. 즉 축 하나에 2D 심플렉스 하나가 대응한다.
+            // 종전 값노이즈는 z 를 0 으로 둔 3D 격자 보간이라 스펙트럼이 달랐다.
             //
             // **동봉 도달 5건이 전부 `scale` 0(또는 부재)** 이라 공간항이 소거되고 시간항만 남는다
             // (`thunderbolt`: timescale 5 · distance 100 → 볼트 전체가 시간에 따라 흔들린다).
@@ -1209,7 +1212,7 @@ public struct ParticleSimulator {
             func fbm(_ a0: Float, _ a1: Float) -> Float {
                 var amp: Float = 1, freq: Float = 1, sum: Float = 0, norm: Float = 0
                 for _ in 0..<octaves {
-                    sum += valueNoise3(SIMD3(freq * a0, freq * a1, 0)) * amp
+                    sum += SimplexNoise.snoise2(freq * a0, freq * a1) * amp
                     norm += amp
                     amp *= 0.5
                     freq *= 2
@@ -1460,14 +1463,24 @@ public struct ParticleSimulator {
     /// 초당 ~1유닛 진행이 되게 잡은 상수(bit-exact 불요 — 유계·결정성·자연스러움만 요구).
     private static let remapInputK: Float = 0.1
 
-    /// [0,1] 노이즈. fbm = 3옥타브 값노이즈(계수합 정규화), 아니면 단일 값노이즈. salt 로 성분 탈상관.
+    /// [0,1] 노이즈. fbm = 3옥타브(계수합 정규화), 아니면 단일.
+    ///
+    /// [2026-08-21] 커널이 **1D 심플렉스**로 바뀌었다. 실물 `remapvalue` 의
+    /// `transformfunction: simplexnoise` 는 `snoise1`(0x14027b090)을 부르고
+    /// (호출부 0x14023d96c · 0x14023d9a4 · 0x14023d9c3), `fbmnoise` 는 1D fBm
+    /// (0x14027b4b0, 호출부 0x14023da10 · 0x14023da41 · 0x14023da65)을 부른다.
+    /// **2D 도 3D 도 아니다** — 종전 3D 값노이즈는 차원부터 틀렸다.
+    /// 결과를 `0.5·n + 0.5` 로 [0,1] 에 매핑하는 것은 실물과 같다(0x14023d97d).
+    ///
+    /// `salt` 는 성분 탈상관용 Waple 관례다(실물 대응물 미확인). 1D 커널이라 x 성분만 쓴다.
     private func remapNoise01(_ fbm: Bool, _ x: Float, _ salt: SIMD3<Float>) -> Float {
-        let p = SIMD3<Float>(x, 0, 0) + salt
+        let x0 = x + salt.x
         let n: Float
         if fbm {
-            n = (valueNoise3(p) + 0.5 * valueNoise3(p * 2) + 0.25 * valueNoise3(p * 4)) / 1.75
+            n = (SimplexNoise.snoise1(x0) + 0.5 * SimplexNoise.snoise1(x0 * 2)
+                 + 0.25 * SimplexNoise.snoise1(x0 * 4)) / 1.75
         } else {
-            n = valueNoise3(p)
+            n = SimplexNoise.snoise1(x0)
         }
         return 0.5 * (1 + max(-1, min(1, n)))
     }
@@ -1476,12 +1489,12 @@ public struct ParticleSimulator {
     /// 레거시 remapNoise01(fbm=true) 와 octaves=3 은 동일 산술(레거시는 기존 함수 유지 — 비트동일).
     private func remapNoiseOctaves(_ octaves: Int, _ x: Float, _ salt: SIMD3<Float>) -> Float {
         var sum: Float = 0, amp: Float = 1, norm: Float = 0
-        var p = SIMD3<Float>(x, 0, 0) + salt
+        var t = x + salt.x                       // 1D 커널 — salt 는 x 성분만 쓴다
         for _ in 0..<max(1, octaves) {
-            sum += amp * valueNoise3(p)
+            sum += amp * SimplexNoise.snoise1(t)
             norm += amp
             amp *= 0.5
-            p *= 2
+            t *= 2
         }
         return 0.5 * (1 + max(-1, min(1, sum / norm)))
     }
@@ -1627,9 +1640,13 @@ public struct ParticleSimulator {
     ///    (0x140242cfc/d0f/d18) 마지막에 speed(`xmm11`)를 곱한다(0x140242d2e/32/36). 전부 스칼라 곱이라
     ///    순서는 산술적으로 무관하다 — 중요한 것은 dt 가 **정확히 한 번, 선형으로만** 들어간다는 것.
     ///
-    /// 노이즈 커널 자체는 여전히 다르다(실물은 Gustavson 3D 심플렉스 ×32 @0x1400fd010, 여기는 값노이즈).
-    /// 커널 교체는 별건이다 — 이 함수가 고치는 것은 **좌표·배수·누적 대상**이고, 그 셋이 궤적의
-    /// 정성적 성질(유계 이류 → 랜덤워크)을 결정한다.
+    /// [2026-08-21] 커널도 실물로 갈았다 — Gustavson 3D 심플렉스 ×32
+    /// (SSE2 0x1400fc220–0x1400fd006 / SSE4.1 0x1400fd010–0x1400fdc41, perm[512] 0x1404833a0,
+    /// 최종 배수 32.0 @0x1404835d0). 두 벌은 CPU 디스패치 쌍이고 술어가 같다.
+    /// **실물의 코너 선택 결함까지 그대로 재현한다** — `j1` 은 `z0 < y0`(cmpltps @0x1400fc590),
+    /// `j2` 는 `z0 <= y0`(cmpleps @0x1400fc536) 이라 `y0 == z0 && x0 < y0` 인 점에서 코너가 겹쳐
+    /// |값| 이 ±1.39 까지 간다. `c = (pos + ph)·scale` 이라 두 좌표가 정수 차이면 걸릴 수 있는데,
+    /// 클램프를 넣으면 그 점에서 실물과 갈리므로 **넣지 않는다**(SimplexNoiseTests 가 고정).
     private func turbulenceAcceleration(_ t: (smin: Float, smax: Float, scale: Float, timeScale: Float,
                                               mask: SIMD3<Float>, pmin: Float, pmax: Float,
                                               blend: BlendWindow),
@@ -1638,9 +1655,9 @@ public struct ParticleSimulator {
         let ph = phase + time * t.timeScale
         let c = (pos + SIMD3(repeating: ph)) * t.scale
         // ④: 같은 삼중항의 순환치환 3회.
-        let ax = valueNoise3(SIMD3(c.z, c.x, c.y))
-        let ay = valueNoise3(SIMD3(c.y, c.z, c.x))
-        let az = valueNoise3(SIMD3(c.x, c.y, c.z))
+        let ax = SimplexNoise.snoise3(c.z, c.x, c.y)
+        let ay = SimplexNoise.snoise3(c.y, c.z, c.x)
+        let az = SimplexNoise.snoise3(c.x, c.y, c.z)
         return SIMD3(ax * t.mask.x, ay * t.mask.y, az * t.mask.z) * speed
     }
 

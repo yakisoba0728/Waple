@@ -67,6 +67,35 @@ public enum SimplexNoise {
 
     // MARK: - 공개 API
 
+    /// **1D 심플렉스.** 실물 `0x14027b090`–`0x14027b16b`. `perm` 은 2D 와 같은 256바이트 표
+    /// (`0x140484f40`)를 8비트 랩으로 읽는다(`movzx edx, cl` @0x14027b0c9, `inc dl` @0x14027b10e).
+    ///
+    /// 커널: `t = 1 − x²` → `t⁴ · grad1(h, x)` 를 두 코너에서 더하고 마지막에 `×0.395`
+    /// (`0x1404926b0`, `mulss` @0x14027b15e) — upstream `simplexnoise1234.c` 와 같은 값이다.
+    ///
+    /// `remapvalue` 의 `transformfunction: simplexnoise` 가 이걸 쓴다
+    /// (호출부 0x14023d96c · 0x14023d9a4 · 0x14023d9c3, 결과를 `0.5·n + 0.5` 로 [0,1] 매핑 @0x14023d97d).
+    /// `turbulentvelocityrandom` 도 한 번 부른다(0x14023be12).
+    public static func snoise1(_ x: Float) -> Float {
+        let px = fold(x)
+        let i0 = fastFloor(px)
+        let x0 = px - Float(i0), x1 = x0 - 1
+        var t0 = 1 - x0 * x0; t0 *= t0                       // 0x14027b0fa / 0x14027b0fe
+        let n0 = grad1(perm[i0 & 0xff], x0) * (t0 * t0)      // 0x14027b10a / 0x14027b123
+        var t1 = 1 - x1 * x1; t1 *= t1
+        let n1 = grad1(perm[(i0 + 1) & 0xff], x1) * (t1 * t1)
+        return (n1 + n0) * 0.395                             // 0x14027b15a / 0x14027b15e
+    }
+
+    /// `grad1` — `1 + (h & 7)`(0x14027b0da–0x14027b0f6), `h & 8` 이면 부호 반전
+    /// (`test cl, 8` @0x14027b102, `xorps` 로 −0.0 XOR). 2D 의 `grad2` 와 달리 upstream 그대로다.
+    @inline(__always)
+    static func grad1(_ hash: UInt8, _ x: Float) -> Float {
+        var g = 1 + Float(hash & 7)   // UInt8→Float 는 항상 정확(좁힘 아님)
+        if hash & 8 != 0 { g = -g }
+        return g * x                                          // 0x14027b116
+    }
+
     /// 2D 심플렉스 노이즈. 치역 [-1, 1] (실측 봉우리 ±0.999996).
     /// 실물 `0x14027b170`–`0x14027b4ab` 이식.
     public static func snoise2(_ x: Float, _ y: Float) -> Float {
