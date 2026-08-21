@@ -8,6 +8,22 @@ import CoreGraphics
 /// 컬러 폰트(이모지 sbix/CBDT/COLR) 글리프만 CTLineDraw 가 그린 자체 색을 그대로 보존한다
 /// (WE 실물 동작 — 근거는 render() 의 un-premultiply 블록 주석에 VA 로 인용).
 public enum TextRasterizer {
+    /// `width`/`height` 는 **스케일 전 글리프 픽셀 크기**이고, 실물 텍스트 오브젝트의 `size`
+    /// 멤버(`+0x2f0`)에 대응한다 — 커서 히트 상자가 바로 그 멤버다.
+    ///
+    /// 실물 규약(2026-08-21 실측, `docs/re/text-layer.md` §8b):
+    /// `0x140258900`(텍스트 vtable `0x140491950` 슬롯 `+0x110`, 레이아웃 직후 `0x1402575db` 이 호출)이
+    /// `[obj+0x2f0] = (잉크박스 maxX-minX, maxY-minY) + 2·clamp(padding, 512)` 를 쓰고
+    /// (잉크박스는 레이아웃 결과 `+0x90`–`+0x9c`, 패딩 게이트는 `0x14025895d`–`0x14025896d`),
+    /// 커서 히트 순회가 그 vec2 를 그대로 상자로 쓴다(`0x14019dd8a` → `mulps -0.5` `0x14019de4b`).
+    /// 텍스트 오브젝트의 타입 가상함수는 4(`0x1400fde90`)라 이미지(1)와 **같은 상자 함수**
+    /// `0x14019dbb0` 를 탄다.
+    ///
+    /// 즉 이 두 수는 히트 쿼드 배선의 재료다(`SceneRendererResources.rasterize` 가
+    /// `GPUText.rasterWidth`/`rasterHeight` 로 보관한다). **패딩 항은 여기 없다** — 실물은
+    /// 이펙트/오프스크린 합성/`opaquebackground` 셋 중 하나가 참일 때만 축당 `+2·padding` 을
+    /// 더하는데, Waple 래스터에는 패딩 개념 자체가 없다. 배선 시 그 차이를 반드시 읽어라
+    /// (`docs/re/text-layer.md` §11.1).
     public struct Raster { public let rgba: Data; public let width: Int; public let height: Int }
     /// **실물과 다르다(갭).** WE 는 거부가 아니라 `clamp(pointsize, 1, 256)` 이다
     /// (`minss 256.0` @`0x1401b054a` · `comiss 1.0` @`0x1401b055b`). 여기 8192 는 "이 값을 넘으면

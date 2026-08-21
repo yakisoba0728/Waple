@@ -457,11 +457,46 @@ public struct SceneTextLayer: Equatable {
     /// **파스·보존 전용이다.** 소비(텍스트 빌보드의 cameraOffset 가중)는 `WapleRender` 소유이고
     /// 이 라운드에서 배선하지 않았다 — 정확한 패치안은 `docs/re/scene-object-model.md` §12.1.4.
     public var parallaxDepth: Vec2 = Vec2(x: 1, y: 1)
-    /// "Limit width"(limitwidth) 체크 시 워드랩 폭 maxwidth(래스터 로컬 px — 실물 maxwidth 스크립트가
-    /// 화면폭을 scale.x 로 나눠 전달 = 스케일 전 단위, d.ts "Max width in pixels"). nil = 무제한(무회귀).
-    public var maxWidth: Float? = nil
-    /// "Limit rows"(limitrows) 체크 시 최대 행수 maxrows(실측 기본 1 — 1628/1640). nil = 무제한.
-    public var maxRows: Int? = nil
+    /// "Limit width"(limitwidth) 게이트 — 실물은 **플래그 워드 `+0x594` 의 bit2** 다.
+    /// 등록 `0x140258f0d` `lea rdx,"limitwidth"` → 이름 대입 `0x140258f1e` → `[desc+0x34] = 0x594`
+    /// (`0x140258f26`) · `[desc+0x30] = 6`(플래그 비트형, `0x140258f38`). 비트 번호는 주입기
+    /// `0x14019bfa0` 이 갖고 있다 — `or ecx, 4`(`0x14019bfda`) / `and r8d, 0xfffffffb`
+    /// (`0x14019bfd6`), 그리고 게터 `0x14019c070` 의 `test byte [rcx], 4`(`0x14019c07a`).
+    /// 생성자 기본 false — `0x140256cf2` `mov dword [rdi+0x594], 1`(bit0 만).
+    public var limitWidth: Bool = false
+    /// "Max width"(maxwidth) **값** — 게이트와 **다른 멤버**다: float `+0x508`
+    /// (등록 `0x14025959e`/대입 `0x1402595af`, `[desc+0x34]=0x508` `0x1402595e2` ·
+    /// `[desc+0x30]=4` `0x1402595e9`). 생성자 기본 **500.0** — `0x140256c1a`
+    /// `mov dword [rdi+0x508], 0x43fa0000`.
+    ///
+    /// **주입기는 게이트와 무관하게 키마다 따로 돈다.** 적용 루프(`0x1401731d0`)는 JSON 멤버
+    /// 이름을 해시해 디스크립터를 찾고 그 디스크립터의 주입기 `[desc+8]` 만 호출한다
+    /// (`0x140173398` `call qword [rax+8]`) — `maxwidth` 주입기 `0x1401a4b00` 은 `+0x508` 만 쓰고
+    /// `+0x594` 를 읽지 않으며, 그 역도 같다. 그래서 `limitwidth:false, maxwidth:390` 인
+    /// 오브젝트의 실물 멤버는 **390** 이고 `thisLayer.maxwidth` 도 390 이다.
+    /// 게이트를 보는 것은 **소비부**뿐이다 — 레이아웃 요청 조립 `0x140257498` `test cl,4` →
+    /// `0x14025749d` 가 그때만 `+0x508` 을 싣는다.
+    ///
+    /// 단위는 래스터 로컬 px(실물 maxwidth 스크립트가 화면폭을 scale.x 로 나눠 전달 = 스케일 전
+    /// 단위, d.ts "Max width in pixels").
+    public var maxWidthValue: Float = 500
+    /// "Limit rows"(limitrows) 게이트 — `+0x594` **bit3**. 등록 `0x140258fe6` → 대입 `0x140258ff7` →
+    /// `[desc+0x34]=0x594`(`0x140259003`) · `[desc+0x30]=6`(`0x140259018`). 비트는 주입기
+    /// `0x14025aca0` 의 `or ecx, 8`(`0x14025acda`) / `and r8d, 0xfffffff7`(`0x14025acd6`) ·
+    /// 게터 `0x14025ad70` 의 `test byte [rcx], 8`. 생성자 기본 false(위와 같은 리터럴).
+    public var limitRows: Bool = false
+    /// "Max rows"(maxrows) **값** — int `+0x510`(등록 `0x14025965c`/대입 `0x14025966d`,
+    /// `[desc+0x34]=0x510` `0x140259679` · `[desc+0x30]=esi`=0 `0x14025968f`; `esi` 는 함수 머리
+    /// `0x140258cc3` `xor esi,esi` 이후 재대입이 없다). 주입기는 int 형 `0x1401a4930`
+    /// (`mov [r14+rbp], eax` @`0x1401a496c`). 생성자 기본 **1** — `0x140256c2e`
+    /// `mov dword [rdi+0x510], 1`. 위 `maxWidthValue` 와 같은 이유로 게이트와 독립이다
+    /// (소비 게이트는 `0x1402574aa` `test cl,8` → `0x1402574af`).
+    public var maxRowsValue: Int = 1
+    /// 소비부(워드랩/행 제한)가 보는 **유효값** — 게이트가 꺼졌거나 값이 0 이하면 nil(무제한).
+    /// 저장 프로퍼티였던 종전과 **한 글자도 다르지 않은 값**을 돌려준다(무회귀).
+    public var maxWidth: Float? { limitWidth && maxWidthValue > 0 ? maxWidthValue : nil }
+    /// 위와 동일 규약의 행 제한 유효값.
+    public var maxRows: Int? { limitRows && maxRowsValue > 0 ? maxRowsValue : nil }
     /// "Overflow ellipsis"(limituseellipsis) — 행 제한 잘림 시 마지막 행에 U+2026.
     public var overflowEllipsis: Bool = false
     /// "Justify text"(blockalign — 에디터 프로퍼티 테이블 실측 라벨) — 워드랩 줄 양쪽 정렬.
@@ -2411,13 +2446,22 @@ extension SceneDocument {
         // W-①: 3D 씬 텍스트 빌보드용 origin.z(월드) — SceneLayer.originZ(:1221 인근)와 동일 파스 규약.
         let originFull = floats(obj["origin"])
         t.originZ = originFull.count >= 3 ? originFull[2] : 0
-        // "Limit width/rows" 체크(불리언 리터럴 — 코퍼스 1640건 전수)가 켜진 때만 유효값. maxwidth 는
-        // 바인딩 dict({user/script,value} — 실물 32건)가 있어 float() 의 {value} 언랩 경유, 폴백은
-        // 에디터 기본(maxwidth 500 — 1468건 / maxrows 1 — 1628건). 부재/미체크 nil = 무제한(무회귀).
-        // 체크 플래그도 unwrap 경유 — 코퍼스 전수 평문 Bool 이라 무회귀지만, 값(maxwidth/maxrows)만
-        // 바인딩을 읽고 게이트는 못 읽는 비대칭을 없앤다(이 파일의 hdr/bloom/cameraparallax 와 동형).
-        if weBool(obj["limitwidth"]), case let mw = float(obj["maxwidth"]) ?? 500, mw > 0 { t.maxWidth = mw }
-        if weBool(obj["limitrows"]), case let mr = intVal(obj["maxrows"]) ?? 1, mr > 0 { t.maxRows = mr }
+        // "Limit width/rows" — **게이트와 값은 실물에서 서로 다른 멤버**다(선언부 주석의 VA 참조:
+        // 게이트 `+0x594` bit2/bit3, 값 `+0x508` float / `+0x510` int). 적용 루프 `0x1401731d0` 은
+        // JSON 키 이름으로 디스크립터를 찾아 그 주입기 하나만 부르므로(`0x140173398`), 미체크 상태의
+        // 저작값도 멤버에 그대로 남는다 — 그래서 넷을 각각 싣고 `maxWidth`/`maxRows`(계산 프로퍼티)가
+        // 소비부용 유효값을 만든다. 종전에는 `Int?`/`Float?` 하나로 접어 미체크 시 저작값이 소실됐다.
+        //
+        // 폴백은 **에디터 기본이 아니라 생성자 기본**이다(maxwidth 500 `0x140256c1a` /
+        // maxrows 1 `0x140256c2e`) — 주입기가 태그 불일치로 멤버를 안 건드릴 때 남는 값과 같다.
+        // maxwidth 는 바인딩 dict({user/script,value} — 코퍼스 32건)가 있어 float() 의 {value} 언랩
+        // 경유고, 실물 float 주입기 `0x1401a4b00` 도 태그 7 이면 `find("value")` 로 같은 자리를 읽는다.
+        // 게이트는 태그 5 전용(`weBool`) — 실물 플래그 주입기 `0x14019bfa0` 의 `cmp byte [r8+8], 5`
+        // 와 1:1 이고, 태그가 다르면 생성자 기본 false 가 남는다(함정 15).
+        t.limitWidth = weBool(obj["limitwidth"])
+        t.maxWidthValue = float(obj["maxwidth"]) ?? 500
+        t.limitRows = weBool(obj["limitrows"])
+        t.maxRowsValue = intVal(obj["maxrows"]) ?? 1
         t.overflowEllipsis = weBool(obj["limituseellipsis"])
         t.justify = weBool(obj["blockalign"])
         // 프로퍼티 스크립트(origin/scale/alpha/color/angles, F218): parseLayer(:731-739)와 동형 캡처 —
