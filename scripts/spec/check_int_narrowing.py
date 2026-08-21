@@ -86,7 +86,14 @@ PINS = [
 # 기준선에 들어 있다). ① `digits` 는 `prefix(while: { $0.isNumber })` 결과라 숫자만이고,
 # ② `Int(String)` 은 실패 가능 이니셜라이저라 넘치면 트랩이 아니라 nil 이며 `if let` 으로 받는다.
 # 즉 좁힘이 아니라 파싱이다 — 센서스 패턴이 구분하지 못할 뿐이다.
-CENSUS_BASELINE = 344
+#
+# [2026-08-21] 344 → 345. 늘어난 한 자리는 `SimplexNoise.fastFloor` 의 `Int(x)`(Float→Int)다.
+# 실물은 `cvttss2si` 라 범위를 넘어도 안 죽지만 Swift 는 트랩하므로, 같은 파일의 `fold(_:)` 가
+# **호출 전에** 정의역을 ±10⁶ 로 접는다(NaN/Inf 포함). 그 위에서는 트랩이 불가능하다.
+# `safeFloatToInt` 를 태우지 않은 이유: 이 자리는 파티클 루프 안에서 파티클×옥타브만큼 돌아
+# Optional 언랩 한 겹이 그대로 비용이고, 가드가 이미 함수 경계에 있어 이중이 된다.
+# 나머지 새 좁힘 20건은 전부 `Int(UInt8)`(확대라 트랩 불가)이라 `clamping:` 라벨을 달아 뺐다.
+CENSUS_BASELINE = 345
 
 
 def swift_files():
