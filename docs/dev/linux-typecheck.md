@@ -137,25 +137,51 @@ scripts/dev/linux-render-typecheck.sh --tests
 소스만 볼 때(약 35초)보다 2~3배 든다 — 그래서 기본값이 아니라 **명시 플래그**다.
 `Tests/**` 를 건드린 작업은 푸시 전에 반드시 이걸 돌려라.
 
-#### 첫 실행이 찾은 것 — 그리고 그게 심 공백이었다는 것
+#### 수렴 기록 — 열 번 돌려서 rc=0 이 됐다
 
-첫 실행(152파일)에서 **1파일 · 오류 16줄**이 났고 전부 **심 공백**이었다:
+이 축은 한 번에 열리지 않았다. **앞 파일의 오류가 뒤 파일을 가리는 구조**라 실행할 때마다
+새 공백이 하나씩 드러났다. 그 기록을 남긴다 — 다음에 새 테스트 파일이 들어와 같은 일이
+벌어졌을 때 "왜 한 번에 안 나오지" 로 시간을 쓰지 않도록.
 
-| 없던 것 | 쓰는 곳 | 처리 |
-|---|---|---|
-| `NSBitmapImageRep.init?(data:)` | `AncestorVisibilityGateRenderTests:48` | `appkit.swift` 에 추가 |
-| `NSBitmapImageRep.colorAt(x:y:)` | 〃 `:49` | 〃 |
-| `NSColor.redComponent`/`greenComponent` | 〃 `:66` 이하 | `blueComponent`/`alphaComponent` 까지 함께 |
+| # | 걸린 곳 | 없던 표면 |
+| --- | --- | --- |
+| 1 | `AncestorVisibilityGateRenderTests` | `NSBitmapImageRep.init?(data:)` · `colorAt(x:y:)` · `NSColor.red/greenComponent` |
+| 2 | `AudioCalibrationTests` | (심이 아니라 **모델 결함** — 아래 서곡 절) |
+| 3 | `LDRBloomPassTests` | `MTLCommandBufferStatus`(+**`Equatable`**) |
+| 4 | `MediaFixRegressionTests` | `CGAffineTransform(rotationAngle:)` |
+| 5 | `RealPackagesGroundTruthTests` | `NSImage.init?(contentsOf:)` |
+| 6 | `RealWebGroundTruthTests` | `NSImage.tiffRepresentation` · `NSWindow.alphaValue` · `WKWebView()` · `isLoading` |
+| 7 | `SceneRendererAuditV06RegressionTests` | 서곡에 `simd` 누락 |
+| 8 | `SceneTranslatedEffectRenderTests` | `NSColor` HSB 접근자 |
+| 9 | `TestSupport` 외 7파일 | **AVAssetWriter 계열 11종**(오류 68줄) + `CVPixelBufferPool` |
+| 10 | `TexDecoderTests` | `CGImageDestination*` · `UTType.png` |
+| 11 | `VideoRendererLifecycleTests` | `AVPlayer.timeControlStatus`(+**`Equatable`**) |
+| 12 | `WebHardPauseTests` · `WebInputProxyViewTests` · `WebRendererSecurityTests` | `WKWebView.stopLoading` · `NSWindow.orderFront/close` · `WKWebView(frame:)` · `WKWebsiteDataStore.isPersistent` |
 
-**151/152 는 손대지 않고 통과했다** — 즉 심의 표면은 이미 테스트 대부분을 덮고 있었고,
-안 쓰던 도구였을 뿐이다.
+**지금은 rc=0 이다** — 152파일 전부 통과한다.
 
-> **심 공백과 진짜 오류를 구분하는 법.** 오류가 `linux-shim/` 의 `note:` 를 달고 나오거나
-> 메시지가 `has no member` / `extra argument` / `missing argument` 면 대개 심이 모자란
-> 것이다. 그때는 **테스트가 아니라 `scripts/dev/linux-shim/` 을 고쳐라**(실제 애플 헤더
-> 시그니처를 주석에 적고 본문은 더미로 둔다 — 이 도구는 타입만 본다).
-> 스크립트도 실패 시 이 판별을 자동으로 한 줄 찍는다. 소스 쪽 실패 메시지와 달리
-> **"macOS 에서도 그대로 난다" 고 단정하지 않는다** — 테스트는 애플 API 표면을 훨씬 넓게 쓴다.
+세 가지가 반복되는 함정이었다.
+1. **`XCTAssertEqual` 은 `Equatable` 을 요구한다.** `MTLCommandBufferStatus` 와
+   `AVPlayer.TimeControlStatus` 둘 다 처음엔 안 붙여서
+   `type 'Equatable' has no member 'completed'` 로 걸렸다.
+2. **생성자가 없으면 "인자 없는 호출에 인자를 넘겼다" 로 나온다.** `NSImage(contentsOf:)` ·
+   `WKWebView()` · `CGAffineTransform(rotationAngle:)` 이 전부 그 모양이었다. 그리고 그 뒤로
+   변수가 미해결이라 **파생 오류가 줄줄이 딸려 나온다**(6줄 중 5줄이 파생인 경우도 있었다).
+   실제 공백은 늘 보이는 것보다 적다 — **첫 줄만 보고 고쳐라.**
+3. **프로덕션이 안 쓰는 방향의 API 가 통째로 비어 있었다.** `Sources/WapleRender/**` 는 미디어를
+   **읽기만** 하므로 `AVAssetWriter`·`CGImageDestination` 처럼 **쓰는** 쪽이 심에 없었다.
+   테스트는 픽스처를 **만들어야** 해서 그 방향을 쓴다 — 커버를 넓히면 이런 축이 새로 열린다.
+
+값 정확도 규칙에도 예외가 둘 생겼다. 심은 원칙적으로 **타입만** 맞추지만,
+`CGAffineTransform(rotationAngle:)` 은 `MediaFixRegressionTests:481` 이 30° 회전을 "8원소
+어디에도 안 맞는다" 는 **음성 대조**로 쓰므로 더미(항등)를 넣으면 테스트의 의미가 뒤집힌다.
+`UTType.png.identifier` 도 값이 실제로 인자로 흘러가므로 진짜 UTI 문자열을 넣었다.
+
+#### 빠른 반복
+
+한 번 돌리면 소스 15초 + 모듈 emit 45~65초 + 테스트 타입체크 35초다. 심만 고치는 반복에서는
+모듈을 다시 만들 필요가 없으므로, 고친 심 모듈만 재빌드하고 테스트 단계만 다시 도는 편이
+훨씬 빠르다(실측 **34초**). 위 표의 뒷부분은 그렇게 돌렸다.
 
 #### 서곡 파일 — 애플의 "Clang 모듈 전이 노출" 을 흉내 낸다
 
@@ -208,7 +234,11 @@ scripts/dev/linux-render-typecheck.sh --compat     # --tests 를 포함한다
   `Tests/WapleLibraryTests/**`(7파일)·`Tests/WaplePolicyTests/**`(1파일)는 아직이다 —
   `WapleLibrary`/`WaplePolicy` 모듈을 세우면 붙는다.
 - `Tests/WapleCoreTests/**` 는 여기 대상이 아니다 — `scripts/dev/linux-core-tests.sh` 가
-  **실제로 실행**한다(타입체크보다 강하다).
+  **실제로 실행**한다(타입체크보다 강하다). 다만 **실행한다고 macOS 를 대변하지도 않는다** —
+  리눅스는 swift-corelibs-foundation 이고 macOS 는 Apple Foundation 이다. 2026-08-21 실측
+  사례: `JSONSerialization` 의 **중복 키 승자**가 갈려서(`{"a":1,"a":2}` → 리눅스 `2` /
+  macOS `1`) 리눅스 초록인 채로 macOS CI 가 붉었다(run 32492467832 ·
+  `AssetJSONLenientTests`). 자세한 것은 `linux-core-tests.sh` 머리말의 한계 절.
 - 타입체크는 **실행이 아니다.** 단언이 맞는지, 픽셀이 맞는지는 여전히 macOS CI 가 답한다.
 
 ### 제외 파일과 이유

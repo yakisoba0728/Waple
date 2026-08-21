@@ -331,6 +331,10 @@ open class NSWindow: NSResponder {
                 backing backingStoreType: BackingStoreType, defer flag: Bool) { super.init() }
     open func setFrame(_ frameRect: NSRect, display flag: Bool) {}
     open func orderFrontRegardless() {}
+    /// 실제: `open func orderFront(_ sender: Any?)` · `open func close()`.
+    /// [2026-08-21] `--tests` 요구 표면(`WebHardPauseTests:163`·`:109`).
+    open func orderFront(_ sender: Any?) {}
+    open func close() {}
     open func orderOut(_ sender: Any?) {}
     open func makeKeyAndOrderFront(_ sender: Any?) {}
     /// 실제: `open func convertPoint(fromScreen point: NSPoint) -> NSPoint` (macOS 10.12+)
