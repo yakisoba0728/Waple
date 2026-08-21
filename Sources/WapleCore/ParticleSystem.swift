@@ -195,7 +195,23 @@ public struct VortexRing: Equatable {
 }
 
 public enum ParticleOperator: Equatable {
-    case movement(gravity: Vec3, drag: Float)
+    /// 중력 + 선형 drag. `flags` 는 실물 파스 페이로드 +0x0c(0x1401cb39d 로 `"flags"` 를 만들고
+    /// 0x1401cb3ce 정수 게터 → 0x1401cb3d3 `mov [r14+0xc], eax`; 같은 페이로드의 +0x00 이 gravity,
+    /// +0x10 이 drag) 이고, 런타임 오브젝트에선 0x10 헤더가 앞에 붙어 +0x1c 가 된다.
+    ///
+    /// **bit0 = 중력이 월드 공간 벡터** — 오퍼레이터 VM op 0x01 핸들러(0x14023fdc9)가
+    /// `test byte [r14+0x1c], 1`(0x14023fde2) 로 이 비트를 보고, 켜져 있으면 오브젝트 행렬의
+    /// 3×3 회전부를 뽑아(0x14023fdfd → 0x1400dd7d0) 중력에 곱한다(0x14023fe13 → 0x1401f87e0).
+    /// 곱셈은 `out.x = dot(row0, v)` 꼴이라 행이 오브젝트의 월드 기저벡터인 행우선 행렬에서는
+    /// **월드 → 로컬** 변환이다. 즉 저작된 중력을 시뮬 공간(오브젝트 로컬)으로 옮긴다.
+    ///
+    /// 시스템 최상위 `flags & 1`(worldspace) 이면 이미 월드 공간 시뮬이라 변환을 **건너뛴다**
+    /// (0x14023fde9 `test byte [rsi+0x20], 1` → `jne` 스킵). Waple 도 같은 게이트를 탄다 —
+    /// worldspace 는 SceneRenderer3D 가 오브젝트 행렬 m 을 우회하는 그 비트다.
+    ///
+    /// 동봉 도달 6건(`flags: 1`): rain_splashes_droplets ×2 · water_impact ×2 ·
+    /// water_impact_droplets ×2. 그중 4건은 시스템 flags 가 0/부재라 실제로 회전을 받는다.
+    case movement(gravity: Vec3, drag: Float, flags: Int = 0)
     case alphaFade(fadeInTime: Float, fadeOutTime: Float)          // 수명 비율 0..1 (fadeOut 0=없음)
     /// 수명 비율 구간에서 factor를 보간해 현재 크기에 곱한다.
     case sizeChange(startTime: Float, startValue: Float, endValue: Float, endTime: Float = 1)
@@ -1251,7 +1267,9 @@ public struct ParticleSystemDef: Equatable {
             }
             switch o["name"] as? String {
             case "movement":
-                ops.append(.movement(gravity: pvec3(o["gravity"]) ?? Vec3(x: 0, y: 0, z: 0), drag: pfloat(o["drag"]) ?? 0))
+                ops.append(.movement(gravity: pvec3(o["gravity"]) ?? Vec3(x: 0, y: 0, z: 0),
+                                     drag: pfloat(o["drag"]) ?? 0,
+                                     flags: pint(o["flags"]) ?? 0))   // 0x1401cb3d3 — 부재 시 0
             case "alphafade":
                 // **[2026-08-20] 부재 기본값은 0 이 아니라 0.5 다.** 원본 주입기 0x1401bce50 이
                 // `fadeintime`(0x1401bce63) · `fadeouttime`(0x1401bcf23) 둘 다에
