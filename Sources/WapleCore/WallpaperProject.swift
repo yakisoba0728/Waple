@@ -17,11 +17,33 @@ public struct WallpaperProject: Equatable, Sendable {
     public let folderURL: URL
     public let presetOverrides: [String: PropertyValue]
     public let presetFolderURL: URL?
+    /// project.json `general.supportsaudioprocessing`(bool). WE 의 `CProject::SupportsAudioProcessing`
+    /// (0x14010d100–0x14010d161) 과 같은 뜻이다 — **벽지가 오디오 반응을 지원한다고 선언**했는가.
+    ///
+    /// 원본에서 이 한 비트가 오디오 파이프라인 전체의 마스터 게이트다. 세 자리가 이 값만 본다:
+    ///  - 0x14010c70c: true 일 때만 `audioprocessing` **유저 프로퍼티를 합성 주입**한다
+    ///    (`type`=bool, 기본 `value`=true(0x14010c6c1 `mov r12d,1`), `icon`="fa-microphone",
+    ///     `text`="ui_browse_properties_audio_recording", `order`=-1).
+    ///  - 0x140114d21: 벽지 런타임 플래그 `[obj+0x1b8]` bit3(0x8) 의 **초기값**을 이 값으로 세운다.
+    ///    직후 0x140114e4f 가 유저 프로퍼티 `audioprocessing.value` 로 덮어쓰는데, 그 덮어쓰기도
+    ///    이 값이 true 일 때만 일어난다 — 즉 false 면 유저가 무슨 값을 넣어도 bit3 은 항상 0.
+    ///  - 0x14006e11a·0x14006e352: 살아 있는 모든 벽지에 대해
+    ///    `SupportsAudioProcessing() && wproperties.audioprocessing.value` 를 OR 로 접고,
+    ///    그 결과가 바뀔 때만 WASAPI 루프백 캡처를 켜고/끈다(시작 0x1400cf120 —
+    ///    "WASAPI processor requires 32 bit per sample." @0x140486660).
+    ///
+    /// bit3 이 0 이면 프레임 틱(0x140111654 `test byte [r15+0x1b8],8`)이 스펙트럼 취득 블록을
+    /// 통째로 건너뛰고, 0→전이 시 0x140115403 이 밴드 버퍼 3개(0x300·0x180·0xc0 =
+    /// 64·32·16밴드 × 3채널 × 4바이트)를 0 으로 민다.
+    ///
+    /// 기본값은 **false** 다 — WE 도 키가 없으면 `general` 이 object(jsoncpp 태그 7)가 아니거나
+    /// 값이 bool(태그 5)이 아닌 순간 전부 false 로 떨어뜨린다(0x14010d11b·0x14010d141).
+    public let supportsAudioProcessing: Bool
 
     public init(id: String, type: WallpaperType, fileName: String?, previewName: String?,
                 title: String, tags: [String], contentRating: String?, workshopId: String?,
                 dependency: String?, folderURL: URL, presetOverrides: [String: PropertyValue] = [:],
-                presetFolderURL: URL? = nil) {
+                presetFolderURL: URL? = nil, supportsAudioProcessing: Bool = false) {
         self.id = id
         self.type = type
         self.fileName = fileName
@@ -34,5 +56,6 @@ public struct WallpaperProject: Equatable, Sendable {
         self.folderURL = folderURL
         self.presetOverrides = presetOverrides
         self.presetFolderURL = presetFolderURL
+        self.supportsAudioProcessing = supportsAudioProcessing
     }
 }
