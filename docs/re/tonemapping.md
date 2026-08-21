@@ -645,8 +645,8 @@ albedo.rgb = mix(albedo.rgb, albedoFiltered, g_LutParams);
  2. 씬                  drawScene(obj, 0) → MSAA RT 있으면 그것, 없으면 현재 타깃  0x140183550
       └ 볼류메트릭 5패스는 이 안에서 씬 컬러에 additive 로 합쳐진다(volumetric-light.md §2.4)
  3. MSAA resolve        RT vtbl+0x10 → ResolveSubresource                       0x1401835fb
- 4. 화면 캡처            RT vtbl+0x08 → _rt_FullFrameBuffer                      0x140180a82
- 5. 밉맵 프레임버퍼       캡처 + GenerateMips → _rt_MipMappedFrameBuffer          0x140180a8f (씬 flags bit11)
+ 4. 화면 캡처            RT vtbl+0x08 → _rt_FullFrameBuffer                      0x140180a7f
+ 5. 밉맵 프레임버퍼       캡처 + GenerateMips → _rt_MipMappedFrameBuffer          0x140180a8c (씬 flags bit11)
  6. 블룸 체인            drawBloomChain                                          0x140180ac5
       LDR: FFB →quarter_bloom→ 1/4 →eighth_blur_v(X 13탭)→ 1/8 →blur_h_bloom(Y 13탭)→ _rt_Bloom
       HDR: FFB →hdr_downsample_bloom→ L0 →hdr_downsample→ L1..Ln-1 →hdr_upsample(_cubic) additive→ L0
@@ -954,3 +954,12 @@ for p in glob.glob('.../materials/lut/*.tex'):
 부동소수 상수: `1.0`=`0x140492704` · `-1.0`=`0x1404929b8` · `0.5`=`0x1404926c0` ·
 `0.25`=`0x14049268c` · `2.0`=`0x1404927a8` · `1e-5`=`0x1404925ec` ·
 `50.0`=`0x1404928cc` · `80.0`=`0x1404928e8` · `100.0`=`0x1404928f8` · `200.0`=`0x140492904`.
+
+---
+
+> **[2026-08-21 · VA 인용 정정 2건]** `scripts/re/va_citations.py` 로 잡았다. 두 주소는
+> `spec/engine/render-pass.json` 의 `sitesInFrameFn`/`fieldUseOrder` 에서 옮겨 온 값인데, 그쪽은
+> **바이트 스캐너가 찾은 변위 필드 위치**이지 명령 주소가 아니다(그 사실은 이제 정본의
+> `engine.renderPass.addressSemantics` 가 적고 있다). 명령 주소로 고쳤다:
+> 종전 `0x140180a82`→`0x140180a7f`(`mov rcx, [rsi+0x3098]` = `_rt_FullFrameBuffer`) ·  [VA-정정]
+> 종전 `0x140180a8f`→`0x140180a8c`(`mov rcx, [rsi+0x30f8]` = `_rt_MipMappedFrameBuffer`).  [VA-정정]
