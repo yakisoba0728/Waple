@@ -2,7 +2,7 @@
 
 세 갈래 측정을 한 스크립트에 담는다(외부 의존 없음, 순수 표준 라이브러리):
 
- 1. corpus  — 워크샵 scene.pkg 162개 + 설치 assets 의 .tex 전수(4,991개) 헤더 파스.
+ 1. corpus  — 워크샵 scene.pkg 162개 + 설치 `assets/`·`projects/` 의 .tex 전수(5,120개) 헤더 파스.
               파스가 전건 성공한다는 것 자체가 TEXI/TEXB 레이아웃의 검증이다.
  2. cli     — resourcecompiler64.exe 를 실제로 돌려 인자/포맷 enum/flags 비트를 차분 측정.
               (.tex-json 사이드카 키를 하나씩 켜고 헤더 바이트가 어떻게 바뀌는지 본다)
@@ -169,9 +169,9 @@ def parse_tex(b):
 
 
 def iter_tex():
-    """(출처, 이름, 바이트) — pkg 내부 + 설치 assets 의 loose .tex."""
+    """(출처, 이름, 바이트) — pkg 내부 + 설치 `assets/`·`projects/` 의 loose .tex."""
     # 코퍼스가 없으면 조용히 건너뛰지 않는다. 건너뛰면 `corpusTexFiles` 가 0 이 되고
-    # 산문 근거("코퍼스 4991 중 bit3 켜진 파일 0개")가 "코퍼스 0 중 0개" 로 바뀌어
+    # 산문 근거("코퍼스 5120 중 bit3 켜진 파일 0개")가 "코퍼스 0 중 0개" 로 바뀌어
     # **같은 문장이 반대 의미가 된다** — 0/0 은 아무 것도 증명하지 않는데 문장은 그대로
     # 확정으로 남는다. exit 0 으로 통과하는 것이 이 구멍의 핵심이다.
     if not os.path.isdir(WS):
@@ -196,9 +196,9 @@ def iter_tex():
                 for name, off, size in entries:
                     if name.lower().endswith(".tex"):
                         yield (path, name, data[base + off:base + off + size])
-    assets = os.path.join(WE, "assets")
-    if os.path.isdir(assets):
-        for dp, _, fn in os.walk(assets):
+    # [2026-08-21] `projects/` 추가(없는 루트는 walk 가 빈 이터레이터) — 근거 docs/re/tex-format.md §2.4.
+    for root in (os.path.join(WE, "assets"), os.path.join(WE, "projects")):
+        for dp, _, fn in os.walk(root):
             for f in fn:
                 if f.endswith(".tex"):
                     p = os.path.join(dp, f)
@@ -787,6 +787,10 @@ def build(m):
          "0x8": f"파일 입력이 **아니다** — 코퍼스 {corpus['total']}개 중 bit3 이 켜진 파일 0개. "
                 f"엔진 로더가 프레임 수 < 2 일 때 스스로 세우고, -transcode 출력에도 그대로 찍혀 나온다"
                 f"(입력 flags 2 → 출력 10 관측). 리더는 이 비트를 무시해야 한다",
+         "0x10": f"설치 `projects/` 를 코퍼스에 넣고서야 나타난 비트(관측 "
+                 f"{corpus['flagbits'].get('4', 0)}건). `.tex-json` 의 `srgb: true` 와 "
+                 f"사이드카 짝 358쌍에서 10/10 · 348/348 로 붙는다. **이름과 런타임 소비 여부는 "
+                 f"별도 항목 `format.tex.flags.srgbBit` 를 보라** — 그쪽은 확정이 아니다",
          "0x20": "비디오 텍스처(mp4 페이로드). 코퍼스 38개, 전부 TEXB0003",
          "0x40": "3D 슬라이스(volume). 헤더에 i32 texDepth 가 추가된다. slice3d:true 로 재현",
          "0x80000": "alphachannelpriority — 차분 측정 확정(코퍼스 82개)",
@@ -799,6 +803,36 @@ def build(m):
          ev("binary", "wallpaper64.exe FUN_14015e580 — 프레임 수 < 2 이면 flags |= 8"),
          ev("corpus", f"{corpus['total']}개 전수 비트 도수"),
          ev("script", S)]))
+
+    # 비트 0x10 은 **도수만 확정**이고 이름·소비는 아니다. `flags.bits` 는 확정 항목이라
+    # 그 안에 헤지를 섞으면 항목 전체의 등급이 흐려진다 — 등급이 다른 주장은 항목을 나눈다.
+    entries.append(E(
+        "format.tex.flags.srgbBit",
+        {"observed": f"코퍼스 {corpus['total']}개 중 비트 4(`0x10`)가 선 파일 "
+                     f"{corpus['flagbits'].get('4', 0)}개 — 전부 설치 "
+                     f"`projects/defaultprojects/razer_bedroom/materials/` 한 프로젝트다. "
+                     f"`assets/`·워크샵 코퍼스에는 0건이라 `projects/` 를 넣기 전까지 안 보였다",
+         "sidecarCorrespondence": "`.tex-json` 짝 358쌍(동봉 272 + 설치 projects 86)에서 "
+                                  "`srgb: true` 10/10 이 비트를 세우고 `srgb` 부재 348/348 이 안 세운다. "
+                                  "check_tex_format_map.py 의 J 게이트가 매 실행 다시 잰다",
+         "nameIsNotConfirmed": "표본 10건이 전부 같은 프로젝트 = 같은 시점 같은 도구로 구운 한 묶음이라 "
+                               "교란 가능하다. 그 10건에만 있는 다른 성질이 원인일 수도 있다. "
+                               "게다가 현행 resourcecompiler64.exe 의 `.tex-json` 키 표 34개에 `srgb` 가 "
+                               "없다(texJson.keys.deadKeys) — 지금 컴파일러는 이 비트를 만들지 못한다. "
+                               "차분 컴파일로 재현하지 못한 유일한 비트다",
+         "runtimeConsumption": "wallpaper64.exe `.text`(4,344,320B) 전수 바이트 스캔에서 "
+                               "`test byte ptr [reg+4], 0x10`(f6 /0, disp8=4, imm8=0x10) 0건. "
+                               "형제 인코딩은 0 이 아니다 — 같은 자리 다른 imm 36건 · 같은 imm 다른 "
+                               "disp8 108건이라 판별력 있는 0 이다. 다만 (a) `mov eax,[reg+4]` 로 먼저 "
+                               "적재한 뒤 `test al, imm` 하는 형태는 이 스캔이 못 잡고 (b) WE 는 "
+                               "여러 바이너리로 나뉜다. 그러므로 **비소비는 정황**이다",
+         "wapleImpact": "Waple 은 이 비트를 무시한다. 그것이 안전한 기본값이다 — 읽기 시작하면 그때부터 "
+                        "WE 와 **다르게** 그리는 쪽이 되고, 지금은 렌더 결과가 이 비트와 무관하다",
+         "doc": "docs/re/tex-format.md §3.1"},
+        "추정",
+        [ev("corpus", "설치 projects 129개 · 사이드카 짝 358쌍 대응 전수"),
+         ev("binary", "wallpaper64.exe .text 전수 바이트 스캔 — test byte [reg+4], 0x10 0건"),
+         ev("script", "scripts/spec/check_tex_format_map.py")]))
 
     entries.append(E(
         "format.tex.texs.fieldLayout",
@@ -1005,7 +1039,7 @@ def build(m):
          "binaryTokenCounts": ks,
          "note": "format 값에 '+' 접미사(dxt5n+)가 코퍼스에 6건 있는데 컴파일러는 dxt5n 과 동일하게 처리한다"},
         "확정",
-        [ev("file", f".tex-json {tj['files']}개 전수 수확(설치 assets + 워크샵)"),
+        [ev("file", f".tex-json {tj['files']}개 전수 수확(설치 assets/projects + 워크샵)"),
          ev("binary", "세 바이너리 문자열 표 토큰 존재 검사"),
          ev("binary", "-tex 차분 컴파일로 헤더 변화 측정"),
          ev("script", S)]))

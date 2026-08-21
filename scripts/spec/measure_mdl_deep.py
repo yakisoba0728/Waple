@@ -130,6 +130,127 @@ def parse_mdmp(data, magic_off, meshes):
     return p, next_off, records
 
 
+ANIM_MODES = ("loop", "single", "mirror", "clamp")
+MAX_BONES = 128                            # Sources/WapleCore/Model3DFormat.swift:98
+
+
+def skeleton_bone_count(data):
+    """MDLS 섹션의 본 수. `"MDLS000N" | u8 0 | u32 nextOff | u32 boneCount`.
+
+    매직 스캔은 블롭 한복판에 오탐 착지할 수 있으므로 상한(`MAX_BONES`)으로 거른다 —
+    Waple 이 `Model3D.swift:642` 에서 같은 이유로 상한을 100,000 → 128 로 좁혔다.
+    """
+    i = data.find(b"MDLS000")
+    if i < 0 or i + 17 > len(data):
+        return None
+    n = struct.unpack_from("<I", data, i + 13)[0]
+    return n if 0 < n <= MAX_BONES else None
+
+
+def _cstring(data, p, limit=96):
+    e = data.find(b"\0", p)
+    if e < 0 or e - p > limit:
+        return None
+    return data[p:e].decode("utf-8", "replace"), e + 1
+
+
+def parse_mdla(data, magic_off, bone_count):
+    """MDLA 애니 섹션의 **클립마다** 본 트랙 프레이밍을 잰다. (클립목록, 위반목록).
+
+    엔진이 강제하는 불변식(둘 다 어기면 `int 0x29` = __fastfail):
+
+        trackBytes % 36 == 0            (0x140263c78 lea/0x140263c7c shl 로 몫×36 을 만들어
+                                         0x140263c80 sub 로 나머지를 내고 0x140263c8e test →
+                                         0x140263c95 int 0x29)
+        trackBytes / 36 == frameCount + 1
+                                        (0x140263c61 movabs 0xe38e38e38e38e38f · 0x140263c71 mul ·
+                                         0x140263c74 shr rdx,5 = /36 · 0x140263c83 inc ecx =
+                                         frameCount+1 · 0x140263c85 cmp → 0x140263c8c int 0x29)
+
+    **Waple 은 앞의 하나만 본다**(`Model3D.swift:759` `tsRaw % 36 == 0`) — 뒤의
+    `frameCount + 1` 관계는 어디에서도 검사하지 않는다. 그것이 이 측정의 이유다.
+
+    레이아웃은 `Sources/WapleCore/Model3D.swift` 의 `parseAnimations` 를 그대로 옮겼다
+    (그쪽이 워크샵 33 애니모델 전수로 검증된 모델이다):
+
+        "MDLA000N" | u8 0 | u32 nextOff | u32 animCount | u32 baseId | u32 0
+        클립: cstring 이름 | cstring 모드 | f32 fps | u32 frameCount | u32 0 | u32 boneCount | u32 0
+              본별: u32 trackBytes | trackBytes | u32 blob2Bytes | blob2Bytes
+              가변 트레일러(32~39B) → 다음 클립 헤더를 ≤256B 앞에서 **리싱크**로 찾는다
+    """
+    def try_header(p):
+        got = _cstring(data, p)
+        if not got or not got[0]:
+            return None
+        name, p2 = got
+        got = _cstring(data, p2, limit=16)
+        if not got or (got[0] and got[0] not in ANIM_MODES):
+            return None
+        mode, p3 = got
+        if p3 + 20 > len(data):
+            return None
+        fps = struct.unpack_from("<f", data, p3)[0]
+        if not (0 < fps <= 240):
+            return None
+        frames, bc = struct.unpack_from("<I", data, p3 + 4)[0], struct.unpack_from("<I", data, p3 + 12)[0]
+        if bc != bone_count:
+            return None
+        return dict(name=name, mode=mode, fps=fps, frames=frames, bones=bc, off=p3 + 20)
+
+    clips, bad = [], []
+    p = magic_off + 9
+    if p + 16 > len(data):
+        return clips, bad
+    p += 16
+    while True:
+        h = try_header(p)
+        if h is None:
+            break
+        p = h["off"]
+        tracks, ok = [], True
+        for bi in range(h["bones"]):
+            if p + 4 > len(data):
+                ok = False
+                break
+            ts = struct.unpack_from("<I", data, p)[0]
+            if p + 4 + ts > len(data):
+                ok = False
+                break
+            p += 4
+            if ts % 36:
+                bad.append({"clip": h["name"], "bone": bi, "trackBytes": ts,
+                            "why": "36 의 배수가 아니다(나머지 %d)" % (ts % 36)})
+            elif ts // 36 != h["frames"] + 1:
+                bad.append({"clip": h["name"], "bone": bi, "trackBytes": ts,
+                            "why": "키 %d개인데 frameCount+1 = %d" % (ts // 36, h["frames"] + 1)})
+            p += ts
+            if p + 4 > len(data):
+                ok = False
+                break
+            blob2 = struct.unpack_from("<I", data, p)[0]
+            if p + 4 + blob2 > len(data):
+                ok = False
+                break
+            p += 4 + blob2
+            tracks.append(ts)
+        if not ok or len(tracks) != h["bones"]:
+            bad.append({"clip": h["name"], "bone": len(tracks), "trackBytes": None,
+                        "why": "본 트랙이 잘렸다(%d/%d)" % (len(tracks), h["bones"])})
+            break
+        clips.append({"name": h["name"], "mode": h["mode"], "fps": round(h["fps"], 4),
+                      "frames": h["frames"], "bones": h["bones"],
+                      "keysPerTrack": (tracks[0] // 36) if tracks else 0})
+        nxt = None
+        for d in range(257):               # 가변 트레일러 리싱크(Model3D.swift:779 와 동일 폭)
+            if try_header(p + d) is not None:
+                nxt = p + d
+                break
+        if nxt is None:
+            break
+        p = nxt
+    return clips, bad
+
+
 def channel_probe(data, mesh, tally, sample=256):
     """정점 채널 **오프셋**을 값의 성질로 검증한다.
 
@@ -292,6 +413,38 @@ def main():
                                   "blobs": [{"gateBit": (f"0x{b:x}" if b else "필수"), "bytes": s}
                                             for b, s in r["blobs"]]})
 
+    # MDLA 애니 섹션 — 클립마다 본 트랙 프레이밍 불변식(36 배수 · frameCount+1)
+    mdla_files = mdla_ok = 0
+    mdla_clips = 0
+    mdla_bad = []
+    mdla_noskel = []
+    anim_bones = collections.Counter()
+    anim_frames = collections.Counter()
+    anim_per_file = collections.Counter()
+    anim_modes = collections.Counter()
+    mdla_magics = collections.Counter()
+    for src, name, data in files:
+        i = data.find(b"MDLA000")
+        if i < 0:
+            continue
+        mdla_files += 1
+        mdla_magics[data[i:i + 8].decode("ascii", "replace")] += 1
+        bc = skeleton_bone_count(data)
+        if bc is None:
+            mdla_noskel.append(f"{src}:{os.path.basename(name)}")
+            continue
+        clips, bad = parse_mdla(data, i, bc)
+        for b in bad:
+            mdla_bad.append(dict(b, file=f"{src}:{os.path.basename(name)}"))
+        if clips and not bad:
+            mdla_ok += 1
+        mdla_clips += len(clips)
+        anim_per_file[len(clips)] += 1
+        for c in clips:
+            anim_bones[c["bones"]] += 1
+            anim_frames[c["frames"]] += 1
+            anim_modes[c["mode"] or "(빈 모드=디렉토리 레코드)"] += 1
+
     # 설치본 .mdl <-> 형제 옵션 json 대조
     opt_match, opt_mismatch = 0, []
     for src, path, data in files:
@@ -335,8 +488,70 @@ def main():
         specfmt.entry(
             "format.mdl.parseCoverage",
             {"파일수": len(files), "착지성공": parse_ok, "실패": len(failures),
-             "메시수": mesh_total, "착지분포": dict(landings)},
+             "메시수": mesh_total, "착지분포": dict(landings),
+             # **[2026-08-21 추가]** "착지성공 451/451" 이 파일 내용 전체를 검증한 것으로
+             # 읽히는 오독을 막는다. 이 수치가 말하는 것은 **메시 섹션까지의 프레이밍**뿐이다.
+             "검사 범위": {
+                 "이 수치가 뜻하는 것": "헤더 + 메시 섹션(정점/인덱스/AABB/메시 트레일러)을 "
+                                         "버전별 프레이밍 표로 끝까지 읽었을 때 파스 끝이 EOF · "
+                                         "말미 NUL · 다음 섹션 매직 중 하나에 **정확히 닿는다** 는 것. "
+                                         "한 필드라도 어긋나면 착지가 깨지므로 메시 프레이밍의 증명이다",
+                 "이 수치가 뜻하지 않는 것": "스켈레톤(MDLS)·애니(MDLA)·부착점(MDAT)·에디터(MDLE) "
+                                              "섹션의 **내용**은 이 451/451 에 들어 있지 않다. "
+                                              "그 넷은 메시 섹션 뒤에 오므로 착지가 성공해도 내용은 "
+                                              "안 읽힌 채다",
+                 "섹션별 실제 검사 깊이": {
+                     "메시/정점/인덱스/AABB": "깊이 파스 + 불변식(stride·maxIndex·채널 성질·AABB 대조)",
+                     "MDMP0001": "깊이 파스 + 착지 검증(format.mdl.mdmpSection)",
+                     "MDLA": "**[2026-08-21 신설]** 클립별 본 트랙 프레이밍 "
+                             "(format.mdl.mdlaTrackFraming)",
+                     "MDLS0002/0003/0004": "매직 도수만. 본 계층·부모 인덱스·바인드 행렬·꼬리 "
+                                           "T1..T7 은 **여기서 안 본다** — Waple 쪽 파서와 테스트는 "
+                                           "Sources/WapleCore/Model3D.swift 의 parseSkeletonTail 에 있다",
+                     "MDAT0001": "매직 도수만. 부착점 이름·본 인덱스·로컬 행렬은 안 본다",
+                     "MDLE0002": "매직 도수만. 64B 강체변환 블록은 안 본다",
+                 }}},
             "확정" if not failures else "보고", [ev_corpus]),
+
+        specfmt.entry(
+            "format.mdl.mdlaTrackFraming",
+            {"불변식": "MDLA 클립의 본 트랙 블롭 `trackBytes` 는 **36 의 배수**이고 "
+                       "`trackBytes / 36 == frameCount + 1` 이다. 엔진은 둘 다 어기면 "
+                       "`int 0x29`(__fastfail) 로 즉시 죽는다 — 즉 **엔진 자신이 강제하는 불변식**이라 "
+                       "실물 파일은 전건 만족해야 한다",
+             "근거 명령열": "wallpaper64.exe 0x140263c5c movsxd r8,[rsp+0x70](trackBytes) · "
+                             "0x140263c61 movabs rax,0xe38e38e38e38e38f · 0x140263c6b mov ecx,[rbp+0xbc]"
+                             "(frameCount) · 0x140263c71 mul r8 · 0x140263c74 shr rdx,5 (= /36) · "
+                             "0x140263c78 lea rax,[rdx+rdx*8] · 0x140263c7c shl rax,2 (= 몫×36) · "
+                             "0x140263c80 sub r8,rax (= 나머지) · 0x140263c83 inc ecx (= frameCount+1) · "
+                             "0x140263c85 cmp rdx,rcx → 0x140263c8c int 0x29 · "
+                             "0x140263c8e test r8,r8 → 0x140263c95 int 0x29",
+             "키 레이아웃": "36B = pos 3f | 오일러각 3f(라디안) | 스케일 3f",
+             "Waple 격차": "Sources/WapleCore/Model3D.swift 의 parseAnimations 는 `tsRaw % 36 == 0` "
+                           "만 본다 — `frameCount + 1` 관계는 어디서도 검사하지 않는다. "
+                           "그래서 프레임 수와 키 수가 어긋난 파일을 조용히 받아들인다",
+             "왜 +1 인가": "[미해결] 마지막 프레임을 닫는 키(루프 복귀 키)로 보이지만 확인하지 못했다. "
+                           "엔진이 강제한다는 것만 확정이다",
+             "실측": {"MDLA 보유 파일": mdla_files, "클립 전건 통과 파일": mdla_ok,
+                      "클립 수": mdla_clips, "위반": mdla_bad[:20],
+                      "스켈레톤 본수를 못 읽어 건너뛴 파일": mdla_noskel[:20],
+                      "매직": dict(sorted(mdla_magics.items()))},
+             "본 수 분포": {str(k): v for k, v in sorted(anim_bones.items())},
+             "프레임 수 분포": {str(k): v for k, v in sorted(anim_frames.items())},
+             "파일당 클립 수 분포": {str(k): v for k, v in sorted(anim_per_file.items())},
+             "모드 분포": dict(sorted(anim_modes.items())),
+             "표본 없음일 때": "설치본만 붙은 환경에서는 MDLA 보유 파일이 0개다(설치본 .mdl 28개 전부 "
+                               "MDLS/MDLA 0건 — 2026-08-21 실측). 그때 위 도수는 전부 비고 위반도 0이다. "
+                               "**0/0 은 불변식을 증명하지 않는다** — 그래서 status 를 표본 유무로 가른다. "
+                               "합성 픽스처 양성 대조는 scripts/spec/tests/test_mdla_framing.py",
+             "파스 모델 출처": "Sources/WapleCore/Model3D.swift parseAnimations — 워크샵 33 애니모델 "
+                               "전수 파스로 검증된 모델을 그대로 옮겼다(가변 트레일러는 ≤256B 리싱크)"},
+            "확정" if (mdla_clips and not mdla_bad) else "보고",
+            [specfmt.ev("binary", "wallpaper64.exe 0x140263c61–0x140263c95",
+                        "MDLA 트랙 프레이밍 __fastfail 두 개"),
+             ev_corpus,
+             specfmt.ev("script", "scripts/spec/tests/test_mdla_framing.py",
+                        "합성 픽스처 음성 대조 — 36 배수 위반 · frameCount+1 위반 · 다중 클립 리싱크")]),
 
         specfmt.entry(
             "format.mdl.header",
@@ -431,18 +646,22 @@ def main():
                    "materialbasedirectory / materialdirectory",
              "대조": {"일치": opt_match, "불일치": len(opt_mismatch),
                       "불일치목록": [{"file": f, "사유": b} for f, b in opt_mismatch]},
-             "주의": "짝 .json 이 **없는** .mdl 은 대조에서 제외한다(위 301행 "
+             # 종전 이 문장은 `measure_mdl_deep.py:301` 로 **줄 번호**를 가리켰다. 이 파일에
+             # 한 줄만 더해도 그 참조가 거짓이 되므로(2026-08-21 에 실제로 밀렸다) 줄 번호를 뺀다.
+             # 나머지 문면은 정본에 사람이 손질해 둔 판(강조 포함)을 생성기 쪽으로 되가져온 것이다 —
+             # 종전엔 정본만 손질돼 있어 재생성하면 그 강조가 조용히 사라지는 상태였다.
+             "주의": "짝 `.json` 이 **없는** .mdl 은 대조에서 제외한다(옵션 대조 루프의 "
                      "`if not os.path.exists(jp): continue`). **이걸 '옵션 부재 = 기본값' 으로 "
                      "읽으면 안 된다** — 설치본 실측(28개 전수, 2026-08-20 재측정): 짝 json 없음 "
-                     "**14**개 / 옵션 있음 14개, **빈 {} 는 0개**. 그 14개의 formatFlag 는 "
+                     "**14**개 / 옵션 있음 14개, **빈 `{}` 는 0개**. 그 14개의 formatFlag 는 "
                      "0x9 12개 · 0xf 2개로 **갈린다**(0x9: audiophile flow·glow, ricepod "
                      "jet·skybox·orbitaleffects, fantasticcar dome·shadow, retro bgfade, "
                      "dna_fragment bgfade, techno glow·rays·orbitsmall / 0xf: "
                      "assets/models/editor/camera, particleelementpreviews/collisionmodel/sphere). "
                      "즉 json 부재는 '이 파일이 굽기 옵션을 안 담고 있다' 는 뜻이지 옵션이 어떤 "
                      "기본값이라는 뜻이 아니다. **[2026-08-20 정정]** 종전 이 줄은 같은 논증을 "
-                     "'빈 {} json' 으로 적고 네 파일을 그 예로 들었는데, 네 파일 모두 빈 json 이 "
-                     "아니라 json 이 아예 없다. 논증은 그대로 성립하고 분류만 틀렸다"},
+                     "*'빈 {} json'* 으로 적고 네 파일을 그 예로 들었는데, 네 파일 모두 빈 json 이 "
+                     "아니라 **json 이 아예 없다**. 논증은 그대로 성립하고 분류만 틀렸다."},
             "확정", [ev_rc, specfmt.ev("file", "projects/defaultprojects/*/models/*/*.json",
                                        "설치본 모델 옵션 json ↔ .mdl formatFlag/skinCount 대조")]),
 
@@ -466,6 +685,14 @@ def main():
              "디스패치": ["MDLS0002/0003/0004", "MDLA0003..0006", "MDAT0001", "MDMP0001", "MDLE0002"],
              "실측 착지": dict(landings),
              "실측 섹션 도수": dict(sorted(sections.items())),
+             # **[2026-08-21]** 이 도수를 "섹션 개수" 로 읽으면 틀린다 — 그렇게 읽힌다는
+             # 지적을 받아 뜻을 못박는다.
+             "실측 섹션 도수의 뜻": "매직마다 `data.find` **1회**다 — 그 매직을 가진 **파일 수**이지 "
+                                     "섹션 수가 아니다. 한 파일에 같은 매직이 둘 있어도 1로 센다. "
+                                     "(같은 이유로 블롭 한복판의 가짜 매직도 1로 셀 수 있다 — "
+                                     "Waple 의 매직 스캔이 실제로 그 오탐에 당한 적이 있다: "
+                                     "Tests/WapleCoreTests/Model3DTrailerSkeletonTailTests.swift 의 "
+                                     "가짜 MDLA 회귀 테스트.) 섹션 **내용**은 MDMP/MDLA 만 판다",
              "MDLV0004 예외": "v0004 파일 8개는 종단 NUL 없이 정확히 EOF 에서 끝난다 "
                               "(리더가 EOF 를 빈 문자열로 보고 루프를 끝내므로 동작은 동일)"},
             "확정", [ev_corpus, ev_bin]),
@@ -580,6 +807,10 @@ def main():
     print(f"정적 AABB 예외: {static_outliers}")
     print(f"gate bit10..13 메시: {len(gate_hi_meshes)}")
     print(f"MDMP 파스+착지 {mdmp_ok} (실패 {len(mdmp_fail)})")
+    print(f"MDLA 보유 {mdla_files} / 전건통과 {mdla_ok} / 클립 {mdla_clips} / "
+          f"트랙 프레이밍 위반 {len(mdla_bad)} / 스켈레톤 미판독 {len(mdla_noskel)}")
+    for b in mdla_bad[:10]:
+        print(f"   MDLA 위반 {b}")
     print(f"옵션json 대조 일치 {opt_match} / 불일치 {len(opt_mismatch)}")
     for f, b in opt_mismatch:
         print(f"   {f}: {b}")
