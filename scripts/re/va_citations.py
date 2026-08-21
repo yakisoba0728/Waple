@@ -59,12 +59,24 @@ DEFAULT_TARGETS = ("Sources", "Tests", "docs/re", "docs/dev", "scripts/spec", "s
 SUFFIXES = (".swift", ".md", ".py", ".json")
 
 
+def image_base(data):
+    """PE 옵셔널 헤더의 ImageBase. `.pdata` 의 RUNTIME_FUNCTION 은 **RVA** 라 이게 필요하다.
+
+    종전에는 섹션 표에서 `va - raw` 의 최솟값으로 어림했는데 그건 이미지 베이스가 아니다
+    (`base + vaddr - rptr` 이다). 그 어림 때문에 조각 경계가 통째로 밀려 선형 디스어셈이
+    쓰레기를 뱉었고, 그 쓰레기가 `add bl, dh` 같은 명령으로 보고서에 올라왔다.
+    """
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    opt = pe + 4 + 20
+    return struct.unpack_from("<Q", data, opt + 24)[0]
+
+
 def pdata_functions(data, secs):
     """`.pdata` RUNTIME_FUNCTION 배열 → 정렬된 [(begin, end)]. 조각은 그대로 둔다."""
     sec = next((s for s in secs if s["name"] == ".pdata"), None)
     if sec is None:
         return []
-    base = min(s["va"] - (s["raw"] if s["raw"] else 0) for s in secs if s["raw"])
+    base = image_base(data)
     out = []
     o, end = sec["raw"], sec["rawEnd"]
     while o + 12 <= end:
