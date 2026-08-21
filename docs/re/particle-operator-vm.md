@@ -401,6 +401,64 @@ opid 8 과 동일 배치: `0x1401cc97e`,`0x1401cc98c`,`0x1401cc991`,`0x1401cc99a
 | `+0x100` | 파생 f32(가상 함수 반환) | `0x1401cf111` |
 | `+0x110..+0x14f` | 창 | `0x1401cf101` |
 
+#### opid 19 런타임 — 입력 정규화와 `flags` 클램프 게이트
+
+[2026-08-21 추가] 위 페이로드가 핸들러에서 어떻게 쓰이는지까지 옮긴다. 핸들러 진입부가
+`+0x2c` 의 최하위 비트를 뽑아 두고(`movzx r9d, byte [r14+0x2c]` `0x140244996` /
+`and r9b, 1` `0x1402449a0`), `inputcomponent` 축약(점프테이블 `0x140245020`) 뒤에
+
+    t = (v − inputrangemin) · rcp(inputrangemax − inputrangemin)
+
+를 건다. 자리는 둘이다 — 3성분 판 `subps xmm0,xmm1` `0x140245096` + `mulps xmm0,xmm2`
+`0x140245099`(이하 두 성분 `0x1402450a0`–`0x1402450b2`), 스칼라 판 `subps xmm7,xmm1`
+`0x1402450fa` + `mulps xmm7,xmm2` `0x1402450fd`.
+
+그 **직후**가 클램프인데 **`flags` bit0 게이트가 걸려 있다**:
+`test r9b,r9b` `0x1402450be`(3성분) / `0x140245105`(스칼라) → 서 있을 때만
+`minps` 1.0(`0x140483640`, `0x1402450cd` / `0x14024510a`) + `maxps` 0(`0x1402450d3` /
+`0x140245117`). `flags` 주입 기본이 int 1 이라 **기본은 클램프 켜짐**이다.
+그 다음이 `transformfunction` 디스패치(`mov eax,[r14+0x24]` `0x14024512c`) —
+즉 **정규화·클램프가 transform 보다 먼저**이고, `transforminputscale` 은 transform **안**이다.
+
+`inputcomponent` 축약 arm 은 값을 세 레인에 **브로드캐스트**한 뒤 정규화하므로,
+`inputrange*` 가 vec3 면 같은 신호가 성분마다 다른 t 를 낸다(`x` `0x140245022` ·
+`y` `0x140245029` · `z` `0x140245034` · `average` `0x140245043`(×⅓ `0x140492db0`) ·
+`sum` `0x140245059` · `max` `0x140245068` · `min` `0x140245077`; `all` 은 arm 없이 통과).
+
+#### 이미터 레코드 — `cone` 과 방출 창
+
+오퍼레이터가 아니라 이미터지만 같은 팩토리(`0x1401c5490`–`0x1401d152c`)가 만든다.
+
+| off | 내용 | VA |
+| --- | --- | --- |
+| `+0x00` | `rate` | `0x1401c1ca5` |
+| `+0x04` | `duration` | `0x1401c1cc7` |
+| `+0x08` | `delay` | `0x1401c1cfa` |
+| `+0x0c` | `duration` **사본** | `0x1401c1ce3`(`mov eax,[rdi+4]`) → `0x1401c1cf4` |
+| `+0x10` | `delay` **사본** | `0x1401c1cff` |
+| `+0x18/+0x1c` | `minperiodicduration` / `maxperiodicduration` | `0x1401c1d66` / `0x1401c1dac` |
+| `+0x20/+0x24` | `minperiodicdelay` / `maxperiodicdelay` | `0x1401c1d89` / `0x1401c1dcf` |
+| `+0x28` | `maxtoemitperperiod` | `0x1401c1df5` |
+| `+0x34/+0x38` | `instantaneous` (역시 두 칸) | `0x1401c1d18` / `0x1401c1d22` |
+| `+0x3c` | `flags` | `0x1401c1d35` |
+| `+0xe4` | **`-cos(cone · π)`** | `0x1401c61ce` |
+
+> **한 칸 밀림 주의(함정 16).** `duration` 은 `+0x04` 와 `+0x0c`, `delay` 는 `+0x08` 과 `+0x10`
+> 이다 — *`+0x04`/`+0x08` 이 duration, `+0x0c`/`+0x10` 이 delay* 가 **아니다**. `delay` 의
+> `asFloat` 반환(`0x1401c1cde`)과 그 두 저장(`0x1401c1cfa`·`0x1401c1cff`) 사이에 `duration`
+> 사본 복사(`0x1401c1ce3`·`0x1401c1cf4`)가 끼어 있어서 순진하게 읽으면 어긋난다.
+> 커밋 `87abb1f` 의 메시지가 정확히 그렇게 어긋나 있다(코드는 스칼라 한 칸씩만 쓰므로 무해).
+> `+0x18`/`+0x20` 은 함수 꼬리(`0x1401c1deb`–`0x1401c1e0c`)가 `minss` 로 max 에 맞춰 내린다.
+
+`cone` 은 `sphererandom` 바인더(`0x1401b9100`–`0x1401b992c`)에만 있고 기본 0 이다
+(`xorps xmm2,xmm2` `0x1401b94ab` → `H_FLOAT` `0x1401b94b8`, 키 `lea` `0x1401b94ae`).
+소비는 `asFloat` `0x1401c61b5` → `mulss xmm0, π`(`0x140492834`) `0x1401c61ba` →
+`call 0x1400d2a10`(→`0x14041a2e0` = **`cosf`**) `0x1401c61bf` → `xorps xmm0, -0.0`
+(`0x140492ff0`) `0x1401c61c4` → `movss [rsi+0xe4]` `0x1401c61ce`.
+즉 **반회전 단위**(0→−1 · 0.5=90°→0 · 1=180°→+1)다.
+동봉·설치본 각 2건 전부 `cone: 0` 이라 **실효 도달 0**.
+**[미해결]** 이 −cos 임계값을 방향 샘플러가 어떻게 쓰는지는 아직 못 짚었다.
+
 ### opid 20 `inheritvaluefromevent` — `0x60` / `0x50`
 `+0x00` `input` enum(`0x1401cf1ce`, 문자열→enum `0x1402611f0`) · `+0x10..+0x4f` 창
 

@@ -920,6 +920,16 @@ public struct RemapSpec: Equatable {
     /// (`minps` 1.0 @0x14024510a · `maxps` 0 @0x140245117; 게이트 `and r9b,1` @0x1402449a0).
     ///
     /// 기본 `(0,0,0)`/`(1,1,1)` 이면 `t = x` 라 종전 동작과 같다 — **키를 안 쓰는 자산은 무회귀**다.
+    ///
+    /// **[2026-08-21] 시뮬 배선 완료.** `ParticleSimulator.remapNormalizeInput(_:_:)` 이 위 식을
+    /// 그대로 걸고, `remapEval` 이 입력 신호와 `transforminputscale` **사이**에서 부른다
+    /// (실물도 정규화가 transform 디스패치 `0x14024512c` 앞이다). 종전에는 이 두 필드를 파스만
+    /// 하고 아무도 읽지 않아, 프리뷰 씬의 `inputrangemin:150`/`inputrangemax:200` 같은 값이
+    /// `.none` transform 의 `[0,1]` 클램프에 통째로 뭉개졌다.
+    /// 다만 **`flags & 1` 게이트는 아직 옮기지 않았다** — Waple 의 `.none` transform 은 항상
+    /// 클램프하고 나머지 transform 은 한 번도 안 한다. 실물은 `flags` bit0 으로 **모든** transform
+    /// 앞에서 한 번 자른다(`minps` 1.0 `0x14024510a` · `maxps` 0 `0x140245117`). `flags` 기본이 1 이라
+    /// `.none` 은 우연히 일치하고 나머지는 갈린다. **[미해결]** — `RemapSpec` 이 `flags` 를 안 들고 있다.
     public let inMin: Vec3                    // inputrangemin (부재 int 0 → (0,0,0))
     public let inMax: Vec3                    // inputrangemax (부재 int 1 → (1,1,1))
     /// blendinstart/end · blendoutstart/end. 실물 RVA 는 **0x48f850/0x48f860/0x48f870/0x48f880**
@@ -1559,6 +1569,10 @@ public struct ParticleSystemDef: Equatable {
     /// 유도·소비 근거는 `EmitterWindow` 주석. 소비처는 `ParticleSimulator` 의 방출 게이트와
     /// 창 카운트다운 두 곳이다.
     public var emitterWindow: [EmitterWindow] = []
+    /// 이미터별 `cone`(**`sphererandom` 전용** — emitters 와 병렬, 다른 이미터는 항상 0).
+    /// 비어 있으면 전 이미터 0(= 원뿔 없음)으로 본다 — 직접 조립한 def 의 무회귀 경로.
+    /// **파스·보존 전용**(시뮬 미배선). 유도·변환식·도달은 `emitterConeThreshold(_:)` 주석.
+    public var emitterCone: [Float] = []
     /// F623: 실물 def "flags" 비트(1=worldspace, 4=perspective z-원근).
     ///
     /// [정정 2026-08-01] 종전 주석은 "파스·보존 전용(렌더 소비는 후속)" 이라고 적혀 있었는데
@@ -1586,6 +1600,37 @@ public struct ParticleSystemDef: Equatable {
     public var mapSequenceArcAmount: Float? = nil
     /// rope/ropetrail 렌더러 확장 키(@0x48fbb0–0x48fc18) — 모델 노출 전용(렌더 소비 보류).
     public var ropeOptions: RopeRenderOptions? = nil
+
+    /// `emitter[].cone` 의 **실물 저장 표현** — `-cos(cone · π)`.
+    ///
+    /// **실측(2026-08-21).** 이미터 팩토리가 `Json::Value::operator[]`(`0x140086de0`) 로 `"cone"`
+    /// 노드를 잡아 `asFloat`(`0x140086220`, 호출 `0x1401c61b5`) 한 값에
+    ///   `mulss xmm0, xmm11`  `0x1401c61ba`  — xmm11 = **π**(`0x140492834`, 적재 `0x1401c5c03`)
+    ///   `call 0x1400d2a10`   `0x1401c61bf`  — `→ jmp 0x14041a2e0` = **`cosf`**
+    ///                                         (|x| 가 아주 작으면 `1.0`@`0x140471cb8` 반환,
+    ///                                          `cmp eax,0x3f490fdb`(π/4) 가지치기)
+    ///   `xorps xmm0, xmm15`  `0x1401c61c4`  — xmm15 = `-0.0`(`0x140492ff0`, 적재 `0x1401c5bac`) = **부호 반전**
+    ///   `movss [emit+0xe4], xmm0`           `0x1401c61ce`
+    /// 를 걸어 담는다. 바로 다음 명령이 이미터 타이밍 리더 호출(`0x1401c61d6` → `0x1401c1c70`)이라
+    /// 이 `rsi` 가 이미터 레코드인 것도 같은 자리에서 확정된다.
+    ///
+    /// 즉 `cone` 은 **반회전 단위**다 — 0 → −1, 0.5(90°) → 0, 1(180°) → +1.
+    /// 부재 기본은 **0**(`xorps xmm2,xmm2` `0x1401b94ab` → `H_FLOAT` `0x1401b94b8`,
+    /// 바인더 `0x1401b9100`–`0x1401b992c`), 그리고 `cone` 은 그 바인더(= `sphererandom`
+    /// 키 집합 `flags/origin/directions/sign/distancemin/distancemax/speedmin/speedmax/
+    /// controlpoint/cone`)에만 있다.
+    ///
+    /// **동봉 도달 2건(파일 2, 설치본도 같은 2건) — 전건 `sphererandom` 의 `cone: 0`**
+    /// (`presets/magic/particles/presets/magic_vortex_orb.json` 과 그 previewvortexorb 사본).
+    /// `cone == 0` 은 저장값 −1 이고 그건 부재와 완전히 같으므로 **실효 도달 0** 이다 —
+    /// 이 키로 그림이 바뀌는 동봉 씬은 없다.
+    ///
+    /// **[미해결]** 이 −cos 값을 방향 샘플러가 어떻게 쓰는지는 안 떴다(방출 방향 생성 자리를
+    /// 아직 못 짚었다). 그래서 `ParticleSimulator` 는 이 값을 **읽지 않는다** — 실효 도달 0 인
+    /// 키의 샘플링 규약을 지어내지 않는다.
+    public static func emitterConeThreshold(_ cone: Float) -> Float {
+        -cosf(cone * Float.pi)
+    }
 
     public init(emitters: [Emitter], initializers: [Initializer], operators: [ParticleOperator],
                 renderer: RendererKind, maxCount: Int, startTime: Float, material: ParticleMaterial?,
@@ -2253,6 +2298,8 @@ public struct ParticleSystemDef: Equatable {
         var emitterPeriodic: [PeriodicEmission?] = []
         // 방출 창(duration/delay) — 세 이미터 케이스에서 emitters 와 함께 append.
         var emitterWindow: [EmitterWindow] = []
+        // cone — sphererandom 바인더에만 있는 키(0x1401b94ae). 다른 이미터는 0 으로 채워 병렬 유지.
+        var emitterCone: [Float] = []
         /// `emitter[].duration` / `emitter[].delay`. 파서 0x1401c1c70 이 `asFloat` 로 읽고
         /// **부재 기본은 0**(주입 상수 없음 — null 의 asFloat). 의미·소비 지점은 `EmitterWindow` 주석.
         /// 세 이미터 이름이 같은 base 파서를 공유하므로(호출부 0x1401c61d6 · 0x1401c691e ·
@@ -2332,6 +2379,9 @@ public struct ParticleSystemDef: Equatable {
                 boxDistanceMin.append(nil)
                 emitterPeriodic.append(parsePeriodic(e))
                 emitterWindow.append(parseWindow(e))
+                // 부재 기본 0(`xorps xmm2,xmm2`@0x1401b94ab → H_FLOAT@0x1401b94b8).
+                // 변환식·도달은 `ParticleSystemDef.emitterConeThreshold(_:)` 주석.
+                emitterCone.append(injected(e, "cone", 0))
             case "boxrandom":
                 emitters.append(.box(
                     origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
@@ -2354,6 +2404,7 @@ public struct ParticleSystemDef: Equatable {
                 boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
                 emitterPeriodic.append(parsePeriodic(e))
                 emitterWindow.append(parseWindow(e))
+                emitterCone.append(0)      // boxrandom 바인더(0x1401b9520)에 cone 이 없다.
             case "layerimage":
                 // E1(②): layerimage(레이어 이미지 픽셀에서 방출) — 케이스 자체가 없어 무조건 드롭돼
                 // 이 이미터만 가진 시스템은 emitters=[] 로 파티클을 0개도 생성하지 못했다. 픽셀 불투명
@@ -2375,6 +2426,7 @@ public struct ParticleSystemDef: Equatable {
                 boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
                 emitterPeriodic.append(parsePeriodic(e))
                 emitterWindow.append(parseWindow(e))
+                emitterCone.append(0)      // layerimage 바인더(0x1401b9930)에도 cone 이 없다.
             case let other:
                 WapleLog.warn("[Waple] SP4 unsupported emitter dropped: \(other ?? "nil")")
             }
@@ -2665,6 +2717,8 @@ public struct ParticleSystemDef: Equatable {
         def.boxDistanceMin = boxDistanceMin
         def.emitterPeriodic = emitterPeriodic
         def.emitterWindow = emitterWindow
+        // 전건 0 이면(= 동봉 전건) 배열 자체를 비워 둔다 — 직접 조립한 def 와 같은 모양이 된다.
+        def.emitterCone = emitterCone.contains(where: { $0 != 0 }) ? emitterCone : []
         def.vortexAudio = vortexAudio
         def.operatorBlends = operatorBlends
         def.collisionOperators = collisionOps

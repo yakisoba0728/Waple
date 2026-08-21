@@ -1791,6 +1791,46 @@ public struct ParticleSimulator {
         }
     }
 
+    /// `remapvalue` **입력 범위 정규화** — `t = (raw − inputrangemin) / (inputrangemax − inputrangemin)`.
+    ///
+    /// **실측(2026-08-21).** 파서(오퍼레이터 분기 `0x1401ce660`–`0x1401cf145`)가 세 칸을 미리 굽는다:
+    ///   · `[op+0x20]`/`[op+0x30]`/`[op+0x40]` ← `inputrangemin` 의 x/y/z 브로드캐스트
+    ///     (`0x1401cee1a` · `0x1401cee2a` · `0x1401cee3a`)
+    ///   · `[op+0x50]`/`[op+0x60]`/`[op+0x70]` ← **`rcpps`** 로 뒤집은 `(max − min)` 의 x/y/z
+    ///     (`0x1401cee47` · `0x1401cee57` · `0x1401cee67`). 뺄셈 자체는 `Vector3::sub`
+    ///     `0x14005f0a0` 호출 `0x1401ceaf0`(`dst = inputrangemax − inputrangemin`).
+    ///   · 그 직전 루프 `0x1401cedd1`–`0x1401cedfe` 가 성분이 **정확히 0 이면 `0x34000000`**
+    ///     (= `Float.ulpOfOne`, 1.1920929e-7)로 갈아 끼운다 — 0 나눗셈 방호다.
+    /// 소비는 VM opid 19 핸들러의 정규화 두 자리 —
+    ///   3성분: `subps xmm0,xmm1` `0x140245096` + `mulps xmm0,xmm2` `0x140245099`
+    ///   스칼라: `subps xmm7,xmm1` `0x1402450fa` + `mulps xmm7,xmm2` `0x1402450fd`
+    /// 둘 다 **`inputcomponent` 축약 뒤 · transform 디스패치(`0x14024512c`) 앞**이다.
+    ///
+    /// **부재 기본은 `0` / `1`**(주입기 `0x1401bfc8c` · `0x1401bfd76`, 이니셜라이저 쌍둥이는
+    /// `0x1401bc589` · `0x1401bc676`)이라 이 함수는 그때 **항등**이다 —
+    /// `(raw − 0) × (1/1) = raw` 로 부동소수점 비트까지 같다(무회귀).
+    ///
+    /// **동봉 도달**(WEAssets 1996파일 · 설치본 트리도 같은 수): 키 출현 5건 —
+    /// `operator[].remapvalue` 1파일(`scenes/particleelementpreviews/remapvalue/…`, 150/200) +
+    /// `initializer[].remapinitialvalue` 3파일(`…/remapinitialvalue/…` 300 ·
+    /// `thunderbolt_beam_child` 50 ×2). **이 함수가 실제로 닿는 것은 앞의 1파일뿐**이다 —
+    /// `remapinitialvalue` 는 Waple 이 파스·보존만 하고 시뮬 원소가 아예 없다.
+    ///
+    /// 채널 축약: 실물은 채널마다 다른 min/역폭을 쓰지만 위 5건이 **전건 스칼라**라 x/y/z 가 같다.
+    /// 그래서 x 레인만 쓴다.
+    /// **[미해결]** vec3 `inputrange*` + `inputcomponent:"all"` 은 실물이 성분마다 다른 t 를 내는데,
+    /// Waple 의 값 파이프라인은 스칼라라 재현할 수 없다(같은 갭이 `remapEval` 주석에도 적혀 있다).
+    ///
+    /// 역수는 실물의 `rcpps`(12비트 근사)가 아니라 **정확한 나눗셈**을 쓴다 — 헤드리스 결정성이
+    /// 우선이고, 기본값(폭 1)에서는 어차피 둘 다 1.0 이라 무회귀가 깨지지 않는다.
+    @inline(__always)
+    static func remapNormalizeInput(_ raw: Float, _ spec: RemapSpec) -> Float {
+        let lo = spec.inMin.x
+        var span = spec.inMax.x - lo
+        if span == 0 { span = Float.ulpOfOne }      // 0x1401cedf3 (0x34000000)
+        return (raw - lo) * (1 / span)
+    }
+
     /// `remapValueEx` 중 시뮬레이터가 **실제로 적용하는** 채널.
     ///
     /// 실물 20채널 중 6종은 실물도 무동작이고(`RemapChannel.isNoOpOutput`), 남은 14 중 CP 계열
@@ -1827,29 +1867,32 @@ public struct ParticleSimulator {
     private func remapEval(_ spec: RemapSpec, _ p: Particle) -> (value: SIMD3<Float>, weight: Float) {
         let n = p.lifetime > 0 ? min(1, p.age / p.lifetime) : 1
         // 1) 입력 신호([추정] 의미론 — RemapInput doc 주석 참조).
-        let x: Float
+        let raw: Float
         switch spec.input {
         case .none:
-            x = (p.remapPhase + p.age) * Self.remapInputK * spec.inputScale   // 레거시 동형
+            raw = (p.remapPhase + p.age) * Self.remapInputK   // 레거시 동형
         case .some(.lifetimeFraction):
-            x = n * spec.inputScale
+            raw = n
         case .some(.particleSystemTime), .some(.layerTime), .some(.runtime), .some(.timeOfDay):
-            x = time * spec.inputScale   // [추정] 시계열 근사(헤드리스 결정성 우선)
+            raw = time   // [추정] 시계열 근사(헤드리스 결정성 우선)
         case .some(.velocity):
-            x = simd_length(p.vel) * spec.inputScale
+            raw = simd_length(p.vel)
         case .some(.deltaToControlPoint), .some(.distanceToControlPoint):
-            x = simd_length(p.pos - remapCP(spec.inputCP0)) * spec.inputScale
+            raw = simd_length(p.pos - remapCP(spec.inputCP0))
         case .some(.directionToControlPoint):
             let d = normalizeSafe(remapCP(spec.inputCP0) - p.pos)
-            x = Self.remapReduce(d, spec.inputComponent) * spec.inputScale
+            raw = Self.remapReduce(d, spec.inputComponent)
         case .some(.positionBetweenControlPoints):
             let a = remapCP(spec.inputCP0), b = remapCP(spec.inputCP1)
             let ab = b - a
             let len2 = simd_length_squared(ab)
-            x = (len2 > 1e-8 ? max(0, min(1, simd_dot(p.pos - a, ab) / len2)) : 0) * spec.inputScale
+            raw = len2 > 1e-8 ? max(0, min(1, simd_dot(p.pos - a, ab) / len2)) : 0
         case .some(.layerOrigin):
-            x = simd_length(p.pos) * spec.inputScale
+            raw = simd_length(p.pos)
         }
+        // 1b) **입력 범위 정규화**(`inputrangemin`/`inputrangemax`) — 실물이 transform 앞에서 한다.
+        //     `transforminputscale` 은 그 뒤(transform 안)라 곱 순서가 이렇다.
+        let x = Self.remapNormalizeInput(raw, spec) * spec.inputScale
         // 2) transform → v01 ∈ [0,1]. 노이즈는 remapPhase 솔트로 파티클 탈동기(레거시 동형).
         let v01: Float
         switch spec.transform {
