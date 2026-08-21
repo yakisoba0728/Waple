@@ -2337,12 +2337,25 @@ public final class TextScriptEngine {
                 }
                 return this.__animations[key];
             },
+            // BO(2026-08-21): 실물의 인자 해석기는 **하나**다 — `scenescript64.dll` `0x1816372d0`
+            // (imagebase 0x180000000). getLayer/getLayerIndex/sortLayer 가 전부 이 함수를 부른다.
+            // 세 갈래를 순서대로 본다:
+            //   · String(instance type < 0x80)  → 이름 조회(호스트 vtable +0x8).
+            //     **실패하면 그 문자열을 base-10 정수로 파싱해 id 조회**(+0x10).
+            //     `0x18163733b–0x181637357`: `strtoll(str, NULL, 10)`(`0x1817465c4`, r8d=0xa) 뒤 `call [r8+0x10]`.
+            //   · Number(`Value::IsNumber` `0x180016c70`) → **인덱스** 조회(+0x18).
+            //   · Object(`Value::IsObject` `0x180016c40`) → 내부 필드에서 레이어 핸들 언랩.
+            //   · 그 외 → nullptr.
+            // 종전 심은 문자열의 **id 폴백이 없어**, 공식 스니펫이 심는 `'{{ID}}'` 형태의 숫자
+            // 문자열을 getLayer 로 넘기면 이름 불일치 → 합성 폴백 레이어(씬에 없는 유령)를 돌려줬다.
             getLayer: function(i) {
                 if (typeof i === 'string') {
                     for (var n = 0; n < this.layers.length; n += 1) {
                         if (this.layers[n].name === i) { return this.layers[n]; }
                     }
                     if (this.__soundLayers[i]) { return this.__soundLayers[i]; }   // 사운드 레이어 이름 매칭(트리거)
+                    var byId = this.getLayerByID(i);                               // 실물 문자열 폴백: 이름 → id
+                    if (byId) { return byId; }
                     return fallbackLayer(i);
                 }
                 return this.layers[i || 0] || layer;
@@ -2351,17 +2364,30 @@ public final class TextScriptEngine {
             // 종전엔 객체만 봤다: `thisScene.getLayerIndex('postprocess')`(WE 동봉 dino_run
             // objects[22].visible 스크립트, 설치본 도달 1) 가 indexOf 실패로 항상 0 을 돌려줘
             // 뒤따르는 sortLayer 가 맨 앞으로 밀어 넣었다. 이름 조회는 getLayer 와 같은 규약
-            // (첫 이름 일치)이고, 못 찾으면 종전과 같이 0 이다(폴백 레이어를 만들지는 않는다 —
-            // 인덱스 질의가 씬에 레이어를 늘리면 안 된다).
+            // (첫 이름 일치)이다.
+            //
+            // BO(2026-08-21) 정정 — **실패 반환은 0 이 아니라 -1 이다.**
+            // 실물 `0x181635200`(getLayerIndex 콜백)의 실패 경로는 셋 다 한 자리로 모인다:
+            //   · 인자 0개  `0x18163545f  cmp dword [rdi], 1` / `jl 0x181635525`
+            //   · 타입 불일치(Object/Number/String 어느 것도 아님) → 같은 `0x181635525`
+            //   · 해석기(`0x1816372d0`)가 nullptr → `0x1816354c6  je 0x181635525`
+            // 그리고 `0x181635525  mov qword [rdi+0x30], 0xfffffffffffffffe`.
+            // `[rdi+0x30]` 은 반환값 슬롯이고, 성공 경로가 `movsxd r8,eax` → `add rax,rax`
+            // (`0x1816354e8`)로 값을 싣는 것에서 보듯 이 빌드의 Smi 태깅은 **value*2** 다.
+            // 따라서 `0xfffffffffffffffe` = **-1**. 0 은 "0번 레이어" 라는 유효한 답이라
+            // 실패와 구분되지 않는다 — 그게 종전 심의 결함이었다.
             getLayerIndex: function(l) {
                 if (typeof l === 'string') {
                     for (var n = 0; n < this.layers.length; n += 1) {
                         if (this.layers[n].name === l) { return n; }
                     }
-                    return 0;
+                    return -1;
+                }
+                if (typeof l === 'number') {
+                    return (isFinite(l) && l >= 0 && l < this.layers.length) ? Math.floor(l) : -1;
                 }
                 var idx = this.layers.indexOf(l);
-                return idx < 0 ? 0 : idx;
+                return idx < 0 ? -1 : idx;
             },
             enumerateLayers: function() {
                 var out = this.layers.slice();
@@ -2456,7 +2482,22 @@ public final class TextScriptEngine {
             // 대신 요청한 정렬 위치를 레이어에 **기록**하고(__wapleSortIndex) d.ts 대로 Boolean 을
             // 돌려준다 — 대상/인덱스가 유효할 때만 true. 실제 드로우 순서 반영은 렌더 배선 몫이다
             // (createLayer 로 만든 레이어가 아직 렌더 경로에 없다는 같은 갭 안에 있다).
+            //
+            // BO(2026-08-21) — 인자 규약을 실물 콜백 `0x181634eb0` 에서 다시 떴다. 실패는 전부
+            // **false** 다(예외가 아니다):
+            //   · `0x18163510f  cmp dword [rdi], 2` / `jge` — 인자 **2개 미만이면** 곧장
+            //     `[rdi+0x30] = [isolate+0x388]`. 루트 표는 undefined(+0x368) · the_hole(+0x370) ·
+            //     null(+0x378) · true(+0x380) · false(+0x388) 순이라 **+0x388 = false** 다
+            //     (대조: `isRunningInEditor` `0x181654d00` 이 `[+0x380 + idx*8]` 로 true/false 를 고른다).
+            //   · args[0] 은 Object(`0x180016c40`) · Number(`0x180016c70`) · String(instance type<0x80)
+            //     셋 중 하나여야 한다(`0x181635132`–`0x181635163`). 아니면 false.
+            //   · **args[1] 은 반드시 Number 다** — `0x181635165  lea rcx,[rdi+0x58]` +
+            //     `0x181635169  call 0x180016c70`(IsNumber), 아니면 false. 숫자 문자열('5')도 거부다.
+            //   · 해석기(`0x1816372d0`)가 nullptr → false.
+            //   · 성공하면 호스트 vtable `+0x38` 의 bool 을 그대로 true/false 로 돌려준다
+            //     (`0x1816351cb`–`0x1816351e2`).
             sortLayer: function(l, index) {
+                if (typeof index !== 'number' || !isFinite(index)) { return false; }   // 실물 IsNumber 게이트
                 var idx = -1;
                 if (typeof l === 'string') {
                     for (var i = 0; i < this.layers.length; i += 1) {
@@ -2468,9 +2509,7 @@ public final class TextScriptEngine {
                     idx = this.layers.indexOf(l);
                 }
                 if (idx < 0) { return false; }
-                var want = __num(index, NaN);
-                if (!isFinite(want)) { return false; }
-                this.layers[idx].__wapleSortIndex = Math.floor(want);
+                this.layers[idx].__wapleSortIndex = Math.floor(index);
                 return true;
             },
             getInitialLayerConfig: function() { return { origin: new Vec3(0, 0, 0), angles: new Vec3(0, 0, 0), scale: new Vec3(1, 1, 1) }; },
@@ -2750,6 +2789,14 @@ public final class TextScriptEngine {
             try { j = JSON.stringify(store[k]); } catch (e) { return; }   // 순환참조 등 직렬화 불가는 영속 스킵
             if (typeof j === 'string') { __wapleStorageSet(k, j); }        // undefined/함수는 미영속(get 계약 불변)
         }
+        // BO(2026-08-21): set(k, undefined) 이 여기로 꼬리호출한다(아래 set 주석) — `this` 에 기대지
+        // 않도록 지역 함수로 뽑는다(`var s = localStorage.set; s('k')` 형태에서도 같게 동작해야 한다).
+        function __erase(k) {
+            var had = Object.prototype.hasOwnProperty.call(store, k);
+            delete store[k];
+            if (typeof __wapleStorageDelete === 'function') { __wapleStorageDelete(k); }
+            return had;
+        }
         return {
             LOCATION_GLOBAL: 'global',
             LOCATION_SCREEN: 'screen',
@@ -2757,12 +2804,27 @@ public final class TextScriptEngine {
                 var k = String(key);
                 return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : undefined;
             },
-            set: function(key, value, location) { var k = String(key); store[k] = value; __persist(k); },
-            delete: function(key, location) {
+            // BO(2026-08-21) — 실물 `LocalStorageSet` 콜백 `0x181658680` 은 **값이 undefined 면
+            // delete 로 꼬리호출한다**:
+            //   `0x18165876c  mov rdx,[r15]`(= args[1], 인자 1개면 `[isolate+0x368]`=undefined)
+            //   `0x181658781  mov r10d, 0x83` / `0x181658787  cmp word [rax+rcx+7], r10w`  ← Oddball 타입
+            //   `0x18165878f  mov eax,[rdx+0x17]` / `sar eax,1` / `cmp eax,4`               ← Oddball kind 4
+            //   `0x18165879c  call 0x181658f70`                                             ← = localStorage.delete
+            // (V8 Oddball kind: 0 false · 1 true · 2 the_hole · 3 null · **4 undefined**.)
+            // 종전 심은 `store[k] = undefined` 라 in-memory get 은 우연히 같은 값을 냈지만
+            // `__persist` 가 `JSON.stringify(undefined) === undefined` 로 **영속을 건너뛰어**
+            // 디스크의 옛 값이 살아남았다 — 앱 재시작이면 지운 값이 되살아난다.
+            set: function(key, value, location) {
                 var k = String(key);
-                delete store[k];
-                if (typeof __wapleStorageDelete === 'function') { __wapleStorageDelete(k); }
+                if (value === undefined) { __erase(k); return; }
+                store[k] = value;
+                __persist(k);
             },
+            // d.ts:2371 `delete(key, location?): Boolean`. 실물 `0x181658f70` 의 반환은
+            // `0x1816590bc  call [rax+0xd8]`(호스트 bool) → `neg al` / `sbb rcx,rcx` →
+            // `mov rcx,[rax + rcx*8 + 0x388]` — rcx=0 이면 +0x388(false), rcx=-1 이면 +0x380(true).
+            // 종전 심은 undefined 를 돌려줬다.
+            delete: function(key, location) { return __erase(String(key)); },
             clear: function(location) {
                 store = {};
                 if (typeof __wapleStorageClear === 'function') { __wapleStorageClear(); }
