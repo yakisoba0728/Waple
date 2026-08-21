@@ -318,32 +318,30 @@ grep -rl castvolumetrics Sources/WapleRender/Resources/WEAssets/ \
 > 바뀐다 — 반경 밖에서 정확히 0 이 되어 무한 꼬리가 사라지고, 스포트 가장자리가 3차 보간으로
 > 부드러워진다.
 
-### 4.4 남은 두 배선 (이번 담당 파일 밖)
+### 4.4 남은 배선 (이번 담당 파일 밖)
 
-1. **`radius` 배선 — 한 줄.** `SceneRenderer3D.swift:1925`–`1934` 의
-   `VolumetricLightParameters(...)` 호출에 `radius: light.radius` 를 더하면 된다.
-   그전까지 `VolumetricLightParameters.radius` 는 기본값 0 이고, 패스는 WE 라이트 생성자
-   기본 반경 1.0(`0x140190494`)으로 마치한다 — 반경 1 짜리 헐이라 **사실상 비가시**이고,
-   그게 WE 가 무저작 반경에 대해 하는 일 그대로다. `encode` 가 1회 경고를 남긴다.
+1. ~~**`radius` 배선**~~ — **[2026-08-21 완료]** `SceneRenderer3D.swift:1934` 가
+   `radius: light.radius` 를 넘긴다. `VolumetricLightParameters.radius` 의 기본값 0 이
+   남아 있는 것은 이제 **씬이 `radius` 를 저작하지 않은 경우**뿐이고(파스가 `?? 0`,
+   `SceneDocument.swift:1916`), 그때 패스는 WE 라이트 생성자 기본 반경 1.0
+   (`0x140190494`)으로 마치한다 — 헐 0.99 라 **사실상 비가시**이고, 그게 WE 가 무저작
+   반경에 대해 하는 일 그대로다. `encode` 가 1회 경고를 남긴다.
+   그 퇴화가 그냥 어두운 것으로 끝나지 않는다는 실측은 §6.1 에 있다.
 2. **씬 뎁스 클립(W-17 잔여).** `SceneRenderer3D.swift:1466` 의 `pooledDepth` 는
    `usage=[.renderTarget]` · `storeAction=.dontCare` 라 샘플할 수 없다. `.shaderRead` 를 주고
    저장한 뒤 `encode` 에 넘기면 `_rt_volumetricsSingle` 과 같은 역할을 해서 샤프트가
    지오메트리에 가려진다. 그전까지는 통과한다.
 
 또한 `Tests/WapleRenderTests/VolumetricLightTests.swift` 의
-`testVolumetricLightDirectionUsesForwardConverterNotRawEulerAngles` 는 **`density: 0` · `radius` 무저작**
-씬으로 중앙 픽셀이 밝기를 단언한다. 종전 모델에서 `exp(-0 × d × 0.001) = 1` 이라 통과하던
-픽스처인데, 실물에서 `density` 는 순수 배수라 0 이면 **WE 도 아무것도 안 그린다**(§1.5).
-콘/방향 변환기 회귀를 계속 잡으려면 그 씬의 `density` 만 올리면 된다 — 반경 무저작(=WE 기본 1.0)
-이어도 카메라가 10 밖에 안 떨어져 있어 헐이 중앙 화소를 덮는다. 같은 순수 함수로 미리 계산한
-중앙 화소 값은 `density × 0.3333` 이다:
+`testVolumetricLightDirectionUsesForwardConverterNotRawEulerAngles` 는 종전에 **`density: 0` ·
+`radius` 무저작** 씬으로 중앙 픽셀 밝기를 단언했다. 옛 모델에서 `exp(-0 × d × 0.001) = 1` 이라
+통과하던 픽스처인데, 실물에서 `density` 는 순수 배수라 0 이면 **WE 도 아무것도 안 그린다**(§1.5).
+지금 픽스처는 `density 3` · `radius 20` 이고, 그 값의 근거와 예측 픽셀값은 §6.1–§6.2 다.
 
-| `density` | 0 | 1 | 2 | 2.5 | **3** | 4 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 중앙 rgb | 0.0000 | 0.3333 | 0.6667 | 0.8333 | **1.0000** | 1.3333 → 포화 1.0 |
-
-즉 `"density":0` 을 `"density":3` 으로 바꾸면 단언(`> 0.5`)이 포화 마진과 함께 성립한다.
-`radius` 까지 저작하면(예: 20) 배선 완료 후에도 그대로 통과한다.
+> **[2026-08-21 정정]** 이 자리에 "중앙 rgb = `density × 0.3333`" 표가 있었다. **그 표는
+> 광축(ndc = 0) 레이를 푼 값이라 실제 픽셀과 다르다** — 어떤 화면 해상도에도 광축 위에 앉는
+> 픽셀은 없다. 같은 픽스처의 실제 중앙 픽셀은 `density × 0.0751`(radius 무저작) ·
+> `density × 0.1687`(radius 20)이다. 그 표를 믿고 검산한 것이 §6.1 의 "4.5배" 소동이다.
 
 ---
 
@@ -392,6 +390,119 @@ ALL OK (실패 0)
 §7 의 입력은 동봉 `collisionmodel` 씬의 실제 라이트 저작값
 (`density 7.48` · `volumetricsexponent 4` · `intensity 6.44` · `radius 811.69` ·
 `origin 281.837 315.168 162`)이다.
+
+### 6.1 "CPU 1.0 vs Metal 0.2235, 4.5배" — 전말 (2026-08-21)
+
+macOS CI 가 아래를 보고했다.
+
+- 픽스처: 카메라 `(0,0,10)` → 원점 · `fov 50` · 64×64. 라이트 `origin "0 0 0"` · `angles "0 0 0"` ·
+  `intensity 6` · `innercone 10` · `outercone 30` · `density 3` · `volumetricsexponent 1` ·
+  **`radius` 키 없음**(→ 헐 `0.99`).
+- 같은 픽스처를 CPU 순수 산술로 풀면 **1.0**(보고는 "포화" 라고 했지만 실은 포화가 아니라 **정확히** 1.0 이다 — 아래 표).
+- 실제 Metal 렌더의 중앙 픽셀은 **0.2235**(= 57/255). 약 **4.5배** 차.
+
+**두 구현이 갈린 것이 아니다. 레이가 갈렸다.** 검산 쪽이 **광축(ndc = 0) 레이**를 풀었고
+셰이더는 **픽셀 중심 레이**를 푼다. 64×64 의 "중앙" 픽셀 (32,32) 의 NDC 는 `(0,0)` 이 아니라
+`(+1/64, −1/64) = (±0.015625)` 다 — **어떤 짝수 해상도에도 광축 위에 앉는 픽셀은 없다.**
+
+그 반 픽셀이 왜 4.4배가 되는가:
+
+| 단계 | 광축 레이(ndc=0) | 픽셀 중심 레이(ndc=±0.015625) |
+| --- | ---: | ---: |
+| 레이와 라이트의 최근접 거리 | `0` | **`0.10304`** |
+| 구 교차 구간 `segment` | `1.980000` | `1.969247` (×0.99457) |
+| `maxLightScale` | `12.000000` | `11.934833` |
+| 샘플 8개의 `spotCookie` | `1,1,1,1,0,0,0,0` | **`0.9566, 0.6710, 0, 0, 0,0,0,0`** |
+| `shadowFactor / N` | `0.277778` | **`0.062960`** (×0.22665) |
+| 최종 `rgb` | **`1.000000`** | **`0.225425`** |
+
+지배항은 `spotCookie` 다. 헐이 `0.99` 뿐이라 8 샘플이 라이트에서 `0.150`–`0.773` 밖에 안 떨어져
+앉는데, 그 거리에서 옆으로 `0.103` 비끼면 각도가 콘 반각 15° 를 넘어간다 — 3번째 샘플의
+`cos` 가 `0.9571` 로 `cos15° = 0.96593` **아래**로 내려가 `smoothstep` 이 0 을 준다.
+`1.000000 / 0.225425 = 4.4361` 이 곧 보고된 "4.5배" 다.
+
+**0.225425 가 관측치와 맞는지도 끝까지 따라간다.** 목적지가 `bgra8Unorm`(비-sRGB) 이므로
+`round(0.225425 × 255) = 57`, 캡처 PNG 는 `OffscreenCapture.png` 가 `.deviceRGB` 로 **원바이트를
+그대로** 싣고(감마 인코딩 없음), `NSBitmapImageRep.colorAt` 이 `57/255 = 0.223529` 를 돌려준다.
+**관측치 0.2235 와 정확히 같다.** 즉 셰이더는 처음부터 맞는 값을 냈다.
+
+같은 계산을 배선된 `radius 20`(헐 `19.8`)로 돌리면 중앙 `0.506209`(바이트 129) · 코너 (2,2)
+`0.047063`(바이트 12)이고, 이건 §4.4 각주가 이미 인용하던 수와 같다 — 즉 `radius` 가 도달한
+경로에서는 검산과 렌더가 이미 맞아 있었다. 4.5배는 **헐이 `0.99` 로 퇴화한 픽스처에서만** 터진다.
+
+### 6.2 같은 식을 두 번 적은 자리 — 전수 대조표
+
+`metalSource`(MSL 문자열)와 `VolumetricMath`(CPU) 가 같은 식을 두 벌 갖는 자리를 전부 세웠다.
+"갈릴 수 있나" 는 **값이 실제로 달라질 수 있는가**다.
+
+| # | 식 | `volumetricsfront.frag` | `metalSource`(MSL) | `VolumetricMath`(CPU) | 갈릴 수 있나 |
+| ---: | --- | --- | --- | --- | --- |
+| 1 | 픽셀 → NDC | `:60-61` (`v_ScreenPos.xyz / .w`) | `volumetricVertex` uv → `ndc` | **종전 없음** → `pixelNDC` 신설 | **여기서 갈렸다(§6.1)** |
+| 2 | 뷰 레이 재구성 | `:105-111` (`mul(·, g_EffectModelMatrix)` 역투영) | `normalize(fwd + right·(ndc.x·tanHalf·aspect) + up·(ndc.y·tanHalf))` | **종전 없음** → `viewRayDirection` 신설 | **여기서 갈렸다(§6.1)** |
+| 3 | 헐 입·출구 | `:63-74` 뎁스 2패스 | 구 교차 축약형(`a = dot(d,d) = 1` 가정) | **종전 없음** → `hullSpan` 신설 | 방향 미정규화면 조용히 틀림 — 주석에 가정 명시 |
+| 4 | `tEnter`/`tExit` 클램프 | FULLSCREEN 근평면 / `min(back, limit)` | `max(-b-sq, near)` / `min(-b+sq, far)` | `hullSpan` | 근평면을 **레이 길이**로 잰다(`near/cosθ` 아님) — 두 벌은 같고 WE 와만 다른 근사다. `radius 20` 픽스처(근평면 클램프가 실제로 걸리는 쪽)에서 오차 `5.3e-6` |
+| 5 | `worldStep` 의 `(N+1)` 분모 | `:113` | `segment / (N + 1.0)` | `marchMeanFactor`(+ 해석식 `samplePosition`) | 일치 |
+| 6 | 샘플 순서(`p += step` 후 샘플) | `:130` | 더한 뒤 샘플 | **누산으로 통일**(닫힌 꼴 아님) | 일치. 닫힌 꼴로 적으면 반올림 누적이 달라져 비트 대조 불가 |
+| 7 | `shadowFactor /= N` | `:187` | `*= marchParams.y` (= `1/N`) | `* (1 / Float(N))` | 일치(`N+1` 아님 — 나눌 때만 `N`) |
+| 8 | `maxLightScale` | `:115-122` | `intensity · seg · lightCone.z · lightCone.w` | `maxLightScale(...)` — **나눗셈이었다 → 역수 곱으로 정렬** | 정렬 전 ulp 차 |
+| 9 | 반경 감쇠 | `:132` | `pow(saturate(1 − d·invHull), E)` | `radialFalloff` — **나눗셈이었다 → 역수 곱으로 정렬** | 정렬 전 ulp 차 |
+| 10 | 지수 클램프 | 없음(WE 는 안 한다) | `encode` 가 `max(0, exponent)` 로 **업로드 전** 클램프 | **`radialFalloff` 엔 없었다** → `marchMeanFactor` 에 추가 | **음수 지수에서 갈렸다**: CPU 는 `powf(base, −1)` 을 실제로 계산하고, GPU 는 `encode` 의 클램프 때문에 `pow(base, 0) = 1` 만 본다. 저작값은 무클램프 파스(`SceneDocument.swift:1919`)라 도달 가능한 입력이다 |
+| 11 | 콘 `smoothstep` | `:139-140` | `smoothstep(lightCone.x, lightParams.w, cos)` | `coneFalloff` | 일치. 퇴화(`inner == outer`)만 규약이 다르다(MSL 은 0 나눗셈) — 호출부가 `+1e-4` 로 벌려 도달 불가(`SceneDocument.swift:739`) |
+| 12 | `normalize(lightDelta)` | `:139` | `lightDelta / max(dist, 1e-6)` | 같은 **나눗셈** 형태 | 일치 |
+| 13 | POINTLIGHT 게이트 | `#if POINTLIGHT` | `lightDirection.w < 0.5` | `PixelInput.isPoint` = `VolumetricLightParameters.isPointLight` (`outer ≤ −0.999`) | 일치(판정 단일 소스) |
+| 14 | POINTLIGHT `×0.5` | `:119` vs `:121` | `lightCone.w` | `pointLightScale` | 일치 |
+| 15 | 헐 반경 `radius × 0.99` | `vert:13` + `0x140198760` | `encode` 가 유니폼에 굽는다 | `hullRadius(radius:)` — **같은 함수** | 단일 소스 |
+| 16 | 최종 `× 0.1` | `:190` | 마지막 곱 | `finalScale` | 일치 |
+| 17 | 유니폼 팩 순서 | — | `lightParams`(x=density y=exp z=intensity w=inner) · `lightCone`(x=outer y=hull z=1/hull w=pointScale) · `marchParams`(x=N y=1/N) | `PixelInput` 필드명을 같은 이름으로 맞춤 | 슬롯별 대조 결과 **전부 일치**. 구조체 크기도 11×`float4` = 176B 로 동일 |
+
+### 6.3 배제한 가설
+
+출력 경로도 끝까지 봤고, 아래는 전부 **아니다**.
+
+| 가설 | 배제 근거 |
+| --- | --- |
+| sRGB/감마 인코딩 | 파이프라인 포맷이 `bgra8Unorm`(**`_srgb` 변종 아님**, `VolumetricLightPass.swift` 의 `makeDescriptor`), `writeFramePNG` 는 `getBytes` 원바이트 → `OffscreenCapture.png` 가 `.deviceRGB` 로 그대로 싣는다. 변환 지점이 존재하지 않는다 |
+| 감마 × 다른 인자의 곱 | 위와 같은 이유로 감마 인자 자체가 0개. 그리고 픽셀 예측이 감마 없이 **바이트 단위로 맞는다**(57) |
+| 목적지가 `rgba16Float`(HDR 경로) | 픽스처에 `hdr` 없음 → `hdrActive == false` → `accPixelFormat == .bgra8Unorm` |
+| `finalizeScene` 후처리(톤맵/블룸) | 이 씬은 `sceneWantsLDRBloom == false` 라 `source === destination` → `finalizeScene` 이 `return true` 로 즉시 빠진다(무연산) |
+| additive 블렌드가 값을 바꿈 | `clearcolor "0 0 0"` 위에 `one/one` 이라 더할 배경이 0. 알파는 프래그가 `a = 1` 을 쓰므로 255 → `colorAt` 의 언프리멀티플이 무영향 |
+| uv y-flip / 픽셀 인덱싱 | (32,32)·(31,31)·(31,32) 예측이 모두 같은 값(대칭). 정점 셰이더의 `ndc == 보간된 clip.xy` 임을 대수로 확인 |
+| 유니폼 스트라이드/필드 어긋남 | 표 §6.2 #17 — 슬롯 전수 대조 일치 |
+| `shadowFactor` 를 `N` 대신 `(N+1)` 로 나눔 | 그러면 `0.200378`(바이트 51)이다. 관측 `0.2235`(57)와 다르다 — **값으로** 배제 |
+| 샘플 순서(더하기 전에 샘플) | **이 픽스처로는 못 가른다** — 값이 `0.225425` 로 같다. 버려지는 첫 샘플이 헐 표면(감쇠 정확히 0)에 앉고 늘어나는 마지막 샘플은 라이트 뒤(콘 0)라 둘 다 기여가 0 이기 때문이다. 셰이더 평문(`:130` 이 더한 뒤 샘플)과 MSL 이 같다는 **독법**으로만 배제된다 |
+| `pow` base/exponent 규약(`pow(0,0)`) | 이 픽스처는 `E = 1` 이라 도달하지 않는다(규약 자체는 §6.2 #10 에서 정렬) |
+
+### 6.4 보강한 것
+
+1. **`VolumetricMath` 가 이제 프래그먼트 전체를 덮는다.** `pixelNDC` · `viewRayDirection` ·
+   `hullSpan` · `marchMeanFactor` · `pixelValue`(+ `dot3`/`length3`/`normalize3`)를 더했다.
+   종전엔 감쇠 항만 있어서 **호출자가 레이 재구성을 직접 다시 적어야 했고**, 그게 §6.1 사고의
+   물리적 원인이다. `import Foundation` 하나로 서는 성질은 유지했다(`SIMD3<Float>` 는
+   표준 라이브러리 타입이고 `simd` 모듈이 아니다) — 위 추출 절차가 그대로 성립한다.
+2. **리눅스에서 값이 고정된다.** 추출 실행 결과(2026-08-21, Swift 6.0.3 on Linux):
+
+   ```
+   radius=0.0  hull=0.9900  center(32,32)=0.225425  byte=57   corner(2,2)=0.000000  onAxis=1.000000  ratio=4.4361
+   radius=20.0 hull=19.8000 center(32,32)=0.506209  byte=129  corner(2,2)=0.047063  onAxis=0.506250  ratio=1.0001
+   ndc(32,32,64,64) = (0.015625, -0.015625)
+   ndc(0,0,1,1)     = (0.0, 0.0)
+   ```
+
+   `pixelNDC(x:0, y:0, width:1, height:1)` 이 정확히 `(0,0)` 이므로 **광축 레이도 같은 API 로**
+   표현된다 — "1×1 로 부르면 광축" 이 §6.1 의 두 수를 한 함수 안에서 나란히 보게 해 준다.
+3. **테스트 두 겹.** `Tests/WapleRenderTests/VolumetricLightTests.swift` 에
+   `testVolumetricMathMirrorsShaderForFixturePixel` 을 새로 뒀다 — GPU 없이 위 값 전부와
+   변환기 두 개(`forwardLightAxis` → `(0,0,1)`, `forwardSpotConeCosines(10,30)` → `cos5°/cos15°`)를
+   못 박는다. 그리고 기존 Metal 테스트의 단언을 **대비 비교에서 CPU 미러와의 절대 대조로**
+   올렸다(`accuracy: 0.02` ≈ 5/255 — 양자화와 GPU 초월함수 오차는 덮고 4.4배 발산은 잡는 폭).
+   대비 단언 두 개는 그대로 둔다(방향/콘 변환기 회귀를 그쪽이 잡는다). 기대치를 변환기로
+   만들지 않고 **의도한 값**(`(0,0,1)`, `cos5°/cos15°`)에서 만든 이유는, 변환기가 회귀하면
+   기대치까지 같이 움직여 단언이 무력해지기 때문이다.
+
+**고치지 않은 것.** `metalSource` 의 픽셀 수식은 한 줄도 안 바꿨다 — `volumetricsfront.frag`
+대조에서 틀린 곳이 없었고(§6.2), 관측 픽셀이 CPU 예측과 바이트 단위로 맞았다.
+`VolumetricMath` 쪽에서 바꾼 것은 **GPU 와 같은 순서로 적기 위한 정렬 세 곳**뿐이다
+(§6.2 #8·#9 역수 곱, #10 지수 클램프). 값이 눈에 띄게 달라지는 변경은 없다.
 
 ---
 

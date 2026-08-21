@@ -109,13 +109,95 @@ final class VolumetricLightTests: XCTestCase {
         //
         // 픽스처에 `"radius":20` 을 넣은 것도 같은 이유다 — 반경 없는 볼류메트릭 라이트는
         // 실물 모델에서 퇴화(헐 반경 1)라 WE 에서도 거의 안 보인다. 재는 대상이 아니었다.
-        //
-        // CPU 쪽 `VolumetricMath` 로 같은 픽스처를 풀면 center ≈ 0.506 · corner ≈ 0.047 로
-        // 10배 차다(리눅스에서 단독 컴파일해 실측). Metal 실렌더는 여기서 못 돌리므로
-        // 최종 검증은 macOS CI 다.
         XCTAssertGreaterThan(center.redComponent, corner.redComponent + 0.1,
             "정면 스팟(angles=0)이 좁은 콘으로 카메라를 향해야 하는데 중앙이 주변보다 밝지 않다 — 방향/콘 변환기 미사용 회귀")
         XCTAssertGreaterThan(center.redComponent, 0.1,
             "화면 중앙이 사실상 검다 — 볼류메트릭이 아예 발화하지 않았다")
+
+        // **[2026-08-21] CPU↔GPU 대조를 여기서 닫는다.**
+        //
+        // 위 두 단언은 "대비" 만 재므로 **셰이더 산술이 통째로 몇 배 어긋나도 통과한다**.
+        // 실제로 그 상태에서 "CPU 는 1.0 인데 Metal 은 0.2235, 4.5배 차" 라는 보고가 나왔고,
+        // 원인은 검산 쪽이 광축(ndc=0) 레이를 풀었던 것이었다(docs/re/volumetric-light.md §6.1).
+        // 그 부류를 다시 조용히 지나가게 두지 않으려면, **같은 픽셀을 CPU 로 푼 값**과
+        // 실렌더 픽셀을 직접 맞대야 한다. 예측은 `VolumetricMath.pixelValue` 가 낸다.
+        //
+        // 기대치를 변환기(`forwardLightAxis`/`forwardSpotConeCosines`)로 만들지 않고
+        // **의도한 값 자체**(방향 (0,0,1) · 콘 코사인 cos5°/cos15°)로 만든다 — 변환기가 회귀하면
+        // 기대치까지 같이 움직여 단언이 무력해지기 때문이다. 변환기 자체는 아래
+        // `testVolumetricMathMirrorsShaderForFixturePixel` 이 따로 못 박는다.
+        let predictedCenter = VolumetricMath.pixelValue(
+            Self.directionFixtureInput(radius: 20), x: 32, y: 32, width: 64, height: 64)
+        let predictedCorner = VolumetricMath.pixelValue(
+            Self.directionFixtureInput(radius: 20), x: 2, y: 2, width: 64, height: 64)
+        // 허용오차 0.02 ≈ 5/255. bgra8Unorm 양자화(1/255)와 GPU 초월함수(pow/smoothstep)의
+        // 마지막 자리 차이는 넉넉히 덮으면서, 4.4배 같은 실제 발산은 확실히 잡는 폭이다.
+        XCTAssertEqual(Float(center.redComponent), predictedCenter, accuracy: 0.02,
+            "Metal 실렌더 중앙 픽셀이 CPU 미러(VolumetricMath.pixelValue)와 갈렸다 — metalSource 와 VolumetricMath 가 한 벌씩 따로 논다")
+        XCTAssertEqual(Float(corner.redComponent), predictedCorner, accuracy: 0.02,
+            "Metal 실렌더 코너 픽셀이 CPU 미러와 갈렸다 — 콘/반경 감쇠가 화면 가장자리에서 발산")
+    }
+
+    // MARK: - 순수 산술 레인 (GPU 불필요 — `VolumetricMath` 만 쓴다)
+
+    /// 위 Metal 테스트와 **같은 픽스처**를 CPU 로 표현한 것. 두 테스트가 같은 입력을 보게 하는 자리다.
+    /// 카메라 기저는 `SceneRenderer3D.encode3D` 가 만드는 것과 같다 —
+    /// eye (0,0,10) → center 원점 · up (0,1,0) ⇒ fwd (0,0,-1) · right (1,0,0) · camUp (0,1,0).
+    /// near/far 는 `SceneDocument.swift:1544-1545` 의 미저작 기본값(0.1 / 10000)이다.
+    private static func directionFixtureInput(radius: Float) -> VolumetricMath.PixelInput {
+        VolumetricMath.PixelInput(
+            eye: SIMD3(0, 0, 10), forward: SIMD3(0, 0, -1), right: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0),
+            fovYDegrees: 50, aspect: 1, nearZ: 0.1, farZ: 10000,
+            lightPosition: SIMD3(0, 0, 0), lightForward: SIMD3(0, 0, 1),
+            density: 3, exponent: 1, intensity: 6,
+            innerCos: cos(5 * Float.pi / 180), outerCos: cos(15 * Float.pi / 180),
+            radius: radius, sampleCount: VolumetricLightPass.marchSampleCount)
+    }
+
+    /// **[2026-08-21] "4.5배 차" 사건의 회귀 못.** Metal 도 GPU 도 필요 없다 —
+    /// `VolumetricMath` 는 `import Foundation` 하나로 서므로 이 값들은 리눅스에서
+    /// 블록만 잘라 그대로 재현된다(docs/re/volumetric-light.md §6).
+    ///
+    /// 못 박는 사실 셋:
+    /// 1. **픽셀 중심 레이**로 푼 값이 실렌더 값이다 — 64×64 의 (32,32)는 광축이 아니라
+    ///    반 픽셀(ndc ±1/64) 비껴 있고, `radius` 무저작(헐 0.99)에서는 그 반 픽셀이
+    ///    **4.44배**를 만든다. 광축 레이로 검산하면 GPU 와 안 맞는 것이 정상이다.
+    /// 2. 그때 값 0.2254 는 `bgra8Unorm` 에서 바이트 **57** 이고, 캡처 PNG 를
+    ///    `NSBitmapImageRep.colorAt` 로 읽으면 57/255 = **0.2235** 다(감마 없음 —
+    ///    `OffscreenCapture.png` 가 `.deviceRGB` 로 원바이트를 싣는다). 관측치와 일치한다.
+    /// 3. 픽스처가 쓰는 변환기 두 개(`forwardLightAxis`/`forwardSpotConeCosines`)가 실제로
+    ///    (0,0,1) · cos5°/cos15° 를 낸다 — 위 Metal 단언의 기대치가 하드코딩인 근거.
+    func testVolumetricMathMirrorsShaderForFixturePixel() throws {
+        // (3) 변환기 고정 — 기대치를 손으로 적어도 되는 근거.
+        let axis = SceneLight3D.forwardLightAxis(angles: Vec3(x: 0, y: 0, z: 0))
+        XCTAssertEqual(axis.x, 0, accuracy: 1e-6)
+        XCTAssertEqual(axis.y, 0, accuracy: 1e-6)
+        XCTAssertEqual(axis.z, 1, accuracy: 1e-6, "angles=0 은 카메라를 향하는 +Z 여야 한다")
+        let cone = SceneLight3D.forwardSpotConeCosines(inner: 10, outer: 30)
+        XCTAssertEqual(cone.inner, cos(5 * Float.pi / 180), accuracy: 1e-6, "innercone 은 **반각 코사인**이다")
+        XCTAssertEqual(cone.outer, cos(15 * Float.pi / 180), accuracy: 1e-6)
+
+        // (1)(2) 픽셀 값 고정 — 리눅스 실측 2026-08-21.
+        let wired = Self.directionFixtureInput(radius: 20)
+        XCTAssertEqual(VolumetricMath.pixelValue(wired, x: 32, y: 32, width: 64, height: 64),
+                       0.506209, accuracy: 1e-4, "radius=20 픽스처의 중앙 픽셀")
+        XCTAssertEqual(VolumetricMath.pixelValue(wired, x: 2, y: 2, width: 64, height: 64),
+                       0.047063, accuracy: 1e-4, "radius=20 픽스처의 코너 픽셀")
+
+        let bare = Self.directionFixtureInput(radius: 0)   // 씬이 `radius` 를 저작하지 않은 경우 → 헐 0.99
+        let barePixel = VolumetricMath.pixelValue(bare, x: 32, y: 32, width: 64, height: 64)
+        XCTAssertEqual(barePixel, 0.225425, accuracy: 1e-4,
+            "radius 무저작 픽스처의 중앙 픽셀 — 실측 Metal 값 57/255=0.2235 와 같은 자리다")
+        XCTAssertEqual((min(1, max(0, barePixel)) * 255).rounded(), 57,
+            "bgra8Unorm 양자화 바이트가 캡처 PNG 의 57 과 같아야 한다")
+
+        // 같은 입력을 **광축 레이**(1×1 = ndc 정확히 (0,0))로 풀면 1.0 이다. 이 1.0 과 위 0.2254 의
+        // 비가 곧 보고된 "4.5배" 이고, 두 구현이 갈린 것이 아니라 **레이가 갈린 것**이다.
+        let onAxis = VolumetricMath.pixelValue(bare, x: 0, y: 0, width: 1, height: 1)
+        XCTAssertEqual(onAxis, 1.0, accuracy: 1e-4, "광축 레이 값 — 종전 검산이 보던 수")
+        XCTAssertEqual(onAxis / barePixel, 4.436, accuracy: 0.01,
+            "광축/픽셀중심 비 = 보고된 4.5배의 정체(반 픽셀 각도 × 좁은 콘 × 작은 헐)")
+        XCTAssertEqual(VolumetricMath.pixelNDC(x: 32, y: 32, width: 64, height: 64).x, 0.015625, accuracy: 1e-7,
+            "짝수 해상도의 가운데 픽셀은 광축이 아니다 — 이 반 픽셀이 위 4.44배의 원인")
     }
 }
