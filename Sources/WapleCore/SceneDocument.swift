@@ -86,7 +86,46 @@ public struct SceneLayer: Equatable {
     public var attachment: String? = nil
     public let size: Vec2
     public var scale: Vec2
+    /// `scale` 의 3성분째 — `originZ` 와 동일 규약(2D 정사영 경로는 안 읽는다).
+    ///
+    /// **왜 `scale` 을 Vec3 으로 넓히지 않았나.** 실물 디스크립터는 `scale` 을 **vec3**
+    /// (등록 `0x1401e06a6` `lea rdx,"scale"` → 멤버 `+0x134`@`0x1401e06c6` → **타입 태그 2**
+    /// @`0x1401e06ea`; 같은 표의 `origin` `+0x128` 태그 2, `angles` `+0x140` 태그 2,
+    /// `parallaxDepth` `+0x170` 태그 **1**=vec2)로 등록하고, 씬스크립트 `ILayer.scale` 도
+    /// `Vec3` 이다(`ui/dist/monaco/autocomplete/lib.sceneScript.d.ts:2033`).
+    /// 그런데 `scale` 은 2D 합성(`composeParentTransforms`)·쿼드 배치·렌더 인코더까지
+    /// `Vec2` 로 흐르는 **소비처 다수**라, 타입을 넓히면 이 세션에 동시 편집 중인
+    /// `WapleRender` 소유 파일이 함께 움직인다. `originZ` 가 이미 쓰는 **별 필드** 규약이
+    /// 같은 문제를 무회귀로 푼다 — 파스·보존은 여기서 끝내고, 소비(씬스크립트 표면)는
+    /// 소유자가 배선한다.
+    ///
+    /// 도달(3성분째가 기본 1 과 다른 오브젝트 수): `SceneLayer` 는 동봉 `WEAssets` 씬 172 중
+    /// **7**(이미지 4 + shape 쿼드 3) · 설치본 `wallpaper_engine` 씬 186 중 **24**(이미지 21 + shape 3),
+    /// `SceneTextLayer` 는 **3 / 5**. (파티클·모델·그룹노드는 이미 `Vec3`
+    /// (`scale3D`/`SceneObject3D.scale`/`SceneNode3D.scale`)이라 소실이 없었다 —
+    /// 인수인계서의 "동봉 71 / 설치본 92" 는 텍스트를 뺀 **전체** 오브젝트 수이고, 그중 실제로
+    /// 값을 잃던 것은 이 7 / 24 뿐이다.) **전건 균일값이라는 인수인계 기술은 틀렸다** —
+    /// `presets/rain/previewperspective` 파티클 `"0.500 0.500 0.100"`,
+    /// 설치본 `projects/defaultprojects/razer_bedroom` 모델 `"1.65900 1.48800 3.95800"` 처럼
+    /// z 가 x·y 와 다른 저작이 실재한다(둘 다 이미 Vec3 을 쓰는 타입이라 손실은 없었다).
+    ///
+    /// **2D 렌더 무영향**: 이 필드를 읽는 코드는 없다(신규 필드). 기본 1 이라 `Equatable` 비교도
+    /// 종전과 같은 씬에서 같은 결과다.
+    public var scaleZ: Float = 1
     public var angleZ: Float
+    /// `angles` 의 1·2성분째(라디안, 오일러 X/Y) — `angleZ` 와 동일 규약.
+    ///
+    /// 실물 `angles` 는 vec3 디스크립터(`+0x140`, 태그 2 — `scaleZ` 주석의 등록 VA 참조)이고
+    /// 씬스크립트 `ILayer.angles` 도 `Vec3` 이다(d.ts:2028). Waple 은 `angleZ` 만 들고 있어
+    /// x·y 가 파스에서 통째로 사라졌다 — 2D 정사영 렌더는 z 회전만 쓰므로 그림은 같지만
+    /// **스크립트 표면이 틀린다**(`getTransformMatrix`/`rotateObjectSpace` 도 같은 값을 본다).
+    ///
+    /// 도달: 동봉 씬 172 · 설치본 씬 186 전수에서 `angles` 의 x 또는 y 가 0 이 아닌 오브젝트는
+    /// **동봉 1 · 설치본 7** 인데, 그 전건이 light(1/1) · model(0/3) · particle(0/3) —
+    /// 즉 **이미 `Vec3` 을 들고 있던 타입**이다. `SceneLayer`/`SceneTextLayer` 도달은
+    /// 두 코퍼스 모두 **0**이므로 이 필드는 워크샵 대비 표면 보정이고 재현 코퍼스에서는 무변화다.
+    public var angleX: Float = 0
+    public var angleY: Float = 0
     public let alpha: Float
     public let color: Vec3
     public let brightness: Float
@@ -393,6 +432,31 @@ public struct SceneTextLayer: Equatable {
     /// F057: 2D 씬 parent 체인이 있으면 파스 말미에 부모 누적 각이 더해진 월드 각으로 덮어쓴다
     /// (composeTextParentTransforms — origin/scale 과 동일 규약, 그래서 var).
     public var angleZ: Float = 0
+    /// `scale`/`angles` 의 나머지 성분 — `SceneLayer.scaleZ`/`angleX` 와 **완전히 같은 규약**이다.
+    /// d.ts 는 `ILayer extends ITextLayer`(:2020)라 텍스트 오브젝트도 같은 `origin`/`angles`/`scale`
+    /// Vec3 표면을 쓴다(:2028·:2033). 파스·보존 전용(소비처 0 — 2D 렌더 무영향).
+    /// 도달: `scaleZ` 가 1 이 아닌 텍스트 오브젝트 동봉 **3** / 설치본 **5**,
+    /// `angleX`/`angleY` 가 0 이 아닌 텍스트 오브젝트 **0 / 0**.
+    public var scaleZ: Float = 1
+    public var angleX: Float = 0
+    public var angleY: Float = 0
+    /// `parallaxDepth`(카메라 시차 가중치, x·y 축별) — **텍스트 오브젝트에만 없던 필드다.**
+    ///
+    /// 실물은 이 키를 타입별이 아니라 **공통 오브젝트 디스크립터**에 등록한다 —
+    /// `0x1401e082f` `lea rdx,"parallaxDepth"` → 멤버 `+0x170`(`0x1401e0848`) → 타입 태그 **1**
+    /// (= vec2, `0x1401e085a`). 같은 표가 `origin`/`scale`/`angles` 를 얹는 표이므로,
+    /// image·particle 만 갖고 text 는 안 갖는 키가 아니다. Waple 은 `SceneLayer` ·
+    /// `SceneParticle` · `SceneSprite` 에만 같은 이름의 필드를 뒀고 텍스트에서만 빠져 있었다.
+    ///
+    /// 도달: 워크샵 코퍼스 텍스트 **1,597건 중 956건**이 이 키를 저작한다
+    /// (`spec/corpus/scene-schema.json` `waple.gapImpact` — 그중 `cameraparallax` 활성 56씬
+    /// 안에서 482건이 실효, 269건 0(시차 없음) · 184건 음수(역시차)).
+    /// 재현 코퍼스는 동봉 3 / 설치본 3 건뿐이고 **전건 `"1.000 1.000"`(=기본값)** 이라
+    /// 이 파스로 값이 달라지는 씬은 두 코퍼스에서 **0건**이다.
+    ///
+    /// **파스·보존 전용이다.** 소비(텍스트 빌보드의 cameraOffset 가중)는 `WapleRender` 소유이고
+    /// 이 라운드에서 배선하지 않았다 — 정확한 패치안은 `docs/re/scene-object-model.md` §12.1.4.
+    public var parallaxDepth: Vec2 = Vec2(x: 1, y: 1)
     /// "Limit width"(limitwidth) 체크 시 워드랩 폭 maxwidth(래스터 로컬 px — 실물 maxwidth 스크립트가
     /// 화면폭을 scale.x 로 나눠 전달 = 스케일 전 단위, d.ts "Max width in pixels"). nil = 무제한(무회귀).
     public var maxWidth: Float? = nil
@@ -1558,8 +1622,27 @@ extension SceneDocument {
         // 우리는 크기를 0 으로 만들 수 없으므로(선언부 `orthoAuto` 주석) 종전 폴백을 쓰되,
         // **키를 읽지 않는 것**만은 그대로 지킨다. 동봉 저작 2씬은 width/height 자체가 없어 무영향.
         let orthoAuto = weBool(proj["auto"])
-        let pw = orthoAuto ? 1920 : (intVal(proj["width"]) ?? 1920)
-        let ph = orthoAuto ? 1080 : (intVal(proj["height"]) ?? 1080)
+        // **읽기 규약: `width`/`height` 는 전부-아니면-전무다.** 실물은 두 노드를 먼저 `operator[]`
+        // 로 꺼내 두고(`0x140187532` `lea rdx,"width"` → `mov rsi,rax`@`0x140187548`,
+        // `0x14018754b` `lea rdx,"height"` → `mov rbx,rax`@`0x140187554`), `auto` 분기를 지난 뒤
+        // **둘 다** 태그 1..3 인지 인라인 `isNumeric` 으로 검사한다 —
+        // `movzx eax,[rsi+8]; dec eax; cmp eax,2; ja 0x140187602`(`0x140187572`–`0x14018757b`) 와
+        // `movzx eax,[rbx+8]; dec eax; cmp eax,2; ja 0x140187602`(`0x140187581`–`0x14018758a`).
+        // 하나라도 실패하면 `0x140187602` 로 점프해 **두 스토어를 모두 건너뛰므로**
+        // 크기는 생성자 0(= 엔진이 출력 해상도로 결정) 그대로 남는다(브리프 함정 15와 같은 형태).
+        // 성공 경로만 `asUInt`(`0x140085ee0`)로 읽어 `[scene+0x354]`/`[+0x358]` 에 float 로 굽고
+        // (`0x14018758f`·`0x1401875a7`), `cvttss2si` 로 `[obj+0x84]`/`[+0x88]` 에 정수로 굽는다.
+        // 우리는 크기를 0 으로 만들 수 없으므로(선언부 `orthoAuto` 주석) 폴백 1920×1080 으로 접되,
+        // **전부-아니면-전무**만은 지킨다 — 종전 `intVal`(= `lenientInt`)은 `{"width":true}` 를 1 로,
+        // `{"width":"1920"}` 를 1920 으로 읽어 각각 1×1 정사영·문자열 관용이라는 두 오차를 냈다.
+        // 도달: 동봉(WEAssets 씬 172) · 설치본(wallpaper_engine 씬 186) 전수에서 비숫자
+        // `width`/`height` **0건** — 이 패치로 값이 달라지는 씬은 0 이다(워크샵 대비 잠복 방어).
+        let orthoSize: (w: Int, h: Int)? = {
+            guard let w = numericInt(proj["width"]), let h = numericInt(proj["height"]) else { return nil }
+            return (w, h)
+        }()
+        let pw = orthoAuto ? 1920 : (orthoSize?.w ?? 1920)
+        let ph = orthoAuto ? 1080 : (orthoSize?.h ?? 1080)
         let clear = vec3(general["clearcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         let ambientColor = vec3(general["ambientcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         // 부재 시 (0,0,0) — `ambientcolor` 폴백이 아니다(선언부 주석: 등록/저장/생성자 모두 독립).
@@ -1791,6 +1874,10 @@ extension SceneDocument {
         var origin = vec2(obj["origin"]) ?? Vec2(x: 0, y: 0)
         var size = vec2(obj["size"]) ?? Vec2(x: Float(pw), y: Float(ph))
         var scale = vec2(obj["scale"]) ?? Vec2(x: 1, y: 1)
+        // W-V①: 3성분째(선언부 `SceneLayer.scaleZ` 주석). `scale` 과 같은 생애 — 풀스크린 승격이
+        // `scale` 을 (1,1)로 되돌리면 z 도 1 로 되돌아야 트랜스폼이 한 벌로 남는다.
+        let scaleFull = floats(obj["scale"])
+        var scaleZ: Float = scaleFull.count >= 3 ? scaleFull[2] : 1
         let entryName: String
         var isFB = false
         switch resolved {
@@ -1802,6 +1889,7 @@ extension SceneDocument {
                 origin = Vec2(x: Float(pw) / 2, y: Float(ph) / 2)
                 size = Vec2(x: Float(pw), y: Float(ph))
                 scale = Vec2(x: 1, y: 1)
+                scaleZ = 1
             }
         }
         var anims: [String: PropertyAnimation] = [:]
@@ -1976,6 +2064,12 @@ extension SceneDocument {
         // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
         let originFull = floats(obj["origin"])
         layer.originZ = originFull.count >= 3 ? originFull[2] : 0
+        // W-V①: `scale`/`angles` 의 나머지 성분 보존(별 필드 — 선언부 `scaleZ`/`angleX` 주석).
+        // 부재/2성분 저작은 각각 생성자 기본(1 · 0)을 유지한다 — 실물도 vec3 주입기
+        // (`0x1401a4230`)가 문자열에서 읽어낸 성분만 덮고 나머지는 멤버를 안 건드린다.
+        layer.scaleZ = scaleZ
+        layer.angleX = angles.count >= 1 ? angles[0] : 0
+        layer.angleY = angles.count >= 2 ? angles[1] : 0
         layer.parent = intVal(obj["parent"])
         layer.attachment = obj["attachment"] as? String   // 이름 본-슬롯 부착(28씬 실측: 평문 문자열)
         layer.id = intVal(obj["id"]) ?? 0
@@ -2210,6 +2304,15 @@ extension SceneDocument {
         layer.id = intVal(obj["id"]) ?? 0
         layer.parent = intVal(obj["parent"])
         layer.initialVisible = initialVisible
+        // W-V①: parseLayer 와 동일 규약(선언부 `scaleZ`/`angleX` 주석). shape 쿼드도 같은 공통
+        // 디스크립터 표(`0x1401e0530`)를 타므로 `scale`/`angles` 는 vec3 다. 도달은 **0 이 아니다** —
+        // 동봉·설치본 shape 쿼드는 각각 3개뿐인데 **전건이 3성분 `scale` 이고 z≠1** 이다
+        // (lightshafts 프리뷰 3종: 1.20791 / 2.03800 / 2.09076, 전부 균일값).
+        // `angles` x·y 는 shape 쿼드 도달 0/0.
+        let quadScale = floats(obj["scale"])
+        layer.scaleZ = quadScale.count >= 3 ? quadScale[2] : 1
+        layer.angleX = angles.count >= 1 ? angles[0] : 0
+        layer.angleY = angles.count >= 2 ? angles[1] : 0
         // 저작 트랜스폼을 살렸으니 그 바인딩도 함께 산다 — 버려 두면 정적 값만 맞고 애니는 멈춘다
         // (parseLayer 의 동일 루프. 이펙트 캐리어는 텍스처가 없으니 material 계열은 해당 없음).
         // 5키 고정 목록의 근거(코퍼스 실측 + 소비처 키 목록)는 parseLayer 의 같은 루프 주석 참조.
@@ -2296,6 +2399,15 @@ extension SceneDocument {
         // 스크립트 바인딩({"script":...})이어도 floats()→unwrap 이 "value" 스냅샷을 돌려주므로 초기값으로 안전.
         let textAngles = floats(obj["angles"])
         t.angleZ = textAngles.count >= 3 ? textAngles[2] : 0
+        // W-V①: angles x·y 와 scale z 보존 — 레이어와 동일 규약(선언부 주석).
+        t.angleX = textAngles.count >= 1 ? textAngles[0] : 0
+        t.angleY = textAngles.count >= 2 ? textAngles[1] : 0
+        let textScale = floats(obj["scale"])
+        t.scaleZ = textScale.count >= 3 ? textScale[2] : 1
+        // W-V②: `parallaxDepth` — 공통 오브젝트 디스크립터 `+0x170`(태그 1 = vec2, `0x1401e085a`).
+        // 레이어(`parseLayer` 의 `parallaxDepth:` 인자)·파티클·스프라이트와 **같은 파스 규약**
+        // (2성분 미만이면 기본 (1,1) — 스칼라 브로드캐스트 `uniformVec2` 가 아니다).
+        t.parallaxDepth = vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1)
         // W-①: 3D 씬 텍스트 빌보드용 origin.z(월드) — SceneLayer.originZ(:1221 인근)와 동일 파스 규약.
         let originFull = floats(obj["origin"])
         t.originZ = originFull.count >= 3 ? originFull[2] : 0
