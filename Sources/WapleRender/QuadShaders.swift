@@ -193,6 +193,15 @@ enum QuadShaders {
         // 슬롯 8 — 3D 레인(Scene3DLighting.maximumLights)과 같은 상한. F660 이 3D 를 8 로 올릴 때
         // 이 2D 루프만 4 로 남아 5번째 라이트부터 2D 라이팅 레이어에서만 사라졌다.
         // 바인딩 길이는 ForwardUniforms.slotCount(WapleCore) · SceneRenderer 의 light* 배열과 동기.
+        //
+        // ⚠️ WE 에는 이 상한이 없다 — 씬 `general.lightconfig` 의 종류별 카운트가 그대로 배열 길이가
+        // 되고(생성기 0x140169140–0x14016b0d4, 콤보 세터 0x1401a5c40) 저장 폭이 니블이라 종별 최대 15,
+        // 섀도우/쿠키 계열은 2비트라 최대 3 이다. 8 은 **Waple 쪽 캡**이다. 미사용 슬롯은
+        // `radius<=0`(kind!=1) 로 스킵되므로 카운트를 **줄이는** 쪽은 데이터만으로 재현되고,
+        // 늘리는 쪽만 퍼뮤테이션이 필요하다 — 규약 전문은 `Scene3DLighting.LightSlotBudget` 주석과
+        // `docs/re/scene-lighting.md` §3/§6.
+        // 다만 이 2D 레인의 라이트 팩은 `SceneDocument.ForwardUniforms`(WapleCore, 타 레인 소유)라
+        // lightconfig 예산은 **아직 2D 에 배선되지 않았다**(3D 는 Scene3DLighting.resolveLights(config:)).
         for (int i = 0; i < 8; i++) {
             int kind = int(lightKindCone[i].x + 0.5);
             float3 L;
