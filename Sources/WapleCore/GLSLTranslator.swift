@@ -217,6 +217,31 @@ public enum GLSLTranslator {
         for src in [vertex, fragment] {
             for (k, v) in ShaderPreprocessor.parseComboDefaults(src) where combos[k] == nil { combos[k] = v }
         }
+        // `formatcombo` 슬롯의 `TEXnFORMAT` 도 **선언에서 오는 기본값**이다(위 `[COMBO]` 와 같은 성격) —
+        // 호출부가 값을 안 주면 0(= `FORMAT_RGBA8888`, `shaders/common_fragment.h:2`)으로 심는다.
+        //
+        // 왜 필요한가(실측): `shaders/fur4.frag:152` 는 이 매크로를 **값으로** 쓴다 —
+        //   `float furMask = ConvertTextureFormat(TEX8FORMAT, texSample2D(g_Texture8, …)).a;`
+        // `#if` 안이 아니므로 미정의면 전처리가 지워 주지 않고 식별자가 그대로 MSL 로 새어
+        // `conv(TEX8FORMAT, …)` 가 된다(방출 MSL 실측: 동봉·설치본 양쪽 `shaders/fur4` 의 세 구성
+        // 전건 = 6건). 방언 토큰이 아니라 그냥 미정의 식별자라 종전 토큰 린트로는 안 잡혔고,
+        // Metal 컴파일 실패로만 드러났다. 이 시딩 뒤 그 6건이 0건이 된다.
+        //
+        // 실물 대조: WE 는 슬롯 0..9 를 돌며 이름을 `"TEX"`(0x14048ee70) + itoa(slot) + `"FORMAT"`
+        // (0x14048ee98) 로 조립해 매크로맵에 넣는다(루프 0x1401a6870-0x1401a6a52, 이름 조립
+        // 0x1401a697e-0x1401a699f, 값 저장 `mov dword ptr [rax], edi` @0x1401a69e4 — `edi` 는
+        // `dword ptr [rdi+0x18]` = 그 슬롯 텍스처의 포맷 코드). 어노테이션 플래그가 없거나
+        // (0x1401a695d `cmp byte ptr [rbx+0x80], 0`) 텍스처를 못 구하면(0x1401a694d) 건너뛴다.
+        // 즉 실물도 "선언에 formatcombo 가 있고 텍스처가 있으면 **항상** 정의" 이고, 값 0 도 그대로
+        // 정의한다(0 스킵 분기 없음 — 값 방출은 0x14016c5c5 의 무조건 itoa).
+        //
+        // 무회귀 근거: `#if` 평가에서 미정의는 이미 0 이므로(evalChecked 의 미지 식별자 = 0) 이 시딩으로
+        // 바뀌는 것은 **본문 텍스트 치환뿐**이다. 호출부(`SceneRendererResources.resolvePassCombos`)가
+        // 실제 포맷 코드를 주면 그 값이 이긴다(`combos[k] == nil` 가드).
+        for slot in formatComboSlots(vertex).union(formatComboSlots(fragment)) {
+            let key = "TEX\(slot)FORMAT"
+            if combos[key] == nil { combos[key] = 0 }
+        }
         // 블록 주석은 여기서 제거(`//` 어노테이션은 보존) — `/* uniform ... */` 속 죽은 선언이
         // 줄 단위 선언 파서에 실선언으로 잡히면 usesAudio 오점화(불필요 TCC 프롬프트)/유령 슬롯이 생긴다.
         let (vsrc, vArrays, vMats) = expandArrayVaryings(stripPrecision(stripBlockComments(ShaderPreprocessor.preprocess(vertex, combos: combos, include: include))))

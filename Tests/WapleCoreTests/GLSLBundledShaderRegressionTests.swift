@@ -195,6 +195,204 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
             .map { $0.name }
     }
 
+
+    // MARK: - 방출 MSL 심볼 린트 (미선언 식별자 · 미존재 struct 멤버)
+
+    /// 위 `untranslated` 토큰 목록이 **구조적으로 못 보는** 실패 부류가 둘 있다.
+    ///
+    /// ① **선언이 조용히 탈락하고 사용만 남는 경우.** 방출물에 남는 것은 방언 토큰이 아니라
+    ///    그냥 평범한 식별자라(`PerformLighting_V1`, `TEX8FORMAT`) 금칙어 목록에 걸릴 것이 없다.
+    ///    실제로 이 부류를 잡으려고 종전에는 심볼 이름을 하나씩 `untranslated` 에 **손으로** 넣어
+    ///    왔다("모델 밖 엔진 심볼" 항목이 그것이다) — 새로 새는 이름은 정의상 못 잡는다.
+    /// ② **`vin.`/`in.`/`out.`/`eng.` 로 없는 멤버를 읽는 경우.** `vin.a_Normal` 은 문법적으로
+    ///    완전히 정상인 MSL 이라 어떤 토큰 패턴에도 안 걸리지만, `VIn` 에 그 멤버가 없으므로
+    ///    컴파일이 확정 실패한다. `assemble` 의 `VIn` 은 `a_Position`/`a_TexCoord` **둘 고정**인데
+    ///    번역기는 소스의 `attribute` 를 전부 `vin.<이름>` 으로 매핑한다(GLSLTranslator :296).
+    ///
+    /// 둘 다 "번역은 성공, MSL 은 컴파일 불가" 라 **폴백이 정답인 자리**다(이 리포의 규약:
+    /// 오역보다 폴터). 그래서 여기서 하는 일은 실패를 없애는 게 아니라 **집합을 못 박는 것**이다 —
+    /// 새 이름이 새면 아래 `knownGaps`/`knownGapsSweep` 와 어긋나 테스트가 터진다.
+    ///
+    /// 리눅스 코어 테스트에는 Metal 컴파일러가 없으므로(클래스 헤더 주석 참조) 이 두 린트가
+    /// "컴파일 되나?" 에 가장 가까이 갈 수 있는 근사다.
+
+    /// MSL 토큰(식별자/숫자/구두점). 문자 단위 순회는 Swift 의 grapheme 처리 때문에 느려서
+    /// UTF-8 바이트로 훑는다 — 방출 MSL 은 전건 ASCII 다.
+    struct MSLToken { let isIdent: Bool; let text: String }
+
+    static func tokenizeMSL(_ msl: String) -> [MSLToken] {
+        // 주석 · 전처리 지시문 줄(`#include <metal_stdlib>`) · 속성(`[[...]]`) 제거.
+        var s = stripComments(msl)
+        s = s.replacingOccurrences(of: "^[ \t]*#[^\n]*", with: " ", options: .regularExpression)
+        s = s.replacingOccurrences(of: "\\[\\[[^\\]]*\\]\\]", with: " ", options: .regularExpression)
+        let b = Array(s.utf8)
+        func isAlpha(_ c: UInt8) -> Bool {
+            (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95
+        }
+        func isDigit(_ c: UInt8) -> Bool { c >= 48 && c <= 57 }
+        var out: [MSLToken] = []
+        var i = 0
+        while i < b.count {
+            let c = b[i]
+            if isAlpha(c) {
+                var j = i
+                while j < b.count, isAlpha(b[j]) || isDigit(b[j]) { j += 1 }
+                out.append(MSLToken(isIdent: true, text: String(decoding: b[i..<j], as: UTF8.self)))
+                i = j
+            } else if isDigit(c) {
+                // 숫자 리터럴 — **접미사까지 삼킨다.** `0u`/`12u`/`1.0f`/`0x1F` 의 접미 글자를
+                // 남기면 `u`/`f` 가 미선언 식별자로 잡혀 가짜 실패가 난다(실제로 당했다:
+                // `shadowcaster.vert:49` 의 `0u`/`12u` 가 "미선언 `u`" 12건을 만들었다).
+                var j = i
+                while j < b.count, isDigit(b[j]) || isAlpha(b[j]) || b[j] == 46 { j += 1 }
+                out.append(MSLToken(isIdent: false, text: "0"))
+                i = j
+            } else if c == 58, i + 1 < b.count, b[i + 1] == 58 {   // `::`
+                i += 2
+            } else {
+                if c != 32 && c != 9 && c != 10 && c != 13 {
+                    out.append(MSLToken(isIdent: false, text: String(UnicodeScalar(c))))
+                }
+                i += 1
+            }
+        }
+        return out
+    }
+
+    /// MSL 키워드/타입/내장 — 이 밖의 식별자는 소스에서 온 이름이라 선언이 있어야 한다.
+    static let mslKeywords: Set<String> = [
+        "struct", "return", "if", "else", "for", "while", "do", "break", "continue", "switch", "case",
+        "default", "const", "constexpr", "inline", "static", "using", "namespace", "metal", "sizeof",
+        "true", "false", "vertex", "fragment", "kernel", "constant", "device", "thread", "threadgroup",
+        "discard_fragment", "level", "bias", "gradient2d",
+    ]
+    static let mslTypeNames: Set<String> = [
+        "void", "bool", "char", "uchar", "short", "ushort", "int", "uint", "long", "ulong", "half", "float",
+        "float2", "float3", "float4", "half2", "half3", "half4", "int2", "int3", "int4",
+        "uint2", "uint3", "uint4", "bool2", "bool3", "bool4",
+        "float2x2", "float2x3", "float2x4", "float3x2", "float3x3", "float3x4",
+        "float4x2", "float4x3", "float4x4", "sampler", "texture2d", "texture3d", "texturecube",
+        "depth2d", "array",
+    ]
+    static let mslBuiltinNames: Set<String> = [
+        "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "ceil", "clamp", "cos", "cosh",
+        "cross", "degrees", "determinant", "distance", "dot", "exp", "exp2", "exp10", "faceforward",
+        "floor", "fma", "fmax", "fmin", "fmod", "fract", "frexp", "isfinite", "isinf", "isnan", "isnormal",
+        "ldexp", "length", "length_squared", "log", "log2", "log10", "max", "min", "mix", "modf",
+        "normalize", "pow", "powr", "radians", "reflect", "refract", "rint", "round", "rsqrt", "saturate",
+        "sign", "sin", "sincos", "sinh", "smoothstep", "sqrt", "step", "tan", "tanh", "transpose", "trunc",
+        "select", "all", "any", "dfdx", "dfdy", "fwidth", "sample", "sample_compare", "read", "write",
+        "get_width", "get_height", "get_num_mip_levels", "as_type", "popcount", "clz", "ctz",
+        // constexpr sampler 인자 열거자
+        "filter", "linear", "nearest", "mip_filter", "none", "address", "clamp_to_edge", "repeat",
+        "mirrored_repeat", "compare_func", "less_equal",
+    ]
+
+    /// `struct <name> { … };` 의 (이름 → 멤버 이름들). `assemble` 이 내는 `Vary`/`VIn`/`EngineU` 와
+    /// 소스 유래 struct 전부.
+    static func mslStructMembers(_ msl: String) -> [String: Set<String>] {
+        var out: [String: Set<String>] = [:]
+        var idx = msl.startIndex
+        while let s = msl.range(of: "struct ", range: idx..<msl.endIndex) {
+            let afterKw = msl[s.upperBound...]
+            let name = String(afterKw.prefix(while: { $0.isLetter || $0.isNumber || $0 == "_" }))
+            guard let o = msl.range(of: "{", range: s.upperBound..<msl.endIndex),
+                  let c = msl.range(of: "};", range: o.upperBound..<msl.endIndex) else { break }
+            var members = Set<String>()
+            for raw in msl[o.upperBound..<c.lowerBound].split(separator: ";") {
+                let t = raw.replacingOccurrences(of: "\\[\\[[^\\]]*\\]\\]", with: " ", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !t.isEmpty else { continue }
+                var last = t.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" }).last.map(String.init) ?? ""
+                if let br = last.firstIndex(of: "[") { last = String(last[..<br]) }
+                if !last.isEmpty { members.insert(last) }
+            }
+            if !name.isEmpty { out[name] = members }
+            idx = c.upperBound
+        }
+        return out
+    }
+
+    /// 방출 MSL 의 미선언 식별자 — 있으면 Metal 컴파일 확정 실패.
+    static func undeclaredIdentifiers(in msl: String) -> [String] {
+        let toks = tokenizeMSL(msl)
+        let structs = mslStructMembers(msl)
+        var types = mslTypeNames
+        var declared = Set<String>()
+        for (name, members) in structs { types.insert(name); declared.insert(name); declared.formUnion(members) }
+
+        // 선언 인식: 타입 토큰 뒤 식별자(`*`/`&`/`<…>` 통과) + 같은 선언문의 `,` 다중 선언자.
+        var k = 0
+        while k < toks.count {
+            guard toks[k].isIdent, types.contains(toks[k].text) else { k += 1; continue }
+            var j = k + 1
+            var angle = 0
+            while j < toks.count, !toks[j].isIdent || angle > 0 {
+                let t = toks[j].text
+                if t == "<" { angle += 1 } else if t == ">" { angle = max(0, angle - 1) }
+                else if angle == 0 && !(t == "*" || t == "&") { break }
+                j += 1
+            }
+            guard j < toks.count, toks[j].isIdent, !types.contains(toks[j].text) else { k += 1; continue }
+            declared.insert(toks[j].text)
+            var m = j + 1, depth = 0
+            loop: while m < toks.count {
+                let t = toks[m].text
+                if toks[m].isIdent { m += 1; continue }
+                switch t {
+                case "(", "[": depth += 1
+                case ")", "]": if depth == 0 { break loop }; depth -= 1
+                case ";", "{", "}": break loop
+                case ",":
+                    if depth == 0 {
+                        guard m + 1 < toks.count, toks[m + 1].isIdent, !types.contains(toks[m + 1].text)
+                        else { break loop }
+                        declared.insert(toks[m + 1].text)
+                    }
+                default: break
+                }
+                m += 1
+            }
+            k = j + 1
+        }
+
+        var used = Set<String>()
+        for (i, t) in toks.enumerated() where t.isIdent {
+            if i > 0, !toks[i - 1].isIdent, toks[i - 1].text == "." { continue }   // 멤버 접근/스위즐
+            used.insert(t.text)
+        }
+        return used.subtracting(declared).subtracting(mslKeywords)
+            .subtracting(mslTypeNames).subtracting(mslBuiltinNames).sorted()
+    }
+
+    /// `vin.`/`in.`/`out.`/`eng.` 의 **없는 멤버** 접근 — 문법은 합법이라 토큰 린트가 못 본다.
+    static func undefinedStructMembers(in msl: String) -> [String] {
+        let structs = mslStructMembers(msl)
+        let table: [(recv: String, type: String)] = [
+            ("vin", "VIn"), ("in", "Vary"), ("out", "Vary"), ("eng", "EngineU"),
+        ]
+        let toks = tokenizeMSL(msl)
+        var bad = Set<String>()
+        for i in 0..<toks.count where toks[i].isIdent {
+            guard let e = table.first(where: { $0.recv == toks[i].text }),
+                  let members = structs[e.type],
+                  i + 2 < toks.count, !toks[i + 1].isIdent, toks[i + 1].text == ".",
+                  toks[i + 2].isIdent else { continue }
+            // `x.in.y` 같은 형태는 수신자가 아니다.
+            if i > 0, !toks[i - 1].isIdent, toks[i - 1].text == "." { continue }
+            if !members.contains(toks[i + 2].text) { bad.insert("\(e.recv).\(toks[i + 2].text)") }
+        }
+        return bad.sorted()
+    }
+
+    /// 위 두 린트를 `untranslatedTokens` 와 **같은 형태**(발견 종류 이름들)로 접는다 —
+    /// 그래야 아래 스윕들이 `knownGaps`/`knownGapsSweep` 한 벌로 전부를 못 박는다.
+    static func findings(in msl: String) -> [String] {
+        untranslatedTokens(in: msl)
+            + undeclaredIdentifiers(in: msl).map { "미선언 식별자: \($0)" }
+            + undefinedStructMembers(in: msl).map { "미존재 멤버: \($0)" }
+    }
+
     // MARK: - stage_in / 정점 반환 구조체 멤버 타입 린트
 
     /// MSL 이 `[[stage_in]]` 구조체 멤버로 **허용하는** 타입(스칼라·벡터)만. 스펙(2026-06-04 판) 5.2.4:
@@ -440,6 +638,39 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
         // 대조군 — LF 소스도 같은 결과(종전 구현이 통과하던 유일한 경우).
         let lf = Self.inlineIncludes("#include \"h.h\"\nvoid main() {}") { $0 == "h.h" ? "float h();" : nil }
         XCTAssertTrue(lf.contains("float h();"))
+    }
+
+    /// `[COMBO]` 어노테이션의 `"options"` 맵 = **에디터가 저작할 수 있는 값의 전부**(+ `"default"`).
+    /// 이름 → 값 집합.
+    ///
+    /// 왜 필요한가: 위 두 스윕은 `{기본값, 0, 1}` 이라는 **합성** 값만 쓰고, 아래 열거 스윕은
+    /// 소스의 `#if NAME == N` 리터럴에서 요구를 **역산**한다. 둘 다 "저작 가능한 값" 과는 다른
+    /// 모집단이다 — 실측(동봉 `[COMBO]` 선언 310건): `"options"` 가 0/1 이 아닌 값을 주는 콤보가
+    /// **21종**(`BLENDMODE` 0/2/9/12/22/30/31/32 · `INSTANCECOUNT` 5/9/13/21 · `RESOLUTION` 16/32/64 ·
+    /// `SHAPE` 0..9 · `SAMPLES`/`NUMBLENDTEXTURES`/`EDGES`/… ). 그리고 이 값들은 `#if` 안에서만
+    /// 쓰이지 않는다 — `INSTANCECOUNT` 처럼 **본문 식**(루프 상한)에 직접 들어가는 것도 있어
+    /// `#if` 리터럴 역산으로는 영원히 안 잡힌다.
+    ///
+    /// 저작 가능성 확인(설치본 + 동봉 `.json` 3,777건 전수 파스): 실제 `combos` 값으로 0/1 밖의
+    /// 값이 나오는 키는 `BLENDMODE`(2·9·12·23·30) · `KERNEL`(2) · `QUALITY`(2) · `RAYMODE`(2) ·
+    /// `VERSION`(2) · `TEX1FORMAT`(4) 여섯이다. 즉 비-이진 콤보는 **가설이 아니라 실물 저작값**이다.
+    static func comboOptionValues(_ src: String) -> [String: Set<Int>] {
+        var out: [String: Set<Int>] = [:]
+        // CRLF 함정(브리프 11): 동봉 셰이더는 전건 CRLF 라 `isNewline` 로 쪼개야 한다.
+        for line in src.split(whereSeparator: { $0.isNewline }) {
+            guard line.contains("[COMBO]"), let lb = line.firstIndex(of: "{"),
+                  let rb = line.lastIndex(of: "}"), lb < rb else { continue }
+            guard let d = String(line[lb...rb]).data(using: .utf8),
+                  let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+                  let combo = o["combo"] as? String else { continue }
+            var vals = Set<Int>()
+            if let def = o["default"] as? Int { vals.insert(def) }
+            if let opts = o["options"] as? [String: Any] {
+                for (_, v) in opts { if let n = v as? Int { vals.insert(n) } }
+            }
+            if !vals.isEmpty { out[combo, default: []].formUnion(vals) }
+        }
+        return out
     }
 
     struct ComboValueReq: Hashable { let name: String; let value: Int }
