@@ -276,8 +276,9 @@ enum Scene3DLighting {
     // spotshadowcookie/tube/directional/directionalshadow (0x14048e4d8–0x14048e588).
     // 즉 씬마다 셰이더가 새로 생성돼 라이트 수만큼 루프가 언롤된다. 8 은 **Waple 쪽 캡**이다.
     //
-    // ⛔️ **정정(2026-08-21)**: 종전 주석의 범위 `0x1401691c0–0x14016b154` 는 틀렸다.
-    // `primary(0x1401691c0)` 가 돌려주는 실측 함수는 `0x140169140–0x14016b0d4`(진입 `LIGHTING`
+    // ⛔️ **정정(2026-08-21)**: 종전 주석의 범위는 틀렸다 — 양 끝이 서로 다른 함수였고 둘 다 명령
+    // 경계도 아니었다(옛 주소와 그것이 실제로 가리키던 명령은 `docs/re/scene-lighting.md` §2.1
+    // 정정 표). `merged()`/`primary()` 실측 함수는 `0x140169140–0x14016b0d4`(진입 `LIGHTING`
     // 콤보 비교 0x1401691b8 · `#require LightingV1` 비교 0x1401691f5 · `return light;\n}` 방출
     // 0x14016b0a3 · `ret` 0x14016b0cc)이다. 바로 뒤 `0x14016b0e0–0x14016c3f8` 은 스니펫이 아니라
     // **전처리기 디렉티브 파서**(`^\s*#\s*([a-z]+)\b\s*(.*)` 0x14048d048)이고, HLSL 쪽 라이트 배열은
@@ -422,42 +423,22 @@ enum Scene3DLighting {
 
     /// spot `innercone`/`outercone`(도) → 축 기준 콘 코사인.
     ///
-    /// **2026-08-21 확정: 반각이다 — `* 0.5` 는 없다.** 종전 주석의 "ponytail: half vs full 미확정"
-    /// 은 해소됐다. V1 유니폼 패커가 도 값에 deg2rad 만 곱해 `cosf` 에 넣는다:
-    /// - `xmm7 = 0.01745329238474369`(= π/180) 적재 0x1401910bf, 상수 원본 0x140492628
-    /// - inner: 0x140192e64–0x140192e86 `cos(innercone[+0x2f0] * xmm7)` → `g_LSpot_Origin[i].w`
-    /// - outer: 0x140192eaa–0x140192ebf `cos(outercone[+0x2f4] * xmm7)` → `g_LSpot_Direction[i].w`
-    /// 셰이더 소비는 `smoothstep(Direction.w, Origin.w, cosAngle)`(스니펫 0x14048c900)이라
-    /// edge0=cos(outer), edge1=cos(inner) — 아래 반환 순서와 맞는다.
-    /// 즉 scene.json 의 두 값은 **광축에서 잰 반각(도)** 이고, 종전 `* 0.5` 는 콘을 절반으로
-    /// 좁히는 오이식이었다(기본값 20/30 이면 40°/60° 콘이 20°/30° 콘으로 그려졌다).
+    /// **[2026-08-21] 산식을 여기에 두지 않는다 — `SceneLight3D.forwardSpotConeCosines`(WapleCore)가
+    /// 리포 단일 정본이고 이 함수는 그 이름을 3D 레인에 유지하기 위한 얇은 위임이다.**
+    /// 종전엔 같은 변환이 두 벌이었고 2D/볼류메트릭 쪽에만 `* 0.5` 가 남아 있어서, **같은 라이트가
+    /// 포워드(3D PBR)와 갓레이에서 서로 다른 콘 폭**을 가졌다. 한 벌만 고치면 또 갈리므로
+    /// 구현 자체를 하나로 접었다. 위임은 `resolveLights` 의 `spotConeCosines(inner:outer:)` 호출과
+    /// `Scene3DLightingTests` 를 그대로 살려 둔다.
     ///
-    /// 반대 방향 증거도 남긴다(반증 아님, 다른 양이다): 0x1401ec338–0x1401ec362 와
-    /// 0x14018b347–0x14018b373 은 같은 두 필드에 0.5 를 곱한다. 전자는 볼류메트릭 **콘 지오메트리**
-    /// 변환(탄젠트 반경) 계산, 후자는 에디터 기즈모 오브젝트의 좌표 인코딩이라 셰이딩 코사인과
-    /// 무관하다. 셰이딩 유니폼으로 실제로 실리는 경로는 위 0x140192e64/0x140192eaa 하나뿐이다.
+    /// 확정 사실(근거 VA·셰이더 문면은 정본 함수의 주석에 있다): 저작 두 값은 **광축에서 잰 반각(도)**
+    /// 이고 유니폼 패커는 `cos(도 × π/180)` 을 그대로 싣는다. 반환 순서는 셰이더 소비와 맞는다 —
+    /// `genericimage3.frag` 가 `smoothstep(g_LSpot_Direction[l].w, g_LSpot_Origin[l].w, spotCookie)`
+    /// 이므로 edge0 = `outer`(넓은 쪽) · edge1 = `inner`(좁은 쪽)다.
     ///
-    /// ⚠️ **동기 필요(이번 레인 밖)**: 같은 변환의 2D 포트
-    /// `SceneDocument.forwardSpotConeCosines`(`Sources/WapleCore/SceneDocument.swift:960`)는 아직
-    /// `* 0.5` 를 곱한다(`:962` `toHalfRadians`). 그 파일은 다른 레인 소관이라 여기서 건드리지
-    /// 않았다 — 그쪽에서 `toHalfRadians` 를 `Float.pi / 180` 으로 바꾸면 두 레인이 다시 맞는다.
-    /// 그때 `SceneForwardLightKindTests`(`testSpotConeHalfAngleCosines`,
-    /// `testPackCarriesKindAxisConePerSlot`)의 기대값도 함께 간다.
-    ///
-    /// **[2026-08-21 추가] 그 2D 포트를 쓰는 곳이 2D 레인만이 아니다.** 볼류메트릭 패스 호출부
-    /// `SceneRenderer3D.swift:1918` 이 `SceneLight3D.forwardSpotConeCosines` 를 쓴다 — 즉 갓레이
-    /// 콘도 지금 WE 의 **절반 폭**이다. 그 한 줄을 아래 `spotConeCosines` 로 바꾸면(같은 모듈,
-    /// 같은 시그니처) 소유 밖 파일을 하나만 건드리고 닫힌다. 근거는
-    /// `docs/re/volumetric-light.md` §2.3 · `VolumetricLightPass.swift` 의 `innerCone` 주석.
+    /// 퇴화 규약도 정본과 같다: `outercone` 이 없거나 0 이면 `(1, -1)` 을 돌려주고, 셰이더가
+    /// `(cosAngle+1)/2` 반구 그라디언트로 접는다(축상 1 · 수직 0.5 · 후방 0 — 전방향 통과가 아니다).
     static func spotConeCosines(inner: Float, outer: Float) -> (inner: Float, outer: Float) {
-        guard outer.isFinite, outer > 0 else { return (1, -1) }  // 콘 데이터 없음 → 반구 그라디언트(셰이더 (cosAngle+1)/2 → 축상 1·수직 0.5·후방 0). 전방향 통과 아님.
-        // WE 는 `outercone` 이 90 을 넘어도 그대로 cos 를 취한다(콘이 반구를 넘는다). 클램프하지 않는다.
-        let toRadians = Float.pi / 180
-        let cosOuter = cos(max(0, outer) * toRadians)
-        let cosInnerRaw = inner.isFinite && inner > 0 ? cos(inner * toRadians) : 1
-        // inner 는 outer 보다 좁아야(코사인 큼) 스무드스텝이 0→1 로 증가.
-        // WE 는 edge0==edge1 을 막지 않아 그 지점에서 smoothstep 이 미정의다 — 여기서만 1e-4 를 벌린다.
-        return (max(cosInnerRaw, cosOuter + 1e-4), cosOuter)
+        SceneLight3D.forwardSpotConeCosines(inner: inner, outer: outer)
     }
 
     /// 영벡터/비유한 방어 정규화(셰이더 normalizedOr 과 동일 시맨틱).

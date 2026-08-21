@@ -211,6 +211,123 @@ final class SceneWELightMathTests: XCTestCase {
                        0.5, accuracy: tol)
     }
 
+    // MARK: W-17 단계 1 — 볼류메트릭 씬 뎁스 클립 (`volumetricsfront.frag:64,71`)
+
+    // 이 절이 여기(메시 라이팅 파일) 있는 이유: 볼류메트릭 순수 산술의 정본 파일이
+    // `Sources/WapleCore/ScenePBRLighting.swift` 로 같고, `SceneVolumetricMathTests` 는 다른 레인
+    // 소관이라 이번 라운드에 손대지 않았다. 옮길 자리는 그쪽이다(보고서 인계 항목).
+
+    /// `Scene3DMath.perspective` 의 **역**이 맞는지 — 정변환을 손으로 다시 적어 왕복시킨다.
+    /// 그 행렬은 `zz = far/(near−far)` 로 `clip.z = zz·vz + near·zz`, `clip.w = −vz` 를 만들므로
+    /// 전방축 거리 `d = −vz` 에 대해 `ndc = zz·(near−d)/d` 다. 기대값을 역식으로 다시 적지 않고
+    /// **정식으로 만들어** 넣는 것이 요점이다.
+    func testViewDepthDistanceInvertsThePerspectiveDepth() {
+        // near/far 비가 1000 이하면 float32 왕복이 **정확**하다(아래 표본 전부 상대오차 0).
+        let near: Float = 1, far: Float = 1000
+        let zz = far / (near - far)
+        for d in [Float(1), 7.5, 250, 500, 1000] {
+            let ndc = zz * (near - d) / d
+            XCTAssertEqual(SceneWEVolumetricMath.viewDepthDistance(ndcDepth: ndc, nearZ: near, farZ: far),
+                           d, accuracy: max(1e-4, d * 1e-5), "d=\(d)")
+        }
+        XCTAssertEqual(SceneWEVolumetricMath.viewDepthDistance(ndcDepth: 0, nearZ: near, farZ: far),
+                       near, accuracy: 1e-6)
+    }
+
+    /// **클리어 뎁스(1.0)는 항상 `farZ` **이상**으로 풀린다** — 이게 W-17 클립의 무회귀 보증이다.
+    /// `tExit` 은 이미 `min(·, farZ)` 이므로 그때 `min` 이 무연산이 된다.
+    ///
+    /// 씬 기본 절두체(`near 0.1` / `far 10000`, `SceneDocument` 미저작 기본값)에서는 float32
+    /// 소거 때문에 원거리 왕복이 **정확하지 않다**(ndc=1 → 10138.6, 상대오차 1.4%). 그래도
+    /// 오차가 **먼 쪽**으로 나므로 클립이 조기 발동하지 않는다. 이 성질을 값으로 못박는다 —
+    /// 반대 방향(가까운 쪽)으로 틀리는 구현이 들어오면 화면이 통째로 어두워진다.
+    func testClearedDepthNeverResolvesNearerThanFarPlane() {
+        for (near, far) in [(Float(1), Float(1000)), (0.1, 10000), (0.01, 100000)] {
+            let atClear = SceneWEVolumetricMath.viewDepthDistance(ndcDepth: 1, nearZ: near, farZ: far)
+            XCTAssertGreaterThanOrEqual(atClear, far, "near=\(near) far=\(far)")
+        }
+        // 퇴화 입력(분모 ≤ 0, 뒤집힌 절두체)도 farZ 로 접는다 — 자르지 않는 쪽이 안전한 쪽이다.
+        XCTAssertEqual(SceneWEVolumetricMath.viewDepthDistance(ndcDepth: 2, nearZ: 1, farZ: 1000),
+                       1000, accuracy: tol)
+        XCTAssertEqual(SceneWEVolumetricMath.viewDepthDistance(ndcDepth: 0.5, nearZ: 0, farZ: 1000),
+                       1000, accuracy: tol)
+    }
+
+    /// 뎁스는 카메라 **전방축** 투영 거리고 마치는 단위 레이 파라미터 t 라, 화면 가장자리에서
+    /// `t = d / cos` 로 늘어난다. 이 나눗셈을 빼먹으면 가장자리 샤프트가 너무 일찍 잘린다.
+    func testSceneDepthRayLimitDividesByAxisCosine() {
+        let near: Float = 0.1, far: Float = 1000
+        let onAxis = SceneWEVolumetricMath.sceneDepthRayLimit(ndcDepth: 0.9, nearZ: near, farZ: far,
+                                                              cosFromAxis: 1)
+        let offAxis = SceneWEVolumetricMath.sceneDepthRayLimit(ndcDepth: 0.9, nearZ: near, farZ: far,
+                                                              cosFromAxis: 0.5)
+        XCTAssertEqual(offAxis, onAxis * 2, accuracy: max(1e-4, onAxis * 1e-5))
+        // 퇴화(정상 절두체에는 없는 입력)는 **안 자르는 쪽**으로 접는다 — 자르는 쪽으로 틀리면
+        // 화면이 통째로 검어진다.
+        XCTAssertEqual(SceneWEVolumetricMath.sceneDepthRayLimit(ndcDepth: 0.5, nearZ: near, farZ: far,
+                                                                cosFromAxis: 0), far, accuracy: tol)
+        XCTAssertEqual(SceneWEVolumetricMath.sceneDepthRayLimit(ndcDepth: 0.5, nearZ: near, farZ: far,
+                                                                cosFromAxis: -1), far, accuracy: tol)
+    }
+
+    /// `hullSpan` 의 `sceneLimit` — 종전 거동 보존이 이 기능의 안전성 근거다.
+    func testHullSpanSceneLimitOnlyCutsWhenGeometryIsCloser() {
+        let eye = SIMD3<Float>(0, 0, 10)
+        let dir = SIMD3<Float>(0, 0, -1)
+        let light = SIMD3<Float>(0, 0, 0)
+        guard let span = SceneWEVolumetricMath.hullSpan(eye: eye, direction: dir,
+                                                       lightPosition: light, hullRadius: 4,
+                                                       nearZ: 0.1, farZ: 1000) else {
+            return XCTFail("헐 구간이 없다 — 픽스처가 잘못됐다")
+        }
+        XCTAssertEqual(span.enter, 6, accuracy: 1e-5)   // 구 교차 입구 = 10 − 4
+        XCTAssertEqual(span.exit, 14, accuracy: 1e-5)   // 출구 = 10 + 4
+
+        // ① 구간 뒤쪽의 뎁스(=지오메트리가 헐보다 멀다)는 무연산.
+        let farLimit = SceneWEVolumetricMath.hullSpan(eye: eye, direction: dir, lightPosition: light,
+                                                      hullRadius: 4, nearZ: 0.1, farZ: 1000,
+                                                      sceneLimit: 900)
+        XCTAssertEqual(farLimit?.exit ?? -1, 14, accuracy: 1e-5)
+        // ② 구간 한가운데의 뎁스는 출구만 자른다(입구는 그대로).
+        let midLimit = SceneWEVolumetricMath.hullSpan(eye: eye, direction: dir, lightPosition: light,
+                                                      hullRadius: 4, nearZ: 0.1, farZ: 1000,
+                                                      sceneLimit: 11)
+        XCTAssertEqual(midLimit?.enter ?? -1, 6, accuracy: 1e-5)
+        XCTAssertEqual(midLimit?.exit ?? -1, 11, accuracy: 1e-5)
+        // ③ 입구보다 앞의 뎁스(라이트 전체가 벽 뒤)는 구간 소멸 → nil(픽셀 기여 0).
+        XCTAssertNil(SceneWEVolumetricMath.hullSpan(eye: eye, direction: dir, lightPosition: light,
+                                                    hullRadius: 4, nearZ: 0.1, farZ: 1000,
+                                                    sceneLimit: 3))
+    }
+
+    /// **클리어된 뎁스(1.0)는 클립을 넣기 전과 픽셀값이 한 자리도 다르지 않다.** 골든 픽스처가
+    /// 전부 "지오메트리 없음" 이라 이 성질이 곧 무회귀 보증이고, MSL 쪽도 같은 식이라
+    /// (`u.marchParams.z` 게이트 뒤 `min(tExit, limit)`) 두 벌이 함께 움직인다.
+    func testClearedDepthLeavesPixelValueUnchanged() {
+        var input = SceneWEVolumetricMath.PixelInput(
+            eye: SIMD3(0, 0, 10), forward: SIMD3(0, 0, -1), right: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0),
+            fovYDegrees: 50, aspect: 1, nearZ: 0.1, farZ: 10000,
+            lightPosition: SIMD3(0, 0, 0), lightForward: SIMD3(0, 0, 1),
+            density: 3, exponent: 1, intensity: 6,
+            innerCos: SceneWELightMath.coneCosine(degrees: 10),
+            outerCos: SceneWELightMath.coneCosine(degrees: 30),
+            radius: 20, sampleCount: 8)
+        let noDepth = SceneWEVolumetricMath.pixelValue(input, x: 32, y: 32, width: 64, height: 64)
+        XCTAssertGreaterThan(noDepth, 0, "대조군이 0 이면 아래 비교가 무의미하다")
+        input.sceneDepth = 1
+        XCTAssertEqual(SceneWEVolumetricMath.pixelValue(input, x: 32, y: 32, width: 64, height: 64),
+                       noDepth, accuracy: 0, "클리어 뎁스는 무연산이어야 한다(비트 동일)")
+
+        // 라이트 앞을 가리는 지오메트리(전방축 거리 ≈ 3 < 헐 입구 ≈ 10−19.8)는 픽셀을 어둡게 만든다.
+        // ndc 는 정변환 `zz·(near−d)/d` 로 만든다(역식을 다시 적지 않는다).
+        let zz = input.farZ / (input.nearZ - input.farZ)
+        let occluderDistance: Float = 3
+        input.sceneDepth = zz * (input.nearZ - occluderDistance) / occluderDistance
+        let occluded = SceneWEVolumetricMath.pixelValue(input, x: 32, y: 32, width: 64, height: 64)
+        XCTAssertLessThan(occluded, noDepth, "지오메트리에 가려진 픽셀이 더 어두워야 한다")
+        XCTAssertGreaterThanOrEqual(occluded, 0)
+    }
+
     // MARK: WE 라이트 오브젝트 생성자 기본값 — 0x140190441–0x1401904ef
 
     /// 파스 기본값이 WE 와 갈리는 항목을 상수로 고정한다. 소비(SceneDocument.parseLight)는 별도 레인.

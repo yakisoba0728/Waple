@@ -25,10 +25,12 @@ import WapleCore
 ///   정점의 **xy 만** 줄이고(`a_Position * vec3(0.99, 0.99, 1.0)`) `#if POINTLIGHT` 가지(`:11`)에는
 ///   **아예 없다** — 즉 콘 헐 단면을 살짝 좁혀 경계 새는 것을 막는 지오메트리 보정이지,
 ///   유니폼 반경 스케일이 아니다. 두 0.99 를 한 근거로 묶어 인용하면 안 된다.
-/// - **남은 구멍(W-17 잔여)**: **씬 뎁스 클립이 없다.** 호출부(`SceneRenderer3D.swift:1466`)의
-///   `depthTex` 는 `usage=[.renderTarget]`·`storeAction=.dontCare` 라 샘플할 수 없다. 그래서 샤프트가
-///   아직 지오메트리를 통과한다. 이걸 닫으려면 그 뎁스 텍스처에 `.shaderRead` 를 주고 저장해야 하는데
-///   그 파일은 이번 담당 범위 밖이다.
+/// - **[2026-08-21 닫힘] 씬 뎁스 클립(W-17 단계 1)**: 종전엔 호출부의 pooled depth 가
+///   `usage = [.renderTarget]` · `storeAction = .dontCare` 라 샘플조차 못 했고 샤프트가
+///   지오메트리를 통과했다. 지금은 `SceneRenderer3D.pooledDepth` 가 `.shaderRead` 를 함께 주고,
+///   `encode3D` 의 `needsDepthStore` 게이트에 볼류메트릭 라이트 유무가 들어가며(`hasVolumetrics`),
+///   그 텍스처가 `encode(sceneDepth:)` 로 넘어와 아래 `tExit = min(tExit, limit)` 에 쓰인다.
+///   지오메트리가 없는 픽셀(클리어 뎁스 1.0)에서는 무연산이라 종전 픽셀값이 그대로 보존된다.
 /// - **의도적 이탈**: 라이트버퍼 다운스케일(1/4·1/8)과 blur3 h/v 체인을 두지 않고 목적지에 풀해상도로
 ///   직접 합성한다. WE 자신도 QUALITY≥3 에서는 blur 를 **아예 건너뛴다**(`0x140198d21`) — 즉
 ///   "풀해상도·무블러" 는 WE 고품질 경로의 모양이고, 저품질 경로의 1/8 다운샘플은 성능 아티팩트다.
@@ -68,25 +70,28 @@ struct VolumetricLightParameters: Equatable {
     /// 극소 |x| 에서 `1.0`(`0x140471cb8`)을 반환한다.
     ///
     /// **⚠️ 즉 `innercone`/`outercone` 은 광축에서 잰 반각(도)이고, `× 0.5` 는 없다.**
-    /// V1 PBR 패커도 같다(`0x140192e64`–`0x140192e86` / `0x140192eaa`–`0x140192ebf`).
-    /// 그런데 **현재 호출부(`SceneRenderer3D.swift:1918`)는 `SceneLight3D.forwardSpotConeCosines`
-    /// 를 쓰고, 그 2D 포트는 아직 `* 0.5` 를 곱한다**(`SceneDocument.swift:962`) — 그래서 지금
-    /// 볼류메트릭 콘은 WE 의 절반 폭으로 그려진다. 같은 모듈에 **정본이 이미 있다**
-    /// (`Scene3DLighting.spotConeCosines` — 같은 변환의 3D 판이고 `* 0.5` 가 이미 지워져 있다).
-    /// 한 줄 교체가 남았고 그 파일은 이번 담당 밖이라 보고서로 넘긴다.
+    /// V1 PBR 패커도 같다(`0x140192e64`/`0x140192e6d`/`0x140192e71` → `0x140192e86`,
+    /// `0x140192eaa`/`0x140192eb3`/`0x140192eb7` → `0x140192ebf`).
+    ///
+    /// **[2026-08-21 닫힘]** 종전엔 이 자리에 "호출부가 `* 0.5` 를 곱하는 2D 포트를 써서
+    /// 볼류메트릭 콘이 WE 의 절반 폭" 이라는 미결 항목이 있었다. 지금은 콘 변환이
+    /// `SceneLight3D.forwardSpotConeCosines` **한 벌**뿐이고 `* 0.5` 가 없다 —
+    /// `Scene3DLighting.spotConeCosines` 는 그 함수로 위임하는 이름일 뿐이라, 갓레이와
+    /// 3D 포워드가 같은 라이트에 대해 같은 콘을 본다.
     let innerCone: Float
     /// `VAR_SPOT_PARAMS_OUTER` = `g_RenderVar1.z` (`0x140198778`). 위와 동일하게 코사인
     /// (load `0x140198738` → `mulss` `0x140198740` → `cosf` `0x140198744`).
     /// 콘 데이터가 없는 라이트는 호출부가 `(inner:1, outer:-1)` 을 준다
-    /// (`SceneDocument.swift:961`) — 그게 아래 `isPointLight` 프록시의 신호다.
+    /// (`forwardSpotConeCosines` 의 `guard outer.isFinite, outer > 0 else { return (1, -1) }`)
+    /// — 그게 아래 `isPointLight` 프록시의 신호다.
     let outerCone: Float
     /// `VAR_SPOT_PARAMS_RADIUS` = `g_RenderVar1.x` (`0x140198768`, 씬 키 `radius`).
     /// WE 는 여기에 `radius × 0.99` 를 넣는다(`0x140198760` f32=0.99).
     ///
-    /// **[2026-08-21 정정] 호출부는 배선돼 있다** — `SceneRenderer3D.swift:1934` 가
-    /// `radius: light.radius` 를 넘긴다. 종전 주석은 "아직 안 넘긴다" 고 적혀 있었는데
+    /// **[2026-08-21 정정] 호출부는 배선돼 있다** — `SceneRenderer3D.encode3D` 의
+    /// `VolumetricLightParameters(...)` 생성이 `radius: light.radius` 를 넘긴다. 종전 주석은 "아직 안 넘긴다" 고 적혀 있었는데
     /// 그건 배선 전의 사실이었다. 이 기본값 0 이 남아 있는 것은 **씬이 `radius` 를
-    /// 저작하지 않은 경우**(파스가 `?? 0`, `SceneDocument.swift:1916`) 때문이고, 그때
+    /// 저작하지 않은 경우**(`parseLight` 의 `radius: float(obj["radius"]) ?? 0`) 때문이고, 그때
     /// `hullRadius` 가 WE 라이트 생성자 기본 1.0(`0x140190494`)을 대신 써서
     /// **헐 반경 0.99** 로 마치한다 — `encode` 가 한 번만 경고한다.
     ///
@@ -174,9 +179,20 @@ final class VolumetricLightPass {
         self.pipelineHDR = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: makeDescriptor(.rgba16Float)) }
     }
 
+    /// - Parameter sceneDepth: 방금 그린 3D 씬의 뎁스 텍스처(`depth32Float`, `destination` 과 동일 해상도).
+    ///   W-17 단계 1 — 레이마치의 **출구**를 이 뎁스로 한 번 더 자른다(WE `volumetricsfront.frag:64,71`
+    ///   `backDepth = min(backDepth, limitDepth)`). 호출부가 `.shaderRead` 사용 플래그와
+    ///   `storeAction = .store` 를 보장해야 한다 — `.dontCare` 로 넘어오면 내용이 미정의라
+    ///   샤프트가 임의로 잘린다.
+    ///
+    ///   **옵셔널이 아니다.** MSL 이 선언한 텍스처 인자를 바인딩하지 않으면 Metal 검증이
+    ///   "missing texture binding" 으로 잡고 검증을 끈 빌드에서는 미정의 읽기가 된다. 그래서
+    ///   텍스처는 **항상** 바인딩하고, 쓸지 말지는 `marchParams.z` 플래그로만 가른다
+    ///   (해상도가 안 맞으면 0 → 셰이더가 `read` 를 아예 실행하지 않는다).
     func encode(
         commandBuffer: MTLCommandBuffer,
         destination: MTLTexture,
+        sceneDepth: MTLTexture,
         cameraEye: SIMD3<Float>,
         cameraFwd: SIMD3<Float>,
         cameraRight: SIMD3<Float>,
@@ -205,10 +221,17 @@ final class VolumetricLightPass {
         let isPoint = light.isPointLight
         // `pow(base, exp)` 의 base 는 셰이더에서 saturate 로 이미 [0,1] 이라 NaN 은 못 나오지만,
         // **음수 지수**면 base=0 인 헐 경계에서 +inf 가 되어 그 픽셀이 통째로 하얘진다.
-        // 저작값은 무클램프 파스(`SceneDocument.swift:1919`)고 코퍼스 실측 범위는 1.0–3.04라
+        // 저작값은 무클램프 파스(`parseLight` 의 `volumetricsExponent: float(obj["volumetricsexponent"]) ?? 1`)고
+        // 코퍼스 실측 범위는 1.0–3.04라
         // (`spec/corpus/scene-schema.json`) 이 클램프는 정상 씬을 바꾸지 않는다.
         let exponent = max(0, light.exponent)
         let sampleCount = Float(Self.marchSampleCount)
+        // W-17 단계 1 게이트. `read(uint2)` 는 범위 밖이 미정의라 해상도가 어긋나면 클립을 끈다
+        // (`destination` 과 pooled depth 는 같은 크기로 잡히므로 정상 경로는 항상 1이다).
+        // 뎁스 포맷도 확인한다 — MSL 이 `depth2d<float>` 로 선언했으므로 다른 포맷이 오면 클립을 끈다.
+        let depthUsable = sceneDepth.width == destination.width
+            && sceneDepth.height == destination.height
+            && sceneDepth.pixelFormat == .depth32Float
         var uniforms = VolumetricUniforms(
             cameraEye: SIMD4(cameraEye.x, cameraEye.y, cameraEye.z, 1),
             cameraFwd: SIMD4(cameraFwd.x, cameraFwd.y, cameraFwd.z, 0),
@@ -220,7 +243,7 @@ final class VolumetricLightPass {
             lightDirection: SIMD4(light.direction.x, light.direction.y, light.direction.z, isPoint ? 1 : 0),
             lightParams: SIMD4(light.density, exponent, light.intensity, light.innerCone),
             lightCone: SIMD4(light.outerCone, hull, 1 / hull, Self.pointLightScale(isPoint: isPoint)),
-            marchParams: SIMD4(sampleCount, 1 / sampleCount, 0, 0))
+            marchParams: SIMD4(sampleCount, 1 / sampleCount, depthUsable ? 1 : 0, 0))
 
         let descriptor = MTLRenderPassDescriptor()
         descriptor.colorAttachments[0].texture = destination
@@ -231,6 +254,7 @@ final class VolumetricLightPass {
         }
         encoder.setRenderPipelineState(selectedPipeline)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<VolumetricUniforms>.stride, index: 0)
+        encoder.setFragmentTexture(sceneDepth, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
         return true
@@ -292,12 +316,13 @@ final class VolumetricLightPass {
         float4 lightDirection; // xyz = VAR_SPOT_FORWARD, w = POINTLIGHT
         float4 lightParams;    // x=VAR_DENSITY y=VAR_EXPONENT z=INTENSITY w=INNER(cos)
         float4 lightCone;      // x=OUTER(cos) y=hullRadius z=1/hullRadius w=pointScale
-        float4 marchParams;    // x=sampleCount y=1/sampleCount
+        float4 marchParams;    // x=sampleCount y=1/sampleCount z=씬뎁스클립 on/off
     };
 
     fragment float4 volumetricFragment(
         VolumetricVertexOut in [[stage_in]],
-        constant VolumetricUniforms &u [[buffer(0)]]
+        constant VolumetricUniforms &u [[buffer(0)]],
+        depth2d<float> sceneDepth [[texture(0)]]
     ) {
         // 픽셀 뷰 레이(월드) — fovY/aspect 로부터 perspective 재구성.
         float2 ndc = float2(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0);
@@ -317,7 +342,21 @@ final class VolumetricLightPass {
         if (disc <= 0.0) { return float4(0.0); }          // WE `:67,70` 의 clip() 자리
         float sq = sqrt(disc);
         float tEnter = max(-b - sq, u.projParams.z);
-        float tExit = min(-b + sq, u.projParams.w);        // WE 는 여기서 씬 뎁스로 한 번 더 자른다(미보유)
+        float tExit = min(-b + sq, u.projParams.w);
+        // W-17 단계 1 — WE `:64` `limitDepth` + `:71` `min(backDepth, limitDepth)`.
+        // 뎁스 버퍼는 `Scene3DMath.perspective`(Metal NDC z 0..1, 뷰 -near→0 / -far→1)로 쓰였으므로
+        // `d = near·far / (far - ndc·(far-near))` 가 카메라 **전방축** 거리다. 마치는 단위 dir 을
+        // 따라 도니까 `t = d / dot(dir, forward)` 로 환산해서 자른다.
+        // 지오메트리가 없는 픽셀의 클리어값 1.0 은 d=far 로 풀리고 tExit 이 이미 far 이하라 무연산이다.
+        if (u.marchParams.z > 0.5) {
+            float ndcDepth = sceneDepth.read(uint2(in.position.xy));
+            float denom = u.projParams.w - ndcDepth * (u.projParams.w - u.projParams.z);
+            float cosAxis = dot(dir, u.cameraFwd.xyz);
+            if (denom > 0.0 && cosAxis > 1e-6) {
+                float limit = (u.projParams.z * u.projParams.w / denom) / cosAxis;
+                tExit = min(tExit, limit);
+            }
+        }
         if (!(tExit > tEnter)) { return float4(0.0); }
 
         float3 worldStart = u.cameraEye.xyz + dir * tEnter;

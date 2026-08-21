@@ -4,7 +4,9 @@ import XCTest
 
 /// F800(S-9): 2D 포워드 라이팅 kind 분기 — ForwardUniforms 의 kind/axis/cone 팩 회귀.
 /// axis = 모델회전(Rz·Ry·Rx) blue축(col2) = WE 스크립트 API Mat4.forward 규약(3D 경로와 동일),
-/// cone = spot 전각(도) → half-angle 코사인(Scene3DLighting.spotConeCosines 동일 변환).
+/// cone = spot 저작각(**광축 기준 반각**, 도) → 코사인(`SceneLight3D.forwardSpotConeCosines`,
+/// 리포 단일 정본 — 3D 레인의 `Scene3DLighting.spotConeCosines` 가 이 함수로 위임한다).
+/// 콘 산식 자체의 성질은 `SceneSpotConeTests` 가 따로 못박는다. 여기서는 **팩 배선**만 본다.
 final class SceneForwardLightKindTests: XCTestCase {
     private func light(_ type: String, origin: Vec3 = Vec3(x: 0, y: 0, z: 250),
                        angles: Vec3 = Vec3(x: 0, y: 0, z: 0),
@@ -68,21 +70,15 @@ final class SceneForwardLightKindTests: XCTestCase {
 
     // MARK: spot cone 코사인
 
-    /// ⚠️ **이 두 테스트는 "현행 2D 포트"를 잠글 뿐 WE 규약이 아니다.**
-    /// 2026-08-21 확정: WE 의 `innercone`/`outercone` 은 축 기준 **반각(도)** 이고 유니폼 패커가
-    /// `cos(도 * π/180)` 을 그대로 싣는다(wallpaper64.exe 0x140192e64–0x140192e86 /
-    /// 0x140192eaa–0x140192ebf, deg2rad 0x140492628). 3D 레인
-    /// `Scene3DLighting.spotConeCosines` 는 그에 맞춰 `* 0.5` 를 제거했지만, 2D 포트
-    /// `SceneDocument.forwardSpotConeCosines` 는 아직 반각 변환(`* 0.5`)을 쓴다 —
-    /// `SceneDocument.swift` 가 다른 레인 소관이라 이번 라운드에서 손대지 않았다.
-    /// 그쪽을 고칠 때 아래 `half` 를 `Float.pi / 180` 으로 바꾸면 된다(같은 커밋에서).
-    func testSpotConeHalfAngleCosines() {
-        // 실물 3047405322 의 lspot 값(innercone 44.830605 / outercone 67.129997, 전각 도).
-        let cone = SceneLight3D.forwardSpotConeCosines(inner: 44.830605, outer: 67.129997)
-        let half = Float.pi / 180 * 0.5
-        XCTAssertEqual(cone.inner, cos(44.830605 * half), accuracy: 1e-6)
-        XCTAssertEqual(cone.outer, cos(67.129997 * half), accuracy: 1e-6)
-        XCTAssertGreaterThan(cone.inner, cone.outer)  // inner 가 좁을수록 코사인 큼
+    /// 저작각은 **광축에서 잰 반각(도)** 이고 변환은 `cos(도 × π/180)` 이다 — `× 0.5` 가 없다.
+    /// 기대값을 `cos(도 × 배율)` 로 다시 적으면 배율이 회귀해도 기대값이 같이 움직여 무의미해지므로,
+    /// **각도와 무관하게 알려진 코사인 값**으로 적는다(60° → 1/2, 90° → 0). 종전 `× 0.5` 해석이면
+    /// 같은 입력이 각각 cos30° = 0.8660254 / cos45° = 0.7071068 이라 두 자리 모두 갈린다.
+    func testSpotConeUsesAuthoredDegreesDirectly() {
+        let cone = SceneLight3D.forwardSpotConeCosines(inner: 60, outer: 90)
+        XCTAssertEqual(cone.inner, 0.5, accuracy: 1e-6)   // cos 60° = 1/2
+        XCTAssertEqual(cone.outer, 0, accuracy: 1e-6)     // cos 90° = 0
+        XCTAssertGreaterThan(cone.inner, cone.outer)      // inner 가 좁을수록 코사인 큼
     }
 
     func testSpotConeDegenerateOuterFallsBackToHemisphere() {
@@ -99,7 +95,7 @@ final class SceneForwardLightKindTests: XCTestCase {
             light("lpoint"),
             light("ldirectional", angles: Vec3(x: Float.pi / 2, y: 0, z: 0), radius: 0),
             light("lspot", angles: Vec3(x: 0, y: 0, z: -2.54682),
-                  innerCone: 44.830605, outerCone: 67.129997, radius: 2048),
+                  innerCone: 20, outerCone: 30, radius: 2048),
         ])
         XCTAssertEqual(u.count, 3)
         // 슬롯 0: point — kind 0, cone 0(미사용), axis 는 identity blue축(셰이더가 kind 로 분기해 미소비).
@@ -110,11 +106,14 @@ final class SceneForwardLightKindTests: XCTestCase {
         XCTAssertEqual(u.axisCone[1].y, -1, accuracy: 1e-6)
         XCTAssertEqual(u.axisCone[1].z, 0, accuracy: 1e-6)
         // 슬롯 2: spot — kind 2, axis = (0,0,1) (z-only 회전), w = cone outer cos, inner cos = kindCone.y.
+        // 콘 20/30 은 WE 라이트 생성자 기본값(0x1401904a8/0x1401904b2 = 20.0/30.0)이자 코퍼스
+        // 실측 상단값이다(spec/corpus/scene-schema.json: innercone 범위 [10.63, 20.0] ·
+        // outercone [14.28, 30.0], 5건/2씬). 기대값은 cos 30° = √3/2 = 0.8660254 처럼
+        // **각도만으로 정해지는 수**로 적는다 — 산식을 다시 적으면 회귀를 못 잡는다.
         XCTAssertEqual(u.kindCone[2].x, 2, accuracy: 1e-6)
-        let half = Float.pi / 180 * 0.5
-        XCTAssertEqual(u.kindCone[2].y, cos(44.830605 * half), accuracy: 1e-6)
+        XCTAssertEqual(u.kindCone[2].y, 0.9396926, accuracy: 1e-6)   // cos 20°
         XCTAssertEqual(u.axisCone[2].z, 1, accuracy: 1e-6)
-        XCTAssertEqual(u.axisCone[2].w, cos(67.129997 * half), accuracy: 1e-6)
+        XCTAssertEqual(u.axisCone[2].w, 0.8660254, accuracy: 1e-6)   // cos 30° = √3/2
         // 슬롯 3: 미사용 — 제로(종전 radius 0 스킵 규약과 동일하게 kind 0+radius 0).
         XCTAssertEqual(u.kindCone[3], .zero)
         XCTAssertEqual(u.axisCone[3], .zero)
@@ -123,7 +122,7 @@ final class SceneForwardLightKindTests: XCTestCase {
     func testPackKeepsLegacySlotsBitIdentical() {
         // 기존 positions/colorRadius/ambientTerm/count 는 kind 확장과 무관하게 동일 값(무회귀).
         let lights = [light("lspot", origin: Vec3(x: 4134.5, y: 2319.7, z: 565),
-                            innerCone: 44.830605, outerCone: 67.129997, radius: 2048, intensity: 4.87)]
+                            innerCone: 20, outerCone: 30, radius: 2048, intensity: 4.87)]
         let u = pack(lights)
         XCTAssertEqual(u.positions[0], SIMD4<Float>(4134.5, 2319.7, 565, 2))
         XCTAssertEqual(u.colorRadius[0], SIMD4<Float>(4.87, 4.87, 4.87, 2048))
@@ -142,7 +141,7 @@ final class SceneForwardLightKindTests: XCTestCase {
          "objects":[
            {"id":1,"light":"lspot","origin":"100 100 250","angles":"0 0 -2.54682",
             "color":"1 1 1","intensity":4.87,"radius":2048,"exponent":2,
-            "innercone":44.830605,"outercone":67.129997}
+            "innercone":20,"outercone":30}
          ]}
         """
         let pkg = ScenePackage.assemble([("scene.json", scene.data(using: .utf8)!)])

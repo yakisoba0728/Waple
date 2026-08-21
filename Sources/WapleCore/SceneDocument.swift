@@ -89,8 +89,10 @@ public struct SceneLayer: Equatable {
     /// `scale` 의 3성분째 — `originZ` 와 동일 규약(2D 정사영 경로는 안 읽는다).
     ///
     /// **왜 `scale` 을 Vec3 으로 넓히지 않았나.** 실물 디스크립터는 `scale` 을 **vec3**
-    /// (등록 `0x1401e06a6` `lea rdx,"scale"` → 멤버 `+0x134`@`0x1401e06c6` → **타입 태그 2**
-    /// @`0x1401e06ea`; 같은 표의 `origin` `+0x128` 태그 2, `angles` `+0x140` 태그 2,
+    /// (등록 `0x1401e06a3` `lea rdx, [rip + 0x2aefa2]` → `0x14048f64c` = `"scale"` → 멤버 `+0x134`
+    /// @`0x1401e06c6`(`mov dword ptr [rbx + 0x34], 0x134`) → **타입 태그 2**
+    /// @`0x1401e06ea`(`mov dword ptr [rbx + 0x30], 2`); 같은 표의 `origin` `+0x128` 태그 2, `angles` `+0x140` 태그 2,
+    /// [VA-정정] 2026-08-21 — 종전 표기 `0x1401e06a6` 은 명령 주소가 아니라 그 `lea` 의 **disp32 필드 위치**(+3)였다.
     /// `parallaxDepth` `+0x170` 태그 **1**=vec2)로 등록하고, 씬스크립트 `ILayer.scale` 도
     /// `Vec3` 이다(`ui/dist/monaco/autocomplete/lib.sceneScript.d.ts:2033`).
     /// 그런데 `scale` 은 2D 합성(`composeParentTransforms`)·쿼드 배치·렌더 인코더까지
@@ -279,9 +281,12 @@ public struct SceneLayer: Equatable {
     public var clampUVs: Bool = true
     public var noInterpolation: Bool = false
     /// **엔진에 이미지 레이어 `spacing` 은 없다.** 디스크립터 이름 문자열 `"spacing"` 은
-    /// 이미지 전체에 **`0x140491878` 한 곳뿐**이고 그 disp32 참조 2건(`0x140259458` ·
-    /// `0x1402594e6`)이 **둘 다 텍스트 등록부 안**이다(전-이미지 바이트 스캔 — `lea` 선형
+    /// 이미지 전체에 **`0x140491878` 한 곳뿐**이고 그 참조 2건이 **둘 다 텍스트 등록부**
+    /// (`0x140258ca0`–`0x14025a713`) **안**이다: `0x140259455 mov rax, qword ptr [rip + 0x23841c]`
+    /// (15바이트 이하라 MSVC SSO — 문자열을 통째로 레지스터에 싣는다) ·
+    /// `0x1402594e3 lea rdx, [rip + 0x23838e]`. 전-이미지 바이트 스캔으로 떴다(`lea` 선형
     /// 디스어셈은 함정 #8 로 놓친다). 이미지 등록부 `0x1401ee520` 의 12개 프로퍼티에도 없다.
+    /// [VA-정정] 2026-08-21 — 종전 표기 `0x140259458`/`0x1402594e6` 은 명령 주소가 아니라 두 명령의 **disp32 필드 위치**(+3)였다.
     /// 즉 이 필드는 파스·보존만 하는 **유령 키**다 — 소비처 0. 그래도 형(型)은 텍스트와
     /// 맞춰 vec2 로 둔다(같은 이름의 키가 두 타입에서 다른 모양이면 그게 더 나쁘다).
     public var spacing: Vec2? = nil
@@ -917,8 +922,8 @@ public extension SceneLight3D {
     /// - F800(S-9): `axisCone`/`kindCone` — 라이트 kind/axis/cone. 3D 경로(Scene3DLighting.swift)의
     ///   확정 규약을 2D 로 가져온 포트: kind 는 Scene3DLightKind rawValue 와 동일(0=point/1=directional/2=spot
     ///   /4=tube, 미지 type 은 point 폴터 — 종전 전원 point 처리와 동일이라 무회귀), axis 는 모델회전(Rz·Ry·Rx)의
-    ///   blue축(+Z, col2) = WE 스크립트 API `Mat4.forward()` 규약, cone 은 spot 전각(도)→half-angle
-    ///   코사인(Scene3DLighting.spotConeCosines 와 동일 변환). point 는 axis/cone 미사용(셰이더가 kind 로 분기).
+    ///   blue축(+Z, col2) = WE 스크립트 API `Mat4.forward()` 규약, cone 은 spot 저작각(**광축 기준 반각**, 도)
+    ///   → 코사인(아래 `forwardSpotConeCosines` — 리포 단일 정본). point 는 axis/cone 미사용(셰이더가 kind 로 분기).
     ///   tube(kind 4)는 axisCone.xyz 가 forward 가 아니라 **세그먼트 단점 B**(WE g_LTube_OriginB —
     ///   genericimage3.frag:115/157 PointSegmentDelta 소비, cone 미사용이라 동 슬롯 재활용).
     struct ForwardUniforms: Equatable {
@@ -989,15 +994,62 @@ public extension SceneLight3D {
         return f
     }
 
-    /// F800(S-9): spot innercone/outercone(전각, 도) → half-angle 코사인 — Scene3DLighting
-    /// .spotConeCosines(WapleRender)와 동일 변환의 2D 포트(동기 유지 책임).
-    // ponytail: half vs full 미확정(3D 경로 주석과 동일) — full-angle 이면 `* 0.5` 제거.
+    /// spot `innercone`/`outercone`(도) → 콘 코사인. **리포 전체에서 이 함수 하나가 정본이다** —
+    /// 2D 포워드 팩(아래 `forwardUniforms`), 3D PBR 레인(`Scene3DLighting.spotConeCosines` 가
+    /// 이 함수를 그대로 호출한다), 볼류메트릭/갓레이 호출부가 전부 여기로 들어온다.
+    /// 종전엔 같은 변환이 두 벌이었고 한 벌에만 `* 0.5` 가 남아 **같은 라이트가 포워드와 갓레이에서
+    /// 서로 다른 콘 폭**을 갖고 있었다.
+    ///
+    /// ## 저작값은 **광축에서 잰 반각(도)** 이다 — `* 0.5` 는 없다 (2026-08-21 재확인)
+    /// 셰이더가 코사인 슬롯의 의미를 먼저 못박는다. `shaders/genericimage3.frag` 스팟 루프:
+    /// `spotCookie = -dot(normalize(lightDelta), g_LSpot_Direction[l].xyz)` 뒤
+    /// `smoothstep(g_LSpot_Direction[l].w, g_LSpot_Origin[l].w, spotCookie)` —
+    /// `lightDelta = Origin.xyz - worldPos` 이므로 부호를 뒤집은 쪽이 라이트→표면이고,
+    /// 내적은 **광축에서 잰 각의 코사인**이다. 즉 두 `.w` 슬롯은 반각 코사인을 받는다.
+    /// (볼류메트릭 `shaders/volumetricsfront.frag` 도 같다:
+    ///  `dot(normalize(lightDelta), VAR_SPOT_FORWARD)` → `smoothstep(OUTER, INNER, ·)`.)
+    ///
+    /// 남은 물음은 "C++ 이 그 슬롯에 무엇을 굽느냐" 뿐이고, 두 패커 모두 도 값에 **π/180 만** 곱한다:
+    /// - V1 PBR 패커(함수 `0x140190c80`–`0x1401964b8`):
+    ///   `0x140192e64 movss xmm0,[r14+0x2f0]` → `0x140192e6d mulss xmm0,xmm7` → `0x140192e71 call 0x14041a2e0`
+    ///   → `0x140192e86` 스토어(`[rdi+rax*4]`, `rax = rbx+3` = vec4 의 `.w` = `g_LSpot_Origin[i].w`),
+    ///   이어서 `0x140192eaa`(`+0x2f4`)/`0x140192eb3`/`0x140192eb7`/`0x140192ebf` 가 같은 꼴로
+    ///   `g_LSpot_Direction[i].w`.
+    /// - 볼류메트릭 패커(함수 `0x140196ce0`–`0x1401988d7`): `0x140198724`/`0x14019872c`/`0x140198730`
+    ///   → `0x140198770` 스토어(`+0xbc` = `g_RenderVar1.y` = `VAR_SPOT_PARAMS_INNER`),
+    ///   `0x140198738`/`0x140198740`/`0x140198744` → `0x140198778`(`+0xc0` = `..._OUTER`).
+    ///
+    /// `xmm7`/`xmm6` 에 실리는 승수는 `0x140492628` f32=`0.01745329238474369` = π/180 이다.
+    /// V1 패커에서 `xmm7` 은 라이트 루프 안에서 여러 번 재정의되므로 **도달정의로 확인했다** —
+    /// 루프 진입 전 `0x1401910bf` 적재와 루프 꼬리 `0x14019317c` 재적재가 두 `mulss` 지점을
+    /// 모두 지배한다(그 사이 재정의는 다른 경로에 있다). 볼류메트릭 쪽은 `0x1401986ac` 적재가
+    /// 같은 직선 블록 안이라 지배가 자명하다.
+    ///
+    /// 콜리 `0x14041a2e0` 이 `cosf` 라는 근거: 소인수 경로가 `1.0 - x²·0.5 + …` 로 **짝함수**이고
+    /// (`0x140471bb0`=1.0 / `0x140471bc0`=0.5), 극소 |x| 에서 `x` 가 아니라 `1.0`(`0x140471cb8`)을
+    /// 돌려준다(`sinf` 였다면 각각 홀함수·`x` 여야 한다).
+    ///
+    /// 반대 방향으로 보이는 `* 0.5` 자리가 따로 **두 곳** 있다. 직접 떠 보면 **다른 양**이라
+    /// 반증이 아니다 — 둘 다 결과가 `g_LSpot_*`/`g_RenderVar*` 유니폼으로 가지 않는다.
+    /// - `0x1401ec338`–`0x1401ec362`(함수 `0x1401ebf60`–`0x1401ec71c`): `[rsi+0x2f0]`/`[rsi+0x2f4]`
+    ///   에 0.5(`0x1404926c0`, 같은 직선 블록 `0x1401ec322` 적재)를 곱한 뒤 그 반각을
+    ///   `[rsi+0x344]`/`[rsi+0x34c]`/`[rsi+0x350]`/`[rsi+0x35c]` 벡터들과 곱한다 — **지오메트리 구성**이다.
+    /// - `0x14018b347`–`0x14018b373`(함수 `0x14018b2c0`–`0x14018b532`): 같은 두 필드에 0.5
+    ///   (`0x14018b31a` 적재)를 곱해 **공통 오브젝트 슬롯** `[rdi+0x128]`/`[rdi+0x12c]` 에 쓰고,
+    ///   바로 앞에서 같은 두 필드를 `cvttss2si` 로 **정수 절단**해 `[rcx+0x84]`/`[rcx+0x88]` 에 쓴다
+    ///   (정수 도 값 = 에디터 UI 성격).
+    /// 어느 쪽이 정확히 무슨 지오메트리/위젯인지는 **여기서 확정하지 않았다** — 필요한 사실은
+    /// "셰이딩·볼류메트릭 유니폼 경로가 아니다" 뿐이고 그건 위 스토어 목적지로 확정된다.
+    ///
+    /// - Returns: `(inner: cos(innercone°), outer: cos(outercone°))`. `outercone` 이 없거나 0 이면
+    ///   `(1, -1)` — 콘 데이터 없음 신호이고, 소비처가 반구 그라디언트로 접는다(전방향 통과 아님).
+    ///   WE 는 `outercone > 90` 도 클램프하지 않으므로 여기서도 클램프하지 않는다(콘이 반구를 넘는다).
     static func forwardSpotConeCosines(inner: Float, outer: Float) -> (inner: Float, outer: Float) {
-        guard outer.isFinite, outer > 0 else { return (1, -1) }  // 콘 데이터 없음 → 반구 그라디언트(3D 동일)
-        let toHalfRadians = Float.pi / 180 * 0.5
-        let cosOuter = cos(max(0, outer) * toHalfRadians)
-        let cosInnerRaw = inner.isFinite && inner > 0 ? cos(inner * toHalfRadians) : 1
-        // inner 는 outer 보다 좁아야(코사인 큼) 스무드스텝이 0→1 로 증가.
+        guard outer.isFinite, outer > 0 else { return (1, -1) }  // 콘 데이터 없음 → 반구 그라디언트
+        let cosOuter = SceneWELightMath.coneCosine(degrees: max(0, outer))
+        let cosInnerRaw = inner.isFinite && inner > 0 ? SceneWELightMath.coneCosine(degrees: inner) : 1
+        // inner 는 outer 보다 좁아야(코사인 큼) 스무드스텝이 0→1 로 증가한다.
+        // WE 는 edge0 == edge1 을 막지 않아 그 지점의 smoothstep 이 미정의다 — 여기서만 1e-4 를 벌린다.
         return (max(cosInnerRaw, cosOuter + 1e-4), cosOuter)
     }
 
@@ -1176,12 +1228,13 @@ public struct SceneSprite: Equatable {
 ///
 /// 실제 라이트는 `objects[]` 의 `lpoint`/`lspot`/`ltube`/`ldirectional` 이 만든다. 이 딕셔너리는
 /// 개수를 세지 않는다 — 그 개수로 **셰이더를 생성**한다. 라이팅 스니펫 생성기
-/// (`0x140169140`–`0x14016B0D4` — `.pdata` 조각 1개, `primary()` 실측. 종전 표기
-/// `0x1401691C0`–`0x14016B154` 는 시작을 함수 중간으로, 끝을 다음 함수까지로 잡은 것이다)가
+/// (`0x140169140`–`0x14016b0d4` — `.pdata` 조각 1개, `merged()`/`primary()` 실측. 종전 표기는
+/// 시작을 함수 중간으로, 끝을 **다음 함수** 안으로 잡은 것이었다 — 옛 주소 두 개와 각각이
+/// 실제로 가리키던 명령은 `docs/re/scene-lighting.md` §2.1 의 정정 표에 남겨 뒀다)가
 /// 이 값을 콤보 문자열로 받아 `atoi`(`0x1402C82C0`) 한 뒤 `uniform vec4 g_LPoint_Origin[`
 /// (`0x14048BE50`, HLSL 판은 `const float4 g_LPoint_Origin[` `0x140487658`) 뒤에 그대로 찍는다.
 /// 즉 WE 에는 라이트 슬롯 **고정 상한이 없고**, 씬마다 배열 길이가 다른 셰이더가 새로
-/// 컴파일된다(`WapleRender/Scene3DLighting.swift:267` 주석의 `maximumLights = 8` 은 Waple 쪽
+/// 컴파일된다(`WapleRender/Scene3DLighting.swift` 의 `static let maximumLights = 8` 은 Waple 쪽
 /// 캡이다 — WE 정본이 아니다).
 ///
 /// 콤보 이름은 **아홉 키와 1:1**이다(exe 전수 문자열 검색으로 확인 — `LIGHTS_` 접두 문자열은
@@ -1503,6 +1556,16 @@ public struct SceneDocument: Equatable {
     /// 훗날 레이어별 시계(일시정지·개별 재생속도)를 도입할 때 그것을 끄는 스위치로 쓰면 된다 —
     /// 도입 전에 이 값을 소비하면 아무것도 안 바뀌는 코드가 늘 뿐이다.
     /// 무엇을 "전역 클록" 으로 삼는지는 **[미해결]** — bit6 의 소비 지점을 exe 에서 못 찾았다.
+    ///
+    /// **[해소 2026-08-21]** 찾았다. 마스크 검사가 아니라 **워드째 실어 `shr` 로 꺼낸다** —
+    /// 그래서 `0x40` 마스크 스캔이 0건이었다.
+    ///   `0x140114d0a mov eax,[rax+0xe0]` / `shr eax,6` / `test al,1`
+    ///     → `0x140114d17 or dword [rsi+0x1b8], 4`
+    ///     → `0x140113510 test byte [r15+0x1b8], 4`
+    ///     → `0x1401135e8 Sleep(min(max(다음프레임−현재, 0) / 배속, 0.25) × 1000)`
+    /// 곧 **레이어별 시계가 아니라 씬 시작을 다음 시트 프레임 경계까지 늦추는 것**이다.
+    /// "착지 지점이 없다" 는 결론은 그대로지만 **이유가 다르다** — 프레임 진행을 바꾸는 것이
+    /// 아니라 시작 시각만 민다. 전문은 `docs/re/media-playback.md` §7.4.
     /// 근거: `.pdata` 함수 전수를 디스어셈해 `[reg+0xE0]` 접근 **928곳**을 모았고, 그중 마스크
     /// `0x40` 이 근처에 있는 자리는 위 프로젝트 집계 두 벌(`0x140183393`·`0x14018B271` 의
     /// `test al,0x40`)뿐이다. 그 둘은 씬의 가상 게터 `[vtbl+0x58]` 이 준 플래그를 접는 코드이지
@@ -1586,11 +1649,15 @@ public struct SceneDocument: Equatable {
     /// `general.lightconfig` — 라이트 종류별 개수(셰이더 퍼뮤테이션 힌트). nil = 미저작
     /// (WE 에서도 전건 0 과 동치). 규약·비트 패킹·동봉 도달은 `SceneLightConfig` 선언부 주석 참조.
     ///
-    /// **파스·보존 전용.** 착지 지점(미배선): `WapleRender/Scene3DLighting.swift:278`
-    /// (`static let maximumLights = 8`)과 그것을 쓰는 `:293`/`:295`/`:418`, 그리고 같은 상한을
-    /// 복제한 `WapleRender/QuadShaders.swift:193`. WE 는 캡이 없고 이 값으로 배열 길이를 찍으므로,
+    /// **파스·보존 전용.** 착지 지점(미배선): `WapleRender/Scene3DLighting.swift` 의
+    /// `static let maximumLights = 8` 과 그것을 쓰는 `result.reserveCapacity(maximumLights)` ·
+    /// `for light in lights where result.count < maximumLights` · `lights.prefix(maximumLights)`,
+    /// 그리고 같은 상한을 복제한 `WapleRender/QuadShaders.swift` 의 f_lit 루프
+    /// (`// 슬롯 8 — 3D 레인(Scene3DLighting.maximumLights)과 같은 상한` 아래).
+    /// WE 는 캡이 없고 이 값으로 배열 길이를 찍으므로,
     /// **저작된 씬은 이 카운트를 종류별 슬롯 상한으로 쓰고 미저작 씬만 8 캡으로 폴백**하는 게
-    /// 원본에 가깝다(그 파일 :267 주석이 이미 이 필요를 적어 뒀다). 다만 셰이더 배열 길이가
+    /// 원본에 가깝다(그 파일의 `enum Scene3DLighting` 머리 주석이 이미 이 필요를 적어 뒀다).
+    /// 다만 셰이더 배열 길이가
     /// 컴파일 타임 상수라 슬롯을 **줄이는** 쪽은 퍼뮤테이션이 필요하다 — 늘리는 쪽(현재 캡을
     /// 넘는 씬)부터 붙이는 게 비용 대비 효과가 크다.
     public var lightConfig: SceneLightConfig? = nil

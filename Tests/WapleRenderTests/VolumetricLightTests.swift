@@ -150,13 +150,19 @@ final class VolumetricLightTests: XCTestCase {
             fovYDegrees: 50, aspect: 1, nearZ: 0.1, farZ: 10000,
             lightPosition: SIMD3(0, 0, 0), lightForward: SIMD3(0, 0, 1),
             density: 3, exponent: 1, intensity: 6,
-            innerCos: cos(5 * Float.pi / 180), outerCos: cos(15 * Float.pi / 180),
+            innerCos: cos(10 * Float.pi / 180), outerCos: cos(30 * Float.pi / 180),
             radius: radius, sampleCount: VolumetricLightPass.marchSampleCount)
     }
 
     /// **[2026-08-21] "4.5배 차" 사건의 회귀 못.** Metal 도 GPU 도 필요 없다 —
     /// `VolumetricMath` 는 `import Foundation` 하나로 서므로 이 값들은 리눅스에서
     /// 블록만 잘라 그대로 재현된다(docs/re/volumetric-light.md §6).
+    ///
+    /// > **[2026-08-21 갱신]** 아래 서술의 `4.44배` · `0.2254` · `57` · `0.2235` 는 **종전(절반 폭)
+    /// > 콘에서 잰 역사 기록**이다. 콘 변환기가 정정되면서(`docs/re/scene-lighting.md` §10) 같은
+    /// > 픽스처의 값이 `0.545993` · 바이트 `139` · 비 `1.8315` 로 바뀌었다. 논증(픽셀 중심 레이 ≠
+    /// > 광축 레이)은 그대로 성립하고 **배율만 작아진다** — 콘이 넓어져 반 픽셀 이탈의 손해가 준다.
+    /// > 위 단언들은 새 값으로 갱신했고, 옛 값은 이 문단에 기록으로 남긴다.  [VA-정정]
     ///
     /// 못 박는 사실 셋:
     /// 1. **픽셀 중심 레이**로 푼 값이 실렌더 값이다 — 64×64 의 (32,32)는 광축이 아니라
@@ -174,28 +180,32 @@ final class VolumetricLightTests: XCTestCase {
         XCTAssertEqual(axis.y, 0, accuracy: 1e-6)
         XCTAssertEqual(axis.z, 1, accuracy: 1e-6, "angles=0 은 카메라를 향하는 +Z 여야 한다")
         let cone = SceneLight3D.forwardSpotConeCosines(inner: 10, outer: 30)
-        XCTAssertEqual(cone.inner, cos(5 * Float.pi / 180), accuracy: 1e-6, "innercone 은 **반각 코사인**이다")
-        XCTAssertEqual(cone.outer, cos(15 * Float.pi / 180), accuracy: 1e-6)
+        // **[2026-08-21 정정]** 저작값이 곧 **광축에서 잰 반각(도)** 이다 — `× 0.5` 는 없다.
+        // 셰이더가 `smoothstep(Direction.w, Origin.w, -dot(normalize(lightDelta), Direction.xyz))`
+        // 로 두 `.w` 를 반각 코사인 슬롯으로 쓴다(`docs/re/scene-lighting.md` §10).
+        // 종전에는 `cos5°`/`cos15°` 를 기대해 **콘이 WE 절반 폭**이었다.
+        XCTAssertEqual(cone.inner, cos(10 * Float.pi / 180), accuracy: 1e-6)
+        XCTAssertEqual(cone.outer, cos(30 * Float.pi / 180), accuracy: 1e-6)
 
         // (1)(2) 픽셀 값 고정 — 리눅스 실측 2026-08-21.
         let wired = Self.directionFixtureInput(radius: 20)
         XCTAssertEqual(VolumetricMath.pixelValue(wired, x: 32, y: 32, width: 64, height: 64),
                        0.506209, accuracy: 1e-4, "radius=20 픽스처의 중앙 픽셀")
         XCTAssertEqual(VolumetricMath.pixelValue(wired, x: 2, y: 2, width: 64, height: 64),
-                       0.047063, accuracy: 1e-4, "radius=20 픽스처의 코너 픽셀")
+                       0.191465, accuracy: 1e-4, "radius=20 픽스처의 코너 픽셀")
 
         let bare = Self.directionFixtureInput(radius: 0)   // 씬이 `radius` 를 저작하지 않은 경우 → 헐 0.99
         let barePixel = VolumetricMath.pixelValue(bare, x: 32, y: 32, width: 64, height: 64)
-        XCTAssertEqual(barePixel, 0.225425, accuracy: 1e-4,
+        XCTAssertEqual(barePixel, 0.545993, accuracy: 1e-4,
             "radius 무저작 픽스처의 중앙 픽셀 — 실측 Metal 값 57/255=0.2235 와 같은 자리다")
-        XCTAssertEqual((min(1, max(0, barePixel)) * 255).rounded(), 57,
+        XCTAssertEqual((min(1, max(0, barePixel)) * 255).rounded(), 139,
             "bgra8Unorm 양자화 바이트가 캡처 PNG 의 57 과 같아야 한다")
 
         // 같은 입력을 **광축 레이**(1×1 = ndc 정확히 (0,0))로 풀면 1.0 이다. 이 1.0 과 위 0.2254 의
         // 비가 곧 보고된 "4.5배" 이고, 두 구현이 갈린 것이 아니라 **레이가 갈린 것**이다.
         let onAxis = VolumetricMath.pixelValue(bare, x: 0, y: 0, width: 1, height: 1)
         XCTAssertEqual(onAxis, 1.0, accuracy: 1e-4, "광축 레이 값 — 종전 검산이 보던 수")
-        XCTAssertEqual(onAxis / barePixel, 4.436, accuracy: 0.01,
+        XCTAssertEqual(onAxis / barePixel, 1.8315, accuracy: 0.01,
             "광축/픽셀중심 비 = 보고된 4.5배의 정체(반 픽셀 각도 × 좁은 콘 × 작은 헐)")
         XCTAssertEqual(VolumetricMath.pixelNDC(x: 32, y: 32, width: 64, height: 64).x, 0.015625, accuracy: 1e-7,
             "짝수 해상도의 가운데 픽셀은 광축이 아니다 — 이 반 픽셀이 위 4.44배의 원인")

@@ -252,10 +252,11 @@ public extension SceneLight3D {
 /// **0x140169140–0x14016b0d4**, 조각 문자열 0x14048be50–0x14048cfd0) 대 `PerformLighting_Deprecated`
 /// (generic3.frag:87-166) 로 갈린다. 우리 스톡 메시 셰이더는 V1 만 이식했다.
 ///
-/// ⛔️ **정정(2026-08-21)**: 종전 표기 `0x140168000–0x14016b154` 는 **양쪽 끝이 다 틀렸다**.
-/// `primary()` 실측으로 0x140168000 은 앞 함수(`0x140167e10–0x140169138`) 안이고, 0x14016b154 는
-/// 뒤 함수(`0x14016b0e0–0x14016c3f8` — 라이팅 스니펫이 아니라 전처리기 디렉티브 파서
-/// `^\s*#\s*([a-z]+)\b\s*(.*)` 0x14048d048)의 안이다. 생성기 본체는 정확히
+/// ⛔️ **정정(2026-08-21)**: 종전 표기는 **양쪽 끝이 다 틀렸다** — 시작은 생성기 **앞** 함수
+/// (`0x140167e10–0x140169138`) 안, 끝은 **뒤** 함수(`0x14016b0e0–0x14016c3f8` — 라이팅 스니펫이
+/// 아니라 전처리기 디렉티브 파서 `^\s*#\s*([a-z]+)\b\s*(.*)` 0x14048d048) 안이었고, 둘 다
+/// 명령 경계조차 아니었다(옛 주소와 그것이 실제로 가리키던 명령은
+/// `docs/re/scene-lighting.md` §2.1 정정 표). 생성기 본체는 정확히
 /// **0x140169140–0x14016b0d4** 다(진입 `LIGHTING` 콤보 조회 0x1401691b8 · `LightingV1` 이름 비교
 /// 0x1401691f5 · 머리 문자열 0x14048c070 방출 · 꼬리 `\treturn light;\n}` 0x14048ce30 · `ret` 0x14016b0cc).
 /// HLSL 판 라이트 배열은 또 다른 함수 `0x1400f5cb0–0x1400f8520` 이다. 전문은
@@ -806,12 +807,16 @@ public enum SceneWEVolumetricMath {
     /// nil = 그 픽셀 기여 0(교차 없음 `disc ≤ 0`, 또는 구간 없음 `exit ≤ enter`).
     /// MSL 쪽 `return float4(0.0)` 과 같은 뜻이고, 그 자리가 WE `:67`/`:70` 의 `clip()` 이다.
     ///
-    /// **남은 구멍**: WE 는 `exit` 을 씬 뎁스로 한 번 더 자른다(`:64` `limitDepth` + `:71`
-    /// `min(backDepth, limitDepth)`). 우리는 그 텍스처가 없어 통과한다 — 샤프트가 지오메트리를
-    /// 뚫고 보인다. 설계안은 `docs/re/volumetric-light.md` §7.2.
+    /// **W-17 단계 1(씬 뎁스 클립)이 여기 들어와 있다.** WE 는 `exit` 을 씬 뎁스로 한 번 더
+    /// 자른다(`volumetricsfront.frag:64` `limitDepth = texLoad2D(g_Texture3, …)` + `:71`
+    /// `backDepth = min(backDepth, limitDepth)`). `sceneLimit` 이 그 `limitDepth` 를
+    /// **레이 파라미터 t 로 환산한 값**이고, `metalSource` 의 `tExit = min(tExit, sceneLimit)`
+    /// 과 같은 자리다. nil 이면 종전 그대로(가림 없음) — 클리어된 뎁스(=1.0)는 `farZ` 로 풀리고
+    /// `exit` 이 이미 `farZ` 이하라 넣어도 무연산이다.
     public static func hullSpan(eye: SIMD3<Float>, direction: SIMD3<Float>,
                                 lightPosition: SIMD3<Float>, hullRadius: Float,
-                                nearZ: Float, farZ: Float) -> (enter: Float, exit: Float)? {
+                                nearZ: Float, farZ: Float,
+                                sceneLimit: Float? = nil) -> (enter: Float, exit: Float)? {
         let oc = eye - lightPosition
         let b = dot3(oc, direction)
         let c = dot3(oc, oc) - hullRadius * hullRadius
@@ -819,9 +824,45 @@ public enum SceneWEVolumetricMath {
         guard disc > 0 else { return nil }
         let sq = sqrtf(disc)
         let enter = max(-b - sq, nearZ)
-        let exit = min(-b + sq, farZ)
+        var exit = min(-b + sq, farZ)
+        if let sceneLimit, sceneLimit < exit { exit = sceneLimit }
         guard exit > enter else { return nil }
         return (enter, exit)
+    }
+
+    /// `depth32Float` 뎁스 버퍼 값(= Metal NDC z, `[0,1]`) → **카메라 전방축 거리**.
+    /// `Scene3DMath.perspective` 의 역이다 — 그 행렬이 `zz = far/(near-far)` 로
+    /// `clip.z = zz·vz + near·zz`, `clip.w = -vz` 를 만들므로 `d = -vz` 에 대해
+    /// `ndc = zz·(near-d)/d` 이고, 이를 d 로 풀면 `d = near·far / (far - ndc·(far-near))` 다.
+    /// 대수적 검산: `ndc = 0 → d = near`, `ndc = 1 → d = far`.
+    ///
+    /// **float32 정밀도는 `far/near` 비에 걸린다.** 분모가 `far − ndc·(far−near)` 라 원거리에서
+    /// 소거가 심하다. 실측(2026-08-21): `near 1 / far 1000` 은 왕복 상대오차 0, 씬 기본값
+    /// `near 0.1 / far 10000` 은 `ndc = 1` 에서 **10138.6**(+1.4%) 이 나온다. 그래도 오차가
+    /// **먼 쪽**이라 `min(tExit, ·)` 이 조기 발동하지 않는다 — 이게 안전한 방향이다.
+    ///
+    /// **클리어값 1.0 이 `farZ` **이상**으로 풀리는 것이 이 함수의 안전성 근거다** — 지오메트리가
+    /// 없는 픽셀은 클립이 무연산이 되고(`exit` 이 이미 `farZ` 이하), 그래서 이 기능을 켜도
+    /// 지오메트리 없는 기존 픽스처의 골든 값이 한 자리도 안 움직인다.
+    /// (`SceneWELightMathTests.testClearedDepthNeverResolvesNearerThanFarPlane` 이 잠근다.)
+    public static func viewDepthDistance(ndcDepth: Float, nearZ: Float, farZ: Float) -> Float {
+        let denominator = farZ - ndcDepth * (farZ - nearZ)
+        guard denominator > 0, nearZ > 0, farZ > nearZ else { return farZ }
+        return nearZ * farZ / denominator
+    }
+
+    /// 위 전방축 거리를 **뷰 레이 파라미터 t** 로 환산한다. 마치는 `eye + dir·t`(dir 은 단위)로
+    /// 도는데 뎁스는 카메라 전방축 투영 거리라, 화면 가장자리 픽셀에서 `t > d` 다.
+    /// `cosFromAxis = dot(dir, forward)`(둘 다 단위 → 광축에서 잰 각의 코사인).
+    ///
+    /// `cosFromAxis` 가 0 이하(뒤쪽/직교 — 정상 절두체에서는 생기지 않는다)면 `farZ` 로 접어
+    /// 클립을 무연산으로 만든다. 자르는 쪽으로 틀리면 화면이 통째로 검어지므로, 퇴화는 항상
+    /// **안 자르는 쪽**으로 접는다.
+    public static func sceneDepthRayLimit(ndcDepth: Float, nearZ: Float, farZ: Float,
+                                          cosFromAxis: Float) -> Float {
+        let distance = viewDepthDistance(ndcDepth: ndcDepth, nearZ: nearZ, farZ: farZ)
+        guard cosFromAxis > 1e-6 else { return farZ }
+        return distance / cosFromAxis
     }
 
     /// `metalSource` 의 `VolumetricUniforms` 와 같은 내용을 CPU 쪽에 담는 입력.
@@ -851,15 +892,22 @@ public enum SceneWEVolumetricMath {
         /// 이 타입이 WapleRender 에 묶인다. 호출부가 그 상수를 그대로 넘기면 된다
         /// (그게 셰이더가 굽는 값이다).
         public var sampleCount: Int
+        /// W-17 단계 1: 이 픽셀의 **씬 뎁스 버퍼 값**(`depth32Float` 원값 = Metal NDC z, `[0,1]`).
+        /// `metalSource` 가 `sceneDepth.read(uint2(in.position.xy))` 로 읽는 그 수다.
+        /// nil = 뎁스를 안 넘긴 호출(클립 없음). 지오메트리가 없는 픽셀의 클리어값 `1.0` 은
+        /// `farZ` 로 풀려 클립이 무연산이 되므로, nil 과 1.0 은 결과가 같다.
+        public var sceneDepth: Float?
 
         /// 인자 순서·라벨은 `VolumetricLightPass` 시절 메모버와이즈와 **동일**하다.
         /// (`Tests/WapleRenderTests/VolumetricLightTests.swift` 가 이 시그니처로 부른다 —
         ///  그 파일은 다른 레인 소관이라 소스 호환을 깨지 않는 것이 이관의 조건이었다.)
+        /// `sceneDepth` 만 **기본값 있는 마지막 인자**로 뒤에 붙였다 — 기존 호출부는 한 글자도 안 바뀐다.
         public init(eye: SIMD3<Float>, forward: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
                     fovYDegrees: Float, aspect: Float, nearZ: Float, farZ: Float,
                     lightPosition: SIMD3<Float>, lightForward: SIMD3<Float>,
                     density: Float, exponent: Float, intensity: Float,
-                    innerCos: Float, outerCos: Float, radius: Float, sampleCount: Int) {
+                    innerCos: Float, outerCos: Float, radius: Float, sampleCount: Int,
+                    sceneDepth: Float? = nil) {
             self.eye = eye
             self.forward = forward
             self.right = right
@@ -877,6 +925,7 @@ public enum SceneWEVolumetricMath {
             self.outerCos = outerCos
             self.radius = radius
             self.sampleCount = sampleCount
+            self.sceneDepth = sceneDepth
         }
 
         /// `VolumetricLightParameters.isPointLight` 와 **같은 판정**(단일 규약).
@@ -939,8 +988,14 @@ public enum SceneWEVolumetricMath {
         let ndc = pixelNDC(x: x, y: y, width: width, height: height)
         let dir = viewRayDirection(ndc: ndc, fovYDegrees: i.fovYDegrees, aspect: i.aspect,
                                    forward: i.forward, right: i.right, up: i.up)
+        // W-17 단계 1 — `metalSource` 의 `tExit = min(tExit, sceneLimit)` 과 같은 순서로 푼다.
+        let sceneLimit = i.sceneDepth.map {
+            sceneDepthRayLimit(ndcDepth: $0, nearZ: i.nearZ, farZ: i.farZ,
+                               cosFromAxis: dot3(dir, i.forward))
+        }
         guard let span = hullSpan(eye: i.eye, direction: dir, lightPosition: i.lightPosition,
-                                  hullRadius: hull, nearZ: i.nearZ, farZ: i.farZ) else { return 0 }
+                                  hullRadius: hull, nearZ: i.nearZ, farZ: i.farZ,
+                                  sceneLimit: sceneLimit) else { return 0 }
         let mls = maxLightScale(intensity: i.intensity, segmentLength: span.exit - span.enter,
                                 hullRadius: hull, isPoint: i.isPoint)
         let mean = marchMeanFactor(i, direction: dir, span: span, hullRadius: hull)
