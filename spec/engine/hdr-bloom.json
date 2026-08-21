@@ -5,8 +5,8 @@
   {
    "id": "engine.bloom.hdr.structure",
    "value": {
-    "source": "WE 셰이더 평문 — RE 불필요",
-    "pipeline": "hdr_downsample 셰이더 **하나**를 콤보로 3역할에 쓰는 듀얼-필터 피라미드",
+    "source": "WE 셰이더 평문 — 구조는 RE 불필요. 다만 **탭 반경은 셰이더만 봐서는 안 나온다**(오프셋을 엔진이 유니폼으로 싣는다) — 아래 tapRadiusBySlot 은 드로우 루프 실측이다.",
+    "pipeline": "hdr_downsample 셰이더 **하나**를 콤보로 3역할(+BICUBIC 변형)에 쓰는 듀얼-필터 피라미드",
     "roles": {
      "hdr_downsample": {
       "shader": "hdr_downsample",
@@ -27,6 +27,14 @@
       },
       "blending": "additive"
      },
+     "hdr_upsample_cubic": {
+      "shader": "hdr_downsample",
+      "combos": {
+       "UPSAMPLE": 1,
+       "BICUBIC": 1
+      },
+      "blending": "additive"
+     },
      "combine_hdr_upsample": {
       "shader": "combine_hdr",
       "combos": null,
@@ -40,23 +48,37 @@
      "zw",
      "zy"
     ],
-    "renderVar0Meaning": "BICUBIC 분기의 `texSize = 0.5 / g_RenderVar0.xy` 에서 g_RenderVar0.xy = 0.5 x 텍셀크기 로 확정 — 즉 4탭이 ±0.5 텍셀 코너에 놓인다.",
+    "renderVar0Meaning": "BICUBIC 분기의 `texSize = 0.5 / g_RenderVar0.xy`(:22) 는 **BICUBIC 콤보가 걸린 자리에서만** 성립하는 항등식이고, 그 콤보는 hdr_upsample_cubic 하나에만 붙어 있다. 전 패스로 일반화하면 안 된다 — 엔진은 셰이더가 크기에서 되짚게 두지 않고 오프셋을 **직접 싣는다**.",
+    "tapRadiusBySlot": {
+     "base": "g_RenderVar0 기저 = (1/W, 1/H, −1/W, −1/H), W·H 는 그 패스의 소스가 아니라 **풀 프레임버퍼**(obj+0x84 · obj+0x88) — 0x14018367c–0x1401836ba, 저장 0x1401836a0–0x1401836ba",
+     "extract": "배율 없이 기저 그대로(0x1401836a0), 소스=_rt_FullFrameBuffer(폭 W) → **±1.0 소스 텍셀**(4×4 박스)",
+     "downsample": "`mov eax,1 ; shl eax,cl`(cl=i) = 1<<i 배(0x14018374a–0x14018375c), 소스=level[i−1](폭 W>>i) → **±1.0 소스 텍셀**(4×4 박스)",
+     "upsample": "`mov eax,2 ; shl eax,cl`(cl=i−1) = 2<<(i−1) 배(0x140183856–0x14018386b), 소스=level[i](폭 W>>(i+1)) → **±0.5 소스 텍셀**(2×2 박스)",
+     "whyDifferent": "배율 수는 둘 다 2^i 로 같다. 반경이 갈리는 원인은 **소스 레벨이 한 단 다른 것**이다.",
+     "bicubicSlots": "업샘플 소스레벨 ebp 가 N−2 이상이면 0x31a8(hdr_upsample_cubic), 아니면 0x31a0(hdr_upsample) — 0x140183810–0x140183822 `cmp ebp,eax ; cmovl rcx,r15`. 즉 가장 깊은 두 단만 큐빅이다."
+    },
     "noGaussianPass": true,
     "upsample": "같은 4탭 x 0.25 x g_BloomScatter, 머티리얼이 blending:additive",
     "combineTaps": 4,
-    "combineNote": "combine_hdr.frag 가 블룸 텍스처를 ±g_TexelSize 4탭으로 평균한 뒤 가산한다"
+    "combineNote": "combine_hdr.frag 가 블룸 텍스처를 ±g_TexelSize 4탭으로 평균한 뒤 가산한다",
+    "crossRef": "engine.uniformFeed.g_RenderVar0.hdrBloomPyramid"
    },
    "status": "확정",
    "evidence": [
     {
      "kind": "shader",
      "ref": "assets/shaders/hdr_downsample.frag",
-     "note": "WE 가 평문 배포하는 블룸 피라미드 셰이더 — 콤보로 3역할"
+     "note": "WE 가 평문 배포하는 블룸 피라미드 셰이더 — 콤보로 3역할(+BICUBIC 변형)"
     },
     {
      "kind": "asset",
-     "ref": "assets/materials/util/hdr_{downsample,downsample_bloom,upsample}.json",
-     "note": "콤보/블렌딩 규약"
+     "ref": "assets/materials/util/hdr_{downsample,downsample_bloom,upsample,upsample_cubic}.json",
+     "note": "콤보/블렌딩 규약 — BICUBIC 콤보는 hdr_upsample_cubic 에만 붙는다"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Composite::drawBloomChain 0x140183610–0x140183a61",
+     "note": "g_RenderVar0 기저·패스별 정수 배율·BICUBIC 슬롯 선택"
     }
    ]
   },
@@ -108,7 +130,7 @@
     {
      "kind": "shader",
      "ref": "assets/shaders/hdr_downsample.frag",
-     "note": "WE 가 평문 배포하는 블룸 피라미드 셰이더 — 콤보로 3역할"
+     "note": "WE 가 평문 배포하는 블룸 피라미드 셰이더 — 콤보로 3역할(+BICUBIC 변형)"
     },
     {
      "kind": "file",
@@ -128,9 +150,9 @@
    "id": "engine.bloom.hdr.filterShapeDeviations",
    "value": {
     "summary": "임계 수식과 파라미터는 처음부터 맞았고 **필터 모양**이 갈렸다. 오차 부호가 서로 반대라 일부만 고치면 더 나빠지는 구조였다.",
-    "status": "**2026-08-02 한 단위로 교체 완료** — 아래 preSwap 5건이 전부 해소됐다.",
+    "status": "**2026-08-02 한 단위로 교체 완료** — 아래 preSwap 5건이 전부 해소됐다. **[2026-08-21] 그 교체가 W1 을 반대로 진단했던 것이 `b19db5b` 에서 드러나 다시 뒤집혔다** — 아래 W1 · postSwapCorrection 참조.",
     "preSwap": {
-     "W1": "추출 4탭이 ±1.0 소스 텍셀(WE ±0.5)",
+     "W1": "추출 4탭이 ±1.0 소스 텍셀 — 당시 이것을 이탈로 적었으나 **오진이었다**(WE 도 ±1.0 이다). 2026-08-02 교체가 ±0.5 로 바꿔 실제 이탈을 만들었고 `b19db5b` 가 ±1.0 으로 되돌렸다.",
      "W2": "레벨마다 blur13(13탭 가우시안) h/v 패스 — WE 엔 그런 패스가 없다",
      "N1": "업샘플이 단일 탭(WE 는 4탭)",
      "N2": "합성이 블룸을 단일 탭으로 읽음(WE 는 ±텍셀 4탭 평균)",
@@ -139,7 +161,7 @@
     },
     "postSwapMeasured": {
      "sharedTapHelper": true,
-     "helperTapScale": "0.5 / 텍스처크기",
+     "helperTapScale": "호스트가 싣는 유니폼 t",
      "helperTapCount": 4,
      "hasBlur13": false,
      "hdrBloomExtractUsesHelper": true,
@@ -148,12 +170,26 @@
      "hdrBloomDownsampleDirectSamples": 0,
      "hdrBloomUpsampleUsesHelper": true,
      "hdrBloomUpsampleDirectSamples": 1,
+     "hdrBloomUpsampleCubicUsesHelper": false,
+     "hdrBloomUpsampleCubicDirectSamples": 1,
      "hdrBloomCombineUsesHelper": false,
      "hdrBloomCombineDirectSamples": 5,
      "topLevelUpsampleFlipped": false,
      "uniformUpsampleRule": true,
      "levelZeroScale": "1/2",
-     "upsampleWeight": "0.25 x scatter"
+     "upsampleWeight": "0.25(4탭 평균) x 생 scatter",
+     "tapOffsetFedByHost": true,
+     "downsampleTapScaleRule": "1 << max(0, level)",
+     "upsampleTapScaleRule": "2 << max(0, sourceLevel - 1)",
+     "hasBicubicUpsample": true,
+     "bicubicSelectionRule": "sourceLevel >= levelCount - 2",
+     "strengthNormalization": true
+    },
+    "postSwapCorrection": {
+     "commit": "b19db5b (2026-08-21)",
+     "what": "① 공용 헬퍼의 `0.5 / 텍스처크기` 되짚기를 없애고 탭 오프셋을 호스트가 싣게 했다(`weDownsample4` → `weBox4(src, uv, t)`). ② 가장 깊은 두 업샘플 단의 BICUBIC 을 이식했다.",
+     "why": "되짚기가 성립하는 곳은 BICUBIC 이 걸린 업샘플뿐인데 헬퍼가 세 계열 공용이라, 추출·다운샘플까지 업샘플 규칙을 받아 반경이 정확히 절반이 됐다.",
+     "canonWasStale": "이 커밋은 구현만 고치고 정본·생성기·문서를 그대로 뒀다. 그래서 생성기의 `weDownsample4` 탐침이 전부 헛돌아 재생성이 `helperTapCount 4 → 0` 축소로 막히는 상태였다(정본이 고아). 2026-08-21 이 갱신이 그 자리를 메운다."
     },
     "orderingConstraint": "W1·W2 는 결과를 넓히고 N1·N2 는 좁힌다. 일부만 고치면 더 나빠지므로 한 번에 갈아야 했다 — 실제로 그렇게 했다.",
     "abResult": {
@@ -169,12 +205,12 @@
     {
      "kind": "shader",
      "ref": "assets/shaders/hdr_downsample.frag",
-     "note": "WE 가 평문 배포하는 블룸 피라미드 셰이더 — 콤보로 3역할"
+     "note": "WE 가 평문 배포하는 블룸 피라미드 셰이더 — 콤보로 3역할(+BICUBIC 변형)"
     },
     {
      "kind": "asset",
-     "ref": "assets/materials/util/hdr_{downsample,downsample_bloom,upsample}.json",
-     "note": "콤보/블렌딩 규약"
+     "ref": "assets/materials/util/hdr_{downsample,downsample_bloom,upsample,upsample_cubic}.json",
+     "note": "콤보/블렌딩 규약 — BICUBIC 콤보는 hdr_upsample_cubic 에만 붙는다"
     },
     {
      "kind": "file",
@@ -199,12 +235,12 @@
     {
      "kind": "shader",
      "ref": "assets/shaders/hdr_downsample.frag",
-     "note": "WE 가 평문 배포하는 블룸 피라미드 셰이더 — 콤보로 3역할"
+     "note": "WE 가 평문 배포하는 블룸 피라미드 셰이더 — 콤보로 3역할(+BICUBIC 변형)"
     },
     {
      "kind": "asset",
-     "ref": "assets/materials/util/hdr_{downsample,downsample_bloom,upsample}.json",
-     "note": "콤보/블렌딩 규약"
+     "ref": "assets/materials/util/hdr_{downsample,downsample_bloom,upsample,upsample_cubic}.json",
+     "note": "콤보/블렌딩 규약 — BICUBIC 콤보는 hdr_upsample_cubic 에만 붙는다"
     },
     {
      "kind": "file",
@@ -217,7 +253,7 @@
    "value": {
     "resolved": "업샘플 머티리얼의 `scatter` 파라미터에는 저작 `bloomhdrscatter` 가 **변형 없이** 실린다. 셰이더의 `0.25` 는 4탭 평균이지 가중이 아니다 — 둘은 애초에 경쟁 후보가 아니었다.",
     "shaderText": "assets/shaders/hdr_downsample.frag:61 `uniform float g_BloomScatter; // {\"material\":\"scatter\",\"default\":1}` · 본문 `albedo *= 0.25 * g_BloomScatter` (albedo 는 4탭 **합**)",
-    "engineFeed": "0x14017f807 `movss xmm6,[rbx+0x3d0]`(저작값 적재) → 중간 변형 없이 `setMaterialParam(mat,\"scatter\",xmm6,1)` 2회: 0x14017f967 · 0x14017f988. 대상 [rsi+0x31a0] · [rsi+0x31a8] = hdr_upsample 계열 2개. 0x14017f854 `movaps xmm0,xmm6` 는 정규화의 powf 입력이라 xmm6 를 바꾸지 않는다.",
+    "engineFeed": "0x14017f807 `movss xmm6,[rbx+0x3d0]`(저작값 적재) → 중간 변형 없이 `setMaterialParam(mat,\"scatter\",xmm6,1)` 2회. **[2026-08-21 재측정으로 VA 정정]** 첫 번째는 `mov rcx,[rsi+0x31a0]`(0x14017f944) → `call 0x14017e920`(0x14017f967), 두 번째는 `mov rcx,[rsi+0x31a8]`(0x14017f96c) → `jmp 0x14017f98f` 로 **공용 꼬리 `call 0x14017fa40`** 에 합류한다 — 0x14017f988 은 \"scatter\" 문자열의 `lea rdx` 이지 call 이 아니다(종전 서술이 그 자리를 call 로 적었다). 대상 [rsi+0x31a0] · [rsi+0x31a8] = hdr_upsample · hdr_upsample_cubic. 0x14017f854 `movaps xmm0,xmm6` 는 정규화의 powf 입력이고 xmm6 는 Win64 비휘발성이라 두 call 을 건너 살아남는다.",
     "whyNoDivergence": "추출 강도를 `bloomhdrstrength / (bloomhdrscatter^(max(N,2)-2) + 1)` 로 나누는 정규화(0x14017f85e powf → 0x14017f86b +1.0 → 0x14017f88f divss)와 **한 쌍**이라 scatter^k 누적이 상쇄된다. 종전 백화(3589454154 meanLuma 0.0913 → 0.4198)는 가중만 옮기고 이 나눗셈을 안 옮겨서 난 것이지 가중이 틀려서가 아니었다.",
     "crossCheck": "spec/engine/uniform-feed.json — engine.uniformFeed.hdrBloom.materialParams(확정)",
     "supersedes": "engine.bloom.hdr.upsampleWeightUnknown"
@@ -227,12 +263,40 @@
     {
      "kind": "shader",
      "ref": "assets/shaders/hdr_downsample.frag",
-     "note": "WE 가 평문 배포하는 블룸 피라미드 셰이더 — 콤보로 3역할"
+     "note": "WE 가 평문 배포하는 블룸 피라미드 셰이더 — 콤보로 3역할(+BICUBIC 변형)"
     },
     {
      "kind": "asset",
-     "ref": "assets/materials/util/hdr_{downsample,downsample_bloom,upsample}.json",
-     "note": "콤보/블렌딩 규약"
+     "ref": "assets/materials/util/hdr_{downsample,downsample_bloom,upsample,upsample_cubic}.json",
+     "note": "콤보/블렌딩 규약 — BICUBIC 콤보는 hdr_upsample_cubic 에만 붙는다"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/HDRBloomPyramidPass.swift"
+    }
+   ]
+  },
+  {
+   "id": "engine.bloom.hdr.levelCountRule",
+   "value": {
+    "we": "생성 가능 단수 = **min(W,H)** 를 2로 계속 나눠 0 이 되기 전까지의 횟수, 루프 상한 8. `cmovg r14d,r12d`(0x14017f363)로 min 을 잡고 `sar eax,1`(0x14017f376) → `jle`(0x14017f37d) 로 끊으며 `inc [rsi+0x310c]`(0x14017f383) 로 센다. 루프는 `cmp ebx,8`(0x14017f541).",
+    "effectiveN": "N = max(1, min(bloomhdriterations, 생성단수)) — 0x14017f7f7–0x14017f84c, 결과는 obj+0x3108. 이 N 이 그대로 정규화 지수 `max(N,2)-2` 로 간다.",
+    "waple": "HDRBloomPyramidPass.levelCount 는 `w > 1 || h > 1` 로 도는 **max 기준**이라 ceil(log2(max(W,H))) 를 센다 — WE 의 floor(log2(min(W,H))) 와 다르다.",
+    "reachability": "min(W,H) ≥ 256 이면 WE 쪽 단수가 이미 8 이라 캡에 걸려 양쪽이 같다. 갈리는 것은 **짧은 변이 256 미만인 소스**뿐이다 (예: 64×32 → WE 5, Waple 6; 커밋된 기대치는 Tests/WapleRenderTests/HDRBloomTests.swift:370 이 6 이다).",
+    "status": "**미반영** — 고치려면 WapleRenderTests 의 기대치를 같이 바꿔야 하는데 그 파일이 이 레인 소유가 아니다. 화면 영향은 짧은 변 <256 인 소스로 한정된다.",
+    "crossRef": "engine.uniformFeed.hdrBloom.materialParams"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Composite::drawBloomChain 0x140183610–0x140183a61",
+     "note": "g_RenderVar0 기저·패스별 정수 배율·BICUBIC 슬롯 선택"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Composite::allocateTargets 0x14017f1b0–0x14017fa6f",
+     "note": "레벨 생성 루프와 N 산출"
     },
     {
      "kind": "file",

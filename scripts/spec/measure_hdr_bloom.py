@@ -1,17 +1,22 @@
 """HDR 블룸 파이프라인을 WE **평문 셰이더**와 대조한다 — spec/engine/hdr-bloom.json.
 
-WE 는 블룸 셰이더를 GLSL 평문으로 배포한다. 그래서 이 항목은 RE 대상이 아니라
-**대조 대상**이다. 픽셀 캡처도, 디스어셈도 필요 없다.
+WE 는 블룸 셰이더를 GLSL 평문으로 배포한다. 그래서 **구조**는 대조만으로 나온다.
 
-WE 의 HDR 블룸 구조(assets/materials/util/*.json + assets/shaders/hdr_downsample.frag):
+    hdr_downsample.json         콤보 없음         → 4탭 박스 다운샘플 (×0.25)
+    hdr_downsample_bloom.json   BLOOM:1          → 같은 4탭 + 임계(소프트 니) 추출
+    hdr_upsample.json           UPSAMPLE:1       → 같은 4탭 × 0.25 × scatter, blending:"additive"
+    hdr_upsample_cubic.json     UPSAMPLE+BICUBIC → 같은 것에 탭마다 textureBicubic
+    combine_hdr_upsample.json   combine_hdr      → 블룸 4탭 평균 후 가산
 
-    hdr_downsample.json         콤보 없음        → 4탭 박스 다운샘플 (×0.25)
-    hdr_downsample_bloom.json   BLOOM:1         → 같은 4탭 + 임계(소프트 니) 추출
-    hdr_upsample.json           UPSAMPLE:1      → 같은 4탭 × 0.25 × scatter, blending:"additive"
-    combine_hdr_upsample.json   combine_hdr     → 블룸 4탭 평균 후 가산
-
-즉 **셰이더 하나**를 콤보로 세 역할에 쓰는 듀얼-필터 피라미드이고,
+즉 **셰이더 하나**를 콤보로 세 역할(+BICUBIC 변형)에 쓰는 듀얼-필터 피라미드이고,
 가우시안 블러 패스가 **없다**.
+
+**[2026-08-21] "디스어셈 불필요" 는 틀렸다.** 셰이더가 쓰는 탭 오프셋 `g_RenderVar0` 은
+셰이더가 계산하지 않고 **엔진이 싣는다**. 그래서 탭 반경·레벨 수·BICUBIC 선택은 셰이더
+문면에 없고 드로우 루프(`Composite::drawBloomChain` 0x140183610–0x140183a61)와 파라미터
+피드(`Composite::allocateTargets` 0x14017f1b0–0x14017fa6f)를 읽어야 나온다. BICUBIC 분기의
+`texSize = 0.5 / g_RenderVar0.xy` 를 전 패스로 일반화한 종전 서술이 구현에 반경 절반 결함을
+낳았다(§structure.renderVar0Meaning · filterShapeDeviations.preSwap.W1).
 
 결론(요약): 임계 수식과 파라미터 기본값은 Waple 이 맞다. 갈리는 건 **필터 모양**이고,
 오차의 부호가 서로 반대라 일부만 고치면 더 나빠진다.
@@ -63,7 +68,11 @@ def we_facts():
     f["combineTapOffset"] = "g_TexelSize" if "g_TexelSize" in ch else None
     # 머티리얼 콤보/블렌딩
     mats = {}
-    for name in ("hdr_downsample", "hdr_downsample_bloom", "hdr_upsample", "combine_hdr_upsample"):
+    # hdr_upsample_cubic 을 빼먹으면 안 된다 — 엔진이 가장 깊은 두 업샘플 단에서 그 슬롯
+    # (`0x31a8`)을 고르고(`0x140183810`–`0x140183822`), BICUBIC 콤보가 걸린 곳이 여기뿐이라
+    # `texSize = 0.5 / g_RenderVar0.xy` 항등식의 성립 범위도 이 머티리얼이 정한다.
+    for name in ("hdr_downsample", "hdr_downsample_bloom", "hdr_upsample", "hdr_upsample_cubic",
+                 "combine_hdr_upsample"):
         p = os.path.join(MATS, name + ".json")
         if os.path.exists(p):
             j = json.loads(read(p))
@@ -81,30 +90,63 @@ def we_facts():
 def waple_facts():
     """Waple 현재 구현(HDRBloomPyramidPass.swift)의 필터 구조를 소스에서 읽는다.
 
-    2026-08-02 WE 구조 교체 후: 탭은 공용 헬퍼 weDownsample4 로 모였고(±0.5 소스 텍셀),
-    가우시안 패스는 없어졌으며, 업샘플/합성이 4탭을 쓴다. 교체 전 값은 아래 PRE_SWAP 상수.
+    이력 두 단계를 그대로 반영한다.
+      · 2026-08-02 — 탭을 공용 헬퍼로 모으고 가우시안 패스를 없앴다. 다만 그 헬퍼가
+        소스 텍스처 크기에서 `0.5 / 크기` 로 오프셋을 **되짚어** 세 계열에 같은 반경을 줬다.
+      · 2026-08-21(`b19db5b`) — 되짚기를 없애고 헬퍼 이름이 `weBox4(src, uv, t)` 가 됐다.
+        `t` 는 호스트가 `tapOffsetUV(scale:baseWidth:baseHeight)` 로 계산해 유니폼으로 싣고,
+        가장 깊은 두 업샘플 단은 `hdrBloomUpsampleCubic` 을 쓴다.
+
+    **탐침이 소스를 놓치면 값이 조용히 0/false 로 무너진다.** 실제로 `b19db5b` 가
+    `weDownsample4` → `weBox4` 로 이름을 바꾼 뒤 이 함수 전체가 헛돌아, 재생성이
+    `helperTapCount 4 → 0` 으로 축소 가드에 막히는 상태였다(정본이 고아가 됐다).
+    그래서 헬퍼 이름을 **한 자리**(HELPER)에 두고 아래가 전부 그걸 참조한다.
     """
     s = read(WSRC)
     f = {}
-    m = re.search(r"float3 weDownsample4\(.*?\n    \}", s, re.S)
+    HELPER = "weBox4"
+    m = re.search(r"float3 " + HELPER + r"\(.*?\n    \}", s, re.S)
     helper = m.group(0) if m else ""
     f["sharedTapHelper"] = bool(m)
-    f["helperTapScale"] = "0.5 / 텍스처크기" if "0.5 / float2(src.get_width()" in helper else "미확인"
+    # 되짚기(`0.5 / 텍스처크기`)가 남아 있으면 그걸 적고, 없으면 호스트 급전을 적는다.
+    # "미확인" 같은 헤지 낱말을 쓰지 않는다 — 확정 항목 안에 들어가면 validate.py 가 신고한다.
+    f["helperTapScale"] = ("0.5 / 텍스처크기" if "0.5 / float2(src.get_width()" in helper
+                           else ("호스트가 싣는 유니폼 t" if re.search(r"float2 t\)", helper)
+                                 else "탐침 불일치"))
     f["helperTapCount"] = len(re.findall(r"\.sample\(", helper))
     # 주석에 'blur13' 이라는 낱말이 남아 있어도 잡히면 안 된다(교체 이력을 주석에 적어 뒀다) —
     # 실제 함수/프래그먼트 정의만 본다.
     f["hasBlur13"] = bool(re.search(r"float3 blur13\(|fragment float4 hdrBloomBlur", s))
-    for name in ("hdrBloomExtract", "hdrBloomDownsample", "hdrBloomUpsample", "hdrBloomCombine"):
-        m = re.search(r"fragment float4 " + name + r".*?\n    \}", s, re.S)
+    for name in ("hdrBloomExtract", "hdrBloomDownsample", "hdrBloomUpsample",
+                 "hdrBloomUpsampleCubic", "hdrBloomCombine"):
+        m = re.search(r"fragment float4 " + name + r"\(.*?\n    \}", s, re.S)
         body = m.group(0) if m else ""
-        f[name + "UsesHelper"] = "weDownsample4" in body
+        f[name + "UsesHelper"] = HELPER + "(" in body
         f[name + "DirectSamples"] = len(re.findall(r"\.sample\(", body))
     f["topLevelUpsampleFlipped"] = bool(
         re.search(r"e\.setFragmentTexture\(top, index: 0\)", s))
     f["uniformUpsampleRule"] = bool(
         re.search(r"for i in stride\(from: n - 2, through: 0, by: -1\)", s))
-    f["levelZeroScale"] = ("1/2" if ">> (1 + i)" in s else ("1/4" if ">> (2 + i)" in s else "미확인"))
-    f["upsampleWeight"] = ("0.25 x scatter" if "parameters.scatter * 0.25" in s else "scatter")
+    f["levelZeroScale"] = ("1/2" if ">> (1 + i)" in s else ("1/4" if ">> (2 + i)" in s else "탐침 불일치"))
+    # 셰이더 문면은 `albedo(4탭 합) *= 0.25 * g_BloomScatter` 다. `weBox4` 가 이미 x0.25 를
+    # 먹었으므로 그 위에 곱하는 것은 **생 scatter** 여야 한다. 종전 캘리브(`* 0.25` 를 한 번 더)
+    # 였는지 문면대로인지를 가른다.
+    f["upsampleWeight"] = ("0.25 x scatter" if "parameters.scatter * 0.25" in s
+                           else ("0.25(4탭 평균) x 생 scatter"
+                                 if re.search(r"weBox4\(add, in\.uv, u\.tapOffset\) \* u\.scatter", s)
+                                 else "탐침 불일치"))
+    # --- b19db5b 이후 새로 측정하는 것들 -------------------------------------
+    f["tapOffsetFedByHost"] = bool(
+        re.search(r"static func tapOffsetUV\(scale: Int, baseWidth: Int, baseHeight: Int\)", s))
+    m = re.search(r"static func downsampleTapScale\(level: Int\) -> Int \{ ([^}]+) \}", s)
+    f["downsampleTapScaleRule"] = m.group(1).strip() if m else "탐침 불일치"
+    m = re.search(r"static func upsampleTapScale\(sourceLevel: Int\) -> Int \{ ([^}]+) \}", s)
+    f["upsampleTapScaleRule"] = m.group(1).strip() if m else "탐침 불일치"
+    f["hasBicubicUpsample"] = bool(re.search(r"fragment float4 hdrBloomUpsampleCubic\(", s))
+    m = re.search(r"static func upsampleUsesBicubic\(sourceLevel: Int, levelCount: Int\) -> Bool \{\n\s*([^\n]+)\n", s)
+    f["bicubicSelectionRule"] = m.group(1).strip() if m else "탐침 불일치"
+    f["strengthNormalization"] = bool(
+        re.search(r"return strength / \(powf\(scatter, exponent\) \+ 1\)", s))
     return f
 
 
@@ -156,26 +198,49 @@ def build():
     wp = waple_facts()
     n, corp = corpus_defaults()
     shader_ev = specfmt.ev("shader", "assets/shaders/hdr_downsample.frag",
-                           "WE 가 평문 배포하는 블룸 피라미드 셰이더 — 콤보로 3역할")
-    mat_ev = specfmt.ev("asset", "assets/materials/util/hdr_{downsample,downsample_bloom,upsample}.json",
-                        "콤보/블렌딩 규약")
+                           "WE 가 평문 배포하는 블룸 피라미드 셰이더 — 콤보로 3역할(+BICUBIC 변형)")
+    mat_ev = specfmt.ev("asset",
+                        "assets/materials/util/hdr_{downsample,downsample_bloom,upsample,upsample_cubic}.json",
+                        "콤보/블렌딩 규약 — BICUBIC 콤보는 hdr_upsample_cubic 에만 붙는다")
     code_ev = specfmt.ev("file", WSRC.replace(os.sep, "/"))
+    chain_ev = specfmt.ev("binary", "wallpaper64.exe Composite::drawBloomChain 0x140183610–0x140183a61",
+                          "g_RenderVar0 기저·패스별 정수 배율·BICUBIC 슬롯 선택")
 
     return [
         specfmt.entry("engine.bloom.hdr.structure", {
-            "source": "WE 셰이더 평문 — RE 불필요",
-            "pipeline": "hdr_downsample 셰이더 **하나**를 콤보로 3역할에 쓰는 듀얼-필터 피라미드",
+            "source": "WE 셰이더 평문 — 구조는 RE 불필요. 다만 **탭 반경은 셰이더만 봐서는 안 나온다**"
+                      "(오프셋을 엔진이 유니폼으로 싣는다) — 아래 tapRadiusBySlot 은 드로우 루프 실측이다.",
+            "pipeline": "hdr_downsample 셰이더 **하나**를 콤보로 3역할(+BICUBIC 변형)에 쓰는 듀얼-필터 피라미드",
             "roles": we["materials"],
             "downsampleTapCount": we["downsampleTaps"],
             "downsampleTapSwizzles": we["downsampleTapSwizzles"],
-            "renderVar0Meaning": f"BICUBIC 분기의 `texSize = {we['renderVar0Scale']} / g_RenderVar0.xy` 에서 "
-                                 f"g_RenderVar0.xy = {we['renderVar0Scale']} x 텍셀크기 로 확정 — "
-                                 "즉 4탭이 ±0.5 텍셀 코너에 놓인다.",
+            # **[2026-08-21] 종전 서술이 틀렸다.** 여기 "즉 4탭이 ±0.5 텍셀 코너에 놓인다" 라고
+            # 적어 두고 그걸 전 패스로 일반화했는데, 그 항등식은 BICUBIC 이 걸린
+            # hdr_upsample_cubic 에서만 성립한다. 실물은 추출·다운샘플이 ±1.0 소스 텍셀이다.
+            # 이 한 줄이 `b19db5b` 이전 구현의 반경 절반 결함(W-1)의 발원지였다.
+            "renderVar0Meaning": f"BICUBIC 분기의 `texSize = {we['renderVar0Scale']} / g_RenderVar0.xy`(:22) 는 "
+                                 "**BICUBIC 콤보가 걸린 자리에서만** 성립하는 항등식이고, 그 콤보는 "
+                                 "hdr_upsample_cubic 하나에만 붙어 있다. 전 패스로 일반화하면 안 된다 — "
+                                 "엔진은 셰이더가 크기에서 되짚게 두지 않고 오프셋을 **직접 싣는다**.",
+            "tapRadiusBySlot": {
+                "base": "g_RenderVar0 기저 = (1/W, 1/H, −1/W, −1/H), W·H 는 그 패스의 소스가 아니라 "
+                        "**풀 프레임버퍼**(obj+0x84 · obj+0x88) — 0x14018367c–0x1401836ba, 저장 0x1401836a0–0x1401836ba",
+                "extract": "배율 없이 기저 그대로(0x1401836a0), 소스=_rt_FullFrameBuffer(폭 W) → **±1.0 소스 텍셀**(4×4 박스)",
+                "downsample": "`mov eax,1 ; shl eax,cl`(cl=i) = 1<<i 배(0x14018374a–0x14018375c), "
+                              "소스=level[i−1](폭 W>>i) → **±1.0 소스 텍셀**(4×4 박스)",
+                "upsample": "`mov eax,2 ; shl eax,cl`(cl=i−1) = 2<<(i−1) 배(0x140183856–0x14018386b), "
+                            "소스=level[i](폭 W>>(i+1)) → **±0.5 소스 텍셀**(2×2 박스)",
+                "whyDifferent": "배율 수는 둘 다 2^i 로 같다. 반경이 갈리는 원인은 **소스 레벨이 한 단 다른 것**이다.",
+                "bicubicSlots": "업샘플 소스레벨 ebp 가 N−2 이상이면 0x31a8(hdr_upsample_cubic), 아니면 "
+                                "0x31a0(hdr_upsample) — 0x140183810–0x140183822 `cmp ebp,eax ; cmovl rcx,r15`. "
+                                "즉 가장 깊은 두 단만 큐빅이다.",
+            },
             "noGaussianPass": not we["hasGaussianBlurPass"],
             "upsample": "같은 4탭 x 0.25 x g_BloomScatter, 머티리얼이 blending:additive",
             "combineTaps": we["combineBloomTaps"],
             "combineNote": "combine_hdr.frag 가 블룸 텍스처를 ±g_TexelSize 4탭으로 평균한 뒤 가산한다",
-        }, "확정", [shader_ev, mat_ev]),
+            "crossRef": "engine.uniformFeed.g_RenderVar0.hdrBloomPyramid",
+        }, "확정", [shader_ev, mat_ev, chain_ev]),
 
         specfmt.entry("engine.bloom.hdr.wapleMatches", {
             "thresholdMath": "추출의 소프트-니 수식이 WE 와 **수학적으로 동일**하다 "
@@ -202,9 +267,17 @@ def build():
         specfmt.entry("engine.bloom.hdr.filterShapeDeviations", {
             "summary": "임계 수식과 파라미터는 처음부터 맞았고 **필터 모양**이 갈렸다. "
                        "오차 부호가 서로 반대라 일부만 고치면 더 나빠지는 구조였다.",
-            "status": "**2026-08-02 한 단위로 교체 완료** — 아래 preSwap 5건이 전부 해소됐다.",
+            "status": "**2026-08-02 한 단위로 교체 완료** — 아래 preSwap 5건이 전부 해소됐다. "
+                      "**[2026-08-21] 그 교체가 W1 을 반대로 진단했던 것이 `b19db5b` 에서 드러나 다시 뒤집혔다** "
+                      "— 아래 W1 · postSwapCorrection 참조.",
             "preSwap": {
-                "W1": "추출 4탭이 ±1.0 소스 텍셀(WE ±0.5)",
+                # **[2026-08-21] 이 줄의 괄호가 틀렸었다.** "WE ±0.5" 라고 적었는데 WE 의 추출·다운샘플은
+                # ±1.0 소스 텍셀이다(0x1401836a0 · 0x14018374a–0x14018375c, structure.tapRadiusBySlot).
+                # 즉 교체 전 Waple 의 ±1.0 이 **맞았고** 2026-08-02 교체가 그걸 ±0.5 로 망가뜨렸다.
+                # `b19db5b` 가 ±1.0 으로 되돌렸다. 오진의 뿌리는 renderVar0Meaning 의 과잉 일반화다.
+                "W1": "추출 4탭이 ±1.0 소스 텍셀 — 당시 이것을 이탈로 적었으나 **오진이었다**"
+                      "(WE 도 ±1.0 이다). 2026-08-02 교체가 ±0.5 로 바꿔 실제 이탈을 만들었고 "
+                      "`b19db5b` 가 ±1.0 으로 되돌렸다.",
                 "W2": "레벨마다 blur13(13탭 가우시안) h/v 패스 — WE 엔 그런 패스가 없다",
                 "N1": "업샘플이 단일 탭(WE 는 4탭)",
                 "N2": "합성이 블룸을 단일 탭으로 읽음(WE 는 ±텍셀 4탭 평균)",
@@ -212,6 +285,17 @@ def build():
                 "levelZero": "피라미드가 1/4 에서 시작(WE 는 매 단계 절반이라 1/2)",
             },
             "postSwapMeasured": wp,
+            "postSwapCorrection": {
+                "commit": "b19db5b (2026-08-21)",
+                "what": "① 공용 헬퍼의 `0.5 / 텍스처크기` 되짚기를 없애고 탭 오프셋을 호스트가 싣게 했다"
+                        "(`weDownsample4` → `weBox4(src, uv, t)`). ② 가장 깊은 두 업샘플 단의 BICUBIC 을 이식했다.",
+                "why": "되짚기가 성립하는 곳은 BICUBIC 이 걸린 업샘플뿐인데 헬퍼가 세 계열 공용이라, "
+                       "추출·다운샘플까지 업샘플 규칙을 받아 반경이 정확히 절반이 됐다.",
+                "canonWasStale": "이 커밋은 구현만 고치고 정본·생성기·문서를 그대로 뒀다. 그래서 "
+                                 "생성기의 `weDownsample4` 탐침이 전부 헛돌아 재생성이 "
+                                 "`helperTapCount 4 → 0` 축소로 막히는 상태였다(정본이 고아). "
+                                 "2026-08-21 이 갱신이 그 자리를 메운다.",
+            },
             "orderingConstraint": "W1·W2 는 결과를 넓히고 N1·N2 는 좁힌다. 일부만 고치면 더 나빠지므로 "
                                   "한 번에 갈아야 했다 — 실제로 그렇게 했다.",
             "abResult": {
@@ -248,12 +332,39 @@ def build():
                       {
                           "resolved": "업샘플 머티리얼의 `scatter` 파라미터에는 저작 `bloomhdrscatter` 가 **변형 없이** 실린다. 셰이더의 `0.25` 는 4탭 평균이지 가중이 아니다 — 둘은 애초에 경쟁 후보가 아니었다.",
                           "shaderText": "assets/shaders/hdr_downsample.frag:61 `uniform float g_BloomScatter; // {\"material\":\"scatter\",\"default\":1}` · 본문 `albedo *= 0.25 * g_BloomScatter` (albedo 는 4탭 **합**)",
-                          "engineFeed": "0x14017f807 `movss xmm6,[rbx+0x3d0]`(저작값 적재) → 중간 변형 없이 `setMaterialParam(mat,\"scatter\",xmm6,1)` 2회: 0x14017f967 · 0x14017f988. 대상 [rsi+0x31a0] · [rsi+0x31a8] = hdr_upsample 계열 2개. 0x14017f854 `movaps xmm0,xmm6` 는 정규화의 powf 입력이라 xmm6 를 바꾸지 않는다.",
+                          "engineFeed": "0x14017f807 `movss xmm6,[rbx+0x3d0]`(저작값 적재) → 중간 변형 없이 `setMaterialParam(mat,\"scatter\",xmm6,1)` 2회. **[2026-08-21 재측정으로 VA 정정]** 첫 번째는 `mov rcx,[rsi+0x31a0]`(0x14017f944) → `call 0x14017e920`(0x14017f967), 두 번째는 `mov rcx,[rsi+0x31a8]`(0x14017f96c) → `jmp 0x14017f98f` 로 **공용 꼬리 `call 0x14017fa40`** 에 합류한다 — 0x14017f988 은 \"scatter\" 문자열의 `lea rdx` 이지 call 이 아니다(종전 서술이 그 자리를 call 로 적었다). 대상 [rsi+0x31a0] · [rsi+0x31a8] = hdr_upsample · hdr_upsample_cubic. 0x14017f854 `movaps xmm0,xmm6` 는 정규화의 powf 입력이고 xmm6 는 Win64 비휘발성이라 두 call 을 건너 살아남는다.",
                           "whyNoDivergence": "추출 강도를 `bloomhdrstrength / (bloomhdrscatter^(max(N,2)-2) + 1)` 로 나누는 정규화(0x14017f85e powf → 0x14017f86b +1.0 → 0x14017f88f divss)와 **한 쌍**이라 scatter^k 누적이 상쇄된다. 종전 백화(3589454154 meanLuma 0.0913 → 0.4198)는 가중만 옮기고 이 나눗셈을 안 옮겨서 난 것이지 가중이 틀려서가 아니었다.",
                           "crossCheck": "spec/engine/uniform-feed.json — engine.uniformFeed.hdrBloom.materialParams(확정)",
                           "supersedes": "engine.bloom.hdr.upsampleWeightUnknown",
                       },
                       "확정", [shader_ev, mat_ev, code_ev]),
+
+        # [2026-08-21 신설] upsampleWeight 를 검증하다 N(레벨 수) 산식에서 이탈을 하나 더 찾았다.
+        # 정규화 분모가 `scatter^(max(N,2)-2)+1` 이라 N 이 틀리면 **강도가 통째로 틀린다** —
+        # 탭 모양보다 눈에 띄는 축이다. 다만 실제 화면 크기에서는 양쪽 다 캡(8)에 걸려 같은 값이 나온다.
+        specfmt.entry("engine.bloom.hdr.levelCountRule",
+                      {
+                          "we": "생성 가능 단수 = **min(W,H)** 를 2로 계속 나눠 0 이 되기 전까지의 횟수, "
+                                "루프 상한 8. `cmovg r14d,r12d`(0x14017f363)로 min 을 잡고 "
+                                "`sar eax,1`(0x14017f376) → `jle`(0x14017f37d) 로 끊으며 "
+                                "`inc [rsi+0x310c]`(0x14017f383) 로 센다. 루프는 `cmp ebx,8`(0x14017f541).",
+                          "effectiveN": "N = max(1, min(bloomhdriterations, 생성단수)) — 0x14017f7f7–0x14017f84c, "
+                                        "결과는 obj+0x3108. 이 N 이 그대로 정규화 지수 `max(N,2)-2` 로 간다.",
+                          "waple": "HDRBloomPyramidPass.levelCount 는 `w > 1 || h > 1` 로 도는 **max 기준**이라 "
+                                   "ceil(log2(max(W,H))) 를 센다 — WE 의 floor(log2(min(W,H))) 와 다르다.",
+                          "reachability": "min(W,H) ≥ 256 이면 WE 쪽 단수가 이미 8 이라 캡에 걸려 양쪽이 같다. "
+                                          "갈리는 것은 **짧은 변이 256 미만인 소스**뿐이다 "
+                                          "(예: 64×32 → WE 5, Waple 6; 커밋된 기대치는 "
+                                          "Tests/WapleRenderTests/HDRBloomTests.swift:370 이 6 이다).",
+                          "status": "**미반영** — 고치려면 WapleRenderTests 의 기대치를 같이 바꿔야 하는데 "
+                                    "그 파일이 이 레인 소유가 아니다. 화면 영향은 짧은 변 <256 인 소스로 한정된다.",
+                          "crossRef": "engine.uniformFeed.hdrBloom.materialParams",
+                      },
+                      "확정", [chain_ev,
+                               specfmt.ev("binary",
+                                          "wallpaper64.exe Composite::allocateTargets 0x14017f1b0–0x14017fa6f",
+                                          "레벨 생성 루프와 N 산출"),
+                               code_ev]),
     ]
 
 
