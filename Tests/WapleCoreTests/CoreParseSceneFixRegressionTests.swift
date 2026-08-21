@@ -241,7 +241,7 @@ final class CoreParseSceneFixRegressionTests: XCTestCase {
         XCTAssertEqual(pass.userTextureNames[2], "$mediaThumbnail")  // {name,type} 는 name 정규화
     }
 
-    // MARK: E1 — 2D text·particle parent 체인 합성 + 각도 라디안 정정 + disablepropagation 스킵
+    // MARK: E1 — 2D text·particle parent 체인 합성 + 각도 라디안 정정 + disablepropagation 무관성
 
     /// 텍스트 오브젝트는 종전 SceneTextLayer 에 parent 필드 자체가 없어 부모 붙은 텍스트가 저작
     /// 로컬 좌표(대개 화면 밖) 그대로 렌더됐다. 레이어/라이트와 동일 규약으로 합성돼야 한다.
@@ -364,6 +364,70 @@ final class CoreParseSceneFixRegressionTests: XCTestCase {
         XCTAssertEqual(p.origin.y, 205, accuracy: 0.001)  // 200 + 5
     }
 
+    /// `disablepropagation` 정정의 **텍스트·파티클 쪽 짝**. 종전엔 이 두 경로에도 같은 가드가 있었고
+    /// (`composeTextParentTransforms`/`composeParticleParentTransforms` 의 `!disablePropagation`),
+    /// 코퍼스 관측상 text/particle 오브젝트의 이 키는 전건 `false` 라 그 가드는 **원래도 no-op** 이었다.
+    /// 그래도 로직으로는 남아 있었으므로, 제거가 실제로 반영됐는지 여기서 잠근다.
+    /// 근거 VA 는 `testDisablePropagationDoesNotSkipParentTransformComposition` 주석 참조
+    /// (합성부 `sub_1401850a0` 은 `+0x120` 을 안 읽고, bit14 유일 소비처는 커서 디스패처 `0x14018a877`).
+    func testDisablePropagationDoesNotSkipTextOrParticleComposition() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[
+           {"id":1,"name":"g","origin":"400 200 0","scale":"2 2 1"},
+           {"id":2,"name":"clock","text":"00:00","parent":1,"origin":"10 10 0",
+            "disablepropagation":true},
+           {"id":3,"name":"snow","particle":"particles/snow.json","parent":1,"origin":"5 5 0",
+            "disablepropagation":true}
+         ]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("particles/snow.json", d(#"{"renderer":[{"name":"sprite"}],"maxcount":1}"#)),
+        ])
+        let doc = try SceneDocument.parse(package: pkg)
+        let t = try XCTUnwrap(doc.texts.first)
+        XCTAssertEqual(t.origin.x, 420, accuracy: 0.001)   // 400 + 2*10
+        XCTAssertEqual(t.origin.y, 220, accuracy: 0.001)
+        XCTAssertTrue(t.disablePropagation, "파스·보존은 유지 — 커서 경로 구현에서 쓸 자리다")
+        let sp = try XCTUnwrap(doc.particles.first)
+        XCTAssertEqual(sp.origin.x, 410, accuracy: 0.001)  // 400 + 2*5
+        XCTAssertEqual(sp.origin.y, 210, accuracy: 0.001)
+        XCTAssertTrue(sp.disablePropagation)
+    }
+
+    /// 조상 체인 케이스: `disablepropagation` 인 **중간 마디**의 자손도 조상 끝까지 합성돼야 한다.
+    /// 종전 `noPropagate` 는 `world()`/`worldParentTransform` 재귀를 그 마디에서 끊어, 손자가 조부의
+    /// 트랜스폼을 통째로 잃었다. 실물 `sub_1401850a0` 은 `[obj+0x180] != 0` 이면 무조건
+    /// `sub_1401850a0([obj+0x180])` 로 재귀한다(`0x1401852b0`) — 끊는 분기가 없다.
+    func testDisablePropagationMidChainStillPropagatesToGrandchild() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1000,"height":1000}},
+         "objects":[
+           {"id":1,"name":"root","origin":"100 0 0","scale":"2 2 1"},
+           {"id":2,"name":"mid","image":"models/x.json","parent":1,"origin":"10 0 0",
+            "scale":"3 3 1","disablepropagation":true},
+           {"id":3,"name":"leaf","image":"models/x.json","parent":2,"origin":"1 0 0"}
+         ]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("models/x.json", d(#"{"material":"materials/x.json"}"#)),
+            ("materials/x.json", d(#"{"passes":[{"textures":["x"]}]}"#)),
+            ("materials/x.tex", d("not-a-real-tex")),
+        ])
+        let doc = try SceneDocument.parse(package: pkg)
+        // mid  월드 origin = 100 + 2*10 = 120, scale = 2*3 = 6
+        let mid = try XCTUnwrap(doc.layers.first { $0.name == "mid" })
+        XCTAssertEqual(mid.origin.x, 120, accuracy: 0.001)
+        XCTAssertEqual(mid.scale.x, 6, accuracy: 0.001)
+        // leaf 월드 origin = mid.월드origin + mid.월드scale * 1 = 120 + 6 = 126, scale = 6*1 = 6
+        let leaf = try XCTUnwrap(doc.layers.first { $0.name == "leaf" })
+        XCTAssertEqual(leaf.origin.x, 126, accuracy: 0.001,
+                       "조상 체인은 disablepropagation 마디에서 끊기지 않는다")
+        XCTAssertEqual(leaf.scale.x, 6, accuracy: 0.001)
+    }
+
     /// W3-⑤ 회귀 가드: 파티클은 텍스트를 부모 후보로 인식하지 않는다(의도적 스코프 제외 — 코퍼스 근거
     /// 없음). buildParentTransformMap 에 texts 를 넘기면 composeTextParentTransforms 이후 호출 순서상
     /// 이미 월드로 확정된 텍스트에 parentOf 가 재등록돼 조상 체인이 이중 합성될 위험이 있어(리뷰 확인),
@@ -414,9 +478,22 @@ final class CoreParseSceneFixRegressionTests: XCTestCase {
         XCTAssertEqual(layer.origin.y, 510, accuracy: 0.01)
     }
 
-    /// disablepropagation:true 인 레이어는 부모 트랜스폼 상속을 차단 — 저작 로컬 좌표를 그대로 유지해야
-    /// 한다(코퍼스 실측 34건, 전부 parent 보유). 종전엔 플래그를 검사하지 않고 무조건 합성했다.
-    func testDisablePropagationSkipsParentTransformComposition() throws {
+    /// **정정(2026-08-21, `docs/re/object-propagation.md`)**: `disablepropagation` 은 부모 트랜스폼
+    /// 상속과 **무관**하다 — 부모가 있으면 무조건 합성해야 한다. 이 테스트는 종전에 그 반대
+    /// (`origin == (10,10)`, `scale == (1,1)`)를 기대했고, 그 기대값이 틀렸다.
+    ///
+    /// **옛 값이 왜 틀렸나(근거 VA)**
+    ///   · 부모→자식 트랜스폼 합성 `sub_1401850a0`(vtbl `+0x80`, 범위 `0x1401850a0`–`0x1401852f7`)의
+    ///     게이트는 `[obj+0x180](parent) != 0` 하나뿐이고, 함수 전문에 플래그워드 `+0x120` 참조가 **0건**이다.
+    ///     이 슬롯을 갖는 vtable 10개가 전부 같은 값이라 파생 타입 오버라이드도 없다.
+    ///   · `disablepropagation` 은 기저 디스크립터(등록 `0x1401e132b`)가 `[obj+0x120]` **bit14** 에 심고
+    ///     (타입 6 = bool, ctor 기본 false — `mov word [r14+0x120], 0x2001` @`0x1401ddc72`),
+    ///     그 비트를 **읽는 코드는 이미지 전체에서 정확히 1곳** — 커서 이벤트 디스패처 `sub_140189e10`
+    ///     안의 `0x14018a877`(`bt ax, 0xe` → 커서 히트테스트 루프 break)다.
+    ///   · 에디터가 이 JSON 키를 로케일 키 `ui_editor_properties_disable_click_propagation` 에 묶고,
+    ///     `locale/ui_en-us.json` 의 그 값이 **"Disable click propagation"** 이다.
+    /// 즉 이 플래그는 **커서 클릭 전파 차단**이고, "부모 트랜스폼 상속 차단" 플래그는 WE 에 존재하지 않는다.
+    func testDisablePropagationDoesNotSkipParentTransformComposition() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":1000,"height":1000}},
          "objects":[
@@ -433,8 +510,11 @@ final class CoreParseSceneFixRegressionTests: XCTestCase {
         ])
         let doc = try SceneDocument.parse(package: pkg)
         let layer = try XCTUnwrap(doc.layers.first { $0.name == "child" })
-        XCTAssertEqual(layer.origin, Vec2(x: 10, y: 10))  // 부모 미합성 — 저작 로컬 그대로
-        XCTAssertEqual(layer.scale, Vec2(x: 1, y: 1))
+        // 부모 origin (500,500) · scale (2,2) · angle 0 → 자식 로컬 (10,10)·(1,1) 이 월드 (520,520)·(2,2).
+        // 플래그는 파스에는 살아 있지만(아래) 합성에는 관여하지 않는다.
+        XCTAssertEqual(layer.origin, Vec2(x: 520, y: 520), "부모가 있으면 플래그와 무관하게 합성한다")
+        XCTAssertEqual(layer.scale, Vec2(x: 2, y: 2))
+        XCTAssertTrue(layer.disablePropagation, "파스·보존은 유지 — 커서 경로 구현에서 쓸 자리다")
     }
 
     /// X-③: 이펙트 패스 usertextures 의 비-시스템(유저) 키는 파스 시점에 userProps 값으로 해석돼
@@ -466,7 +546,7 @@ final class CoreParseSceneFixRegressionTests: XCTestCase {
 
     // MARK: X-⑦ — 이펙트 패스 constantshadervalues {animation} 키프레임 파스
 
-    /// X-⑦: constantshadervalues 의 {"animation":{...}} 키프레임 바인딩(55씬/287건)이 파스 단계에서
+    /// X-⑦: constantshadervalues 의 {"animation":{...}} 키프레임 바인딩이 파스 단계에서
     /// 통째로 소실되지 않고 SceneEffectPass.constantAnimations 에 보존돼야 한다. 정적 value 도 병존
     /// 캡처(애니 없을 때 기본값/기준값).
     func testParsesEffectPassConstantAnimation() throws {

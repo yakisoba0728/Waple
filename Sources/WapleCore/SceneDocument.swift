@@ -8,9 +8,16 @@ public struct SceneEffectPass: Equatable {
     /// 상수 스크립트의 저장 `scriptproperties`(사용자 오버라이드) — 키 → JSON 문자열. 레이어/텍스트
     /// 스크립트와 동일 규약: 엔진 로드 시 주입해 소스 `createScriptProperties().addX({value})` 기본값 대체.
     public var constantScriptProps: [String: String] = [:]
-    /// X-⑦: 상수에 걸린 키프레임 애니메이션({animation:{...}} 바인딩, 55씬/287건) — 렌더러가
+    /// X-⑦: 상수에 걸린 키프레임 애니메이션({animation:{...}} 바인딩) — 렌더러가
     /// per-frame PropertyAnimation.value(component:atTime:base:) 로 평가(레이어 origin/scale/alpha
     /// 애니와 동일 평가기 재사용). 정적 constants[key] 는 애니 없을 때의 기본값 겸 relative 애니의 base.
+    ///
+    /// **도수(범위 라벨 필수)**: 종전 주석의 "55씬/287건" 은 **워크샵 코퍼스** 수치로 보이며 이 저장소에서
+    /// 재현되지 않는다 — 원 근거가 남아 있지 않아 출처는 **[미해결]**. 재측정 가능한 두 코퍼스의 실측은
+    /// 훨씬 작다: 동봉 `WEAssets`(json **1,698**) + 설치본 `wallpaper_engine`(json **2,143**) 전수에서
+    /// `constantshadervalues` 밑 `{animation}` 은 각각 **1건 / 1파일**
+    /// (`effects/blendgradient/preview/scene.json` 의 `multiply`)뿐이고, `"animation"` 딕셔너리 자체가
+    /// 각 트리 **7건 / 6파일**이다(2026-08-21 전수 census, JSONC 관용 파스 포함 · 파스 실패 동봉 0 / 설치본 1).
     public var constantAnimations: [String: PropertyAnimation] = [:]
     public var textureNames: [String?] = []
     /// F697: 패스 `usertextures` 슬롯 — 머티리얼 경로(material/instance)와 동일하게 name 만 정규화
@@ -201,7 +208,9 @@ public struct SceneLayer: Equatable {
     /// 오브젝트). 파스·보존 전용: depLater(타깃이 후순위 — 실물 3113287126 idx2→idx4 등)의
     /// 순서 보장은 렌더러 그리기 순서 책임(보고 경계).
     public var dependencies: [Int] = []
-    /// 오브젝트-레벨 전파/렌더 플래그 파스·보존(소비는 렌더러 책임).
+    /// 오브젝트-레벨 전파/렌더 플래그 파스·보존. `disablePropagation`(bit14 = 커서 **클릭 전파 차단**,
+    /// 트랜스폼 상속과 무관) / `isSolid`(bit13 = 커서 히트테스트 참가, ctor 기본 **true**)의 근거는
+    /// `SceneCameraObject.disablePropagation` 선언 주석 참조.
     public var disablePropagation: Bool = false
     /// B2-effects④: WE 컴포지션(_rt_) 레이어 "배경 복사". 기본 true — WE 레퍼런스 shim 자체 기본값이
     /// `copybackground | true`(references/.../lanes/L1-project-scene-model.md:230, shim:87, "배경 복사(뒤
@@ -238,7 +247,7 @@ public struct SceneLayer: Equatable {
     /// 맞춰 vec2 로 둔다(같은 이름의 키가 두 타입에서 다른 모양이면 그게 더 나쁘다).
     public var spacing: Vec2? = nil
     public var lockTransforms: Bool = false
-    public var isSolid: Bool = false
+    public var isSolid: Bool = true
     public var ledSource: Bool = false
     /// `config:{passthrough:true}` 등 compose 레이어 설정(이미지 오브젝트용).
     public var configPassthrough: Bool = false
@@ -314,18 +323,32 @@ public struct SceneParticle: Equatable {
     public var visibleScript: String? = nil
     /// visible 스크립트의 저장 scriptproperties(사용자 오버라이드) — JSON 문자열.
     public var visibleScriptProps: String? = nil
-    /// 오브젝트-레벨 전파/렌더 플래그 파스·보존.
+    /// 오브젝트-레벨 전파/렌더 플래그 파스·보존. `disablePropagation`(bit14 = 커서 **클릭 전파 차단**,
+    /// 트랜스폼 상속과 무관) / `isSolid`(bit13 = 커서 히트테스트 참가, ctor 기본 **true**)의 근거는
+    /// `SceneCameraObject.disablePropagation` 선언 주석 참조.
     public var disablePropagation: Bool = false
     public var copyBackground: Bool = true
     /// 기본 true — 위 SceneLayer.clampUVs 주석 참조(렌더러블 ctor 0x8040 의 bit15).
     public var clampUVs: Bool = true
     public var noInterpolation: Bool = false
     public var lockTransforms: Bool = false
-    public var isSolid: Bool = false
+    public var isSolid: Bool = true
     /// M(⑤): 오브젝트 `attachment`(부모 퍼펫 모델 이름 부착점) — SceneLayer.attachment(62행)와 동일
     /// 원시 문자열 규약. **파스만**: 3D 렌더 소비는 없음(SceneRenderer3D attachment grep 0건, wf8 id 66) —
     /// 2D PuppetAttach 배선(SceneRendererResources.swift:329-341)과는 별개 경로. nil=일반 계층.
     public var attachment: String? = nil
+    /// scene object `instanceoverride` 의 하위 키에 걸린 키프레임 애니메이션(하위 키 → PropertyAnimation).
+    /// 이펙트 상수 경로(`SceneEffectPass.constantAnimations`)와 동일 규약 — 정적 `value` 는
+    /// `def`(= `ParticleInstanceOverride` 적용 결과)에 이미 반영돼 있고, 이 사전은 그 위에 얹을 트랙이다.
+    ///
+    /// **왜 필요한가**: 동봉 `WEAssets`(json 1,698) 전수에서 `"animation"` 딕셔너리 **7건 중 5건**이
+    /// `instanceoverride` 밑이다(`controlpointangle1` 4 · `controlpoint1` 1). 설치본
+    /// `wallpaper_engine`(json 2,143)도 같은 6파일로 동수다. 종전엔 `vec3()`/`float()` 의 정적 `value`
+    /// 언랩만 있어 이 트랙들이 파스에서 통째로 사라졌다.
+    ///
+    /// **소비 0건(현재)** — 파스·보존 전용이라 그림은 바뀌지 않는다. 소비하려면 렌더 계층이
+    /// per-frame 으로 `def.controlPoints[i]` 를 이 트랙으로 갱신해야 한다(넘길 것 목록 참조).
+    public var instanceOverrideAnimations: [String: PropertyAnimation] = [:]
 }
 
 /// 텍스트 오브젝트(시계/날짜/곡정보 등). text 는 평문 또는 JS 프로퍼티 스크립트(script)로 계산.
@@ -397,7 +420,9 @@ public struct SceneTextLayer: Equatable {
     /// 파스·보존 전용 — 텍스처화된 텍스트에 이펙트를 적용하는 렌더 소비(encodeText 경로)는
     /// 별도 그룹 경계(미적용 시 이펙트가 조용히 소실되는 종전과 동일 동작, 값만 보존).
     public var effects: [SceneEffect] = []
-    /// 오브젝트-레벨 전파/렌더 플래그 파스·보존.
+    /// 오브젝트-레벨 전파/렌더 플래그 파스·보존. `disablePropagation`(bit14 = 커서 **클릭 전파 차단**,
+    /// 트랜스폼 상속과 무관) / `isSolid`(bit13 = 커서 히트테스트 참가, ctor 기본 **true**)의 근거는
+    /// `SceneCameraObject.disablePropagation` 선언 주석 참조.
     public var disablePropagation: Bool = false
     public var copyBackground: Bool = true
     /// 기본 true — 위 SceneLayer.clampUVs 주석 참조(렌더러블 ctor 0x8040 의 bit15).
@@ -427,7 +452,7 @@ public struct SceneTextLayer: Equatable {
     /// (맞추려면 `strtod` 의 **접두 파스**까지 흉내내야 해서 `padding` 쪽 회귀 위험이 생긴다).
     public var spacing: Vec2? = nil
     public var lockTransforms: Bool = false
-    public var isSolid: Bool = false
+    public var isSolid: Bool = true
     /// 텍스트 오브젝트 `depthtest`(scene-json-schema.md:123 텍스트 키 목록 — SceneLayer.depthTest 의
     /// 머티리얼 패스 키(SceneDocument.swift:1107)와는 별개 오브젝트 레벨). 실측 코퍼스는 문자열
     /// "enabled"(1394건, 불리언 형태도 관용 파스). 기본 true(항등). 파스·보존 전용 — 2D 텍스트 경로는
@@ -555,9 +580,22 @@ public struct SceneCameraObject: Equatable {
     public var path: String? = nil
     public var queueMode: String = "random"
     /// 오브젝트-레벨 플래그 파스·보존.
+    ///
+    /// `disablePropagation` = scene.json `disablepropagation`(기저 디스크립터 등록 `0x1401e132b`,
+    /// `[obj+0x120]` **bit14**, 타입 6 = bool, ctor 기본 **false** — `mov word [r14+0x120], 0x2001`
+    /// @`0x1401ddc72`). 뜻은 **커서 클릭 전파 차단**이다(에디터 로케일 키
+    /// `ui_editor_properties_disable_click_propagation` = "Disable click propagation") —
+    /// 트랜스폼 상속과 **무관**하다. 소비처는 이미지 전체에서 커서 이벤트 디스패처
+    /// `0x14018a877` 1곳뿐이고 Waple 의 포인터 경로엔 아직 대응물이 없어 **현재는 파스·보존 전용**이다
+    /// (`docs/re/object-propagation.md` §3·§4·§10).
+    ///
+    /// `isSolid` = scene.json `solid`(등록 `0x1401e1283`, 같은 워드 **bit13**, ctor 기본 **true** —
+    /// 같은 `0x2001` 리터럴). 뜻은 **커서 히트테스트 참가 게이트**다(로케일 키
+    /// `ui_editor_properties_enable_click_events` = "Enable click events", 게이트 `0x14018a02d`).
+    /// 태그5 게이트가 실패하면 ctor 기본값이 남으므로 파스도 `weBool(obj["solid"], true)` 다.
     public var disablePropagation: Bool = false
     public var lockTransforms: Bool = false
-    public var isSolid: Bool = false
+    public var isSolid: Bool = true
     public init() {}
 }
 
@@ -1769,6 +1807,22 @@ extension SceneDocument {
         var anims: [String: PropertyAnimation] = [:]
         var propScripts: [String: String] = [:]
         var propScriptProps: [String: String] = [:]
+        // **왜 5키 고정인가(2026-08-21 재확인 — 넓히지 않기로 한 근거).** 실물 WE 의 바인딩 파서는
+        // 프로퍼티 키를 가리지 않는다(어떤 키에나 `{script}`/`{animation}`/`{user}` 가 붙을 수 있다).
+        // 그래도 이 목록은 그대로 둔다:
+        //   ① **재현 가능한 코퍼스에서 넓혀도 움직이는 게 없다.** 동봉 `WEAssets`(json 1,698) +
+        //      설치본 `wallpaper_engine`(json 2,143) 전수에서 `objects[]` 직속 키가 갖는 바인딩은
+        //      `{script}`: `text` 3 · `angles` 1 · `origin` 1 · `visible` 1,
+        //      `{animation}`: `origin` 1, `{user}`: `visible` 8 · `color` 1 뿐이다.
+        //      `text`/`visible` 은 각자 전용 경로가 이미 캡처하고(각각 parseText 의 `obj["text"]` 분기,
+        //      위 visibleScript), 나머지는 전부 이 5키 안이다 → **증분 0건**.
+        //   ② **넓히면 소비 없는 연속 렌더가 켜진다.** 소비처는 키를 가린다 —
+        //      `SceneRendererResources.swift` 의 스크립트 로더와 `SceneRenderer3D.attachScripts` 는
+        //      `visible/color/alpha/origin/scale/angles` 만 읽는다. 반면 `layer.animations` 는
+        //      **키를 안 가리고** `!isEmpty` 로 `hasAnimations` 를 세운다
+        //      (`SceneRendererResources.swift:458`) — 소비도 안 되는 키의 애니를 담으면
+        //      아무 그림 변화 없이 상시 리드로만 켜진다. 워크샵 씬에서만 발생할 수 있는 순수 손해다.
+        // 넓히려면 소비처(렌더 계층, 다른 소유)의 키 목록을 먼저 넓혀야 한다 — 보고서의 "넘길 것" 참조.
         for key in ["origin", "scale", "alpha", "angles", "color"] {
             if let bind = obj[key] as? [String: Any], let a = PropertyAnimation.parse(bind) {
                 anims[key] = a
@@ -1936,7 +1990,7 @@ extension SceneDocument {
         layer.noInterpolation = weBool(obj["nointerpolation"])
         layer.spacing = uniformVec2(obj["spacing"])   // vec2 — 선언부 주석(유령 키, 소비처 0)
         layer.lockTransforms = weBool(obj["locktransforms"])   // 유령 키(엔진 문자열 0바이트) — weBool 주석
-        layer.isSolid = weBool(obj["solid"])
+        layer.isSolid = weBool(obj["solid"], true)
         layer.ledSource = weBool(obj["ledsource"])
         if let config = obj["config"] as? [String: Any] {
             layer.configPassthrough = weBool(config["passthrough"])
@@ -2158,6 +2212,7 @@ extension SceneDocument {
         layer.initialVisible = initialVisible
         // 저작 트랜스폼을 살렸으니 그 바인딩도 함께 산다 — 버려 두면 정적 값만 맞고 애니는 멈춘다
         // (parseLayer 의 동일 루프. 이펙트 캐리어는 텍스처가 없으니 material 계열은 해당 없음).
+        // 5키 고정 목록의 근거(코퍼스 실측 + 소비처 키 목록)는 parseLayer 의 같은 루프 주석 참조.
         for key in ["origin", "scale", "alpha", "angles", "color"] {
             guard let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String else { continue }
             layer.propertyScripts[key] = sc
@@ -2198,7 +2253,7 @@ extension SceneDocument {
         cam.queueMode = (obj["queuemode"] as? String) ?? "random"
         cam.disablePropagation = weBool(obj["disablepropagation"])
         cam.lockTransforms = weBool(obj["locktransforms"])
-        cam.isSolid = weBool(obj["solid"])
+        cam.isSolid = weBool(obj["solid"], true)
         return cam
     }
 
@@ -2259,6 +2314,7 @@ extension SceneDocument {
         t.initialVisible = initialVisible
         var propScripts: [String: String] = [:]
         var propScriptProps: [String: String] = [:]
+        // 5키 고정 목록의 근거(코퍼스 실측 + 소비처 키 목록)는 parseLayer 의 같은 루프 주석 참조.
         for key in ["origin", "scale", "alpha", "angles", "color"] {
             if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String {
                 propScripts[key] = sc
@@ -2278,7 +2334,7 @@ extension SceneDocument {
         t.noInterpolation = weBool(obj["nointerpolation"])
         t.spacing = uniformVec2(obj["spacing"])   // 디스크립터 타입 1 = vec2 `+0x4f8` — 선언부 주석
         t.lockTransforms = weBool(obj["locktransforms"])   // 유령 키 — weBool 주석
-        t.isSolid = weBool(obj["solid"])
+        t.isSolid = weBool(obj["solid"], true)
         // 텍스트 오브젝트 depthtest(scene-json-schema.md:123) — 실측 문자열 "enabled"(1394건)이 정본,
         // 불리언 형태도 관용. 기본 true(항등). 파스·보존 전용(SceneTextLayer.depthTest 주석 참조).
         if let s = obj["depthtest"] as? String { t.depthTest = s != "disabled" }
@@ -2471,23 +2527,33 @@ extension SceneDocument {
             guard let d = package.data(for: path) ?? assets?(path) else { return false }
             return PuppetModel.parse(d) != nil || Model3D.parse(d) != nil
         }
-        // E1: disablePropagation=true 인 레이어는 부모 트랜스폼 상속을 차단 — composeTargets 에서
-        // 제외해 저작 로컬 좌표를 그대로 유지한다(코퍼스 실측 34건, 전부 parent 보유라 종전엔
-        // 무조건 합성 대상이었다). 이 레이어가 다른 자식의 부모로 쓰일 때는 그 자식이 이 레이어의
-        // "저작 로컬 값 = 유효 위치"를 상속받는다(noPropagate 가드 — world() 참조).
+        // **E1 정정(2026-08-21, `docs/re/object-propagation.md`)**: `disablepropagation` 은 **커서 클릭
+        // 전파 차단**이지 트랜스폼 상속과 무관하다. 종전 이 자리에 있던 `!disablePropagation` 가드는
+        // 실물에 대응물이 없다 —
+        //   · 부모→자식 트랜스폼 합성 `sub_1401850a0`(vtbl `+0x80`, 범위 `0x1401850a0`–`0x1401852f7`)의
+        //     게이트는 `[obj+0x180](parent) != 0` **하나뿐**이고, 함수 전문에 플래그워드 `+0x120` 참조가
+        //     **0건**이다(직접 재확인 — `bt`/`test …,0x4000`/`…,0x2000` 도 0건). 이 슬롯을 갖는 vtable
+        //     10개가 전부 같은 값이라 파생 타입 오버라이드도 없다.
+        //   · bit14(`0x4000`)를 읽는 코드는 이미지 전체에서 **정확히 1곳**, 커서 이벤트 디스패처
+        //     `sub_140189e10` 안의 `0x14018a877`(`bt ax, 0xe` → 히트테스트 루프 break)다.
+        //     (독립 재확인: `.text` 4,344,076바이트 바이트스캔으로 imm=0x0e 비트연산 + imm32=0x4000
+        //      + `mov r32,0x4000` 를 전수 수집해 `[X+0x120]` 근방만 남긴 결과 1건. 같은 스캐너를
+        //      bit13 으로 돌리면 알려진 `solid` 게이트 `0x14018a00b`/`0x14018a02d` 를 잡으므로 위음성이 아니다.)
+        //   · 에디터 라벨이 답을 적어 놨다 — `wallpaperui.exe` 가 이 JSON 키를 로케일 키
+        //     `ui_editor_properties_disable_click_propagation` 에 묶고, `locale/ui_en-us.json:2540` 의
+        //     값이 **"Disable click propagation"** 이다(형제 `solid` 는 "Enable click events").
+        // 따라서 부모가 있으면 **무조건** 합성한다. 파스·모델 필드는 남긴다(커서 경로 구현 시 소비 예정).
         let composeTargets = camera3D != nil ? [] : layers.indices.filter {
-            guard layers[$0].parent != nil, !layers[$0].disablePropagation else { return false }
+            guard layers[$0].parent != nil else { return false }
             if let pp = layers[$0].puppet { return puppetLoads(pp) }
             return true
         }
         guard !composeTargets.isEmpty else { return }
         var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
         var parentOf: [Int: Int] = [:]
-        var noPropagate: Set<Int> = []
         for l in layers where l.id != 0 {
             localT[l.id] = (l.origin, l.scale, l.angleZ)
             if let p = l.parent { parentOf[l.id] = p }
-            if l.disablePropagation { noPropagate.insert(l.id) }
         }
         for n in nodes3D {
             // F437: 레이어/노드 id 중복 시 레이어 우선 — 종전엔 노드가 레이어의 localT 항목을 덮어써
@@ -2519,7 +2585,8 @@ extension SceneDocument {
         }
         func world(_ id: Int, _ depth: Int) -> (origin: Vec2, scale: Vec2, angle: Float)? {
             guard depth < 32, let t = localT[id] else { return nil }
-            guard !noPropagate.contains(id) else { return t }  // E1: 전파 차단 — 조상 재귀 없이 로컬 그대로
+            // E1 정정: 종전 여기 있던 `noPropagate` 단락(조상 재귀 없이 로컬 반환)은 위 composeTargets
+            // 주석의 근거로 제거했다 — 실물 `sub_1401850a0` 은 조상 체인을 **무조건** 재귀 합성한다.
             guard let pid = parentOf[id], let pw = world(pid, depth + 1) else { return t }
             return composed(pw, t)
         }
@@ -2596,15 +2663,17 @@ extension SceneDocument {
     /// (텍스트/파티클)만 이 헬퍼를 공유한다. texts 는 이 함수 호출부(composeTextParentTransforms 등)가
     /// 스스로를 뮤테이트하기 **전** 스냅샷(값 타입 인자라 호출 시점 로컬값 고정)이라 이중 합성이 아니다 —
     /// 텍스트→텍스트 부모 체인(3516106265: id 790/798/804 parent=783)도 재귀로 정상 합성된다.
+    ///
+    /// E1 정정(2026-08-21): 종전 반환 튜플의 세 번째 성분 `noPropagate`(= `disablePropagation` 인 id 집합)는
+    /// 제거했다 — 근거는 `composeParentTransforms` 의 `composeTargets` 주석(실물 합성부는 플래그워드를
+    /// 읽지 않는다).
     private static func buildParentTransformMap(layers: [SceneLayer], nodes3D: [SceneNode3D], texts: [SceneTextLayer] = [])
-        -> (localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)], parentOf: [Int: Int], noPropagate: Set<Int>) {
+        -> (localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)], parentOf: [Int: Int]) {
         var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
         var parentOf: [Int: Int] = [:]
-        var noPropagate: Set<Int> = []
         for l in layers where l.id != 0 {
             localT[l.id] = (l.origin, l.scale, l.angleZ)
             if let p = l.parent { parentOf[l.id] = p }
-            if l.disablePropagation { noPropagate.insert(l.id) }
         }
         for n in nodes3D {
             guard localT[n.id] == nil else { continue }
@@ -2615,20 +2684,19 @@ extension SceneDocument {
             guard localT[t.id] == nil else { continue }
             localT[t.id] = (t.origin, t.scale, t.angleZ)
             if let p = t.parent { parentOf[t.id] = p }
-            if t.disablePropagation { noPropagate.insert(t.id) }
         }
-        return (localT, parentOf, noPropagate)
+        return (localT, parentOf)
     }
 
     /// E1 공용: id 의 월드(부모 체인 합성) 트랜스폼. angle 은 scene.json angles 그대로(라디안).
     private static func worldParentTransform(_ id: Int, _ depth: Int,
                                              localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)],
-                                             parentOf: [Int: Int], noPropagate: Set<Int>)
+                                             parentOf: [Int: Int])
         -> (origin: Vec2, scale: Vec2, angle: Float)? {
         guard depth < 32, let t = localT[id] else { return nil }
-        guard !noPropagate.contains(id) else { return t }
+        // E1 정정: `noPropagate` 파라미터·단락 제거(위 composeTargets 주석 참조).
         guard let pid = parentOf[id],
-              let pw = worldParentTransform(pid, depth + 1, localT: localT, parentOf: parentOf, noPropagate: noPropagate)
+              let pw = worldParentTransform(pid, depth + 1, localT: localT, parentOf: parentOf)
         else { return t }
         let r = pw.angle
         let ca = cosf(r), sa = sinf(r)
@@ -2648,11 +2716,13 @@ extension SceneDocument {
     private static func composeTextParentTransforms(texts: inout [SceneTextLayer], layers: [SceneLayer],
                                                      nodes3D: [SceneNode3D], camera3D: SceneCamera3D?) {
         guard camera3D == nil,
-              texts.contains(where: { $0.parent != nil && !$0.disablePropagation }) else { return }
-        let (localT, parentOf, noPropagate) = buildParentTransformMap(layers: layers, nodes3D: nodes3D, texts: texts)
+              texts.contains(where: { $0.parent != nil }) else { return }
+        let (localT, parentOf) = buildParentTransformMap(layers: layers, nodes3D: nodes3D, texts: texts)
         for i in texts.indices {
-            guard !texts[i].disablePropagation, let pid = texts[i].parent,
-                  let pw = worldParentTransform(pid, 0, localT: localT, parentOf: parentOf, noPropagate: noPropagate)
+            // E1 정정: `disablePropagation` 가드 제거(위 composeTargets 주석 참조). 코퍼스 관측상
+            // text 오브젝트의 이 키는 전건 false 라 이 가드는 원래도 no-op 이었다.
+            guard let pid = texts[i].parent,
+                  let pw = worldParentTransform(pid, 0, localT: localT, parentOf: parentOf)
             else { continue }
             let r = pw.angle
             let ca = cosf(r), sa = sinf(r)
@@ -2675,11 +2745,13 @@ extension SceneDocument {
     private static func composeParticleParentTransforms(particles: inout [SceneParticle], layers: [SceneLayer],
                                                          nodes3D: [SceneNode3D], camera3D: SceneCamera3D?) {
         guard camera3D == nil,
-              particles.contains(where: { $0.parent != nil && !$0.disablePropagation }) else { return }
-        let (localT, parentOf, noPropagate) = buildParentTransformMap(layers: layers, nodes3D: nodes3D)
+              particles.contains(where: { $0.parent != nil }) else { return }
+        let (localT, parentOf) = buildParentTransformMap(layers: layers, nodes3D: nodes3D)
         for i in particles.indices {
-            guard !particles[i].disablePropagation, let pid = particles[i].parent,
-                  let pw = worldParentTransform(pid, 0, localT: localT, parentOf: parentOf, noPropagate: noPropagate)
+            // E1 정정: `disablePropagation` 가드 제거(위 composeTargets 주석 참조). 코퍼스 관측상
+            // particle 오브젝트의 이 키도 전건 false 라 이 가드는 원래도 no-op 이었다.
+            guard let pid = particles[i].parent,
+                  let pw = worldParentTransform(pid, 0, localT: localT, parentOf: parentOf)
             else { continue }
             let r = pw.angle
             let ca = cosf(r), sa = sinf(r)
@@ -2850,7 +2922,7 @@ extension SceneDocument {
                                       userProps: [String: Any] = [:]) -> SceneParticle? {
         // instanceoverride(인스턴스 모디파이어): 프리셋 def 에 배수/CP 대체를 적용해 인스턴스별 다양화
         // (실측 127씬/866건). 종전 통째 드롭 — 재사용 프리셋 전 인스턴스가 동일 기본값으로 렌더됐다.
-        let override = particleInstanceOverride(obj["instanceoverride"])
+        let (override, overrideAnims) = particleInstanceOverride(obj["instanceoverride"])
         guard let def = parseParticleDef(path, package: package, visited: [path],
                                          instanceOverride: override, assets: assets,
                                          userProps: userProps) else {
@@ -2864,6 +2936,7 @@ extension SceneDocument {
         p.origin3D = vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0)
         p.scale3D = vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1)
         p.angles3D = vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0)
+        p.instanceOverrideAnimations = overrideAnims   // K: {animation} 병행 캡처(particleInstanceOverride 주석)
         p.id = intVal(obj["id"]) ?? 0   // 부모 체인 룩업 키(SceneParticle.id 주석 참조)
         p.parent = intVal(obj["parent"])
         p.visible = initialVisible
@@ -2884,7 +2957,7 @@ extension SceneDocument {
         p.clampUVs = weBool(obj["clampuvs"], true)   // WE ctor 0x8040 bit15 — 선언부 주석 참조
         p.noInterpolation = weBool(obj["nointerpolation"])
         p.lockTransforms = weBool(obj["locktransforms"])   // 유령 키 — weBool 주석
-        p.isSolid = weBool(obj["solid"])
+        p.isSolid = weBool(obj["solid"], true)
         return p
     }
 
@@ -2947,8 +3020,30 @@ extension SceneDocument {
     /// 런타임 CP 레코드(`[sys+0x400] + i·0xD0`)의 `+0x80` 에 4×4 가 만들어지고 그 뒤
     /// `0x14022c0b6`–`0x14022c148` 이 그것을 오브젝트/부모 행렬과 합성해 `+0x00` 에 굽는 것까지는
     /// 봤지만, `+0x00`/`+0x80` 을 읽는 쪽을 못 찾았다. 그래서 **소비는 붙이지 않았다**.
-    private static func particleInstanceOverride(_ raw: Any?) -> ParticleInstanceOverride? {
-        guard let io = raw as? [String: Any], !io.isEmpty else { return nil }
+    ///
+    /// **[2026-08-21 · 클러스터 K 이관] `{animation:{…}}` 바인딩이 통째로 드롭되고 있었다.**
+    /// 이 블록의 값은 위 서술대로 **바인딩 객체일 수 있는데**, `float()`/`vec3()` 는 정적 `value` 만
+    /// 언랩하므로 키프레임 트랙이 파스 단계에서 사라졌다. 실측(동봉 json 1,698 전수, 설치본 2,143 동일):
+    /// 트리 안의 `"animation"` 딕셔너리 **7건 중 5건**이 바로 이 `instanceoverride` 밑이다 —
+    /// `controlpointangle1` 4건(`presets/magic/{preset,previewcolorsparkle/…,previewvortexorb/…}`) ·
+    /// `controlpoint1` 1건(`scenes/particleelementpreviews/maintaindistancebetweencontrolpoints`).
+    /// 그래서 이펙트 상수 경로(`constantshadervalues`, `SceneEffectPass.constantAnimations`)와 **같은 규약**으로
+    /// 정적 언랩 **전에** 병행 캡처해 `SceneParticle.instanceOverrideAnimations` 에 보존한다.
+    /// 정적 `value` 는 그대로 `ParticleInstanceOverride` 로 가므로 애니가 없을 때의 값·`relative` base 가 된다.
+    ///
+    /// **소비는 아직 없다** — CP 프레임/위치를 per-frame 으로 갱신하는 소비처는 렌더 계층(다른 소유)이고,
+    /// 애초에 `controlPointAngles` 소비처도 미특정이다(아래 [미해결]). 이 라운드는 **파스·보존 전용**이라
+    /// 그림이 바뀌는 씬은 **0건**이다.
+    private static func particleInstanceOverride(_ raw: Any?)
+        -> (override: ParticleInstanceOverride?, animations: [String: PropertyAnimation]) {
+        guard let io = raw as? [String: Any], !io.isEmpty else { return (nil, [:]) }
+        // 정적 언랩보다 **먼저** — 이펙트 상수 경로와 동일 순서(언랩이 dict 를 소비해도 무관하도록).
+        // `PropertyAnimation.parse` 는 `"animation"` 키가 없으면 nil 이라 평문/숫자/`{user,value}` 는 통과한다.
+        var anims: [String: PropertyAnimation] = [:]
+        for (k, v) in io {
+            guard let bind = v as? [String: Any], let a = PropertyAnimation.parse(bind) else { continue }
+            anims[k] = a
+        }
         var ov = ParticleInstanceOverride()
         ov.count = float(io["count"])
         ov.rate = float(io["rate"])
@@ -2973,7 +3068,7 @@ extension SceneDocument {
             // 각도만 지정하거나 위치만 지정하는 저작이 유효하므로 두 루프를 합치지 않는다.
             if let a = vec3(io["controlpointangle\(i)"]) { ov.controlPointAngles[i] = a }
         }
-        return ov.isEmpty ? nil : ov
+        return (ov.isEmpty ? nil : ov, anims)
     }
 
     /// 프로퍼티 스크립트의 저장 `scriptproperties`(사용자 오버라이드)를 JSON 문자열로 직렬화. {user,value}
@@ -3039,7 +3134,9 @@ extension SceneDocument {
                             // 스크립트가 있을 때만 저장 오버라이드 보존(레이어/텍스트 경로와 동일 규약).
                             if let sp = Self.scriptPropsJSON(dict["scriptproperties"]) { p.constantScriptProps[k] = sp }
                         }
-                        // X-⑦: {animation:{...}} 키프레임 바인딩(55씬/287건) — 스크립트와 동일하게 value
+                        // X-⑦: {animation:{...}} 키프레임 바인딩 — 스크립트와 동일하게 value
+                        // (도수와 범위 라벨은 SceneEffectPass.constantAnimations 선언 주석 참조 —
+                        //  "55씬/287건" 은 이 저장소의 두 코퍼스에서 재현되지 않는 워크샵 수치다)
                         // 언랩보다 먼저 캡처(동일 이유: 아래 float(v)/{value} 언랩이 dict 를 소비해도 무관하게
                         // 독립 필드에 보존). PropertyAnimation.parse 는 "animation" 키 부재 시 nil.
                         if let dict = v as? [String: Any], let anim = PropertyAnimation.parse(dict) {
@@ -3219,8 +3316,8 @@ extension SceneDocument {
     /// | `general.customsortorder` `0x14019adfd` | bit13 | false |
     /// | `general.windenabled` `0x14019b3b7` | bit16 | false |
     /// | `visible`(타입별) | `+0x120`/`+0x118`/`+0xd0` bit0 | true |
-    /// | `solid` `0x1401e1283` | `+0x120` bit13 | false |
-    /// | `disablepropagation` `0x1401e132b` | `+0x120` bit14 | false |
+    /// | `solid` `0x1401e1283` | `+0x120` bit13 | **true**(ctor `0x2001` @`0x1401ddc72`) — 종전 표는 false 오기 |
+    /// | `disablepropagation` `0x1401e132b` | `+0x120` bit14 | false(같은 ctor 리터럴 `0x2001`) |
     /// | `image.perspective` `0x1401ee9b5` | `+0x120` bit7 | false |
     /// | `image.castshadow` `0x1401eea8f` | `+0x120` bit11 | — |
     /// | `image.copybackground` `0x1401eeb6b` | `+0x304` bit6 | true(ctor `0x8040`) |
