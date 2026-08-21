@@ -142,7 +142,7 @@ public enum GLSLTranslator {
                                   premultiplyOutput: premultiplyOutput)
     }
 
-    /// 실물 0x140154599 의 `toupper` 접기. 이미 전건 대문자면 원본을 그대로 돌려준다(할당 회피).
+    /// 실물 0x140154598 의 `toupper` 접기. 이미 전건 대문자면 원본을 그대로 돌려준다(할당 회피).
     /// `uppercased()` 는 로케일 무관 유니코드 대문자화라 ASCII 밖 문자도 건드리는데, 실물은
     /// `'a'..'z'` 만 −0x20 한다. 콤보 이름은 JSON 키이고 동봉/설치본 전건 ASCII 라 실측 차이는
     /// 없지만, 차이가 나는 입력(워크샵의 비-ASCII 콤보 키)에서는 우리가 더 공격적이다 — 그 경우
@@ -256,6 +256,8 @@ public enum GLSLTranslator {
         // 신뢰 경계 밖이라 의심스러워 보이지만 실제로는 도달 불가다. 2026-08-19 스윕에서 확인.
         let vVaryingTypes = Dictionary(uniqueKeysWithValues: vVaryings.map { ($0.name, $0.type) })
         let allUniforms = mergeUniforms(vUniforms + fUniforms)
+        // BK/G7: **엔진 행렬 유니폼의 선언 타입은 mat4 가 아닐 수 있다.** 아래 참조.
+        let engineTypes = engineDeclaredTypes(allUniforms)
 
         var textures: [Int] = []
         var textureDefaults: [Int: String] = [:]
@@ -320,12 +322,12 @@ public enum GLSLTranslator {
         }
         for a in parseAttributes(vsrc) { vert[a.name] = "vin.\(a.name)" }
         for u in allUniforms where isEngine(u.name) {
-            let rep = engineReplacement(u.name)
+            let rep = engineReplacement(u.name, engineTypes: engineTypes)
             frag[u.name] = rep; vert[u.name] = rep
         }
         // 본문 출현 기반 엔진 심볼(선언 부재 시에도 매핑).
         for id in bodyIds where isEngine(id) {
-            let rep = engineReplacement(id)
+            let rep = engineReplacement(id, engineTypes: engineTypes)
             if frag[id] == nil { frag[id] = rep }
             if vert[id] == nil { vert[id] = rep }
         }
@@ -483,7 +485,8 @@ public enum GLSLTranslator {
         for h in helpers {
             let caps = captureOf[h.name] ?? []
             guard let sig = helperSignature(h, captures: caps, materials: materials, structs: structNames,
-                                            textureKinds: textureKinds) else { continue }  // 미지원 타입 → 스킵
+                                            textureKinds: textureKinds,
+                                            engineTypes: engineTypes) else { continue }  // 미지원 타입 → 스킵
             var helperEnv = sizeEnv
             for prm in h.params { helperEnv[prm.name] = prm.array ? 0 : (GLSLTypeAdapter.typeSize(prm.type) ?? 0) }
             // int/uint 파라미터명은 어댑터에 int 로 알려 min/max(int,float) 모호성 해소(실물 multistage_wave).
@@ -504,10 +507,10 @@ public enum GLSLTranslator {
             // 승격 varying 은 로컬 사본을 전달 — `in.<n>` 은 대입 전 보간값이라 헬퍼가 낡은 값을 읽는다.
             // (GLSL 에서 varying 은 전역: main 의 대입을 헬퍼가 봐야 한다.)
             if case .varying(let n, _, _) = cap, promotedVaryings.contains(n) { return n }
-            return captureCallArg(cap, isFragment: true, materials: materials)
+            return captureCallArg(cap, isFragment: true, materials: materials, engineTypes: engineTypes)
         }
         vertBody = appendCaptureArgs(vertBody, helpers: helpers, captureOf: captureOf) { cap in
-            captureCallArg(cap, isFragment: false, materials: materials)
+            captureCallArg(cap, isFragment: false, materials: materials, engineTypes: engineTypes)
         }
         // 배열 varying 로컬 배열: frag 는 진입 시 Vary 스칼라 멤버로 구성, vert 는 선언 후 말미에 out 으로 복사.
         for a in fArrays {
@@ -1487,7 +1490,49 @@ public enum GLSLTranslator {
             || name.hasPrefix("g_LPoint_") || name.hasPrefix("g_LSpot_") || name.hasPrefix("g_LTube_")
             || name.hasPrefix("g_LDirectional_") || name.hasPrefix("g_LFeature_Shadow")
     }
-    static func engineReplacement(_ name: String) -> String {
+    /// BK/G7 — **엔진 행렬 유니폼 중 `mat4` 가 아닌 것의 선언 타입 표.**
+    ///
+    /// `isEngine` 은 이름만 본다(`name.contains("Matrix")`). 그래서 `engineReplacement` 도 종전에는
+    /// 이름만 보고 **무조건 `float4x4(1.0)`** 을 돌려줬다. 그런데 WE 자산에는 같은 이름 계열을
+    /// `mat3` 로 선언하는 셰이더가 있다 — 설치본(`assets/` + `projects/`) 전수 실측:
+    ///
+    /// | 이름 | 선언 | 선언 파일 |
+    /// |---|---|---|
+    /// | `g_NormalModelMatrix` | `mat3` | `shaders/generic4.vert` · `genericimage2/3/4.vert` · `shaders/base/model_vertex_v1.h` (5) |
+    /// | `g_AltNormalModelMatrix` | `mat3` | `shaders/genericimage2/3/4.vert` (3) |
+    /// | `g_ModelMatrix` | `mat3` | `projects/defaultprojects/{audiophile,fantasticcar}/shaders/grid.vert` (2) |
+    ///
+    /// 이 셋이 **설치본 전체에서 선언 타입 ≠ 치환 타입인 유일한 자리**다(엔진 유니폼 56 이름의
+    /// 선언 타입을 전수 대조 — 나머지는 전건 일치). `mat3` 자리에 `float4x4(1.0)` 을 넣으면
+    /// `mul(localNormal, g_NormalModelMatrix)` → `(float4x4(1.0) * float3)` 이 되어 **MSL 컴파일이
+    /// 확정 실패**한다(리눅스 스윕은 이걸 못 잡는다 — 방출 토큰만 보고 컴파일은 안 한다).
+    /// 본문 소비 도달: 직접 4쌍(`generic4` · `genericimage2/3/4`) + `base/model_vertex_v1.h` 를
+    /// 인클루드하는 5쌍(`chroma4` · `foliage4` · `fur4` · `shadowcasterfoliage4` · `shadowcasterfur4`)
+    /// = **동봉/설치본 502 셰이더 중 9쌍**. `grid.vert` 2건은 선언만 하고 본문에서 안 써서
+    /// 종전에도 컴파일은 안 깨졌다(치환 대상 자체가 없다).
+    ///
+    /// **`mat4` 는 일부러 표에 안 넣는다** — 표에 없으면 종전대로 `float4x4` 라 방출물이 바이트 동일하다.
+    static func engineDeclaredTypes(_ uniforms: [Uniform]) -> [String: GLSLType] {
+        var out: [String: GLSLType] = [:]
+        for u in uniforms where isEngine(u.name) {
+            // `mat2`/`mat3` 만 — 둘 다 MSL 정방행렬이라 `floatNxN(1.0)` 대각 생성자가 확실하다.
+            // `mat4x3` 은 비정방이라 `float4x3(1.0)` 의 MSL 유효성을 이 컨테이너에서 확인할 수 없고,
+            // 어차피 그 타입으로 선언되는 엔진 유니폼(`g_Bones`·`g_MorphBoneTransform`)은 이름에
+            // "Matrix" 가 없어 `isEngine` 을 통과하지 못한다 — 도달 0 이라 넓히지 않는다.
+            switch u.type {
+            case .mat2, .mat3: out[u.name] = u.type
+            default: break
+            }
+        }
+        return out
+    }
+
+    /// 엔진 행렬의 항등 리터럴. 선언 타입이 없거나 `mat4` 면 종전과 같은 `float4x4(1.0)`.
+    private static func matrixIdentity(_ name: String, _ engineTypes: [String: GLSLType]) -> String {
+        "\(engineTypes[name]?.msl ?? GLSLType.mat4.msl)(1.0)"
+    }
+
+    static func engineReplacement(_ name: String, engineTypes: [String: GLSLType] = [:]) -> String {
         if name == "g_Time" { return "eng.timeAndPad.x" }
         // 마우스 UV(0..1). **미구동 시 (0,0)** — renderState ctor `0x14017c6d0` 이 `xor eax,eax`
         // (`0x14017c73d`) 후 qword 0 을 심는다(`0x14017c77d`/`0x14017c784`). 종전 이 주석은 0.5,0.5
@@ -1511,7 +1556,8 @@ public enum GLSLTranslator {
         if name == "g_ModelViewProjectionMatrix" || name == "g_EffectModelViewProjectionMatrix" { return "eng.mvp" }
         // 레이어 모델/기타 행렬(...Matrix / ...MatrixInverse 등): 효과 쿼드 기준 항등이 정답
         // (레이어 회전·스케일은 v1 미반영 — 무회전 레이어 정확. 항등의 역/역전치도 항등).
-        if name.hasPrefix("g_"), name.contains("Matrix") { return "float4x4(1.0)" }
+        // BK/G7: **선언 타입이 mat3 면 float3x3(1.0)** — 위 engineDeclaredTypes 주석의 9쌍 참조.
+        if name.hasPrefix("g_"), name.contains("Matrix") { return matrixIdentity(name, engineTypes) }
         // X-⑤: 이펙트 체인 경로는 g_TexelSize = 이펙트 **출력(dst)** 1텍셀(UV), 체인 전 패스에 걸쳐
         // 고정값(패스별 타깃도 tex0 도 아님) 규약으로 채택했다. 근거는 WE gaussian.vert
         // `ratio = g_TexelSize * g_Texture0Resolution` — 단, 이 근거는 **판별력이 없다**: ratio 는
@@ -1544,7 +1590,7 @@ public enum GLSLTranslator {
         // `const float4x4 g_LFeature_ShadowProjection[...]`, A2-pbr-lighting.md:238) — 항등 반환.
         // 나머지(Color/Origin/Direction/OriginA/OriginB/Exponent/…Transform/PointProjection)는 전부
         // vec4 — 0 벡터 반환(radius/exponent 로 쓰이는 .w 도 0 = 광량 0과 동형, 안전).
-        if name == "g_LFeature_ShadowProjection" { return "float4x4(1.0)" }
+        if name == "g_LFeature_ShadowProjection" { return matrixIdentity(name, engineTypes) }
         if name.hasPrefix("g_LPoint_") || name.hasPrefix("g_LSpot_") || name.hasPrefix("g_LTube_")
             || name.hasPrefix("g_LDirectional_") || name.hasPrefix("g_LFeature_Shadow") {
             return "float4(0.0, 0.0, 0.0, 0.0)"
@@ -1969,10 +2015,11 @@ public enum GLSLTranslator {
     }
 
     /// main 호출부에서 전달할 스테이지별 실값.
-    static func captureCallArg(_ cap: Capture, isFragment: Bool, materials: [MaterialParam]) -> String {
+    static func captureCallArg(_ cap: Capture, isFragment: Bool, materials: [MaterialParam],
+                               engineTypes: [String: GLSLType] = [:]) -> String {
         switch cap {
         case .material(let i): return "p[\(i)]\(materials[i].type.swizzle)"
-        case .engine(let n): return engineReplacement(n)
+        case .engine(let n): return engineReplacement(n, engineTypes: engineTypes)
         case .varying(let n, _, _): return isFragment ? "in.\(n)" : "out.\(n)"
         case .attribute(let n, _): return "vin.\(n)"  // fragment 에선 비합법 → 컴파일 실패 → 폴백(의도)
         case .texture(let n): return "g_Texture\(n)"
@@ -1983,11 +2030,14 @@ public enum GLSLTranslator {
     }
 
     private static func captureParamDecl(_ cap: Capture, materials: [MaterialParam],
-                                         textureKinds: [Int: GLSLType] = [:]) -> String {
+                                         textureKinds: [Int: GLSLType] = [:],
+                                         engineTypes: [String: GLSLType] = [:]) -> String {
         switch cap {
         case .material(let i): return "\(materials[i].type.msl) \(materials[i].glslName)"
         case .engine(let n):
-            let t = n.contains("Matrix") ? "float4x4"
+            // BK/G7: 헬퍼 캡처 파라미터의 타입도 선언 타입을 따라야 한다 — 호출부가 넘기는
+            // `captureCallArg` 값(`float3x3(1.0)`)과 갈리면 그 자리에서 컴파일이 깨진다.
+            let t = n.contains("Matrix") ? (engineTypes[n]?.msl ?? "float4x4")
                 // Texel 접미는 isEngine 통과분만 도달 = g_TextureNTexel 한정(g_TexelSize 는 "Size" 접미).
                 : (n.hasSuffix("Resolution") || n.hasSuffix("Texel") || n == "g_PointerState" ? "float4"
                     // F614: g_Screen 은 vec3 — 헬퍼 캡처 승격 시 치환식(float3)과 타입 정합.
@@ -2023,7 +2073,8 @@ public enum GLSLTranslator {
 
     /// 헬퍼 시그니처(MSL): 원 파라미터 + 캡처 파라미터. 미지원 타입 포함 시 nil.
     static func helperSignature(_ h: GLSLFunction, captures: [Capture] = [], materials: [MaterialParam] = [],
-                                structs: Set<String> = [], textureKinds: [Int: GLSLType] = [:]) -> String? {
+                                structs: Set<String> = [], textureKinds: [Int: GLSLType] = [:],
+                                engineTypes: [String: GLSLType] = [:]) -> String? {
         guard let ret = mslType(h.ret, structs: structs) else { return nil }
         var ps: [String] = []
         for p in h.params {
@@ -2032,7 +2083,9 @@ public enum GLSLTranslator {
             if p.array { ps.append("constant \(t)* \(p.name)") }
             else { ps.append(p.byRef ? "thread \(t)& \(p.name)" : "\(t) \(p.name)") }
         }
-        ps.append(contentsOf: captures.map { captureParamDecl($0, materials: materials, textureKinds: textureKinds) })
+        ps.append(contentsOf: captures.map {
+            captureParamDecl($0, materials: materials, textureKinds: textureKinds, engineTypes: engineTypes)
+        })
         return "inline \(ret) \(h.name)(\(ps.joined(separator: ", ")))"
     }
 

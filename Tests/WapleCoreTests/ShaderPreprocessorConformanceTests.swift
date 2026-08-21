@@ -118,10 +118,25 @@ final class ShaderPreprocessorConformanceTests: XCTestCase {
         XCTAssertTrue(out.contains("yes;"), out)
     }
 
-    /// 대조군 — 소수 리터럴 define 은 **여전히 거부**다(실물은 `1.5`→1 절단인데 흉내내지 않는다,
-    /// `ShaderPreprocessor` 의 `[미해결]`). 매크로 확장을 넓혔다고 이 규약이 풀리면 안 된다.
-    func testFractionalDefineStillRefusesTheShader() {
-        XCTAssertNil(ShaderPreprocessor.preprocessStrict("#define K 1.5\n#if K\nyes;\n#endif", combos: [:]))
+    /// **[2026-08-21 규약 반전]** 종전 이름은 `testFractionalDefineStillRefusesTheShader` 였고
+    /// "소수 리터럴 define 은 여전히 거부" 를 잠갔다. 그 거부가 실물과 갈리는 쪽이었다 —
+    /// 렉서(`0x140167021` `cmp byte ptr [rax], 0x2e` → `0x140167026` `inc rax` → `0x140167031`-
+    /// `0x140167046`)가 `.` 과 소수부를 읽고 **버리므로** `#if 1.5` 는 실물에서 **1** 이다.
+    /// 이제 우리도 1 로 본다. 거부 규약 자체는 남아 있고 그건 형제 테스트
+    /// `testDecimalIsNotABlanketPass` 가 잡는다.
+    func testFractionalDefineNowEvaluatesLikeTheEngine() {
+        let out = pre("#define K 1.5\n#if K\nyes;\n#else\nno;\n#endif")
+        XCTAssertTrue(out.contains("yes;"), out)
+        XCTAssertFalse(out.contains("no;"), out)
+        // 0.x 는 정수부가 0 이라 **거짓**이다(소수부를 버리므로 0.9 도 0).
+        let zero = pre("#define K 0.9\n#if K\nyes;\n#else\nno;\n#endif")
+        XCTAssertTrue(zero.contains("no;"), zero)
+    }
+
+    /// 위 확장이 "숫자로 시작하면 뭐든 받는다"가 아님을 못 박는다 — 지수 표기는 실물도 수를
+    /// `1` 에서 끊고 `e5` 를 식별자로 내며, 우리는 그 **잔여 토큰**을 거부한다(의도적 이탈).
+    func testDecimalIsNotABlanketPass() {
+        XCTAssertNil(ShaderPreprocessor.preprocessStrict("#define K 1e5\n#if K\nyes;\n#endif", combos: [:]))
     }
 
     // MARK: 3. `defined` — 실물에 **있다**(문자열이 아니라 즉치 비교라 안 보였을 뿐)

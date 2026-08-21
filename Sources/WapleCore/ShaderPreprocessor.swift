@@ -23,7 +23,8 @@ public enum ShaderPreprocessor {
     /// - include: `#include "name"` → 헤더 소스(없으면 nil → 빈 인라인).
     public static func preprocess(_ source: String, combos: [String: Int],
                                   include: (String) -> String? = { _ in nil }) -> String {
-        // F421: 미지원 #if 식(모듈로·비트·삼항·시프트·16진 리터럴 등)은 어느 분기를 골라도 오역 —
+        // F421: 미지원 #if 식(삼항 `?:`·렉서가 모르는 문자·잔여 토큰)은 어느 분기를 골라도 오역 —
+        // (모듈로·비트·시프트·16진/접미 리터럴은 G2 에서, 소수 리터럴은 BK 에서 실물대로 평가로 넘어갔다.)
         // 조용한 오분기 대신 안전 거부(빈 결과 → 번역 실패 → 폴터로 폴백; "오역보다 폴터").
         preprocessStrict(source, combos: combos, include: include) ?? ""
     }
@@ -156,17 +157,40 @@ public enum ShaderPreprocessor {
     }
 
     private static func inlineIncludes(_ source: String, include: (String) -> String?, depth: Int) -> String {
+        var seen = Set<String>()
+        return inlineIncludes(source, include: include, depth: depth, seen: &seen)
+    }
+
+    /// G4 — **`#include` 는 이름 기준 include-once 다.** 실물(`wallpaper64.exe`, imagebase 0x140000000)의
+    /// `Shader::resolveIncludes`(0x140162100-0x140162ab9)는 이미 인라인한 이름 목록을 선형 탐색해
+    /// (0x1401624b0-0x1401624f4 `memcmp`) 걸리면 **그 줄을 건너뛴다**(0x14016250d → 0x1401627a4).
+    /// 깊이 카운터는 없다 — 순환은 이 목록만으로 끊긴다. 목록은 스테이지마다 리셋된다
+    /// (`Shader::loadAndPreprocess` 0x140162ee0/0x140162f2e 가 컨테이너를 새로 만든다) — 여기서도
+    /// `preprocessStrict`/`inlinedSource` 가 스테이지마다 이 함수를 새로 부르므로 같은 범위다.
+    ///
+    /// **왜 필요한가**: 종전에는 깊이 16 캡만 있어 같은 헤더를 두 번 인라인했다. 헤더에 함수 정의가
+    /// 있으면(동봉 `common*.h` 전건이 그렇다) 중복 인라인은 MSL `redefinition` 에러 = 셰이더 폴백이다.
+    ///
+    /// **도달(범위 라벨)**: 한 TU 안에서 같은 헤더가 두 번 닫히는 자산은 **설치본
+    /// (`assets/` + `projects/`) 의 `.vert`/`.frag`/`.geom` 전수에서 0건**이다(재귀 인클루드 폐포를
+    /// 실제로 돌려 실측). 즉 이 변경은 오늘 방출물을 **바꾸지 않고**(무회귀), 워크샵 셰이더 대비의
+    /// 잠복 게이트다. 깊이 16 캡도 그대로 둔다 — include-once 로 순환은 이미 끊기지만, 병렬 분기가
+    /// 깊게 중첩된 병리적 입력의 스택 방어로 남긴다.
+    private static func inlineIncludes(_ source: String, include: (String) -> String?, depth: Int,
+                                       seen: inout Set<String>) -> String {
         if depth > 16 { return source }
         var lines: [String] = []
         for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
             let t = line.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("#include") {
                 if let name = firstQuoted(t) {
-                    if let header = include(name) {
+                    if !seen.insert(name).inserted {
+                        // 이미 인라인한 이름 — 실물처럼 줄을 그냥 건너뛴다(에러도 경고도 아니다).
+                    } else if let header = include(name) {
                         // 헤더 파일도 CRLF 일 수 있음 — 인라인 전 정규화.
                         let normalized = header.replacingOccurrences(of: "\r\n", with: "\n")
                             .replacingOccurrences(of: "\r", with: "\n")
-                        lines.append(inlineIncludes(normalized, include: include, depth: depth + 1))
+                        lines.append(inlineIncludes(normalized, include: include, depth: depth + 1, seen: &seen))
                     } else {
                         WapleLog.warn("[Waple] GLSL include not found: \(name)")
                     }
@@ -415,10 +439,12 @@ public enum ShaderPreprocessor {
                             // suspect 로 몰려 이 이름을 쓰는 `#if` 가 통째로 거부됐다(= 이펙트 폴백).
                             d[name] = v
                         } else if value.first?.isNumber == true {
-                            // F421: 숫자로 시작하지만 위 어느 문법도 아닌 값(1.5·1e5 류) —
+                            // F421: 숫자로 시작하지만 위 어느 문법도 아닌 값(`1e5` 류 지수 표기) —
                             // #if 에서 참조 시 오평가 방지를 위해 거부 대상으로 표시.
-                            // (실물은 `1.5` 를 소수부를 버린 1 로 본다 — 0x140167021-0x140167046.
-                            //  흉내내지 않는다: **[미해결]**, 별건.)
+                            // **[BK 2026-08-21] `1.5` 는 더 이상 여기 안 온다** — 실물 렉서가 소수부를
+                            // 읽고 버려 1 로 보는 것을 확정해(0x140167021-0x140167046) 위
+                            // `ExprEval.numericLiteral` 가 값 1 로 받는다. 남은 거부는 실물이
+                            // **수로도 안 읽는** 형태뿐이다(`1e5` = 수 `1` + 식별자 `e5` → 잔여 토큰).
                             suspectDefines.insert(name)
                         }
                         textDefines[name] = value
@@ -671,7 +697,8 @@ enum ExprEval {
     /// 엄격 평가 — 미지원 패턴이면 nil(분기 선택 거부). F421: 종전에는 미지 문자를 조용히 버리고
     /// 잔여 토큰도 무시해 `#if A % 2`→A, `#if 0x10`→0 처럼 오분기가 "성공"으로 빠졌다.
     /// **[G2] 거부 규약은 유지하되 아는 문법을 넓혔다.** 이제 거부는 이것뿐이다:
-    /// 렉서가 모르는 문자(`? : . ; @ …`)·10진으로 못 읽는 수치 define(suspect) 참조·잔여 토큰.
+    /// 렉서가 모르는 문자(`? : ; @ …`)·수로 못 읽는 수치 define(suspect) 참조·잔여 토큰.
+    /// (`.` 는 수 리터럴의 일부일 때는 소비된다 — `weNumericLiteral` 주석 참조. 수 밖의 `.` 만 미지 문자다.)
     /// (`% & | ^ ~ << >>`·16진/접미 리터럴은 **더 이상 거부가 아니라 평가**된다 — 실물과 같게.)
     static func evalChecked(_ expr: String, defines: [String: Int], definedNames: Set<String>? = nil,
                             suspect: Set<String> = [], textDefines: [String: String] = [:],
@@ -819,11 +846,22 @@ enum ExprEval {
     /// - `0x`/`0X` 접두(0x140166f9c `add al,0xa8; test al,0xdf` = `x`/`X` 판정) → 16진 누적
     ///   `esi = esi*16 + digit`(0x140166fe7).
     /// - 그 밖엔 10진 누적 `esi = esi*10 + digit`(0x140167007-0x140167019).
+    /// - 정수부 뒤에 `.` 이 오면 **소수점과 소수부를 읽고 버린다**(누적기를 안 건드린다) —
+    ///   즉 `#if 1.5` 는 **1** 이다. [BK 2026-08-21 해소] 실물을 직접 다시 떠서 확정했다
+    ///   (`0x140167021 cmp byte ptr [rax], 0x2e` → `0x140167026 inc rax`(무조건 소비) →
+    ///   `0x140167031`-`0x140167046` 가 `isdigit` 인 동안 포인터만 전진, `esi` 미변경).
+    ///   `.` 뒤에 숫자가 없어도 `.` 자체는 소비된다(`#if 1.` = 1, `#if 1.x` = 1 + 식별자 `x`).
+    ///   **종전에는 흉내내지 않고 `.` 를 모르는 문자로 남겨 식을 거부했다**("오역보다 폴터").
+    ///   뒤집는 근거 셋: (a) 실물 동작이 **측정으로 확정**돼 추정이 아니다 — "오역보다 폴터" 는
+    ///   *모르는* 문법에 대한 규약이지 *아는* 문법에 대한 것이 아니고, 거부는 이제 실물과 갈리는
+    ///   쪽이다. (b) 회귀 폭 0 — `#if`/`#elif` 식 안의 소수 리터럴도, `#define NAME <비정수 수치>`
+    ///   를 `#if` 가 참조하는 자리도 **설치본(`assets/` + `projects/`) 전수에서 0건**이다(실측).
+    ///   (c) 이 확장이 없으면 워크샵 셰이더의 `#define BLUR 1.5` 한 줄이 **이펙트 전체를 폴백**시킨다.
+    ///   `1e5` 같은 지수 표기는 여전히 거부다 — 실물도 `1` 에서 수를 끊고 `e5` 를 식별자 토큰으로
+    ///   내는데, 우리는 그 **잔여 토큰**을 거부하기 때문이다(그 규약은 그대로 유지, §10.9 참조).
     /// - 뒤이어 `u`/`f`/`l`(대소문자 무관, 0x140167058/68/78) 접미를 **여러 개** 소비한다.
     /// - 누적은 실물과 같이 32비트 랩핑(`Int32`) — `0xFFFFFFFF` 는 실물에서 -1 이다.
-    /// 반환: (값, 다음 인덱스). `.` 소수점은 **일부러 안 먹는다** — 실물은 소수부를 읽고 버려
-    /// `#if 1.5` 를 1 로 보지만(0x140167021-0x140167046), 그 관용은 이 게이트 밖이라 여기서는
-    /// `.` 를 모르는 문자로 남겨 거부시킨다(**[미해결]** — 넓히려면 별건으로).
+    /// 반환: (값, 다음 인덱스).
     private static func weNumericLiteral(_ chars: [Character], _ start: Int) -> (value: Int, next: Int)? {
         // 실물은 `isdigit`/`isxdigit`(ASCII) 로 판정한다 — Swift 의 `isNumber`/`hexDigitValue` 는
         // 유니코드 숫자(전각·아라비아-인도 숫자 등)까지 먹으므로 ASCII 로 좁힌다. 좁힌 결과
@@ -844,6 +882,15 @@ enum ExprEval {
             while i < chars.count, let d = asciiDigit(chars[i], radix: 10) {
                 acc = acc &* 10 &+ w32(d); i += 1
             }
+        }
+        // 소수부: `.` 은 **무조건** 소비하고(실물 0x140167026 이 isdigit 검사 전에 inc 한다),
+        // 이어지는 숫자도 소비하되 **값에는 안 넣는다**(실물 0x140167031-0x140167046 은 `esi` 를
+        // 안 건드린다). **16진 분기도 여기로 온다** — 실물의 16진 루프 출구가 `0x140166ff1 jmp
+        // 0x14016701e` 로 바로 이 `.` 검사에 합류한다(즉 `#if 0x10.5` = 16). 이 합류를 놓치고
+        // 10진 분기 안에만 넣으면 16진에서 갈린다.
+        if i < chars.count, chars[i] == "." {
+            i += 1
+            while i < chars.count, asciiDigit(chars[i], radix: 10) != nil { i += 1 }
         }
         while i < chars.count, "uUfFlL".contains(chars[i]) { i += 1 }
         return (wide(acc), i)
@@ -884,7 +931,9 @@ enum ExprEval {
                 guard let r = weNumericLiteral(chars, i) else { unsupported = true; i += 1; continue }
                 toks.append(String(r.value)); i = r.next; continue
             }
-            unsupported = true  // 렉서가 모르는 문자(`?` `:` `.` `@` 등 — 실물 코드 0x19)
+            // 렉서가 모르는 문자(`?` `:` `@` `;` 등 — 실물 토큰 코드 0x19). 수 리터럴 안의 `.` 는
+            // 위 `weNumericLiteral` 가 이미 먹었으므로 여기 오는 `.` 는 수 밖의 것뿐이다(실물도 0x19).
+            unsupported = true
             i += 1
         }
         return (toks, unsupported)

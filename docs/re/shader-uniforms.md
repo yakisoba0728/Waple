@@ -627,6 +627,106 @@ ID 로 피드되고, 매칭 안 되면 머티리얼 파라미터 경로로 떨�
 이름이 갱신 주기를 말해 준다 — Static(1회) / Dynamic(프레임·드로우) / Animation(본·모프) /
 Lights(라이트). **다만 140개 유니폼이 각각 어느 cbuffer 로 가는지는 GLSL 원문에 안 적혀 있고
 (WE 의 HLSL 크로스컴파일러가 정한다) 이 문서에서 확정하지 못했다 — `[미해결]`.**
+**[해소 2026-08-21]** 아래 §3.1b 가 140/140 을 확정했다. 크로스컴파일러는 별도 도구가 아니라
+`wallpaper64.exe` 안의 **텍스트 조립기**이고, 배정은 **유니폼 ID 로 색인하는 디스패치 표**가 정한다.
+
+### 3.1b [해소 2026-08-21] 유니폼 → cbuffer 배정 — 140/140 확정
+
+**어떻게 찾았는가.** `"cbuffer "`(`0x140487618`)·`":register(b"`(`0x1404875d0`)를 xref 하니
+호출자가 하나뿐이다 — `sub_1400f5cb0`(범위 `0x1400f5cb0`..`0x1400f8520`, `primary()` 확인).
+이 함수가 **GLSL 유니폼 선언을 HLSL 텍스트로 조립**한다(GLSL→HLSL 크로스컴파일의 실체).
+
+**① 유니폼 하나를 처리하는 디스패처**(`0x1400f6d68`–`0x1400f709f`). 이름으로 레지스트리 맵
+(`0x1404e8100`, 센티널 `[0x1404e8108]`)을 조회해 못 찾으면 머티리얼 경로로 빠지고, 찾으면
+노드 `+0x30` 의 **ID** 로 갈린다(`unordered_map<string,int>` 노드: next 8 + prev 8 + string 32 → int):
+
+```
+0x1400f6d8b  movsxd rcx, dword ptr [rdx + 0x30]   ; 유니폼 ID
+0x1400f6d8f  cmp ecx, 0x20
+0x1400f6d92  jl  0x1400f703f                      ; ID < 32
+0x1400f6d98  cmp ecx, 0x29
+0x1400f6d9b  jg  0x1400f7047                      ; ID > 41
+0x1400f6da1  lea edx, [rcx - 0x20]                ; ID 32..41 → 텍스처 슬롯 = ID - 0x20
+0x1400f6da8  call 0x140053e40                     ; to_string(slot)
+```
+
+즉 **ID 32..41 이 `g_Texture0`..`g_Texture9` 라는 것이 여기서 독립적으로 증명된다** — §1.2 표의
+ID 는 이름 `lea` 옆의 상수가 아니라 이 범위 검사로 확인한 것이다(방법론 함정 16 의 그 자리).
+그 열 개는 cbuffer 가 아니라 `Texture2D`/`Texture3D` + `SamplerState`/`SamplerComparisonState` 로
+`:register(t<slot>)`/`:register(s<slot>)` 에 나간다(`0x1400f6dbd`·`0x1400f6df9`·`0x1400f6e79`).
+
+**② cbuffer 슬롯을 고르는 점프 표**(`0x1400f7065`–`0x1400f709f`):
+
+```
+0x1400f7065  cmp ecx, 0x8b
+0x1400f706b  ja  0x1400f709d                              ; ID > 139 → 슬롯 0
+0x1400f706d  lea rdx, [rip - 0xf7074]                     ; 0x140000000 (이미지 베이스)
+0x1400f7074  movzx eax, byte ptr [rdx + rcx + 0xf8494]    ; **바이트 색인 표**(베이스+0xf8494), ID 로 색인
+0x1400f707c  mov ecx, dword ptr [rdx + rax*4 + 0xf8480]   ; **점프 표**(베이스+0xf8480)
+0x1400f7083  add rcx, rdx
+0x1400f7086  jmp rcx
+```
+
+점프 표 5엔트리 → 암(arm) → 슬롯 번호(`ebx`):
+
+| 색인 | 암 VA | `ebx` | cbuffer |
+|---:|---|---:|---|
+| 0 | `0x1400f7088` | 1 | `g_bufDynamic` |
+| 1 | `0x1400f709d` | 0 | `g_bufStatic` |
+| 2 | `0x1400f708f` | 2 | `g_bufAnimation` |
+| 3 | `0x1400f7096` | 3 | `g_bufLights` |
+| 4 | `0x1400f709d` | 0 | (텍스처 ID 전용 채움 — ①이 먼저 잡아 **도달 불가**) |
+
+**③ 방출부**(레지스터 번호가 상수로 박혀 있다):
+
+| cbuffer | `cbuffer ` | 이름 | 레지스터 상수 | 내용 |
+|---|---|---|---|---|
+| `g_bufStatic` | `0x1400f72c2` | `0x1400f72d3` (표 엔트리 0) | `0x1400f7309` `xor edx,edx` → **b0** | 누산기 `[rbp+0x00]` |
+| `g_bufDynamic` | `0x1400f73aa` | `0x1400f73bb` (표 엔트리 1) | `0x1400f73f1` `mov edx,1` → **b1** | 누산기 `[rbp+0x20]` |
+| `g_bufAnimation` | `0x1400f7e60` | `0x1400f7eb1` | `0x1400f7f0d` `mov byte,0x32` → **b2** | **고정 텍스트** `const float4x3 g_Bones[BONECOUNT];` (`0x1400f7f81`→`0x1404875e0`) |
+| `g_bufLights` | `0x1400f74db` | `0x1400f74f2` | `0x1400f751d` `mov byte,0x33` → **b3** | **고정 텍스트** LightingV1 라이트 배열 전부 |
+
+표 둘 다 **`.text` 안 데이터**다 — MSVC 가 함수 뒤에 붙인 것이라 `sub_1400f5cb0` 의 `.pdata`
+범위 안에 있지만 명령이 아니다. 그래서 여기서는 절대 VA 대신 **이미지 베이스 상대 오프셋**으로
+적는다(명령이 인코딩한 그대로 — 명령 경계 검사기가 명령으로 오독하지 않게).
+
+**④ 자기검증 셋.** 바이트 색인 표(베이스+0xf8494, 140바이트)를 그대로 읽으면 세 군데가 의미와 정확히 맞는다:
+
+- 색인 `4` 인 자리 = **정확히 ID 32..41 열 개** — ①의 텍스처 범위와 일치.
+- 색인 `3` 인 자리 = **정확히 ID 120..134 열다섯** — `g_LPoint_Color`..`g_LFeature_ShadowPointProjectionTransform`,
+  즉 `#require LightingV1` 생성기가 만드는 집합과 같다.
+- 색인 `2` 인 자리 = **ID 113 하나** — `g_Bones`. ③의 `g_bufAnimation` 고정 텍스트와 일치.
+
+**⑤ 결과 — 140/140.**
+
+| cbuffer | 수 | 유니폼 |
+|---|---:|---|
+| **`g_bufStatic`(b0)** | 5 | `g_TexelSizeHalf`(6) · `g_TexelSize`(7) · `g_Screen`(8) · `g_TextureReductionScale`(92) · `g_HDRParams`(139) |
+| **`g_bufAnimation`(b2)** | 1 | `g_Bones`(113) |
+| **`g_bufLights`(b3)** | 15 | `g_LPoint_Color`(120) · `g_LPoint_Origin`(121) · `g_LSpot_Color`(122) · `g_LSpot_Origin`(123) · `g_LSpot_Direction`(124) · `g_LSpot_Exponent`(125) · `g_LTube_Color`(126) · `g_LTube_OriginA`(127) · `g_LTube_OriginB`(128) · `g_LDirectional_Color`(129) · `g_LDirectional_Direction`(130) · `g_LFeature_ShadowProjection`(131) · `g_LFeature_ShadowProjectionTransform`(132) · `g_LFeature_ShadowPointProjection`(133) · `g_LFeature_ShadowPointProjectionTransform`(134) |
+| **텍스처(cbuffer 아님)** | 10 | `g_Texture0`..`g_Texture9`(32..41) → `t`/`s` 레지스터 |
+| **`g_bufDynamic`(b1)** | **109** | 나머지 전부 |
+
+**⑥ 이게 왜 중요한가 — `g_TexelSize` 규약이 여기서 갈린다.**
+
+`g_bufStatic` 에 든 다섯 개는 전부 **"리사이즈/로드에 한 번" 성격**이다(화면 크기, 그 역수,
+그 절반, 텍스처 축소 배율, HDR 디스플레이 파라미터). 반대로 **바인드마다 바뀌는**
+`g_TextureNResolution`(62..71)·`g_TextureNTexel`(72..81) 은 전부 `g_bufDynamic` 이다. 즉
+"패스/바인드마다 바뀌는 것" 과 "해상도 변화 때만 바뀌는 것" 이 **버퍼로 갈라져 있다.**
+
+→ 따라서 `g_TexelSize`/`g_TexelSizeHalf`/`g_Screen` 은 **패스 타깃이 아니라 풀해상도
+프레임버퍼 기준이고 이펙트 체인 전 구간에 걸쳐 상수**다. §4 가 "풀해상도 프레임버퍼 역수 ·
+리사이즈" 라고 적어 둔 것을 **버퍼 배정이 뒷받침한다**(종전엔 정본에서도 "보고" 상태였다).
+Waple 은 `1/eng.targetRes.xy`(= 이펙트 **출력 dst**)와 `texRes[0]` 근사를 쓰므로 **갈린다** —
+§7.4 참조. 다만 `eng.targetRes`/`eng.texRes` 를 채우는 자리는 이 문서 소관 밖이라 미수정이다.
+
+**⑦ 리드백은 크기만 본다.** `sub_1400dc080`(범위 `0x1400dc080`..`0x1400dc0a3` 조각, `primary()`)이
+컴파일된 셰이더의 리플렉션(`GetConstantBufferByIndex` → `GetDesc`)을 훑어 이름을 위 4종과
+**대소문자 무시로**(`_stricmp` `0x1402c10d0`, `0x1400dc0e7`) 대조하고, `D3D11_SHADER_BUFFER_DESC`
+의 `Size`(구조체 `+0x10` = `[rsp+0x30]`)를 **u16 으로 잘라** `[r14 + slot*2]` 에 적는다
+(`0x1400dc102`–`0x1400dc109`). 이름이 안 맞으면 인덱스가 `-1` 이라 배열 앞 2바이트에 버려진다.
+**즉 엔진이 cbuffer 에서 되읽는 것은 바이트 크기뿐이다** — 유니폼별 오프셋은 리플렉션이 아니라
+조립 순서가 정한다.
 
 ### 3.2 문자열 전수 스캔 (ASCII + UTF-16LE)
 
@@ -669,7 +769,7 @@ Lights(라이트). **다만 140개 유니폼이 각각 어느 cbuffer 로 가는
 
 | 유니폼 | 출처 | 주기 | 근거 |
 |---|---|---|---|
-| `g_Time` (ID 3) | 씬 클록(초) | 프레임 | 소비처 190파일. 피드 VA `[미해결]` |
+| `g_Time` (ID 3) | 씬 클록(초) | 프레임 | 소비처 190파일. 피드 VA `[미해결]` — **[부분 해소 2026-08-21]** 선언 방출은 §3.1b 가 열었고(`g_bufDynamic` b1), 그 버퍼에 **값을 올리는** Map/Unmap 자리는 여전히 못 짚었다 |
 | `g_Frametime` (ID 4) | 직전 프레임 Δt | 프레임 | 소비처 20파일 |
 | `g_Daytime` (ID 5) | 하루 중 시각 | 프레임(추정) | **동봉 셰이더 소비 0건** — 재생목록 `daytime` 모드와 같은 소스로 보이나 확정 못 함 |
 | `g_PointerPosition` / `…Last` / `g_PointerState` (105/104/106) | 커서 | 프레임 | `cursorripple`·`fluidsimulation`·**`xray`** 가 소비(각 12·8·8파일). **[2026-08-21] `g_PointerState` 는 `.z` 만 읽힌다** — 설치본·동봉 4파일 전건이 `.z` 뿐이고 `.x/.y/.w` 소비 0건(`cursorripple_apply_force.frag:83` ×5.0 · `fluidsimulation_vorticity.frag:198` 게인 1 + 프리뷰 사본). 그 `.z` 는 **누른 첫 프레임에만 1.0**(엣지) — `docs/re/pointer-interaction.md` §4 |
@@ -691,13 +791,13 @@ Lights(라이트). **다만 140개 유니폼이 각각 어느 cbuffer 로 가는
 | `g_Morph*` (116..119) | 모프 타깃 | 프레임 | `model_vertex_v1.h` |
 | `g_Fog{Distance,Height}{Color,Params}` (135..138) | 씬 `general.fog*` | 씬 로드 | `spec/engine/uniform-feed.json` `sceneDefaults` 변위 `0x380`/`0x38c`/`0x398`..`0x3b4` |
 | `g_LightAmbientColor` / `g_LightSkylightColor` (96/97) | 씬 `general.ambientcolor` `0x368` / `skylightcolor` `0x374` | 씬 로드 | 같은 정본. 기본 검정 `(0,0,0)` |
-| `g_HDRParams` (139) | HDR 디스플레이 파라미터 | 리사이즈/디스플레이 변경 | 소비 4파일, 산출식 `[미해결]` |
+| `g_HDRParams` (139) | HDR 디스플레이 파라미터 | 리사이즈/디스플레이 변경 | 소비 4파일, 산출식 `[미해결]`. **[성분 의미 해소 2026-08-21]** `.x` = **SDR 화이트 스케일**(선형값을 이걸로 나눈 뒤 sRGB 인코드 — `shaders/passthroughlinear.frag:14` `albedo.rgb = _srgb(albedo.rgb / g_HDRParams.x)`), `.y` = **피크 HDR 의 절반**(`combine_video_hdr.frag:10` `float maxHDR = g_HDRParams.y * 2.0;` 뒤 `/maxHDR → saturate → *maxHDR` 로 클램프). 주기는 §3.1b 가 확정 — `g_bufStatic`(b0) |
 | `g_RenderVar0..4` (108..112) | **고정 의미 없음** — 드로우를 소유한 서브시스템이 채우는 범용 vec4 5칸 | 드로우 | `spec/engine/uniform-feed.json` `g_RenderVar` |
 | `g_Alpha` `g_Color` `g_Color4` (0..2) | 레이어 알파/틴트 | 드로우 | |
 | `g_Screen` (8) | (w, h, w/h) | 리사이즈 | 소비 18파일 |
 | `g_TextureReductionScale` (92) | 텍스처 축소 배율 | 텍스처 로드 | `blend.vert` TRANSFORMUV 가 UV 를 이 값으로 나눔 — **0 이면 ÷0** |
 | `g_BlendMap[BLENDROWCOUNT]` (115) | 퍼펫 블렌드 행렬 | 프레임 | 소비 2파일 |
-| `g_LayerModelMatrix` (24) | — | — | **동봉 소비 0건**, 용도 `[미해결]` |
+| `g_LayerModelMatrix` (24) | — | — | **동봉 소비 0건**, 용도 `[미해결]` — **[미해소]** 소비처가 0 이라 역산할 자산이 없고, §3.1b 는 배정(`g_bufDynamic` b1 = 드로우 주기)만 알려 준다. 이름·주기·이웃 ID(23 `g_EffectTextureProjectionMatrixInverse` / 25 `g_EyePosition`)로 보아 **레이어 쿼드의 모델 행렬**로 보이나 근거 부족 |
 
 ---
 
@@ -718,6 +818,13 @@ Lights(라이트). **다만 140개 유니폼이 각각 어느 cbuffer 로 가는
 | 문자열 ctor B | `0x140017480` | `(dest, str, len)` — id 는 호출부가 따로 씀 |
 | 전용 헬퍼 5 | `0x14016f800` `0x14016f850` `0x14016f8a0` `0x14016f8f0` `0x14016f940` | 각 함수 안에 이름 문자열 + 길이 상수(`0x17`/`0x1a`/`0x18`/`0x24`/`0x29`) |
 | 이름 문자열 블록 | `0x14048d138..0x14048dd94` | 140개 대부분이 여기. 예외 3개는 `0x1404875f3`(`g_Bones`) 등 다른 블록 |
+| **GLSL→HLSL 조립기** | `0x1400f5cb0..0x1400f8520` | §3.1b. 유니폼 선언을 `cbuffer`/`Texture2D`/`SamplerState` 텍스트로 조립 |
+| ID 라우팅 진입 | `0x1400f6d8b` (`movsxd rcx, dword ptr [rdx + 0x30]`) | 맵 노드에서 유니폼 ID 를 꺼낸다 |
+| 텍스처 범위 검사 | `0x1400f6d8f` / `0x1400f6d98` / `0x1400f6da1` | ID 32..41 → 슬롯 = ID − 0x20 |
+| cbuffer 점프 표 | `0x1400f7074`(바이트 색인, 베이스+0xf8494) · `0x1400f707c`(점프, 베이스+0xf8480) | 암 `0x1400f7088`=1 · `0x1400f709d`=0 · `0x1400f708f`=2 · `0x1400f7096`=3 |
+| cbuffer 레지스터 상수 | `0x1400f7309`(b0) · `0x1400f73f1`(b1) · `0x1400f7f0d`(b2, `'2'`) · `0x1400f751d`(b3, `'3'`) | |
+| cbuffer 크기 리드백 | `0x1400dc080` | 리플렉션 이름을 `_stricmp`(`0x1400dc0e7`)로 4종과 대조 → `Size` 하위 16비트를 `[r14+슬롯*2]`(`0x1400dc109`) |
+| HDR 소비 문자열 | `0x140487618`(`"cbuffer "`) · `0x1404875d0`(`":register(b"`) · `0x1404875e0`(`")\n{\nconst float4x3 g_Bones["`) | §3.1b ③ |
 
 `g_BloomBlendParams` soft-knee 상수(ε `1e-5`, 분자 `0.25`, `codeVA 0x14017f8bc`)와
 HDR 블룸 기본값(`bloomstrength 2.0` / `bloomthreshold 0.65` / `bloomhdrscatter 1.619` /
@@ -844,9 +951,9 @@ struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad;
 | `g_TextureNTexel` | `(1/w, 1/h, w, h)` | 같음 (`float4(1/texRes.xy, texRes.xy)`) | 일치 |
 | `g_ParallaxPosition` | 시차 컨트롤러 출력(별도 유니폼) | `g_PointerPosition` 과 **같은 필드 별칭** | 시차 감쇠/지연(`cameraparallaxdelay`, `cameraparallaxamount`)이 반영 안 됨 |
 | `g_Screen` | `vec3` — 소비처 18파일 | `float3(texRes[0].xy, texRes[0].x/texRes[0].y)` = **tex0 근사** | 이펙트 패스에서 tex0=프레임버퍼면 맞고, 아니면 어긋남. 코드 주석이 미확정임을 명시 |
-| `g_TexelSize` | 풀해상도 프레임버퍼 역수(전 패스 불변) | `1/eng.targetRes.xy` = **이펙트 출력(dst)** 역수 | 두 규약 다 "확정 아님"으로 표시돼 있다. 레이어 커스텀 경로는 또 tex0 근사 — **같은 심볼이 경로마다 다른 값** |
+| `g_TexelSize` | 풀해상도 프레임버퍼 역수(전 패스 불변) | `1/eng.targetRes.xy` = **이펙트 출력(dst)** 역수 | 종전엔 두 규약 다 "확정 아님"이었다. **[2026-08-21] WE 쪽이 확정됐다** — §3.1b ⑥: `g_TexelSize`/`…Half`/`g_Screen` 은 `g_bufStatic`(b0)이고 바인드마다 바뀌는 `g_TextureNResolution`/`…Texel` 은 `g_bufDynamic`(b1)이라 **버퍼가 주기를 가른다**. 즉 실물은 패스 타깃이 아니라 풀해상도 기준이다. Waple 은 갈린다 — 고치려면 `eng.targetRes` 를 채우는 `SceneRendererFrameEncoder`(이 문서 소관 밖)를 함께 바꿔야 하고 **화면이 바뀐다**(bokeh 계열 블러 폭). 넘김 |
 | `g_Alpha` / `g_Color` / `g_Color4` | 엔진이 매 프레임 레이어 알파·틴트 주입 | 유니폼은 **중립 1**, 실제 틴트는 출력 후 `eng.layerTint` 곱(`GLSLTranslator.swift:2021-2022`) | 결과는 등가지만 **셰이더가 `g_Alpha` 를 산술에 쓰면**(단순 곱이 아니면) 어긋남 |
-| `g_NormalModelMatrix` `g_AltNormalModelMatrix` | 전건 **`mat3`** | `isEngine` 이 `contains("Matrix")` 로 잡아 **`float4x4(1.0)`** 반환 | `mul(vec3, mat3)` 자리에 `float4x4` 가 들어가 **MSL 컴파일 실패 → 폴백**. built-in 전용이라 현재는 안 닿지만, `mat3 g_ModelMatrix` 를 쓰는 **`audiophile/shaders/grid.vert:2`·`fantasticcar/shaders/grid.vert:2` 는 저작 셰이더라 L1 에 닿는다** |
+| `g_NormalModelMatrix` `g_AltNormalModelMatrix` | 전건 **`mat3`** | ~~`isEngine` 이 `contains("Matrix")` 로 잡아 **`float4x4(1.0)`** 반환~~ → **[해소 2026-08-21]** 선언 타입을 보고 `float3x3(1.0)` 반환 | 종전엔 `mul(vec3, mat3)` 자리에 `float4x4` 가 들어가 **MSL 컴파일 실패 → 폴백**이었다. `GLSLTranslator.engineDeclaredTypes` 가 선언 타입 표를 만들어 치환·헬퍼 캡처 양쪽에 먹인다. 도달: 설치본 502 셰이더 중 **선언 7파일 / 본문 소비 9쌍**(`generic4` · `genericimage2/3/4` 직접 4 + `base/model_vertex_v1.h` 인클루드 5: `chroma4` · `foliage4` · `fur4` · `shadowcasterfoliage4` · `shadowcasterfur4`). `mat3 g_ModelMatrix` 를 쓰는 **`audiophile/shaders/grid.vert:2`·`fantasticcar/shaders/grid.vert:2` 는 저작 셰이더라 L1 에 닿는다**(선언만 하고 본문 미사용이라 종전에도 컴파일은 안 깨졌다) |
 | `g_Daytime` | 레지스트리 ID 5 | 없음 | 동봉 소비 0건이라 현시점 무해 |
 
 ### 7.5 부류 C(238) 대조
@@ -861,22 +968,103 @@ L3 경로는 `annotationMaterial` 을 그대로 키로 쓰고 `"default"` 어노
 
 ---
 
+### 7.6 [신설 2026-08-21] 유니폼 밖의 같은 클래스 — `attribute` 화이트리스트
+
+이 문서는 유니폼 census 지만, **같은 "이름을 알아보는가" 축**에 하나가 더 있고 그쪽 도달이
+§7.3 의 1·2위와 겹치므로 여기 적어 둔다.
+
+`GLSLTranslator` 가 방출하는 정점 입력 구조체는 **두 attribute 로 고정**이다:
+
+```
+struct VIn { float3 a_Position [[attribute(0)]]; float2 a_TexCoord [[attribute(1)]]; };
+```
+
+`parseAttributes` 는 선언된 이름을 전부 `vin.<이름>` 으로 매핑하므로, 그 밖의 attribute 를
+선언한 셰이더는 **`VIn` 에 없는 멤버를 참조**해 MSL 컴파일이 확정 실패한다(→ 폴백).
+
+**도달(설치본 `assets/` + `projects/` 의 `.vert`/`.h` 전수).**
+
+| attribute | 선언 파일 | 그중 저작레인(`projects/` · `effects/`) |
+|---|---:|---:|
+| `a_Position` | 282 | 226 |
+| `a_TexCoord` | 272 | 225 |
+| **`a_Normal`** | 17 | **8** |
+| `a_Color` | 9 | 1 |
+| `a_BlendIndices` / `a_BlendWeights` | 10 / 9 | 0 |
+| `a_Tangent4` | 8 | 1 |
+| `a_TexCoordVec4` 계열 · `a_PositionVec4` 등 | 각 1~7 | 0~1 |
+
+저작레인 8건은 전부 **non-preview 기본 프로젝트**다 —
+`audiophile/{audiophile,grid}.vert` · `demon_core/core.vert` · `dna_fragment/dna.vert` ·
+`fantasticcar/{car,grid}.vert`(+`a_Tangent4`) · `ricepod/ricepod.vert` · `techno/technohex.vert` ·
+`shimmering_particles/particle.vert`(`a_Color` + `a_TexCoordC2`/`a_TexCoordVec4`/`a_TexCoordVec4C1`).
+
+즉 **§7.3 1위 `g_EyePosition`(저작레인 12파일)과 2위가 걸린 바로 그 프로젝트들**이 attribute
+쪽에서도 걸린다. 유니폼을 고쳐도 이쪽이 남으면 그 셰이더들은 여전히 컴파일에 실패한다.
+
+이건 이미 알려진 항목이다 — `Sources/WapleRender/SceneRenderer3D.swift` 의
+`builtinMeshShaderWhitelist` 주석이 *"generic/generic2/generic3/generic4.vert 는 전부 a_Normal 을
+무조건 참조하는데 VIn 은 a_Position/a_TexCoord 만 지원 … GLSLTranslator 의 attribute
+화이트리스트 확장(a_Normal 추가)이 별도로 필요"* 라고 적고 있다. 여기서 새로 더하는 것은
+**저작레인 도달을 수로 잰 것**과, 이 문서의 §7.3 우선순위와 같은 프로젝트를 가리킨다는 사실이다.
+
+**고치려면 두 파일이 함께 가야 한다**(이 라운드 미수행): (a) `GLSLTranslator` 가 참조된
+attribute 만 `VIn` 에 조건부로 싣고 그 사실을 `TranslatedShader` 로 알린다, (b)
+`SceneRenderer3D.buildCustomMeshShader` 의 정점 디스크립터가 그때만 `attribute(2)` 를 더한다
+(메시 정점은 이미 `pos3+normal3+uv2` 8f 라 **법선은 버퍼에 이미 있다** — 오프셋 12).
+무조건 싣기는 금지다 — 2D 레이어/이펙트 쿼드는 법선이 없어 파이프라인 생성이 통째로 깨진다.
+
 ## 8. 확정하지 못한 것
 
 1. **`[미해결]` 유니폼별 cbuffer 배정.** `g_bufStatic/Dynamic/Animation/Lights` 4개가 있고
    이름이 주기를 암시하지만, 140개가 각각 어디로 가는지는 GLSL 원문에 없고 바이너리에서도
    못 찾았다. WE 의 HLSL 크로스컴파일러가 정한다.
+   → **[해소 2026-08-21]** §3.1b. 크로스컴파일러는 별도 도구가 아니라 `sub_1400f5cb0` 의
+   **텍스트 조립기**이고, 배정은 유니폼 **ID 로 색인하는 바이트 표 + 점프 표**가 정한다.
+   140/140 확정: Static 5 · Dynamic 109 · Animation 1 · Lights 15 · 텍스처 10(cbuffer 아님).
+   **레지스트리에 없는 이름(부류 C 사용자 값)은 `g_bufStatic`(b0)** 이다
+   (`0x1400f6d85 je 0x1400f714e` → `xor ebx,ebx`) — `.dxs` 꼬리의 오프셋 표가 그걸 뒷받침한다
+   (`docs/re/shader-combos.md` §6.1).
 2. **`[미해결]` 유니폼별 피드 사이트 VA.** 리플렉션 바인딩(`0x1400dab40`)이 ID 를 레코드
    `+0x60` 에 넣는 데까지는 따라갔지만, 드로우 시 그 ID 로 값을 꺼내는 소비부는 못 열었다.
    `g_TexelSize`·`g_TextureNResolution` 의 값 규약이 기존 정본에서도 "보고" 로 남아 있는 이유가
    이것이다.
+   → **[부분 해소 2026-08-21]** 값 업로드(Map/Unmap) 자리는 **여전히 미해결**이다. 하지만
+   §3.1b ⑥ 이 그 미해결이 막고 있던 질문 하나를 **버퍼 배정으로 우회해 답했다** —
+   `g_TexelSize`/`g_TexelSizeHalf`/`g_Screen` 은 `g_bufStatic`(b0), `g_TextureNResolution`/
+   `…Texel` 은 `g_bufDynamic`(b1)로 **갈라져 있다**. "바인드마다 바뀌는 것" 과 "해상도 변화 때만
+   바뀌는 것" 이 서로 다른 버퍼에 있으므로, `g_TexelSize` 는 **패스 타깃이 아니라 풀해상도
+   프레임버퍼 기준이고 체인 전 구간 상수**다. 값 자체가 아니라 **주기**가 확정된 것이다.
 3. **`[미해결]` 바인딩 레코드 `+0x64`.** ID 바로 뒤에 리플렉션 구조체(`rbp+0x134`)에서 온
    dword 가 하나 더 들어간다. cbuffer 내 오프셋으로 보이지만 확인 못 했다.
+   → **[미해소 2026-08-21, 후보 하나 소거]** 명령 쌍을 다시 떴다:
+   `0x1400db21e mov dword ptr [r15 + 0x60], eax`(ID) 바로 뒤가
+   `0x1400db222 mov eax, dword ptr [rbp + 0x134]` · `0x1400db228 mov dword ptr [r15 + 0x64], eax`.
+   **"cbuffer 슬롯 번호" 후보는 소거된다** — 슬롯은 리플렉션 리드백이 아니라 §3.1b 의 HLSL 텍스트
+   조립 때 이미 정해지고, 리드백(`0x1400dc080`)이 되읽는 것은 **버퍼 크기(u16)뿐**이기 때문이다.
+   남은 후보는 cbuffer 내 바이트 오프셋 / 성분 수 / 배열 길이인데 `rbp+0x110..0x134` 로 복사된
+   원본 구조체를 특정하지 못해 못 갈랐다.
 4. **`[미해결]` `g_Daytime`(ID 5) · `g_LayerModelMatrix`(ID 24) 의 용도.** 둘 다 동봉 셰이더
    소비 0건이라 소비처에서 역산할 수 없다.
+   → **[미해소 2026-08-21]** 그대로다. 새로 아는 것은 배정뿐 — 둘 다 `g_bufDynamic`(b1),
+   즉 **프레임·드로우 주기**다(§3.1b ⑤). 그것만으로는 의미가 안 나온다. 닫으려면 워크샵
+   코퍼스(이 컨테이너에 없다)나 에디터 바이너리(`wallpaperui.exe`)의 UI 라벨이 필요하다.
 5. **`[미해결]` `g_HDRParams`(ID 139) 2성분의 의미.** 소비 4파일뿐이고 산출식을 못 찾았다.
+   → **[성분 의미 해소 2026-08-21 · 산출식은 미해소]** 소비처가 그대로 적고 있었다(함정 6 —
+   x86 전에 자산부터). `.x` = **SDR 화이트 스케일**(`shaders/passthroughlinear.frag:14`
+   `albedo.rgb = _srgb(albedo.rgb / g_HDRParams.x);` — 선형값을 이걸로 나눈 뒤 sRGB 인코드하므로
+   `.x` 가 sRGB 1.0 에 대응하는 장면-선형 값이다). `.y` = **피크 HDR 의 절반**
+   (`shaders/combine_video_hdr.frag:10` `float maxHDR = g_HDRParams.y * 2.0;` 이고 그 뒤가
+   `/maxHDR → saturate → *maxHDR` 클램프다). 둘 다 디스플레이 능력에서 오는 값이라
+   §3.1b 의 `g_bufStatic`(b0) 배정과 정합한다. **엔진이 디스플레이 정보에서 이 둘을 계산하는
+   식은 여전히 못 찾았다.**
 6. **`[미해결]` `.mdl` 프로젝트 4개의 정확한 셰이더 도달.** §6.1 의 근사(프로젝트 materials 전부)
    를 썼다. `.mdl` 파서를 붙이면 좁혀진다.
+   → **[미해소 2026-08-21]** 손대지 않았다. 이유: 도달 수치를 좁히면 §1.2(140행)·§2.3(238행)
+   두 표의 "씬 / np" 열이 통째로 다시 계산돼야 하는데, 그 재계산은 이 문서의 생성기
+   (`scratchpad/UNIC/reach.py`)와 함께 가야 하고 그 스크립트는 세션 스크래치에만 있다
+   (컨테이너 휘발). **부분만 고치면 표 안에서 서로 모순되는 수치가 남는다**(방법론 함정 20).
+   과대 추정 방향이라는 것만 재확인해 둔다.
 7. **부류 C 238개 중 "엔진이 머티리얼 키로 채우는 것"의 전수.** `g_BloomBlendParams` 계열 4개는
    확인했지만, 내장 패스가 코드로 채우는 머티리얼 키가 그 4개뿐이라는 것은 증명하지 못했다.
    그건 이름 축이 아니라 **머티리얼 키 축**의 census 라 별건이다.
