@@ -55,6 +55,57 @@ enum WallpaperBridgeJS {
         }
       }
       installServiceWorkerShim();
+      // WE 가 CEF `OnContextCreated`(webwallpaper64.exe 0x140013280–0x1400143f7)에서
+      // **document-start 에 무조건** 전역으로 심는 것들. 없으면 페이지가 그냥 죽는다
+      // (`ReferenceError` 는 스크립트 하나를 통째로 중단시킨다) — 그래서 도달 수와 무관하게
+      // 존재 자체가 규약이다. 등록 순서·이름은 원본 그대로.
+      //
+      //  · wallpaperGetUtilities (0x140013d73) — 0x140015376 이 만드는 반환 객체는
+      //    `isScreensaver`(0x1400154c5)·`isWallpaper`(0x140015604) **두 함수**뿐이다
+      //    (`CreateFunction` → `SetValue`; 값이 아니라 함수다).
+      //    Waple 은 스크린세이버 모드가 없으므로 isScreensaver 는 항상 false 다.
+      //  · wallpaperOnVideoEnded (0x140014097) — WE 가 동영상 벽지용으로 생성하는 래퍼
+      //    HTML 이 `v.onended` 에서 부른다(주입 원문 @0x1198f0). 페이지가 직접 부르는 일도
+      //    있어 전역이 존재해야 한다. Waple 의 동영상 폴백은 `VideoFallbackHTML` 이 같은
+      //    래퍼를 생성한다.
+      //  · wallpaperRequestTakeScreenshotResponse (0x140014226) — **페이지 → 네이티브** 방향의
+      //    응답 창구다. 네이티브가 먼저 `window.__wpxTakeSnapshot()`(0x140011d99)을 실행해야
+      //    발생하는데, 그 캡처는 `navigator.mediaDevices.getDisplayMedia({displaySurface:
+      //    "browser"})` 로 구현돼 있다(주입 원문 @0x11a1c0 이후). WKWebView 는 화면 캡처
+      //    getDisplayMedia 를 제공하지 않으므로(카메라/마이크만) 이 경로는 재현 불가 —
+      //    자세한 이유는 docs/re/web-wallpaper-bridge.md. 전역은 인자를 받고 버리는 스텁으로
+      //    둔다(호출이 예외로 번지지 않게).
+      defineFixed('wallpaperGetUtilities', function () {
+        return {
+          isScreensaver: function () { return false; },
+          isWallpaper: function () { return true; }
+        };
+      });
+      defineBridge('wallpaperOnVideoEnded', function () {});
+      defineBridge('wallpaperRequestTakeScreenshotResponse', function () {});
+      // WE 의 `___STAHP` 스크립트(주입 원문 @0x119ca0, 5936바이트)가 여는 공용 훅.
+      // WE 자신이 플러그인 로드 통지를 이 위에 얹고(0x14001f569 가 만드는
+      // `window.___wpxShared.onLoad(function(){...onPluginLoaded(...)})`), 벽지도 쓸 수 있다.
+      // 원본과 같은 의미론: load 이후 등록하면 즉시 호출, 이전이면 큐잉.
+      if (!window.___wpxShared) {
+        var wpxShared = {
+          hasLoaded: false,
+          onLoadListeners: [],
+          onLoad: function (fn) {
+            if (typeof fn !== 'function') { return; }
+            if (window.___wpxShared.hasLoaded) { fn(); }
+            else { window.___wpxShared.onLoadListeners.push(fn); }
+          }
+        };
+        defineBridge('___wpxShared', wpxShared);
+        window.addEventListener('load', function () {
+          wpxShared.hasLoaded = true;
+          wpxShared.onLoadListeners.forEach(function (l) {
+            try { l(); } catch (e) {}
+          });
+          wpxShared.onLoadListeners = [];
+        });
+      }
       // F682: WE 의미론의 Page Visibility 스푸핑. 데스크탑/헤드리스 WKWebView 의 네이티브
       // document.hidden/visibilityState 는 월페이퍼 가시성과 무관하다(헤드리스 호스트는 항상 hidden —
       // 가시성 게이트로 애니메이션을 미루는 페이지가 영구 정지한다). WE 는 월페이퍼가 가려질 때
@@ -113,7 +164,23 @@ enum WallpaperBridgeJS {
       var listener; var pendingProps = null; var pendingGeneral = null; var lastProps = null; var lastGeneral = null;
       var lastPaused = null;
       var pendingDirectoryAdds = [];
+      var pendingDirectoryRemoves = [];
       window.__waplePropsDelivered = false;
+      // WE 는 `applyGeneralProperties` 에 **항상 `language` 를 담는다**(0x140020547–0x1400206e4 가
+      // `{language: <코드>}` 를 만들고 0x140020764 가 그것을 넘긴다). 값의 형태는 설치본
+      // `locale/ui_<코드>.json` 75개가 그대로 보여 준다 — `en-us`·`ko-kr` 같은 **소문자 BCP-47**.
+      // 네이티브(WebRenderer)가 아직 fps 만 보내므로, 키가 비어 있을 때만 브라우저 로케일에서
+      // 채운다. **근사임을 명시한다**: WE 값은 WE UI 언어 설정이고 여기서는 시스템 로케일이다.
+      // 네이티브가 언젠가 실제 값을 넣으면 그쪽이 이긴다(덮어쓰지 않는다).
+      function withDefaultLanguage(general) {
+        if (!general || typeof general !== 'object') { return general; }
+        if (general.language) { return general; }
+        try {
+          var tag = (window.navigator && (navigator.language || navigator.userLanguage)) || '';
+          if (tag) { general.language = String(tag).toLowerCase(); }
+        } catch (e) {}
+        return general;
+      }
       function flush() {
         if (!listener) { return; }
         if (pendingProps && listener.applyUserProperties) {
@@ -125,6 +192,7 @@ enum WallpaperBridgeJS {
           pendingGeneral = null;
         }
         flushDirectoryAdds();
+        flushDirectoryRemoves();
       }
       function flushDirectoryAdds() {
         if (!listener || !listener.userDirectoryFilesAddedOrChanged) { return; }
@@ -132,6 +200,19 @@ enum WallpaperBridgeJS {
         pendingDirectoryAdds = [];
         for (var i = 0; i < pending.length; i++) {
           try { listener.userDirectoryFilesAddedOrChanged(pending[i].name, pending[i].files); } catch (e) {}
+        }
+      }
+      // WE 는 추가/변경과 **삭제를 별도 콜백으로** 통지한다(브라우저 프로세스가 만드는 JS 원문:
+      // 0x140009c9a–0x14000a0c4 가 `userDirectoryFilesAddedOrChanged`, 0x14000a0f7–0x14000a50a 가
+      // `userDirectoryFilesRemoved` 를 같은 `if(listener&&listener.<cb>){...(name,[files]);}`
+      // 형태로 생성한다). 브리지 쪽 대칭을 여기서 채운다 — 네이티브 트리거(디렉터리 감시의
+      // 삭제 이벤트)는 `WebRenderer` 소관이라 아직 없다(docs/re/web-wallpaper-bridge.md 참조).
+      function flushDirectoryRemoves() {
+        if (!listener || !listener.userDirectoryFilesRemoved) { return; }
+        var pending = pendingDirectoryRemoves;
+        pendingDirectoryRemoves = [];
+        for (var i = 0; i < pending.length; i++) {
+          try { listener.userDirectoryFilesRemoved(pending[i].name, pending[i].files); } catch (e) {}
         }
       }
       function propagateProps(props, general) {
@@ -184,6 +265,7 @@ enum WallpaperBridgeJS {
         configurable: true
       });
       defineBridge('__wapleApplyProps', function (props, general) {
+        general = withDefaultLanguage(general);
         lastProps = props; lastGeneral = general;
         pendingProps = props; pendingGeneral = general; flush();
         propagateProps(props, general);
@@ -216,6 +298,18 @@ enum WallpaperBridgeJS {
           try {
             if (typeof child.__wapleDirectoryFilesAddedOrChanged === 'function') {
               child.__wapleDirectoryFilesAddedOrChanged(event.name, event.files);
+            }
+          } catch (e) {}
+        });
+      });
+      defineBridge('__wapleDirectoryFilesRemoved', function (name, files) {
+        var event = { name: String(name), files: Array.isArray(files) ? files : [] };
+        pendingDirectoryRemoves.push(event);
+        flushDirectoryRemoves();
+        forEachChild(function (child) {
+          try {
+            if (typeof child.__wapleDirectoryFilesRemoved === 'function') {
+              child.__wapleDirectoryFilesRemoved(event.name, event.files);
             }
           } catch (e) {}
         });
