@@ -32,6 +32,12 @@ final class TextPointerTargetWiringTests: XCTestCase {
         r.textLayers = d.texts.enumerated().map {
             gpuText($0.element, uid: $0.offset, w: raster.x, h: raster.y)
         }
+        // `makeScriptEngine` 은 `sceneScript` 가 없으면 **간단 init** 으로 떨어지는데 그쪽은
+        // `update` 를 요구한다(`TextScriptEngine.init?(script:scriptPropsJSON:owner:)` 의
+        // `guard let fn = ctx.objectForKeyedSubscript("update")`). 커서 훅만 있는 스크립트는
+        // 그 관문을 못 넘어 nil 이 된다 — 실제 mount 처럼 씬 컨텍스트를 먼저 붙인다.
+        r.sceneScript = try XCTUnwrap(SceneScriptContext(
+            layers: d.texts.map { SceneScriptLayerDescriptor(name: $0.name) }))
         let engine = try XCTUnwrap(r.makeScriptEngine(
             "export function cursorClick(e) { shared.n = (shared.n || 0) + 1; }",
             layerName: d.texts[0].name.isEmpty ? nil : d.texts[0].name,

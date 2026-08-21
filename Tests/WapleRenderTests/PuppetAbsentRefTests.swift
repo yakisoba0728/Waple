@@ -104,14 +104,19 @@ final class PuppetAbsentRefTests: XCTestCase {
         for v: Float in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] { f(v) }
         d.append(0)                             // pad
         d.append(Data("MDLA0001".utf8)); d.append(0)
-        u(0); u(2); u(0); u(0)                  // nextOff, 애니수, id, 0
+        // [2026-08-21] MDLA 프레이밍 정정(`PuppetModel` 헤더 주석 · docs/re/skeleton-animation.md §6):
+        // 클립 선두는 **u64 id** 이고, 본 레코드는 `u32 trackFlags | u32 트랙크기 | 트랙` 이다.
+        // 종전 픽스처는 헤더에 `id, 0` 을 두고 트랙 뒤에 "blob2" 를 붙였는데, 그 둘이 정확히
+        // 한 칸씩 밀려 **클립 1의 이름이 "clipB" 가 아니라 "B" 로 읽혔다**(4바이트 잠식).
+        u(0); u(2)                              // nextOff, 애니수
         for (name, dx) in [("clipA", Float(0)), ("clipB", Float(100_000))] {
+            u(0); u(0)                          // u64 클립 id = 0
             d.append(Data(name.utf8)); d.append(0)
             d.append(Data("loop".utf8)); d.append(0)
-            f(1); u(1); u(0); u(1); u(0)        // fps, length, 0, 트랙본수, 0
-            u(36)                               // 1키(36B)
+            f(1); u(1); u(0); u(1)              // fps, frameCount, flags, 본수
+            u(0)                                // 본0 trackFlags
+            u(36)                               // 본0 트랙크기 = 1키(36B)
             f(dx); f(0); f(0); f(0); f(0); f(0); f(1); f(1); f(1)  // pos/angles/scale
-            u(0)                                // blob2
         }
         return d
     }
@@ -143,13 +148,14 @@ final class PuppetAbsentRefTests: XCTestCase {
         for v: Float in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] { f(v) }
         d.append(0)                             // pad
         d.append(Data("MDLA0001".utf8)); d.append(0)
-        u(0); u(1); u(0); u(0)                  // nextOff, 애니수=1, id, 0
+        u(0); u(1)                              // nextOff, 애니수=1
+        u(0); u(0)                              // u64 클립 id = 0
         d.append(Data("clipA".utf8)); d.append(0)
         d.append(Data("loop".utf8)); d.append(0)
-        f(1); u(1); u(0); u(1); u(0)            // fps, length, 0, 트랙본수, 0
-        u(36)                                   // 1키(36B)
+        f(1); u(1); u(0); u(1)                  // fps, frameCount, flags, 본수
+        u(0)                                    // 본0 trackFlags
+        u(36)                                   // 본0 트랙크기 = 1키(36B)
         f(0); f(0); f(0); f(0); f(0); f(0); f(1); f(1); f(1)  // pos/angles/scale(항등)
-        u(0)                                    // blob2
         return d
     }
 
