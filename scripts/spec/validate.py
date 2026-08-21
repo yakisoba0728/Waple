@@ -202,22 +202,54 @@ def _walk_strings(v):
             yield from _walk_strings(x)
 
 
-def hedge_triage(entries, path):
-    """확정 항목 value 안의 헤지 표현을 찾아 보고 문자열 목록으로 낸다."""
-    out = []
+def superseded_ids(docs):
+    """다른 항목이 `supersedes` 로 가리키는 id 집합 = **묘비(tombstone)**.
+
+    묘비는 답이 나온 뒤에도 **당시 서술을 지우지 않고 남긴** 항목이다(예:
+    `engine.bloom.hdr.upsampleWeightUnknown`). 지우지 않는 이유가 이 리포에 적혀 있다 —
+    근거 축소 가드가 항목·키 소멸을 잡는데 하나를 통과시키려고 `allow_shrink` 를 켜면
+    그 파일의 가드가 영구히 꺼지고, 게다가 소스·히스토리 문서가 그 id 를 인용한다.
+
+    그래서 묘비 안에는 "미확인" 같은 헤지가 **정당하게** 남는다. 그걸 계속 신고하면
+    헤지 목록이 영구 오탐을 달고 다니게 되고, 목록 전체가 무시당한다 — 실제 헤지가 그
+    소음에 묻힌다. 여기서 걸러내되 **개수는 반드시 보고**한다(조용히 빼면 그게 더 나쁘다).
+
+    이 면제는 스위치가 아니다 — 면제를 받으려면 **다른 항목이 실제로 이 id 를
+    `supersedes` 로 대체**해야 한다. 대체 항목 없이 헤지만 지우는 길은 없다.
+    """
+    out = set()
+    for d in docs.values():
+        for e in d.get("entries", []):
+            sup = (e.get("value") or {}).get("supersedes") if isinstance(e.get("value"), dict) else None
+            if isinstance(sup, str):
+                out.add(sup)
+            elif isinstance(sup, list):
+                out.update(x for x in sup if isinstance(x, str))
+    return out
+
+
+def hedge_triage(entries, path, tombstones=frozenset()):
+    """확정 항목 value 안의 헤지 표현을 찾아 (보고 문자열 목록, 묘비 면제 수) 를 낸다."""
+    out, exempt = [], 0
     p = os.path.basename(path)
     for e in entries:
         if e.get("status") != "확정":
             continue
+        hit = None
         for s in _walk_strings(e.get("value")):
             for w in HEDGE_WORDS:
                 if w in s:
-                    out.append(f"{p}:{e.get('id')}: 확정인데 '{w}' 가 들어 있다 — {s[:80]}")
+                    hit = f"{p}:{e.get('id')}: 확정인데 '{w}' 가 들어 있다 — {s[:80]}"
                     break
-            else:
-                continue
-            break
-    return out
+            if hit:
+                break
+        if hit is None:
+            continue
+        if e.get("id") in tombstones:
+            exempt += 1          # 대체 항목이 있는 묘비 — 당시 서술이라 정당하다
+            continue
+        out.append(hit)
+    return out, exempt
 
 
 def cross_document_checks(docs):
@@ -293,7 +325,6 @@ def main(argv):
         for e in entries:
             if e.get("status") in stats:
                 stats[e["status"]] += 1
-        hedges += hedge_triage(entries, p)
         if errs:
             print(f"FAIL {p}")
             for e in errs:
@@ -301,6 +332,14 @@ def main(argv):
             total_err += len(errs)
         else:
             print(f"ok   {p}  ({len(entries)} 항목)")
+
+    # 헤지 매기기는 **문서를 다 읽은 뒤**다 — 묘비 판정에 다른 문서의 `supersedes` 가 필요하다.
+    tombs = superseded_ids(docs)
+    hedge_exempt = 0
+    for p, d in sorted(docs.items()):
+        hs, ex = hedge_triage(d.get("entries", []), p, tombs)
+        hedges += hs
+        hedge_exempt += ex
 
     # 문서 하나만 봐서는 못 잡는 것 — 이게 없어서 모순 4건이 오류 0 을 통과했었다.
     cross = cross_document_checks(docs)
@@ -318,9 +357,14 @@ def main(argv):
         if len(hedges) > 15:
             print(f"   ... 외 {len(hedges) - 15}건")
 
+    # 조용히 빼지 않는다 — 면제한 개수를 항상 찍는다(0 이어도).
+    print(f"   (묘비 면제 {hedge_exempt}건 — 다른 항목이 supersedes 로 대체한 id 라 "
+          f"당시 서술의 헤지는 정당하다)")
+
     print()
     print("상태 분포: " + " / ".join(f"{k} {v}" for k, v in stats.items()))
-    print(f"오류 {total_err} 건 · 문서간 경고 {len(cross)}건 · 헤지 {len(hedges)}건")
+    print(f"오류 {total_err} 건 · 문서간 경고 {len(cross)}건 · "
+          f"헤지 {len(hedges)}건(묘비 면제 {hedge_exempt}건 별도)")
     return 0 if total_err == 0 else 1
 
 

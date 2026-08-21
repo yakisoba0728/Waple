@@ -159,19 +159,64 @@ class TestHedgeTriage(unittest.TestCase):
     def test_hedge_in_confirmed_value_is_flagged(self):
         e = {"id": "a.b", "value": {"note": "의미는 미확인"}, "status": "확정",
              "evidence": [{"kind": "corpus", "ref": "r"}]}
-        hits = validate.hedge_triage([e], "t.json")
+        hits, exempt = validate.hedge_triage([e], "t.json")
         self.assertEqual(len(hits), 1)
         self.assertIn("미확인", hits[0])
+        self.assertEqual(exempt, 0)
 
     def test_hedge_in_report_status_is_not_flagged(self):
         e = {"id": "a.b", "value": {"note": "의미는 미확인"}, "status": "보고",
              "evidence": [{"kind": "recon", "ref": "r"}]}
-        self.assertEqual(validate.hedge_triage([e], "t.json"), [])
+        self.assertEqual(validate.hedge_triage([e], "t.json"), ([], 0))
 
     def test_clean_confirmed_value_is_not_flagged(self):
         e = {"id": "a.b", "value": {"count": 162}, "status": "확정",
              "evidence": [{"kind": "corpus", "ref": "r"}]}
-        self.assertEqual(validate.hedge_triage([e], "t.json"), [])
+        self.assertEqual(validate.hedge_triage([e], "t.json"), ([], 0))
+
+    # ── 묘비 면제 ────────────────────────────────────────────────────────────
+    # 답이 나온 뒤에도 당시 서술을 남기는 항목(`supersedes` 로 대체된 id)은 헤지가
+    # 정당하다. 다만 **면제는 개수로 보고**되고, 대체 항목 없이는 절대 면제되지 않는다.
+
+    def test_tombstone_hedge_is_exempted_and_counted(self):
+        e = {"id": "a.old", "value": {"note": "의미는 미확인"}, "status": "확정",
+             "evidence": [{"kind": "corpus", "ref": "r"}]}
+        hits, exempt = validate.hedge_triage([e], "t.json", {"a.old"})
+        self.assertEqual(hits, [])
+        self.assertEqual(exempt, 1, "면제는 조용히 사라지면 안 되고 개수로 남아야 한다")
+
+    def test_tombstone_set_comes_only_from_supersedes(self):
+        docs = {
+            "a.json": doc(entries=[
+                {"id": "a.old", "value": {"note": "미확인"}, "status": "확정",
+                 "evidence": [{"kind": "corpus", "ref": "r"}]},
+                {"id": "a.new", "value": {"supersedes": "a.old"}, "status": "확정",
+                 "evidence": [{"kind": "corpus", "ref": "r"}]}]),
+        }
+        self.assertEqual(validate.superseded_ids(docs), {"a.old"})
+
+    def test_without_superseding_entry_the_hedge_still_fires(self):
+        """면제가 스위치가 아니라는 증명 — 대체 항목을 지우면 헤지가 되살아난다."""
+        docs = {"a.json": doc(entries=[
+            {"id": "a.old", "value": {"note": "미확인"}, "status": "확정",
+             "evidence": [{"kind": "corpus", "ref": "r"}]}])}
+        tombs = validate.superseded_ids(docs)
+        self.assertEqual(tombs, set())
+        hits, exempt = validate.hedge_triage(docs["a.json"]["entries"], "a.json", tombs)
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(exempt, 0)
+
+    def test_supersedes_may_be_a_list(self):
+        docs = {"a.json": doc(entries=[
+            {"id": "a.new", "value": {"supersedes": ["a.old1", "a.old2"]}, "status": "확정",
+             "evidence": [{"kind": "corpus", "ref": "r"}]}])}
+        self.assertEqual(validate.superseded_ids(docs), {"a.old1", "a.old2"})
+
+    def test_non_dict_value_does_not_crash_superseded_scan(self):
+        docs = {"a.json": doc(entries=[
+            {"id": "a.x", "value": 162, "status": "확정",
+             "evidence": [{"kind": "corpus", "ref": "r"}]}])}
+        self.assertEqual(validate.superseded_ids(docs), set())
 
 
 def ref_doc(ref):
