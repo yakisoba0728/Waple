@@ -247,7 +247,7 @@ CODE_SITES = {
         "WE 폰트 MSDF 아틀라스 빌더": (0x1401ae080, "4c894c24204c894424184889",
                                       "0x1401af40e 에서 angleThreshold 3.0 을 싣고 "
                                       "0x1401af41a 에서 edgeColoringSimple 을 부른다. "
-                                      "0x1401af111 이 -0.999999(=CORNER_DOT_EPSILON-1)"),
+                                      "0x1401af10c 이 -0.999999(=CORNER_DOT_EPSILON-1)"),
     },
     "perlin-simplex-noise": {
         "noise(float x)": (0x14027b090, "4883ec18f30f101d547f2100",

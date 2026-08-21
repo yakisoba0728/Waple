@@ -90,12 +90,14 @@ DATA_TABLE_MARKER = "[VA-데이터표]"
 # 없으므로 (파일, 키) 로 좁혀 면제한다. 그 뜻은 정본 자신이 `engine.renderPass.addressSemantics`
 # 에 적고 있다. 키 이름만으로 면제하면 다른 정본의 진짜 명령 주소까지 덮으므로 **파일까지** 묶는다.
 SCANNER_ADDRESS_FIELDS = {
-    "spec/engine/render-pass.json": {"at", "combineLastUseAt", "ccsimpleFirstUseAt", "fadeFirstUseAt"},
+    "spec/engine/render-pass.json": {
+        "at", "combineLastUseAt", "ccsimpleFirstUseAt", "fadeFirstUseAt",
+        # 맨몸 배열. `branchA(…)`/`branchB(…)` 로 한 겹 더 들어가므로 **조상 키**로 건다.
+        "sitesInFrameFn",
+    },
+    # 같은 `rip_refs` 산출물. 정본 자신이 `parseSiteVA 의 뜻` 키로 그렇게 적고 있다.
+    "spec/engine/shape-quad.json": {"parseSiteVA", "xrefs"},
 }
-
-# 같은 이유로, 이 파일들의 **맨몸 배열 원소**(`"0x…",`)도 스캐너 산출 위치다
-# (예: `sitesInFrameFn` 의 목록). 파일을 명시하므로 다른 정본에는 안 번진다.
-SCANNER_ADDRESS_BARE = {"spec/engine/render-pass.json"}
 
 # JSON 정본에서 **범위의 끝**을 담는 키 이름. `"to": "0x…"` 는 이름 자체가 끝을 말한다 —
 # 끝은 배타적이거나 마지막 명령 주소라 경계가 아닐 수 있다(산문 `A–B` 의 B 와 같은 이유).
@@ -103,6 +105,7 @@ SCANNER_ADDRESS_BARE = {"spec/engine/render-pass.json"}
 RANGE_END_KEYS = {"to", "end", "rangeEnd", "endVA"}
 BARE_LINE = re.compile(r'^"0x[0-9a-fA-F]+",?$')
 KV_LINE = re.compile(r'^"([A-Za-z0-9_]+)":\s*"0x[0-9a-fA-F]+",?$')
+CONTAINER_OPEN = re.compile(r'^"([^"]+)":\s*[\[{]$')
 
 CORRECTION_LINES = {
     # `decompilation-provenance.json` 의 두 목록은 **일부러** 비경계 주소를 담는다 —
@@ -202,14 +205,17 @@ def main(argv):
     # wallpaperui 35 · wallpaper64 20 · scenescript64 11 · webwallpaper64 6). 그런 파일은 기준
     # 하나로만 재면 통째로 오탐이 된다. 여기 준 이미지들은 **면죄용으로만** 쓴다 — 어느
     # 이미지에서 경계면 그 사실과 이미지 이름을 찍고 이탈에서 뺀다.
-    also = []
-    while "--also" in args:
-        i = args.index("--also")
-        if i + 1 >= len(args):
-            print("--also 다음에 경로가 필요하다")
-            return 1
-        also.append(args[i + 1])
-        del args[i:i + 2]
+    also, also_data = [], set()
+    for flag, weak in (("--also-data", True), ("--also", False)):
+        while flag in args:
+            i = args.index(flag)
+            if i + 1 >= len(args):
+                print(f"{flag} 다음에 경로가 필요하다")
+                return 1
+            also.append(args[i + 1])
+            if weak:
+                also_data.add(args[i + 1])
+            del args[i:i + 2]
     # `--binary <경로>` 로 **다른 WE 바이너리**를 재게 한다(함정 11). WE 는 여러 이미지로 나뉘고
     # 전부 imagebase 가 같아서, 한 이미지로만 재면 다른 이미지의 인용이 통째로 오탐이 된다.
     if args and args[0] == "--binary":
@@ -255,8 +261,18 @@ def main(argv):
         if counts:
             counts["wallpaper64.exe"] = txt.count("wallpaper64.exe") - txt.count("webwallpaper64.exe")
             mixed[str(f)] = counts
+        scanner_fields = SCANNER_ADDRESS_FIELDS.get(str(f), frozenset())
+        open_keys = []                            # 지금 줄을 감싸고 있는 **배열 키**의 사슬
         for line in txt.splitlines():
             stripped = line.strip()
+            if stripped[:1] in ("]", "}"):
+                if open_keys:
+                    open_keys.pop()
+            elif stripped[-1:] in ("[", "{"):
+                # `"키": [` / `"키": {` 는 그 키를, 익명 `[`·`{`(배열 안의 배열/객체)는
+                # 바로 위 키를 그대로 물려받는다 — 그래야 원소가 조상 키에 계속 매달린다.
+                m = CONTAINER_OPEN.match(stripped)
+                open_keys.append(m.group(1) if m else (open_keys[-1] if open_keys else ""))
             record = (CORRECTION_MARKER in stripped or SCANNER_MARKER in stripped
                       or DATA_TABLE_MARKER in stripped or stripped in CORRECTION_LINES)
             if not record:
@@ -265,7 +281,12 @@ def main(argv):
                     record = True
                 elif kv and kv.group(1) in RANGE_END_KEYS:
                     ends[int(re.search(r"0x[0-9a-fA-F]+", stripped).group(0), 16)] += 1
-                elif str(f) in SCANNER_ADDRESS_BARE and BARE_LINE.match(stripped):
+                elif BARE_LINE.match(stripped) and (
+                    scanner_fields & set(open_keys)
+                ):
+                    # 맨몸 원소(`"0x…",`)에는 자기 키가 없다. 그래서 **감싸고 있는 키**로 건다.
+                    # 조상 사슬 전체를 보는 이유: `sitesInFrameFn` → `branchA(블룸 off)` 처럼
+                    # 익명이 아닌 중간 키가 한 겹 더 끼는 정본이 있다.
                     record = True
             for m in VA_RE.finditer(line):
                 va = int(m.group(0), 16)
@@ -386,6 +407,18 @@ def main(argv):
             for va in sorted(pending):
                 fn = containing(f2, va)
                 if not fn:
+                    # 그 이미지에서는 **어떤 `.pdata` 범위에도 없다** = 데이터(.rdata 문자열·상수)
+                    # 이거나 언와인드 없는 리프다. 실사례: 웹 문서의 `0x14011ab5c` 류는
+                    # `webwallpaper64.exe` 의 `.rdata` 문자열 주소이고 문서도 그렇게 적고 있는데,
+                    # `wallpaper64.exe` 로 재면 함수 한복판으로 보인다.
+                    #
+                    # **다만 이건 약한 신호다.** 이미지가 여럿이면 "그중 하나에서는 .pdata 밖" 이
+                    # 거의 항상 참이라 그물이 통째로 무너진다(실측: 8개를 주면 경계 이탈이 14 → 0
+                    # 이 됐다 — 진짜로 다 설명된 게 아니라 규칙이 공허해진 것이다). 그래서 이건
+                    # `--also-data` 로 **명시 opt-in** 이고, 문서가 **이름을 밝힌 그 이미지 하나**에만
+                    # 주는 것이 옳은 사용법이다.
+                    if extra in also_data:
+                        excused[va] = os.path.basename(extra) + "(데이터/리프)"
                     continue
                 if fn not in cache2:
                     o2 = disasm.off_of(fn[0], s2)
