@@ -379,3 +379,38 @@ particle lifetime" 을 근거로 삼고 있었다. 핸들러는 `age` 배열을 
 5. **레지스터 상수는 지배 관계로 판정하라.** 같은 함수 앞 구간의 기입은 루프 프리헤더에 덮인다(§0).
 6. **도수는 범위 라벨과 함께.** `all`(전수) / `unique`(sha256 중복 제거) 는 동봉 트리에서 거의
    두 배 차이가 난다. `spec/assets/particle-corpus.json` 을 인용하라.
+7. **x86 을 뜯기 전에 자산을 먼저 grep 하라.** WE 는 GLSL 셰이더 원문을 `assets/shaders/` 에
+   동봉하고, 유니폼 어노테이션이 머티리얼 파라미터 이름을 직접 적는다. `TEXnFORMAT` 도
+   블룸 `scatter` 도 그 한 줄이 답이었다 — 디스어셈블은 확인이었지 발견이 아니었다.
+8. **파서가 실제로 읽는 키/어노테이션을 확인하라.** 이름이 비슷한 다른 것일 수 있다
+   (`"combo"` vs `"formatcombo"`).
+9. **문자열 검색은 ASCII 와 UTF-16LE 양쪽으로.** MSVC 어서션의 `__FILE__` 은 wide 이고
+   C 라이브러리의 자기 로그는 narrow 다. **어느 한쪽만 돌린 결과로 부재를 주장하지 마라** —
+   ASCII-only 가 FFTS·GLM 을 "없다" 고 했고, 그 정정으로 만든 UTF-16-only 측정기가 이번엔
+   HarfBuzz·FreeType·zlib·wuffs 를 통째로 놓쳤다(`spec/engine/linked-libraries.json`).
+   **같은 실수의 대칭형이다.**
+10. **짧은 문자열은 `lea` 가 아니라 `mov` 로 온다 — xref 스캔의 구조적 사각지대.**
+    MSVC `std::string` 은 15바이트까지 SSO 라, 짧은 키는 `.rdata` 의 **주소를 싣지 않고**
+    바이트를 스택 버퍼에 직접 조립한다. 오브젝트 팩토리가 `"model"` 을 만드는 자리:
+
+    ```
+    0x14018ff7a  mov   eax, dword [rip+0x2f91c8]   ; 0x140489148  = "mode"
+    0x14018ff8e  mov   dword [rbp-0x60], eax
+    0x14018ff95  movzx eax, byte  [rip+0x2f91b0]   ; 0x14048914c  = "l"
+    0x14018ff9c  mov   r15d, 5                     ; 길이
+    0x14018ffa8  mov   ebx, 0xf                    ; SSO 용량 15
+    ```
+
+    문자열은 `.rdata` 에 **있다**(NUL 종단 1건). 다만 `lea` 가 한 번도 안 나온다.
+    실측으로 확인한 팩토리 3개 arm:
+
+    ```
+    model     mov  @0x14018ff7a + movzx @0x14018ff95      lea 로는 0건(다른 3곳은 무관한 자리)
+    particle  mov  @0x140190001                            lea 로는 0건(1곳은 0x14022b387, 무관)
+    image     mov  @0x140190083 + movzx @0x14019009f       lea 로는 0건
+    ```
+
+    → `scripts/re/xref.py` 에 **`mov`/`movzx [rip+d]` 스캔**을 넣었다(3번 갈래). 문자열 시작뿐
+    아니라 **내부 오프셋**까지 맞춰 봐야 2단계 조립(`"mode"` + `"l"`)이 잡힌다. 탐침 범위는
+    그 문자열 길이로 조여야 한다 — 넉넉히 잡으면 뒤에 붙은 다른 문자열의 적재를 오인한다
+    (실측: `"sprite"`(6자)에 +8 오탐 2건).
