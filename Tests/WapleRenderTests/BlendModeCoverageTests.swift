@@ -97,6 +97,69 @@ final class BlendModeCoverageTests: XCTestCase {
         return [px[i], px[i + 1], px[i + 2]]
     }
 
+    /// AJ-B1: **Metal 없이 도는 오라클** — `BlendMSL.applyBlending` 의 `case` 집합이 동봉 원본
+    /// `shaders/common_blending.h` 의 `#if BLENDMODE == n` 집합과 정확히 같은가.
+    ///
+    /// 위 픽셀 테스트들은 Metal 이 있어야 돌아서 리눅스 게이트에서 통째로 스킵된다. 팔이 하나
+    /// 빠지면(예: `case 17` 삭제) 그 모드는 `default: r = B` 로 조용히 Normal 이 되고, 픽셀
+    /// 테스트의 "27종 이상" 하한도 26 으로만 떨어져 안 잡힐 수 있다. 여기서 **집합 자체**를 센다.
+    ///
+    /// 기대값은 헤더 원문에서 읽는다 — 수식을 옮겨 적지 않는다(파일 헤더 주석의 규약 그대로).
+    func testApplyBlendingCaseSetMatchesTheBundledHeader() throws {
+        let fm = FileManager.default
+        var root: URL? = nil
+        if let p = ProcessInfo.processInfo.environment["WAPLE_WE_ASSETS"], !p.isEmpty,
+           fm.fileExists(atPath: p) { root = URL(fileURLWithPath: p) }
+        if root == nil {
+            var dir = URL(fileURLWithPath: fm.currentDirectoryPath)
+            for _ in 0..<8 {
+                let cand = dir.appendingPathComponent("Sources/WapleRender/Resources/WEAssets")
+                if fm.fileExists(atPath: cand.path) { root = cand; break }
+                dir = dir.deletingLastPathComponent()
+            }
+        }
+        guard let assets = root else { throw XCTSkip("WEAssets 미배치") }
+        let headerURL = assets.appendingPathComponent("shaders/common_blending.h")
+        guard fm.fileExists(atPath: headerURL.path) else { throw XCTSkip("동봉 common_blending.h 없음") }
+        let header = try String(contentsOf: headerURL, encoding: .utf8)
+
+        // 동봉 헤더는 CRLF 다 — Swift 는 "\r\n" 을 한 개의 Character 로 보므로
+        // `split(separator: "\n")` 은 한 줄도 못 쪼갠다(브리프 함정 #11). isNewline 으로 쪼갠다.
+        var original: Set<Int> = []
+        for line in header.split(whereSeparator: { $0.isNewline }) {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard t.hasPrefix("#if BLENDMODE ==") else { continue }
+            if let n = Int(t.dropFirst("#if BLENDMODE ==".count).trimmingCharacters(in: .whitespacesAndNewlines)) {
+                original.insert(n)
+            }
+        }
+        XCTAssertEqual(original, Set(1...32), "동봉 헤더의 모드 집합이 1…32 가 아니다")
+
+        // BlendMSL 쪽: `applyBlending` 본문의 `case N:` 만 센다(중첩 `switch` 는 없다).
+        let msl = BlendMSL.source
+        let fnRange = try XCTUnwrap(msl.range(of: "inline float3 applyBlending(int mode,"),
+                                    "BlendMSL 에서 applyBlending 시그니처를 못 찾았다")
+        let body = msl[fnRange.upperBound...]
+        var ported: Set<Int> = []
+        var rest = Substring(body)
+        while let hit = rest.range(of: "case ") {
+            let after = rest[hit.upperBound...]
+            let digits = after.prefix { $0.isNumber }
+            if let n = Int(digits) { ported.insert(n) }
+            rest = after
+        }
+        XCTAssertEqual(ported, original,
+                       "BlendMSL 의 case 집합이 원본과 다르다 — 빠진 것 \(original.subtracting(ported).sorted()) · 남는 것 \(ported.subtracting(original).sorted())")
+
+        // 범위 밖 규약: 원본은 마지막 #endif 뒤에서 BlendNormal 로 흘러내린다(클램프가 아니다).
+        // MSL 쪽 대응은 `default: r = B;` 한 줄이다 — 이게 사라지면 컴파일은 되지만 규약이 갈린다.
+        XCTAssertTrue(msl.contains("default: r = B;"),
+                      "applyBlending 의 default 가 `r = B`(=Normal) 가 아니다 — 범위 밖 규약이 바뀐다")
+        let lastEndif = try XCTUnwrap(header.range(of: "#endif", options: .backwards))
+        XCTAssertTrue(header[lastEndif.upperBound...].contains("BlendNormal"),
+                      "원본 fallthrough 가 BlendNormal 이 아니다 — 위 default 의 근거가 사라진다")
+    }
+
     /// 32종 전부 그려지고, 서로 충분히 갈리는가.
     ///
     /// 붕괴 검출이 목적이다 — 셰이더가 폴백하거나 스위치가 default 로 새면 결과가 한두

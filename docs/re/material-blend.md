@@ -545,6 +545,155 @@ additive 0.912·1.043)을 근거로 프리멀티 오버를 **의도적으로** �
 
 ---
 
+## 7.5 오브젝트 `colorBlendMode` — 전 범위 확정 (2026-08-21, 클러스터 AJ)
+
+§1–§7 은 머티리얼 `blending`(4모드, 하드웨어 블렌드 상태)이다. **`colorBlendMode` 는 다른
+필드다** — 오브젝트(`objects[]`)의 정수 키이고, 머티리얼 `combos.BLENDMODE` 로 실려
+`common_blending.h` 의 `ApplyBlending` 을 고른다. 이름이 비슷할 뿐 §4 의 문자열 표와 무관하다.
+
+### 7.5.1 도메인은 0…32 이고 33개가 전부다
+
+세 근거가 독립으로 같은 답을 준다.
+
+1. **셰이더** `assets/shaders/common_blending.h` 의 `ApplyBlending` 은 `#if BLENDMODE == n` 을
+   n=1…32 로 **정확히 32개** 갖고, 어느 것도 안 맞으면 마지막 줄
+   `return mix(A, BlendNormal(A,B), opacity)` 로 떨어진다. 모드는 런타임 인자가 아니라
+   **전처리기 콤보**다 — 함수 인자 `blendMode` 는 본문에서 한 번도 읽히지 않는다.
+2. **에디터 드롭다운** `bin/wallpaperui.exe`(12,742,640 B) 파일오프셋 `0x00ad2ee0`–`0x00ad33b7`
+   에 `isgrouptitle` 두 개(`ui_editor_blending_group_native` / `…_group_emulated`)와
+   **`ui_editor_blending_*` 라벨 33개**가 한 블록이다(33 = 0…32). 같은 블록의 값 리터럴은
+   `2 3 4 5 6 9 11…32` 이고 빠진 `0 1 7 8 10` 은 12MB 바이너리 어디서든 접히는 짧은 리터럴이다.
+   **라벨↔값 짝을 이 풀 순서로 짓지 마라** — 함정 #16 그대로 한 칸씩 밀린다. 이름은
+   `common_blending.h` 매크로에서 읽어야 안전하다.
+3. **파서** `colorBlendMode`(문자열 `0x140490870`, 디스크립터 등록 `0x1401eeec2`, 멤버
+   오프셋 `0x32c`)는 리플렉션 int 주입기 `0x1401a4930` 이 태그 1/2 는 `mov`, 태그 3 은
+   `cvttsd2si`(`0x1401a4962`)로 **생짜 int32** 를 꽂는다. **범위 검사도 클램프도 없다.**
+   태그 4(문자열)는 `jne 0x1401a4970` 으로 저장을 건너뛰어 **생성자 기본값 0 이 남는다**
+   (`0x1401e6a14` `mov [rbx+0x32c], eax`, eax=0 — 함정 #15 그대로).
+
+> 부수 정정: §4.1 이 `blending` 의 `[rbx+0x34] = 0x1f0` 을 "프로퍼티 id 496" 이라 적었는데,
+> 같은 자리를 **멤버 오프셋**으로 쓰는 명령이 실재한다 — `0x1401ea0b6` `mov byte [rdi+0x1f0], al`
+> 이 머티리얼 객체의 blending 열거값을 그 오프셋에 쓴다. `colorBlendMode` 도 마찬가지로
+> `[rbx+0x34] = 0x32c` 이고 `0x140206be0` 이 `[rdi+0x32c]` 를 읽는다. 즉 디스크립터의
+> `+0x34` 는 **멤버 오프셋**이다.
+
+### 7.5.2 범위 밖 정수 = 클램프가 **아니라** Normal 로 흘러내림
+
+`colorBlendMode` 는 `combos.BLENDMODE` 로 **그대로** 실린다 — 세 자리 전건
+(`0x140206be0` 오브젝트 머티리얼 합성기 · `0x1401ebc96` effectpassthrough 합성기 ·
+`0x140257911` 세 번째 사본) `movsxd rcx, esi` 후 대입이고 상한 검사가 없다.
+그러면 셰이더가 `#define BLENDMODE 99` 로 컴파일돼 `ApplyBlending` 마지막 줄로 떨어지고
+결과는 **BlendNormal = `mix(A,B,opacity)`**, 즉 평범한 알파 합성이다. 음수도 같다.
+
+→ `SceneDocument.blendModeVal`(`Sources/WapleCore/SceneDocument.swift:3495`)이 범위 밖을
+**32 로 자르지 않고 0 으로 떨어뜨리는** 종전 선택은 이제 실측 뒷받침이 있다. 0 도 결국 같은
+알파 합성이라 불투명 배경에서 화면이 같다. (종전 주석은 "32 로 자르면 Negation 이 적용된다"
+는 **추론**이었다. 결론은 같지만 근거가 바뀐다.)
+
+### 7.5.3 0 과 31 은 셰이더 표에 도달하지 않는다 — WE 의 native 고속 경로
+
+머티리얼 합성기 세 자리가 전건 같은 코드를 갖는다:
+
+```
+0x140206be0  mov  esi, [rdi+0x32c]   ; colorBlendMode
+0x140206be9  test esi, esi
+0x140206beb  je   0x140206bf2        ; 0 이면
+0x140206bed  cmp  esi, 0x1f
+0x140206bf0  jne  0x140206bf5        ; 31 이 아니면 그대로
+0x140206bf2  mov  esi, r12d          ; 0 또는 31 → combos.BLENDMODE = 0
+0x140206c26  movsxd rcx, esi
+0x140206c29  mov  [rax], rcx
+```
+
+그리고 드로우 직전에 머티리얼 blending 열거값을 **갈아끼운다**(두 자리, 사본):
+
+```
+0x1401ea096  cmp  dword [rbx+0x32c], 0x1f
+0x1401ea0a4  jne  0x1401ea0aa
+0x1401ea0a6  mov  al, 2              ; 2 = additive (§4.1 표)
+0x1401ea0b6  mov  [rdi+0x1f0], al
+                                     ; else al = call [vtable+0x120] (머티리얼 자기 blending)
+0x140208786  cmp  dword [rbp+0x32c], 0x1f   ; 두 번째 사본 — 원값을 0x14020878d/0x140208795 에서
+                                     ;   [rsp+0xb0] 로 빼 두고 0x140208c09 에서 되돌린다
+```
+
+거기에 **프레임버퍼 요청도 같은 조건으로 걸린다** — `0x1401e8ef2`/`0x1401e8f44` 가 같은
+`0 또는 31` 검사를 하고, 아닐 때만 `_rt_FullFrameBuffer`(`0x14048b588`)를 잡는다
+(`0x1401e8f7f` / `0x1401ea0fb`).
+
+정리:
+
+| colorBlendMode | combos.BLENDMODE | 머티리얼 blending | `_rt_FullFrameBuffer` | 성격 |
+| ---: | ---: | --- | --- | --- |
+| 0 | 0 | 저작대로(오브젝트 기본) | 안 잡음 | native |
+| 31 | 0 | **강제 additive(2)** | 안 잡음 | native |
+| 1…30 · 32 | 그 값 | 저작대로 | **잡음** | emulated(셰이더) |
+| 범위 밖 | 그 값 | 저작대로 | 잡음 | `#if` 미적중 → BlendNormal |
+
+에디터 UI 의 그룹 헤더 `native (fast)` / `emulated (slow)` 가 이 분기와 정확히 맞는다
+(**추정**: 그룹 멤버십 자체는 `wallpaperui.exe` 를 더 뜯어야 확정된다. 확정된 것은
+"엔진이 native 로 처리하는 오브젝트 모드는 0 과 31 뿐" 이다).
+
+`genericimage2.frag` 의 해당 블록이 emulated 경로의 정본이다:
+
+```glsl
+#if BLENDMODE
+    vec2 screenCoord = v_ScreenCoord.xy / v_ScreenCoord.z * vec2(0.5, 0.5) + 0.5;
+    vec4 screen = texSample2D(g_Texture4, screenCoord);   // g_Texture4 default "_rt_FullFrameBuffer"
+    gl_FragColor.rgb = ApplyBlending(BLENDMODE, screen.rgb, gl_FragColor.rgb, gl_FragColor.a);
+    gl_FragColor.a = screen.a;
+#endif
+```
+
+### 7.5.4 알파 / 프리멀티플라이
+
+* WE 는 **straight(비-프리멀티)** 알파를 셰이더에서 내고 블렌드 상태가 `SRC_ALPHA` 를 곱한다
+  (§6 B5/B7, 정본 `renderState.alpha.straightNotPremultiplied`).
+* 위 블록의 `ApplyBlending` 은 **A·B 양변 모두 straight** 다. A 는 프레임버퍼 색(누적 결과),
+  B 는 이 레이어의 straight 색, opacity 는 이 레이어의 straight 알파.
+* 알파는 `gl_FragColor.a = screen.a` 로 되돌리고, 머티리얼 드로우는 `WriteMask 7`(§4.2)이라
+  **알파를 아예 기록하지 않는다**.
+* Waple `QuadShaders.f_blend` 는 같은 규약이다 — `c.rgb` 에 알파를 곱하지 않고
+  `applyBlending(mode, d.rgb, c.rgb*tint.rgb, c.a*tint.a)` 로 넘기고 `float4(r, d.a)` 로 쓴다
+  (하드웨어 블렌딩 OFF). dst 로 쓰는 acc 는 프리멀티 누적이지만 **누적 RGB 식이
+  `src*a + dst*(1-a)` 로 WE 프레임버퍼와 동일**하므로 A 가 그대로 맞고, 알파는 `d.a` 를
+  되쓰므로 "안 건드림" 과 같다. **즉 이 경로의 RGB·A 는 WE 와 수식이 같다.**
+* 31 도 마찬가지다 — `A + B*o` = `dst + src.rgb*src.a` 는 WE 의 additive 하드웨어 블렌드
+  (`SRC_ALPHA`/`ONE`)와 같은 식이다. **틀리지 않고, 대신 비싸다**(§7.5.6).
+
+### 7.5.5 코퍼스 도달 — 범위 라벨 포함
+
+| 모집단 | 측정 |
+| --- | --- |
+| 워크샵 코퍼스(정본 `spec/corpus/scene-schema.json` `scene.objects.colorBlendMode` **인용**, 이 컨테이너에 코퍼스가 없어 재측정 안 함) | image **782건/83씬**, text **41건/14씬**, 범위 밖 **0건**. image 분포 31:447 · 0:132 · 11:45 · 6:37 · 2:29 · 1:16 · 22:12 · 7:11 · 32:10 · 9:9 · 30:7 · 12:5 · 23:4 · 24:4 · 3:3 · 4:2 · 21:2 · 8/15/16/18/19/27/28 각 1. text 분포 0:18 · 31:12 · 11:4 · 12:2 · 17:2 · 24:2 · 28:1 |
+| image 미도달 모드 | 5 · 10 · 13 · 14 · 17 · 20 · 25 · 26 · 29 (9종) |
+| 동봉 `Sources/WapleRender/Resources/WEAssets` (json 1698) | `objects[].colorBlendMode` 42건/32파일 **전건 0**. `passes[].combos.BLENDMODE` 10건/8파일 = {0:6, 2:2, 9:1, 23:1} |
+| 설치본 `wallpaper_engine` (json 2143) | `colorBlendMode` 66건/36파일 = {0:60, 11:5, 12:1}. `passes[].combos.BLENDMODE` 12건/10파일 = {0:6, 2:2, 9:1, 12:1, 23:1, 30:1} |
+| 셰이더 `[COMBO] "type":"imageblending"` 선언(설치본 `*.frag`/`*.vert` 전수 58줄) | `default` = 0×14 · 2×10 · 9×10 · 12×6 · 31×8 · 32×5 · 30×3 · 22×2 |
+| `colorBlendMode ∉ {0,31}` × 머티리얼 `blending == "additive"` | 설치본 6건(`razer_bedroom` 11×5·12×1) 전부 `material` 키 부재 → **동봉·설치본 도달 0** |
+
+**따라서 워크샵 코퍼스에서 31 이 image 오브젝트의 57%(447/782)로 최다**이고, 이것이 WE 에서는
+셰이더를 아예 안 타는 native 경로다.
+
+### 7.5.6 Waple 대조 — 어긋난 항목 (§6 표의 연장)
+
+| # | 항목 | WE(실측) | Waple | 도달 | 등급 |
+| --- | --- | --- | --- | --- | --- |
+| **B8** | `colorBlendMode == 31` | `combos.BLENDMODE=0` + 머티리얼 blending **additive 강제**, 프레임버퍼 스냅샷 **안 잡음**(`0x1401ea096`·`0x1401e8ef2`) | `f_blend` 스냅샷 경로 + `case 31: A+B*o`. **수식 동일**, 대신 레이어마다 acc 전체를 blit 한다(`SceneRendererFrameEncoder.swift:474` `blit.copy(from: acc, to: snap)`) | 워크샵 image 447/782 · text 12/41. 동봉/설치본 0 | **성능**(그림 차이 없음) |
+| **B9** | `colorBlendMode ∉ {0,31}` 인데 머티리얼이 `additive`/`translucent` | 셰이더 블렌드 결과에 **하드웨어 블렌드가 한 번 더 적용**된다(머티리얼 blending 이 그대로 남으므로) | `f_blend` 는 하드웨어 블렌딩 OFF — 계산 결과를 직기록 | 배경 알파 1 이면 두 경로가 같다. 갈리는 것은 acc 알파 < 1 구간 + additive 조합. **동봉·설치본 도달 0**, 워크샵 미측정 | **[미해결]** |
+| **B10** | 범위 밖 정수 | 클램프 없음 → `#if` 미적중 → BlendNormal | 파스에서 0 으로 접음(`SceneDocument.swift:3495`) | 세 코퍼스 전건 0 | **일치**(불투명 배경 기준) |
+
+**B8 의 정확한 패치안**(소유 밖 — `SceneRendererFrameEncoder.swift` / `SceneRenderer.swift` 는 U):
+`encodeDrawPlan`(`:861` `case .layer where layers[item.idx].colorBlendMode != 0`)의 매치 조건을
+`!= 0 && != 31` 로 좁히고, `GPULayer.blendAdditive` 를 `layer.colorBlendMode == 31 || 머티리얼
+additive` 로 계산하면(`SceneRendererResources.swift:488`) 31 은 기존 additive 파이프라인으로
+떨어진다. **스냅샷 blit 1회와 풀 텍스처 1장이 레이어마다 사라진다.**
+텍스트 쪽(`:845` `case .text where … colorBlendMode != 0`)도 대칭으로 처리해야 한다.
+단, `f_main`/additive 파이프라인은 **프리멀티 출력**(`c.rgb*tint.rgb*a`)이고 WE 는 straight+
+`SRC_ALPHA` 라 RGB 는 같지만 **알파를 기록한다**(§6 B5/B7 의 구조 분기) — 그 차이는
+`colorBlendMode` 도입 전과 동일하므로 새 회귀는 아니다. 넣기 전에 `BlendModeCoverageTests`
+(31 대 9 의 구분)와 골든 A/B 를 돌려라.
+
 ## 8. 게이트
 
 | 게이트 | 결과 |
