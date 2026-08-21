@@ -37,7 +37,20 @@ import Foundation
 /// | 줄 주석 `//` | 허용 | 거부 | `relaxed` 가 메운다 |
 /// | 트레일링 콤마 | 허용 | 거부 | `relaxed` 가 메운다 |
 /// | BOM `EF BB BF` | 허용(`skipBom`) | **허용** | 일치 — 손댈 것 없다 |
-/// | 중복 키 `{"a":1,"a":2}` | 허용, **뒤가 이긴다**(`rejectDupKeys=false`) | 허용, **뒤가 이긴다**(a=2) | 일치 |
+/// | 중복 키 `{"a":1,"a":2}` | 허용, **뒤가 이긴다**(`rejectDupKeys=false`) | **구현마다 다르다** — 리눅스 `2`(뒤) / macOS `1`(앞) | **macOS 만 갈린다** |
+///
+/// > **[2026-08-21 정정]** 위 중복 키 행은 "일치" 라고 적혀 있었는데 **macOS 에서는 틀렸다.**
+/// > `26345f6` 의 macOS CI(run 32492467832)가 `AssetJSONLenientTests` 2건으로 반증했다 —
+/// > `{"a":1,"a":2}` 가 Apple Foundation 에서는 **`1`**(앞이 이긴다)이고
+/// > swift-corelibs-foundation 에서는 `2`(뒤가 이긴다, WE 와 같다)다.
+/// > 즉 **macOS 의 Waple 은 이 축에서 WE 와 갈린다.** 고치려면 파스 전에 중복 키를 훑어
+/// > 뒤를 남기는 전처리가 필요한데 자산 JSON 전부에 그 비용을 물리는 변경이고, 도달은
+/// > 자산 트리 **0건** · 설치본 `locale/ui_en-us.json` **1건**(그 파일은 `AssetJSON` 소비자가
+/// > 읽지 않는다)뿐이라 **[미해결]로 두고 거동만 기록**한다. 워크샵 코퍼스는 이 컨테이너에
+/// > 없어 도달을 못 쟀다.
+/// > 이 축은 `project.json` 파서까지 도달한다 — `{"type":"video","type":"scene"}` 이
+/// > 리눅스 scene / macOS video 로 **타입 분류 자체가 갈린다**
+/// > (`ProjectJSONParserTests.testDuplicateTopLevelKeyWinnerIsPlatformDependent`).
 /// | `NaN`/`Infinity` 리터럴 | 거부(`allowSpecialFloats=false`) | 거부 | 일치 |
 /// | 작은따옴표 `{'a':1}` | 거부(`allowSingleQuotes=false`) | 거부 | 일치 |
 /// | 숫자 키 `{1:2}` | 거부(`allowNumericKeys=false`) | 거부 | 일치 |
