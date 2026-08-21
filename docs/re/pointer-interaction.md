@@ -41,6 +41,7 @@ renderState 슬롯(`+0x8c`, 유니폼 id 105, y = `1 − pointer.y`, 소비부 c
 | 18 | `disablepropagation` 의 실물 의미는 **커서 히트 전파 차단**이지 부모 트랜스폼 상속 차단이 아니다 | 확정 · **해소**(`object-propagation.md` §9.1, 클러스터 M) |
 | 19 | 호버 맵과 홀드 맵을 이전 판이 **바꿔** 적었다 — 호버 = `scene+0x280`(버킷 `0x298`/마스크 `0x2b0`), 홀드 = `scene+0x2c0`(`0x2d8`/`0x2f0`). 삽입 호출부 `0x14018a530` / `0x14018a78b` 가 못박는다 | **확정 · 정정(§4.2)** |
 | 20 | `solid`(bit13)의 **생성자 기본값은 `true`** 다 — 기저 ctor `0x1401ddc72` `mov word [r14+0x120], 0x2001`(= bit0 visible + bit13 solid). §9 의 `dino_run` 수수께끼가 이걸로 풀린다 | **확정 · 신규**(재확인. `object-propagation.md` §2.1 과 독립 일치) |
+| 21 | **텍스트 오브젝트도 이미지와 완전히 같은 히트 경로다.** 타입 가상함수가 4(`0x1400fde90`)이고 순회가 1 과 4 를 한 분기로 모아(`0x14018a044`–`0x14018a050`) 같은 상자 함수 `0x14019dbb0` 에 넘긴다. 갈리는 것은 `+0x2f0` 의 **출처**뿐 — 텍스트는 레이아웃 직후 `0x140258900` 이 `잉크박스 + 2·clamp(padding,512)` 로 덮는다 | **확정 · 신규(§7.2c)** |
 
 확정 못 한 것은 §9 에 모아 뒀다.
 
@@ -432,8 +433,16 @@ basis `0xcbf29ce484222325` · prime `0x100000001b3`)로 두 개의 `std::unorder
 >
 > | 맵 | 베이스 | 버킷 / 마스크 | 정체 | 근거 |
 > |---|---|---|---|---|
-> | 호버 | `scene+0x280` | `0x298` / `0x2b0` | 지금 커서 아래 | `cursorEnter` 직전 삽입 `0x14018a530`(`rcx = [rbp-0x30] = rbx+0x280`, `0x140189ffe`) |
+> | 호버 | `scene+0x280` | `0x298` / `0x2b0` | 지금 커서 아래 | `cursorEnter` 직전 삽입 `0x14018a530`(`rcx = [rbp-0x30] = rbx+0x280` — `0x14018a011 lea rcx,[rbx+0x280]` → `0x14018a020 mov [rbp-0x30], rcx`) |
 > | 홀드 | `scene+0x2c0` | `0x2d8` / `0x2f0` | 이 오브젝트에서 눌렀다 | `down` 확인 후 삽입 `0x14018a78b`(`rcx = [rbp-0x28] = rbx+0x2c0`, `0x14018a007`) |
+>
+> [VA-정정] 호버 행의 옛 근거 `0x140189ffe` 는 명령 경계가 아니었다 — 그 자리는 바로 위
+> 홀드 맵 `lea rcx,[rbx+0x2c0]` 의 disp32 꼬리(+6)였다. 즉 호버 행이 홀드 쪽 바이트를
+> 근거로 달고 있었다.
+>
+> [VA-정정] `ShowCursor` 두 자리도 같은 종류였다 — 옛 `0x1400ff6f7`·`0x14011080d` 는
+> `call qword [rip+d]` 의 disp32 위치이고 명령은 각각 `-2` 다.
+
 >
 > `cursorClick` 조회(`0x14018a7aa`)와 드래그용 `cursorMove`(`0x14018a31c`)가 보는 것은 **홀드 맵**이다.
 
@@ -684,7 +693,7 @@ return wcsicmp(cls, L"Progman") == 0;                  ; 0x1404755d8
 이것이 "데스크톱 아이콘을 가린 벽지에서도 클릭이 먹는" 장치다. 아이콘 자체를 피해 가는
 로직(아이콘 사각형 회피 등)은 **없다** — 클릭은 언제나 셸이 먼저 받고, 벽지는 사후 통보를 받는다.
 
-`ShowCursor` 호출도 둘 있다(`0x1400ff6f7` · `0x14011080d`) — 커서 숨김/복원용이며 상호작용
+`ShowCursor` 호출도 둘 있다(`0x1400ff6f5` · `0x14011080b`) — 커서 숨김/복원용이며 상호작용
 좌표와는 무관하다.
 
 ---
@@ -784,11 +793,54 @@ W-5 를 부분적으로 닫았다** — 무엇을 어떻게 고쳤는지는 §7.
 `thisLayer` 직결 키)가 정확한 키다.
 
 **남은 근사 둘(정직하게)**:
-- **텍스트 오브젝트** — 실물 히트 상자는 래스터된 텍스트 픽셀 크기인데 `SceneTextLayer` 에 그 값이
+- ~~**텍스트 오브젝트** — 실물 히트 상자는 래스터된 텍스트 픽셀 크기인데 `SceneTextLayer` 에 그 값이
   없다(`scene-script-api.md` §9.1 (b) `size` [미해결]). `.geometryUnknown` 으로 두고 **종전 배달을
-  유지**했다. 추측 상자로 좁히면 텍스트 바인딩 스크립트가 통째로 죽는다.
+  유지**했다. 추측 상자로 좁히면 텍스트 바인딩 스크립트가 통째로 죽는다.~~
+  **해소(2026-08-21, 클러스터 BD) — §7.2c.**
 - **파티클/이펙트/카메라/사운드 볼륨 스크립트** — `currentLayerIndex` 를 안 받으므로 `.unbound`
   (= 종전 배달). 파티클은 실물에선 오브젝트이므로 이건 실물과 갈리는 근사다. 코퍼스 도달 0.
+
+### 7.2c 텍스트 오브젝트 히트 기하 (2026-08-21, 클러스터 BD)
+
+§7.2b 가 "남은 근사" 로 남긴 첫째 항목을 닫았다. **실물은 텍스트를 특별 취급하지 않는다** —
+같은 순회, 같은 상자 함수, 같은 평행사변형 판정이다. 갈리는 것은 `size` 멤버 `+0x2f0` 의
+**출처**뿐이다(이미지는 저작 `size`, 텍스트는 레이아웃 결과로 매번 덮인다).
+
+| 사실 | VA (BD 재실측 — 남의 주석을 베끼지 않았다) |
+|---|---|
+| `solid`(`+0x120` bit13) 게이트가 **타입 판정보다 앞** | `0x14018a00b` `mov r8d, 0x2000` → `0x14018a02d` `test word [r15+0x120], r8w` → `je` |
+| 타입 가상함수 | `0x14018a03b` `mov rax,[r15]` → `0x14018a041` `call qword [rax+0x60]` |
+| 텍스트 오브젝트는 **4** 를 돌려준다 | 텍스트 vtable `0x140491950`(ctor `0x140256af7`/`0x140256b05`) 슬롯 `+0x60` = `0x1400fde90`, 바이트 `b8 04 00 00 00 c3` |
+| 순회가 **1(이미지)과 4(텍스트)를 한 분기로** 모은다 | `0x14018a044` `cmp eax,1` · `0x14018a047` `je 0x14018a050` · `0x14018a04b` `cmp eax,4` · `0x14018a050` `mov rdx,r15` |
+| 그 분기의 상자 함수 | `0x14018a242` `call 0x14019dbb0` (타입 5 = 퍼펫만 `0x14018a265` `call 0x140185520`) |
+| 상자 크기 출처 | `0x14019dd8a` `mov rax, qword [rbx+0x2f0]` (§4.3 과 동일 — 이미지와 한 글자도 다르지 않다) |
+| 텍스트의 `+0x2f0` 을 채우는 자리 | 텍스트 vtable 슬롯 `+0x110` = `0x140258900`. `[+0x2f0] = 잉크박스 + 2·clamp(padding,512)`, 패딩은 세 게이트(`0x140258954`–`0x14025896d`) 하에서만. 전 함수 유도는 `text-layer.md` §8b.2 |
+
+**Waple 배선**(`SceneRenderer.buildPointerTargets(doc:)` 의 텍스트 분기):
+`GPUText.rasterWidth`/`rasterHeight` → `PointerHit.textHitSize(inkBox:padding:paddingActive:)` →
+`SceneRenderer.layerHitQuad(origin:size:scale:angleZ:alignment:)`(정렬 문자열은 그리기와 같은
+`SceneRendererFrameEncoder.textAlignmentString`). **신규 수식 0개** — 이미지 경로와 갈릴 여지가 없다.
+
+**시차는 `(1,1)` 을 넘긴다(그리기와 맞춘 의도적 이탈).** 실물은 오브젝트 `parallaxDepth`
+(`+0x170`)를 히트 쿼드 중심에도 그대로 더한다(§4.2 · `0x14019dd79`). 그러나 Waple 의
+`encodeText` 는 정점 시차 슬롯에 `SIMD2<Float>(1, 1)` 을 하드코딩한다 — 이미지 경로만
+`layer.parallaxDepth` 를 넘긴다. 저작값을 히트에만 쓰면 상자가 그림보다 시차만큼 밀린다.
+두 코퍼스의 텍스트는 전건 `parallaxDepth = "1.000 1.000"` 이라 지금은 값이 같다.
+
+`.geometryUnknown` 은 **남는다**: ① 빈 텍스트(래스터 없음 = 드로우 스킵), ② 3D 씬
+(`textLayers` 가 비어 있다 — `buildTexts` 대입이 `if !is3D` 안), ③ 인덱스 방어.
+그래서 `PointerHit.DeliveryScope.geometryUnknown` 케이스는 삭제하지 않았다(§7.2b 표의 타입 불변).
+
+**도달(범위 라벨)**: 설치본 186씬의 텍스트 5건 · 리포 동봉 172씬의 텍스트 3건이 전건 대상이지만,
+그 8건 중 커서 훅(`cursorMove`/`Click`/`Down`/`Up`/`Enter`/`Leave`)을 `export` 하는 스크립트가
+붙은 것은 **0건**이다(시계 2 · 카운트다운 1 의 `text` 스크립트에 훅이 없고, `dino_run` 두 라벨은
+스크립트 자체가 없다) — 즉 **두 코퍼스에서 실제 배달이 달라지는 씬은 0건**이다. 패딩 항도 그
+8건에서 전부 0 이다(전건 `"padding": 0` · `opaquebackground:false` · `effects` 없음 ·
+`colorBlendMode: 0`). 워크샵 정본에서는 도달이 있다(`text-layer.md` §11.2 ②).
+
+**한계(정직하게)**: 실물 잉크박스(FreeType/HarfBuzz, 300 DPI)와 Waple 래스터(CoreText)의
+폭·높이 오차는 **이 컨테이너에서 못 쟀다**(WE 실행 불가 · 워크샵 코퍼스 없음). 히트 상자의
+정확도는 그 오차만큼 열려 있고, 그 항목은 `text-layer.md` §12 의 `[미해결]` 로 남아 있다.
 
 ### 7.3 넘기는 것(소유 밖 — 클러스터 O 가 손대지 않았다)
 
@@ -808,6 +860,9 @@ W-5 를 부분적으로 닫았다** — 무엇을 어떻게 고쳤는지는 §7.
   붙어 있어 `.geometryUnknown` 으로 떨어진다. 좌표는 여전히 무의미하고 테스트 의도(리마운트 후
   새 엔진만 받고 스테일 엔진은 못 받는다)도 그대로다. 텍스트 히트 기하가 확정되면 이 좌표가
   load-bearing 이 된다 — 주석으로 못박아 뒀다.
+  **후기(2026-08-21, BD)**: 텍스트 히트 기하가 확정·배선됐지만 이 테스트는 **여전히 무관하다** —
+  그 씬의 텍스트 값이 빈 문자열이라 래스터가 없고(`TextRasterizer.render` 의 `guard !trimmed.isEmpty`),
+  래스터가 없으면 `.geometryUnknown` 이 유지되기 때문이다. 좌표는 계속 무의미하다.
 
 **② 전파 차단 순회.** ①이 들어갔으니 이제 의미가 있다. 규약은
 `object-propagation.md` §10 이 갖고 있다(z-순서 역순 · `solid` 게이트 · 히트 시 발화 ·
@@ -826,9 +881,9 @@ W-5 를 부분적으로 닫았다** — 무엇을 어떻게 고쳤는지는 §7.
 ### 7.4 남은 우선순위
 
 1. ~~**W-5b(커서 훅 타겟팅)**~~ · ~~**W-9(cursorClick 타이밍)**~~ — **2026-08-21(U) 해소**(§7.2b).
-2. **텍스트 오브젝트 히트 기하** — W-5b 의 남은 근사. `SceneTextLayer` 에 래스터 크기가 없어
+2. ~~**텍스트 오브젝트 히트 기하** — W-5b 의 남은 근사. `SceneTextLayer` 에 래스터 크기가 없어
    `.geometryUnknown` 으로 열어 뒀다. 렌더러는 래스터 크기를 알고 있으므로(`GPUText` 의 텍스처
-   크기) 그 값을 히트 쿼드로 되먹이는 배선이 다음 단계다.
+   크기) 그 값을 히트 쿼드로 되먹이는 배선이 다음 단계다.~~ — **2026-08-21(BD) 해소**(§7.2c).
 3. **W-10(파티클 CP bit0)** — 동봉 28파일. 헤드리스 캡처 결정성과 충돌하므로
    `SceneRenderer.capturePointerUV` 핀과 같은 계약이 필요하다.
 4. **전파 차단 순회** — 동봉 도달 0.
@@ -878,13 +933,16 @@ for f in glob.glob('bin/*')+glob.glob('*.exe'):
     if b'locktopointer' in d or 'locktopointer'.encode('utf-16-le') in d: print(f)
 PY
 
+# [VA-정정] 아래 vdis2 시작 넷은 종전에 명령 한복판이었다(각각 +4/+1/+2/+3):
+#   [VA-정정] 0x1401115a0 · 0x1401815e0 · 0x14022eb20 · 0x1401e11f0.
+#   vdis2 는 시작이 어긋나면 뒤가 통째로 쓰레기가 된다 — 이 문서 5) 항의 경고와 같은 함정이다.
 # 1) 커서 샘플러(GetCursorPos/GetKeyState/WindowFromPoint/ScreenToClient)
 python3 -c "import sys;sys.path.insert(0,'$S');from wpe import function_frags;print(function_frags(0x140110630))"
-python3 $S/vdis2.py 0x1401115a0 0x140111660
+python3 $S/vdis2.py 0x14011159c 0x140111660
 
 # 2) g_PointerState 합성 · 프레임 꼬리의 last 이월 + bit1 세우기
 python3 $S/vdis2.py 0x1400d9e2c 0x1400d9e90
-python3 $S/vdis2.py 0x1401815e0 0x1401816b4
+python3 $S/vdis2.py 0x1401815df 0x1401816b4
 
 # 3) 데스크톱 소유권 판정 · WH_MOUSE_LL 훅
 python3 $S/vdis2.py 0x14010d9b0 0x14010da94
@@ -893,10 +951,10 @@ python3 $S/vdis2.py 0x140126640 0x1401267b4
 # 4) 파티클 CP 드라이버
 python3 -c "import sys;sys.path.insert(0,'$S');from wpe import function_frags;print(function_frags(0x14022e3e0))"
 python3 $S/vdis2.py 0x14022e3e0 0x14022e6e0     # bit16/bit0/bit2 분기 + 언프로젝션
-python3 $S/vdis2.py 0x14022eb20 0x14022ebde     # 루프 꼬리
+python3 $S/vdis2.py 0x14022eb1e 0x14022ebde     # 루프 꼬리
 
 # 5) 히트테스트 워커와 쿼드 판정
-#    주의: vdis2 는 **명령어 경계**에서 시작해야 한다. 0x14018a460 은 경계가 아니다 —
+#    주의[VA-정정]: vdis2 는 **명령어 경계**에서 시작해야 한다. 0x14018a460 은 경계가 아니다 —
 #    워커는 0x140189e10 에서 한 번에 떠라(merged() 로 9조각 = 0x140189e10..0x14018aab9 확인).
 python3 $S/vdis2.py 0x140189e10 0x14018aab9      # solid 게이트 0x14018a02d · 시차 0x14018a0b3 · 전파 0x14018a877
 python3 $S/vdis2.py 0x14019dbb0 0x14019df90      # 쿼드 구성(c0/c1/c2 만) · out = (u·w, (1−v)·h)
@@ -910,7 +968,7 @@ python3 -c "import sys;sys.path.insert(0,'$S');from wpe import pe;print(pe.read(
 python3 $S/vdis2.py 0x14017c6d0 0x14017c7c0      # 0x14017c73d xor eax,eax → 0x14017c77d/0x14017c784 qword 0
 
 # 6) solid / disablepropagation / perspective 비트
-python3 $S/vdis2.py 0x1401e11f0 0x1401e1360     # 등록부
+python3 $S/vdis2.py 0x1401e11ed 0x1401e1360     # 등록부
 python3 $S/vdis2.py 0x14019c3f0 0x14019c440     # solid  → bts 0xd
 python3 $S/vdis2.py 0x14019bb40 0x14019bb90     # disablepropagation → bts 0xe
 python3 $S/vdis2.py 0x14019c620 0x14019c6a0     # perspective → bts 7
