@@ -36,7 +36,7 @@ final class SceneDocumentTransformComponentTests: XCTestCase {
         XCTAssertEqual(d.projectionHeight, 600)
     }
 
-    /// 실물은 태그 3(real)도 받고 `asUInt`(`0x140085ee0`)의 `cvttsd2si`(`0x140085f12`)로
+    /// 실물은 태그 3(real)도 받고 `asInt`(`0x140085ee0`)의 `cvttsd2si`(`0x140085f12`)로
     /// **0 방향 절단**한다. 반올림이 아니다.
     func testOrthoRealSizeTruncatesTowardZero() throws {
         let d = try doc(general(#"{"width":800.9,"height":600.9}"#))
