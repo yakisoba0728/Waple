@@ -386,4 +386,72 @@ final class ScenePackageWEParityTests: XCTestCase {
             XCTAssertEqual(e as? ScenePackageError, .malformed)
         }
     }
+
+    // MARK: - §10 쓰는 쪽(`bin/wallpaperui.exe`)에서 확정한 것
+    //
+    // 아래 셋은 2026-08-21(2차)에 **패커**를 뜯어 확정한 사실을 잠근다. VA 는 전부
+    // `bin/wallpaperui.exe` 다 — `wallpaper64.exe` 와 imagebase 가 같으므로 기계 대조는
+    // `va_citations.py --also "$WE_ROOT/bin/wallpaperui.exe"` 로 재야 한다(§10 머리말).
+
+    /// **의도적 이탈 — 음수 size.** 패커에 들어가는 레코드의 크기는 파일 상태 조회
+    /// (`bin/wallpaperui.exe 0x1408e72b0`)가 준 u64 를 **i32 로 자른** 값이고
+    /// (CLI `0x1401333aa` · UI `0x14020a3e5`), 조회가 실패하면 두 호출부 모두 `-1` 을 들고 나온다
+    /// (CLI `0x14000ee71` · UI `0x14020a3cf`). 패커의 삭제 조건은 `== 0`(`0x14020a7d1`)이라
+    /// `-1` 은 살아남아 `0xFFFFFFFF` 로 기록된다 — 곧 **쓰는 쪽이 실제로 만들 수 있는 값**이다.
+    ///
+    /// WE 읽는 쪽은 그 엔트리 **하나만** "없음" 으로 본다(`wallpaper64.exe 0x14027412a` 의 `jle`
+    /// 가 0 과 음수를 같이 잡는다). Waple 은 **컨테이너 전체를 `malformed`** 로 끊는다 —
+    /// `i32` 를 부호 없이 읽으므로 `0xFFFFFFFF` 는 4,294,967,295 이고 잘린 파일과 구별되지 않기
+    /// 때문이다(`testNegativeEntryCountIsRejectedUnlikeWE` 와 같은 이유의 같은 선택).
+    /// 도달 미관측: 워크샵 161 pkg · 19,777 엔트리 파스 오류 0건, 최대 단일 pkg 0.66 GiB.
+    func testNegativeEntrySizeIsRejectedUnlikeWE() {
+        let ver = Array("PKGV0023".utf8)
+        let nm = Array("a.txt".utf8)
+        var out = i32(ver.count) + ver + i32(1)
+        out += i32(nm.count) + nm + i32(0) + i32(-1)    // size = 0xFFFFFFFF
+        out += [0x41, 0x42]                              // 데이터 섹션은 멀쩡히 있다
+        XCTAssertThrowsError(try ScenePackage.parse(Data(out)),
+                             "WE 는 이 엔트리만 버리고 계속 간다 — Waple 은 의도적으로 더 엄격하다") { e in
+            XCTAssertEqual(e as? ScenePackageError, .malformed)
+        }
+        // 대조군: 같은 바이트에서 size 만 정상이면 통과한다(거부 사유가 size 라는 것을 못 박는다).
+        var ok = i32(ver.count) + ver + i32(1)
+        ok += i32(nm.count) + nm + i32(0) + i32(2)
+        ok += [0x41, 0x42]
+        XCTAssertEqual(try ScenePackage.parse(Data(ok)).data(for: "a.txt"), Data([0x41, 0x42]))
+    }
+
+    /// **`assemble` 의 오프셋 규약은 WE 패커와 같다** — 0 에서 시작하는 크기 누적합이고
+    /// 간극·정렬·패딩이 없다(`bin/wallpaperui.exe 0x14020a85d` 초기화 · `0x14020ab4b` 누적).
+    /// 그래서 `parse(assemble(...))` 왕복이 바이트를 그대로 돌려준다.
+    func testAssembleOffsetsAreCumulativeLikeWEPacker() throws {
+        let a = Data("AAAA".utf8), b = Data("BB".utf8), c = Data("CCCCCCC".utf8)
+        let pkg = ScenePackage.assemble([("a.txt", a), ("b.txt", b), ("c.txt", c)])
+        XCTAssertEqual(pkg.entries.map(\.offset), [0, 4, 6], "누적합이 아니면 실패해야 한다")
+        XCTAssertEqual(pkg.entries.map(\.size), [4, 2, 7])
+        // 오프셋 = 앞선 크기의 합 — 간극이 있으면 이 항등식이 깨진다.
+        var running = 0
+        for e in pkg.entries {
+            XCTAssertEqual(e.offset, running)
+            running += e.size
+        }
+        XCTAssertEqual(pkg.data(for: "b.txt"), b)
+        XCTAssertEqual(pkg.data(for: "c.txt"), c)
+    }
+
+    /// **`assemble` 은 0바이트 엔트리를 일부러 남긴다 — WE 패커와 다르다.**
+    /// 패커는 쓰기 직전 `size == 0` 레코드를 벡터에서 지우고(`bin/wallpaperui.exe 0x14020a7d1`
+    /// 비교, 압축 루프 `0x14020a7db` - `0x14020a824`) 남은 게 없으면 실패한다(`0x14020a83e`).
+    /// 곧 WE 가 만든 pkg 에 0바이트 엔트리는 **구조적으로 없다.** 그런데 `assemble` 은 파리티
+    /// 도구가 아니라 **테스트 스캐폴**이라 그것을 흉내 내면 안 된다 — 흉내 내는 순간
+    /// `testZeroSizeBlobEntryReadsAsMissing` 이 잴 것을 잃는다. 이 테스트가 그 선택을 못 박는다.
+    func testAssembleKeepsZeroSizeEntriesUnlikeWEPacker() {
+        let pkg = ScenePackage.assemble([("empty.json", Data()), ("real.json", Data("R".utf8))])
+        XCTAssertEqual(pkg.entries.map(\.name), ["empty.json", "real.json"],
+                       "0바이트 엔트리를 버리면 §7.5 잠금이 무의미해진다")
+        XCTAssertEqual(pkg.entries.first?.size, 0)
+        XCTAssertNil(pkg.data(for: "empty.json"), "표에는 남지만 조회에서는 탈락한다(§7.5)")
+        // 빈 목록도 그대로 빈 패키지다 — 패커라면 "Pkg file list empty" 로 실패할 자리다.
+        XCTAssertTrue(ScenePackage.assemble([]).entries.isEmpty)
+    }
 }
