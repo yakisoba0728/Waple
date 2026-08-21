@@ -47,17 +47,26 @@ public enum AssetJSON {
             }
             if c == "\"" { inString = true; out.append(c); i = text.index(after: i); continue }
             // 줄 주석: `//` 부터 개행 전까지 버린다(개행은 남긴다 — 줄 번호 보존).
+            //
+            // **[2026-08-21] `!= "\n"` 이 CRLF 를 못 넘었다.** Swift `String` 은 유니코드
+            // **그래핌 클러스터** 단위로 순회하고 `"\r\n"` 은 **한 개의 `Character`** 다.
+            // `Character("\r\n") == "\n"` 은 **false** 이므로 CRLF 파일에서는 이 루프가
+            // 개행에 멈추지 못하고 **파일 끝까지** 지워 버렸다 — 즉 `//` 가 하나라도 있는
+            // CRLF 자산은 관용 파스가 통째로 실패했다. 동봉 `effects/**/effect.json` 은
+            // **122개 전건이 CRLF** 이고, 엄격 파스가 실패해 관용이 필요한 자산 31건도
+            // **전건 CRLF** 다. `isNewline` 은 `"\n"`·`"\r"`·`"\r\n"` 을 모두 참으로 본다.
             if c == "/" {
                 let next = text.index(after: i)
                 if next < text.endIndex, text[next] == "/" {
-                    while i < text.endIndex, text[i] != "\n" { i = text.index(after: i) }
+                    while i < text.endIndex, !text[i].isNewline { i = text.index(after: i) }
                     continue
                 }
             }
             // 트레일링 콤마: `,` 뒤 공백만 지나 `]`/`}` 가 오면 그 콤마를 버린다.
             if c == "," {
                 var j = text.index(after: i)
-                while j < text.endIndex, text[j] == " " || text[j] == "\t" || text[j] == "\r" || text[j] == "\n" {
+                // 같은 그래핌 문제: `"\r\n"` 은 `"\r"` 도 `"\n"` 도 아니라 종전 집합을 빠져나갔다.
+                while j < text.endIndex, text[j] == " " || text[j] == "\t" || text[j].isNewline {
                     j = text.index(after: j)
                 }
                 if j < text.endIndex, text[j] == "]" || text[j] == "}" {
