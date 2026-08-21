@@ -595,9 +595,21 @@ volumetrics_combine   (passthrough, additive) → 화면
 | **W-14** | fog `start/end` 기본값 | dist `1.0/5.0`, height `1.0/−3.0` (`0x140187063`·`0x14018706e`·`0x140187084`·`0x14018708f`) | `start ?? 0`, `end ?? 1` (`Scene3DLighting.swift:611-612`) | **확정** | fog 를 켜고 거리 키를 생략한 씬의 램프가 WE 와 같아진다(코퍼스 0건 → 워크샵 전용) |
 | **W-15** | fog 밀도 기본값 | `startDensity 0`, `endDensity 1.0` (`0x1401864c2`·`0x140187079`) | `0` / `1` (`Scene3DLighting.swift:613-614`) | **확정** | **일치** — 조치 불필요 |
 | **W-16** | fog `end==start` 방어 | 없음(0 나눗셈 허용) | `span` 을 ±1e-4 로 클램프 (`Scene3DLighting.swift:616`) | **확정**(의도적 이탈) | 없음. 안전 이탈로 유지 권장 — 문서화만 필요 |
-| **W-17** | 볼류메트릭 모델 | 깊이 기반 5패스 레이마치(백페이스 깊이 → 12~64샘플 → blur3 h/v → additive), `×0.1` 스케일 (`volumetricsfront.frag:78-96,190`) | 화면공간 원뿔 근사 1패스: `exp(-density*dist*0.001)` + `pow(intensity, exponent)`, 선형 콘 램프 (`VolumetricLightPass.swift:162,169,177`) | **확정**(구조 차이) | 샤프트가 지오메트리에 가려지고 그림자 결이 생긴다. 현재는 오브젝트를 통과해 비친다 |
-| **W-18** | 볼류메트릭 콘 감쇠 | `smoothstep(outer, inner, cos)` (`volumetricsfront.frag:140`) | `clamp((cos−outer)/(inner−outer), 0, 1)` 선형 (`VolumetricLightPass.swift:162`) | **확정** | 스포트 가장자리가 부드러워진다 |
-| **W-19** | 볼류메트릭 반경 감쇠 | `pow(saturate(1 − dist/radius), exponent)` (`volumetricsfront.frag:132`) | `exp(−density*dist*0.001)` (`VolumetricLightPass.swift:169`) | **확정** | 라이트 `radius` 밖에서 정확히 0 이 되어 무한 꼬리가 사라진다 |
+| **W-17** | 볼류메트릭 모델 | 깊이 기반 5패스 레이마치(백페이스 깊이 → 12~64샘플 → blur3 h/v → additive), `×0.1` 스케일 (`volumetricsfront.frag:78-96,190`) | **8샘플 레이마치 1패스 + 구 교차 해석해, 씬 뎁스 클립 없음**(산술 본체는 `SceneWEVolumetricMath`) | **확정**(구조 차이) | 샤프트가 지오메트리에 가려지고 그림자 결이 생긴다. 현재는 오브젝트를 통과해 비친다. **[2026-08-21] WE 쪽 "12~64샘플" 은 셰도우/쿠키 가지 전용이다** |
+| **W-18** | 볼류메트릭 콘 감쇠 | `smoothstep(outer, inner, cos)` (`volumetricsfront.frag:140`) | `smoothstep(u.lightCone.x, u.lightParams.w, cosAngle)` | **확정 · 해소 `7c66d46`** | 스포트 가장자리가 부드러워진다. **도달 0** — 두 트리 라이트 6개가 전부 point 종이고 `innercone`/`outercone` 저작이 0건이다 |
+| **W-19** | 볼류메트릭 반경 감쇠 | `pow(saturate(1 − dist/radius), exponent)` (`volumetricsfront.frag:132`) | `pow(saturate(1.0 - dist * u.lightCone.z), u.lightParams.y)` | **확정 · 해소 `7c66d46`** | 라이트 `radius` 밖에서 정확히 0 이 되어 무한 꼬리가 사라진다. **도달 0**(`castvolumetrics` 가 두 트리 모든 json 에서 0건) |
+
+> **[2026-08-21 정정 — 함정 20]** W-17·W-18·W-19 의 Waple 열이 `VolumetricLightPass.swift:162,169,177`
+> 을 인용하고 있었는데 **그 줄들은 지금 블렌드 상태 설정과 `encode` 시그니처다.** 남의 파일에 줄
+> 번호로 건 인용은 그 파일이 한 번만 바뀌어도 조용히 엉뚱한 곳을 가리킨다 — 그래서 이번에는
+> **코드 전문**으로 바꿨다. W-18·W-19 는 `7c66d46` 이 이미 실물 수식으로 갈아 놓았고, 그 사실이
+> 이 표에 반영되지 않아 **해소된 갭이 미해소로 남아 있었다.**
+>
+> 함께 정정: 종전 표제가 인용하던 *"프론트 vert 가 헐을 0.99 배 한다"* 는 **거짓**이다.
+> `volumetricsfront.vert:11`(`#if POINTLIGHT`)에는 그 스케일이 **아예 없고** `:13` 도
+> `vec3(0.99, 0.99, 1.0)` 로 **xy 만** 줄인다(콘 헐 단면 보정이지 반경 스케일이 아니다).
+> 해석해의 진짜 근거는 `0x140198760` 이 유니폼에 굽는 `radius × 0.99` 하나뿐이다.
+
 | **W-20** | HDR 최종 `lin()` | `saturate(lin(albedo)) * g_RenderVar0.x` (`combine_hdr.frag:43`), bloom off 는 `lin()`만 (`passthroughsrgb.frag:15`) | `saturate(base+bloom)` — `lin()` 미이식 (`HDRBloomPyramidPass.swift:473`, `HDRPostPass.swift:70`) | **미확정** | §8 참조 |
 | **W-21** | `g_RenderVar0.x` 출처 | 합성 직전 디바이스 vtable `+0x158` 질의 (`0x140180b15`–`0x140180b26`) | 없음(암묵 1.0) | **유력** | 값이 1.0 이 아니면 HDR 씬 전체 밝기 배수가 바뀐다 |
 | **W-22** | `camerapreview` | 문자열 자체가 바이너리에 없음 = 미소비 | 미파스 | **확정** | **일치**(둘 다 무시) — 조치 불필요 |
