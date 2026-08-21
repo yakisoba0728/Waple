@@ -23,6 +23,9 @@
 | `contentrating`/`tags`/`visibility`/`approved` | `wallpaper64.exe` 에 문자열조차 **없다** — 런타임이 안 읽는다(`wallpaperui.exe` 전용) |
 | 씬 문서 이름 | `stem(file) + ".json"` 이다 — `filename()` 이 **아니다**(`0x14010e22a`·`0x14010e253`, §4.3.1). 2026-08-21 정정 |
 | Waple 갭 | 마운트 선택자 1건(고), 타입 유도표 1건(중), 정규화·게이트 3건(저) — §7. **2026-08-21 에 5건 처리**, 미처리 §7.7 1건(저). **2026-08-21 2차: §7.8(중복 접힌 키 승자, 고) 신규 확정 + 처리** |
+| **쓰는 쪽 바이너리** | **[2026-08-21(2차) 신규] `bin/wallpaperui.exe` 하나뿐이다.** 설치본 MZ **156개** 전수에서 `PKGV` 를 가진 것은 그것과 `distribution/` 사본뿐 — `resourcecompiler64.exe` 는 `TEXV`/`MDLV` 만 갖는 `.tex`/`.mdl` 컴파일러다 (§10.0) |
+| **패커가 만들지 않는 것** | **[2026-08-21(2차) 신규]** ⑴ 확장자 없는 엔트리(디렉터리 포함) — 수집기가 `has_extension` 로 먼저 거른다 ⑵ 0바이트 엔트리 — 쓰기 직전 벡터에서 지운다 ⑶ 역슬래시·연속 구분자 — 쓰기 정규화가 접는다. 반대로 **대소문자는 접지 않는다**(읽는 쪽에서만 접힌다). §10.2·§10.3 |
+| **읽는 쪽이 두 이미지에 있다** | **[2026-08-21(2차) 신규]** `wallpaperui.exe` 안에도 같은 로더(`0x140474430`)가 있고, §2 의 상수(버전 ≤ 24 · `nameLen` ≤ 0x800 · 바이트별 tolower · FNV-1a · **last-wins** · 고정 횟수 종단)를 **전부 재현**한다. 곧 §2.1b 는 한 함수의 우연이 아니다 (§10.7) |
 
 ---
 
@@ -110,6 +113,13 @@
 `gifscene.pkg`(코퍼스 1건, 내부에 `.json` 3개 중 하나가 `gifscene.json` 일 것)와, 아직 관측되지
 않은 임의 이름 pkg 에서만 갈린다.
 
+> **[2026-08-21(2차) 도달 서술 정정 — §10.5]** 위 "도달을 0으로 만든다" 는 **표본 진술**이지
+> 구조 진술이 아니다. 쓰는 쪽을 뜯어 보면 출력 pkg 이름은 `project.json` 의 `file` 값에서
+> 확장자만 `pkg` 로 갈아 끼운 것이라(`wallpaperui.exe 0x140209c28`·`0x140209c74`), 저작자가 씬
+> 파일을 `techno.json` 으로 이름 지으면 저작 도구가 `techno.pkg` 를 **실제로 만든다**. 설치본
+> `project.json` 361건에 `techno.json` 이 1건 실재한다(§1.2). 곧 도달은 **"구조적으로 0"** 이
+> 아니라 **"관측된 161 표본에서 0"** 이다.
+
 참고로 최빈 비-루트 엔트리는 전부 `waterwaves` 효과 세트다 —
 `shaders/effects/waterwaves.frag`·`.vert`, `effects/waterwaves/effect.json`,
 `materials/effects/waterwaves.json` 이 각각 **83/161**(51.6%). 워크샵 씬의 절반이 이 효과를
@@ -163,7 +173,7 @@
 | --- | --- | --- |
 | 파싱한 pkg | 162 (= `scene.pkg` 161 + `gifscene.pkg` 1, §1.1b) | `spec/corpus/inventory.json` `corpus.pkgParsed` |
 | 파스 오류 | 0 | 같은 파일 `corpus.pkgParseErrors` |
-| 엔트리(알려진 확장자만) | 19,781 | `corpus.entryExtensions` 합 → **pkg 당 122.1** (파생치, 확장자 없는 엔트리 미포함) |
+| 엔트리(알려진 확장자만) | 19,781 | `corpus.entryExtensions` 합 → **pkg 당 122.1** (파생치, 확장자 없는 엔트리 미포함 — **[2026-08-21(2차)]** 그런 엔트리는 **없다**: 수집기가 `has_extension` 로 먼저 거른다, §10.3) |
 | 매직 분포 | `PKGV0002·0007·0008·0011·0012·0016`~`0024` 14종, 최빈 `0023`×50, 최대 `0024`×13 | `spec/formats/pkg.json` `format.pkg.magicDistribution` |
 
 관측 최대 버전 `0024` 가 §2.2 의 엔진 상한(`atoi(magic+4) <= 24`)과 **정확히 같다** — 즉 이 상한은
@@ -677,6 +687,10 @@ JSON 값의 타입 태그는 jsoncpp 규약 그대로다 — `[value+8]` 하위 
 `+0x50`(options)로 채워지는 **런타임 산출물**이고, 호출자는 `0x14001eae0`·`0x140021e50` 다.
 **`.pkg` 안에 이런 매니페스트가 들어 있다는 증거는 이 바이너리에서 찾지 못했다. `[미해결]`**
 
+> **[툼스톤 2026-08-21] 위 `[미해결]` 은 이미 닫혔다 — 리터럴만 남아 있었다.** §8.0 #3 이
+> 워크샵 엔트리 경로 11,338 종 전수에 그런 이름이 **0건**이고 루트 직속 엔트리가 `scene.json`
+> 하나뿐임을 확인했다. 문면은 조사 순서의 기록이므로 지우지 않는다. 현재 상태는 **해소**다.
+
 > **[해소 2026-08-21]** 바이너리 쪽 결론(읽기 함수 없음)은 그대로 두고, **"`.pkg` 안에 있는가"**
 > 는 코퍼스로 닫는다. `corpus_scan/entry-name-frequency.tsv` 는 워크샵 `scene.pkg` **161개**의
 > 엔트리 경로 **11,338 종 / 출현 19,777건 전수**다. 그 안에서:
@@ -792,6 +806,10 @@ je   skip
 > 선택**은 이제 갈려 있다. 갈린 방향은 ⑵⑶에서 스캐너가 더 비관적(= 렌더 가능한 것을 "불가"로
 > 볼 수 있음)이고, ⑴에서는 스캐너가 더 낙관적이다. **`[미해결]`**
 >
+> **[툼스톤 2026-08-21] 위 `[미해결]` 은 이미 닫혔다 — 리터럴만 남아 있었다.** §8.0 #1 ·
+> §8.1 의 같은 행이 결론을 적고 있다(스캐너·DeepScan 이 `resolveMountSource` 를 쓰고
+> `check_scene_mount_parity.py` 가 그것을 핀한다). 문면은 그대로 두고 상태만 **해소**로 정정한다.
+>
 > **[해소 2026-08-21 — 트리 실측으로 이미 닫혀 있었다]** 위 문단("스캐너는 여전히 두 이름을
 > 하드코딩한다")은 **지금 트리에서 참이 아니다.** 실측:
 >
@@ -868,6 +886,8 @@ Waple 은 video 로 본다.
   Waple 쪽에서만 **서로 다른 두 엔트리가 같은 정규화 키로 충돌**할 수 있다(먼저 온 것이 이김 —
   `ScenePackage` 의 `if normalizedIndex[key] == nil { normalizedIndex[key] = entry }`).
   코퍼스에서 실제 충돌은 확인하지 못했다. `[미해결]`
+  (**[툼스톤 2026-08-21]** 이 리터럴은 **바로 아래 블록이 이미 닫았다** — 상태는 해소다.
+  문면은 물음이 어떤 모양이었는지의 기록으로만 남긴다.)
 
 > **[해소 2026-08-21]** 이 `[미해결]` 은 **두 조각**이었고 둘 다 답이 나왔다.
 >
@@ -945,6 +965,12 @@ Waple `ScenePackage.data(for:)` 의 `.blob` 분기는 **빈 `Data`** 를
 > `fromDirectory` 는 엔트리 `size` 를 `fileSize` 로 채우므로, 구분하지 않았다면 0바이트 파일이
 > 있는 언팩 프로젝트에서 **새 회귀**가 났을 자리다.
 > 도달: 0바이트 엔트리를 가진 pkg 는 여전히 미관측(표본 0). 무회귀.
+>
+> **[2026-08-21(2차) 근거 승격 — §10.3]** 위 "미관측" 은 이제 **"생산자가 만들지 않는다"** 로
+> 올라간다. WE 패커는 쓰기 직전 `size == 0` 인 레코드를 벡터에서 **지우고**
+> (`bin/wallpaperui.exe 0x14020a7d1`), 남은 게 없으면 실패한다(`0x14020a83e`). 곧 WE 가 만든
+> pkg 에 0바이트 엔트리는 **구조적으로 없다**. 이 가드가 지키는 것은 손으로 만든 pkg 와 다른
+> 도구의 산출물이다 — 그래서 **빼면 안 된다.**
 >
 > **[2026-08-21 도달 보강 — 파생 실측]** "미관측" 을 "**161 pkg 범위에서 0건**" 으로 좁힐 수 있다.
 > `corpus_scan/pkgv_census.py` 는 엔트리마다 `detect_type(name, blob)` 을 부르는데, 그 함수는
@@ -1091,18 +1117,54 @@ for r in ("…/wallpaper_engine", "…/Sources/WapleRender/Resources/WEAssets"):
 새로 **연** 것도 하나 있다 — §2.1b/§7.8 의 **중복 접힌 키 승자**. 이건 종전에 `[미해결]` 로도
 안 적혀 있던 자리다(질문 자체가 없었다). 확정하고 고쳤다.
 
+### 8.0b 2026-08-21(2차) 전표 — 쓰는 쪽 조사가 닫은 것 / 못 닫은 것
+
+이번 회차는 **쓰는 쪽 바이너리**를 처음 뜯었다(§10). 시작 시점에 이 문서의 `[미해결]` 리터럴은
+**14곳**이었다(중복 참조·표제 포함). 먼저 **자산 도달**을 다시 세고 그 순서로 처리했다.
+
+**자산 도달(먼저 센 것)**
+
+| 자산 | 수 | 이 문서에서 무엇을 재나 |
+| --- | ---: | --- |
+| 워크샵 `scene.pkg` 엔트리 | **19,777** (경로 11,338 종) | 이름 위생·확장자·폴딩 충돌 (§1.1b·§1.1c·§2.1b) |
+| 워크샵 `scene.pkg` | **161** (폴더 446) | 매직·엔트리 수·바이트 총량 (§1.1b) |
+| 설치본 `project.json` | **361** | `file`·`type` 도수 (§1.2) |
+| 설치본 + 동봉 파일 | **9,078** | `.pkg` 실물 **0개** (§1.1) |
+| 설치본 MZ 바이너리 | **156**(`.exe` 36 · `.dll` 116 · `.scr` 4) | 어느 이미지가 `.pkg` 를 다루나 (§10.0) |
+| 실물 `.pkg` 바이트 | **0** | §8.1·§8.2 의 한계 |
+
+**처리 결과**
+
+| # | 자리 | 항목 | 도달 | 결과 |
+| --- | --- | --- | --- | --- |
+| 1 | §5.5(L 근처 "매니페스트") | `key/file/status/…` 매니페스트가 `.pkg` 안에 있는가 | 엔트리 11,338 종에 그런 이름 0건 | **툼스톤** — §8.0 #3 이 이미 닫았는데 `[미해결]` 리터럴만 남아 있었다. 문면은 두고 각주를 달았다 |
+| 2 | §7.1 각주 | 스캐너의 마운트 선택이 렌더러와 갈림 | pkg 보유 폴더 161/446 | **툼스톤** — §8.0 #1 이 이미 닫았다(같은 사유) |
+| 3 | §7.3 | 유니코드 폴딩 전용 충돌 실사례 | ASCII 14군 = 유니코드 14군, 전용 **0군** | **툼스톤** — 바로 아래 해소 블록이 닫았는데 리터럴만 남아 있었다 |
+| 4 | §8.1 첫 행 | 실물 `.pkg` 바이트 덤프 | 표본 **0개**(변동 없음) | **더 좁혔다(닫지는 못함)** — §10.1 이 **생산자 코드**로 필드 넷·연속 배치·무압축을 말한다. §8.2 의 2차 산출물 의존이 한 겹 줄었다. 바이트 자체는 여전히 없다 |
+| 5 | §1.1(L 근처 "도달을 0으로") · §4.3.1 · §7.7 · §8.1 · §9.3 (5곳) | `file:"*.pkg"` 일 때 씬 문서 이름 | **0/161** (변동 없음) | **미해결 유지 · 도달 서술만 정정** — §10.5 가 `techno.pkg` 를 **저작 도구가 실제로 만들 수 있음**을 코드로 보였다. "구조적 0" 이 아니라 "표본 161 에서 0" 이다. 착지·게이트가 소유 밖 |
+| 6 | §7.2 · §8.0 #7 (2곳) | 확장자→타입 유도표 ⑴~⑷ | **미측정**(판별 자료 부재, 변동 없음) | **미해결 유지** — 소유 밖(`ProjectJSONParser.swift`·`VideoFormats`). §10.4 는 **패커의 제외 목록**을 확정했지만 그것은 유도표가 아니다(다른 물음이다) |
+| 7 | §8.1 마지막 행 | `resourceutil64.dll` 등 형제 바이너리의 pkg IO | MZ 156 전수 | **해소 + 정정** — 전부 0건이고, 종전의 "`scenescript64.dll` 에 `.pkg` 1건" 은 **0건**이다(§10.0 툼스톤). 쓰는 쪽은 `bin/wallpaperui.exe` 하나뿐이다 |
+
+**새로 연 것 하나**(§10.4 끝): UI 인프로세스 수집기의 앞단에 CLI 와 같은 확장자 필터가 있는지
+확정하지 못했다 — 그 수집기는 파일 목록을 **호출자에게서 받아** 돌기 때문에 필터가 있다면
+그 위(자바스크립트 UI 쪽)에 있다. 코퍼스도 두 경로를 갈라 주지 않는다. `[미해결]`
+
+**새로 확정해 §7 에 갭으로 세운 것 하나**: §10.6 의 `size < 0`. 종전에는 물음 자체가 없었다.
+고치지 않기로 했고(§10.6 의 이유), `ScenePackageWEParityTests.testNegativeEntrySizeIsRejectedUnlikeWE`
+가 그 선택이 **의도임을** 못 박는다.
+
 ### 8.1 항목별 상태 (누적)
 
 | 항목 | 상태 |
 | --- | --- |
-| 실물 `.pkg` 바이트 덤프 | **`[미해결]` — 이 환경에 표본이 0개다.** §2 는 코드 + 합성 왕복으로만 확정 · **[부분 해소 2026-08-21]** 아래 §8.2 |
+| 실물 `.pkg` 바이트 덤프 | **`[미해결]` — 이 환경에 표본이 0개다.** §2 는 코드 + 합성 왕복으로만 확정 · **[부분 해소 2026-08-21]** 아래 §8.2 · **[더 좁힘 2026-08-21(2차)]** §10.1 이 **생산자 코드**로 필드 넷·연속 배치·무압축을 직접 말한다 — §8.2 의 "2차 산출물 의존" 이 한 겹 줄었다. 바이트 자체는 여전히 0개라 **미해결 유지** |
 | 동봉 `.pkg` 총 바이트 / 평균 엔트리 수 | **산출 불가**(표본 0). 워크샵 코퍼스 파생치 122.1 은 §1.1 참조 |
 | `PKGV0002` 등 구버전의 프레이밍 차이 | 코드에 버전 분기가 **없으므로** 차이가 없다고 본다. 실물로 확인 못 함 · **[부분 해소 2026-08-21]** 실물 161 pkg(버전 14종, `0002`~`0024`)가 **같은 프레이밍으로 전건 파스 성공**했다는 산출물이 있다 — §8.2 |
 | `key/file/status/name/description/version/options` 매니페스트의 읽기 함수 | **없다**(xref 1건). `.pkg` 와의 관계도 미확인 · **[해소 2026-08-21]** `.pkg` 안에는 없다 — 워크샵 161 pkg · 엔트리 경로 11,338 종 전수에 그런 이름 **0건**, 루트 직속 엔트리는 `scene.json` 하나뿐(§5.5 각주) |
 | 유니코드 정규화 키 충돌 실사례 | 코퍼스 부재로 미확인. 2026-08-21 재측정에서도 **0건**(경로 컴포넌트 3,374종 전건 ASCII) — 그래서 §7.3 정정은 "고침"이 아니라 **드리프트 차단**이다 · **[해소 2026-08-21]** 워크샵 전수 11,338 경로로 다시 재서 **유니코드 전용 충돌군 0군**(ASCII 14군 = 유니코드 14군) 확정. 대신 **승자 규약이 반대**였음이 드러나 §7.8 로 고쳤다 |
 | `file:"*.pkg"` 일 때의 씬 문서 이름 | **`[미해결]`** — WE 는 `stem+".json"`, Waple 은 `project.fileName`. §7.7. 도달 0건이고 `check_scene_mount_parity.py` 가 현행 리터럴을 핀한다 · **2026-08-21 재확인: 도달 0/161 · 못 닫은 이유는 소유 경계**(§7.7 각주, 패치안 §9) |
 | 스캐너(`WallpaperCompatibilityAnalyzer`)의 마운트 선택 | **`[미해결]`** — §7.1 을 렌더러에만 적용했다(소유 파일 밖). 두 쪽의 "이슈 없음 = 렌더 가능" 계약이 `.pkg` 보유 프로젝트에서 갈릴 수 있다. 이 환경 도달 0건(`.pkg` 0개) · **[해소 2026-08-21]** 스캐너·DeepScan 이 이미 `resolveMountSource` 를 쓰고 `check_scene_mount_parity.py` 가 그것을 핀한다(§7.1 각주) |
-| `resourceutil64.dll` 등 형제 바이너리의 pkg IO | **없다** — `PKGV`·`.pkg`·`scene.pkg` 전건 0 히트(`resourceutil64.dll` `resourcecompiler64.exe` `wallpaperservice64.exe` `webwallpaper64.exe`). `scenescript64.dll` 에 `.pkg` 1건이 있으나 패키지 IO 로 이어지는 코드는 확인하지 못했다 |
+| `resourceutil64.dll` 등 형제 바이너리의 pkg IO | **없다** — `PKGV`·`.pkg`·`scene.pkg` 전건 0 히트(`resourceutil64.dll` `resourcecompiler64.exe` `wallpaperservice64.exe` `webwallpaper64.exe`). `scenescript64.dll` 에 `.pkg` 1건이 있으나 패키지 IO 로 이어지는 코드는 확인하지 못했다 · **[해소 + 정정 2026-08-21(2차)]** 설치본 MZ **156개** 전수(ASCII·UTF-16LE)를 다시 재면 `scenescript64.dll`·`scenescript32.dll` 은 `PKGV`·`.pkg`·`scene.pkg` **전부 0건**이다 — 위 "1건" 은 **틀린 수치**다(무엇을 셌는지는 복원 못 했다). 쓰는 쪽은 `bin/wallpaperui.exe` 하나뿐이고 `resourcecompiler64.exe` 가 가진 포맷 토큰은 `TEXV`/`MDLV` 뿐이다(§10.0) |
 
 ### 8.2 [부분 해소 2026-08-21] 실물 바이트 증거는 있다 — 다만 **2차 산출물**이다
 
@@ -1173,7 +1235,19 @@ for r in ("…/wallpaper_engine", "…/Sources/WapleRender/Resources/WEAssets"):
 },
 ```
 
-### 9.2 `spec/formats/pkg.json` 에 §2.1b 의 세 사실이 없다
+### 9.2 [**처리됨 2026-08-21(2차)**] `spec/formats/pkg.json` 에 §2.1b 의 세 사실이 없다
+
+> **넘길 것이 아니었다 — 두 파일 다 이 과제의 소유다.** 정본과 생성기 리터럴을 **함께** 고쳤고
+> `specfmt.dump` 를 통해 썼다(축소 가드 통과 · `allow_shrink` 미사용). 아래 초안보다 넓게 넣었다:
+> `format.pkg.entryIndex`(index · duplicateKeyWinner · loopTermination · sizeGate ·
+> separatorFolding · **secondImage**) 를 **독립 엔트리**로 세우고, `format.pkg.layout` 에는
+> `entryRecordFields` · `magicLengthBound` · `compressionDecision` · `pathNormalization` 을
+> 더했으며, 쓰는 쪽을 담을 `format.pkg.writer` 를 새로 만들었다(§10).
+> 초안과 갈린 점 둘: ⑴ VA 마다 **어느 바이너리인지 밝혔다**(두 이미지의 imagebase 가 같다),
+> ⑵ 컨테이너 타입을 "unordered_map" 이 아니라 **"해시맵"** 이라고 적었다 — STL 컨테이너 이름은
+> 이 조사에서 확정한 것이 아니라 형태(FNV-1a + 버킷 순회)에서 **유추**한 것이고, 이름을 근거처럼
+> 적으면 다음 사람이 검증할 수 없다(방법론 함정 27).
+> 아래 초안은 무엇을 넘기려 했는지의 기록으로 남긴다.
 
 정본 `format.pkg.layout` 의 `value` 는 `header`/`entry`/`blobBase`/`compression` 네 키뿐이다.
 **엔트리 표가 접힌 키 하나짜리 맵이라는 것**도, **중복 키가 last-wins 라는 것**도, **엔트리 루프의
@@ -1234,6 +1308,408 @@ let sceneDocName = ScenePackage.asciiLowercased(declared.pathExtension) == "pkg"
 있다. §7.8 이후 접힌 키가 겹치는 두 엔트리는 **같은 바이트**를 돌려준다(WE 와 같다). 지금 그
 자리에 중복 처리 로직이 없으므로 동작은 그대로지만, 같은 바이트를 두 번 파싱하는 낭비가 생긴다.
 고칠 필요는 낮고, **고친다면** 순회 전에 접힌 키로 dedup 해야 한다(먼저가 아니라 **나중** 유지).
+
+### 9.6 `scripts/re/va_citations.py` — 한 파일이 **두 이미지를 섞어** 인용할 때의 라우팅
+
+**증상.** §10 을 넣은 뒤 이 과제의 다섯 파일을 맨몸(`wallpaper64.exe` 기준)으로 재면
+**경계 이탈 105건**이 나온다. 105건 **전부** `bin/wallpaperui.exe` 의 명령 경계이고
+(별도 capstone 런으로 105/105 확인), `--also "$WE_ROOT/bin/wallpaperui.exe"` 를 주면 **0건**이다.
+곧 이 105건은 **인용이 틀린 것이 아니라 기준 이미지가 틀린 것**이다.
+
+**"파일 → 기준 이미지" 한 칸짜리 라우팅 표로는 이 파일들을 못 고친다.** 값이 **하나**면
+"기준을 갈아 끼우는" 것밖에 못 하는데, 여기서 필요한 것은 **기준은 그대로 두고 면죄 이미지를
+더하는 것**이다. 실측으로 방향이 갈린다(다섯 파일 합계, 2026-08-21 측정):
+
+| 기준 | 면죄(`--also`) | 경계 OK | 경계 이탈 |
+| --- | --- | ---: | ---: |
+| `wallpaper64.exe` | — | 261 | 105 |
+| `wallpaper64.exe` | `bin/wallpaperui.exe` | 261 | **0** |
+| `bin/wallpaperui.exe` | — | 236 | 167 |
+| `bin/wallpaperui.exe` | `wallpaper64.exe` | 236 | 11 |
+
+기준을 뒤집으면 `wallpaper64.exe` 의 `.rdata` 문자열 주소(`0x14048b910` `TEXV0005` 등)가
+`wallpaperui.exe` 에서는 `.pdata` 범위 **안**에 들어가 새 오탐 11건을 만든다.
+
+**패치안** — `SCANNER_ADDRESS_FIELDS` 옆에 표를 하나 두고, `--binary` 를 안 준 실행에서
+`also` 에 더한다(파일 → 기준 이미지 라우팅 표가 따로 생긴다면 그 **형제**로 두면 된다):
+
+```python
+# 한 파일이 **두 이미지를 섞어** 인용하는 경우. 기준(base)은 그대로 두고, 여기 적은 이미지는
+# **면죄용으로만** 쓴다(= `--also` 와 같은 뜻, 값은 WE_ROOT 상대경로).
+# 근거: docs/re/package-format.md §9.6 의 4행 표 — 기준을 뒤집으면 오히려 나빠진다.
+ALSO_ROUTING = {
+    "docs/re/package-format.md": ("bin/wallpaperui.exe",),
+    "spec/formats/pkg.json": ("bin/wallpaperui.exe",),
+    "scripts/spec/measure_corpus.py": ("bin/wallpaperui.exe",),
+    "Sources/WapleCore/ScenePackage.swift": ("bin/wallpaperui.exe",),
+    "Tests/WapleCoreTests/ScenePackageWEParityTests.swift": ("bin/wallpaperui.exe",),
+}
+
+# main() 안, roots/files 를 정한 직후:
+we_root = os.environ.get("WE_ROOT", "")
+for f in files:
+    for rel in ALSO_ROUTING.get(str(f), ()):
+        cand = os.path.join(we_root, rel)
+        if we_root and os.path.exists(cand) and cand not in also:
+            also.append(cand)
+```
+
+**한계도 함께 적어 둘 것**: 이 표는 `--also` 와 같은 성질이라 **약한 면죄**다. 이미지를 여럿
+주면 그물이 공허해진다는 경고(`--also-data` 주석)가 여기에도 그대로 적용되므로, **문서가
+이름을 밝힌 이미지 하나만** 넣어야 한다. 위 다섯 파일은 전부 `bin/wallpaperui.exe` 를 문면에
+명시한다.
+---
+
+## 10. 쓰는 쪽 — `bin/wallpaperui.exe` 의 패커 (2026-08-21 신규)
+
+§1~§9 는 전부 **읽는 쪽**(`wallpaper64.exe`)과 2차 산출물(`corpus_scan/`)로만 확정한 것이다.
+이번 조사는 **쓰는 쪽**을 처음 뜯었다. 읽는 코드는 "무엇을 받아 주는가" 만 말하지만 쓰는 코드는
+**"무엇이 실제로 만들어지는가"** 를 말한다 — 그래서 같은 사실이라도 불변식이 더 선명하다.
+
+> **이 절의 VA 는 전부 `bin/wallpaperui.exe` 다**(§10.7 만 두 이미지를 나란히 놓는다).
+> `wallpaper64.exe` 와 imagebase 가 같아 주소만으로는 갈리지 않으므로 **줄마다 바이너리를 밝힌다**
+> (방법론 함정 11). 기계 대조는 반드시 이미지를 지정해서 돌려라:
+> `WE_ROOT=… python3 scripts/re/va_citations.py --also "$WE_ROOT/bin/wallpaperui.exe" docs/re/package-format.md`
+> (재현 절차는 부록 A.10.)
+
+### 10.0 어느 바이너리가 쓰는가 — `resourcecompiler64.exe` 가 **아니다**
+
+설치본의 **MZ 헤더를 가진 파일 156개**(`.exe` 36 · `.dll` 116 · `.scr` 4 — `.exe`/`.dll` 만 세면
+152, 부록 A.8 의 분모와 같다)를 ASCII·UTF-16LE 양쪽으로 전수 검색한 결과:
+
+| 바이너리 | `PKGV` | `.pkg` | `scene.pkg` | `packProject` | `unpackProject` | `Pkg file list empty for %s` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `bin/wallpaperui.exe` (12,742,640 B) | **2** | **2**(+UTF-16 1) | **1** | **2** | **1** | **1** |
+| `wallpaper64.exe` (5,360,112 B) | 0 | 1 | 0 | 0 | 0 | 0 |
+| `bin/resourcecompiler64.exe` | 0 | 0 | 0 | 0 | 0 | 0 |
+| `bin/resourceutil64.dll` · `bin/cloneextensions64.dll` | 0 | 0 | 0 | 0 | 0 | 0 |
+| `bin/scenescript64.dll` · `bin/webwallpaper64.exe` · `bin/wallpaperservice64.exe` | 0 | 0 | 0 | 0 | 0 | 0 |
+
+(`distribution/` 아래의 사본 두 개는 바이트 동일본이라 같은 도수를 낸다.)
+
+`resourcecompiler64.exe` 가 가진 포맷 토큰은 `TEXV` 2 · `MDLV` 1 뿐이다 — **`.tex`/`.mdl` 컴파일러이지
+`.pkg` 도구가 아니다.** **`.pkg` 를 쓰는 코드는 `bin/wallpaperui.exe` 하나뿐이다.**
+
+> **[툼스톤 2026-08-21] §8.1 의 "`scenescript64.dll` 에 `.pkg` 1건" 은 0건이다.** 위 전수를
+> ASCII·UTF-16LE 로 다시 재면 `scenescript64.dll`(그리고 `scenescript32.dll`)은 `PKGV`·`.pkg`·
+> `scene.pkg` 전부 **0건**이다. 종전 서술이 무엇을 셌는지는 복원하지 못했다. 옛 문면은 §8.1 에
+> 그대로 두고 각주만 달았다.
+
+패커에 이르는 길은 둘이고 **둘 다 같은 함수 `wallpaperui.exe 0x14020a660` 을 부르며 매직을 세 번째
+인자로 넘긴다**:
+
+| 경로 | 수집기 | 매직 적재 | 패커 호출 |
+| --- | --- | --- | --- |
+| CLI `packProject -i <dir> -o <out>` | `wallpaperui.exe 0x140131830` | `0x140133446 lea r8, [rip+0x99e64b]` → `0x140ad1a98 "PKGV0024"` | `0x140133450` |
+| UI 인프로세스(업로드/저장) | `wallpaperui.exe 0x140209ba0` | `0x14020a4c9`(같은 문자열) | `0x14020a4d3` |
+
+곧 §2.2b 가 "패커 CLI 옆에 하드코딩된 상수" 라고만 적어 둔 `PKGV0024` 는 **실제로 패커의 세 번째
+인자**다. "4자리 = 버전" 판정이 여기서 한 번 더 독립적으로 굳는다.
+
+### 10.1 패커 `wallpaperui.exe 0x14020a660` 의 쓰기 전표 — 필드마다 VA
+
+인자는 `(rcx = 레코드 벡터, rdx = 출력 경로, r8 = 매직 문자열)` 이다(프롤로그
+`0x14020a67c mov r13, rcx` · `0x14020a686 mov r15, rdx` · `0x14020a67f mov r12, r8`).
+레코드는 **0x48 바이트**이고 세 자리에서 독립적으로 확정된다 — 삭제 루프의
+`0x14020a7d5 lea rdi, [rbx+0x48]`, 엔트리 루프의 `0x14020ab47 add r14, 0x48`, 그리고
+`entryCount` 를 만드는 정확 나눗셈(`0x14020a915 sar rax, 3` + `0x14020a90b movabs rcx, 0x8e38e38e38e38e39`
+= 8로 나눈 뒤 9의 모듈러 역원 곱 = ÷0x48).
+
+레코드 필드는 **수집기 쪽에서** 확정된다(§10.2 표의 세 슬롯이 `-0x60`/`-0x40`/`-0x20`,
+`+0x130`/`+0x150`/`+0x170` 으로 정확히 `+0x00`/`+0x20`/`+0x40` 간격이다):
+
+| 오프셋 | 필드 | 근거 |
+| --- | --- | --- |
+| +0x00 | 내부 이름 `std::string` | 패커가 `0x14020a970 mov ecx, [r14+0x10]` 로 **여기 크기**를 nameLen 으로 쓴다 |
+| +0x20 | 원본 절대 경로 `std::string` | 페이로드 루프가 `0x14020aba4 lea rsi, [r13+0x20]` 로 **여기**를 열어 읽는다 |
+| +0x40 | i32 크기 | `0x14020ab21 mov eax, [r14+0x40]` 가 그대로 size 필드다 |
+
+쓰기 순서(전부 `0x14004ba90` = `std::ostream::write(this, ptr, n)` — sentry 구성 → `rdbuf()->sputn`
+(vtable `+0x48`, `0x14004bb09`) → 짧게 쓰이면 badbit(`0x14004bb0f cmovne`) 의 표준 형태다):
+
+```
+wallpaperui.exe
+0x14020a6bd  call 0x14004a670          ; ofstream::open(wide(outPath), mode 0x20 = binary)
+0x14020a72c  cmp  qword [rbp+0x58], 0  ; 안 열리면 "Failed opening package file %s for write"(0x140addde0)
+                                       ;   문자열 적재 0x14020a741 · 로그 호출 0x14020a74b
+0x14020a7d1  cmp  dword [rbx+0x40], 0  ; ★ size == 0 인 레코드를 벡터에서 **지운다**(압축 루프 0x14020a7db-0x14020a824)
+0x14020a83e  cmp  qword [r13], r14     ; 남은 게 없으면 "Pkg file list empty for %s"(0x140adde78, 적재 0x14020a84e)
+0x14020a85d  xor  esi, esi             ; ★ 누적 오프셋 = 0
+0x14020a871  call 0x1409d20d0          ; strlen(magic)  → "PKGV0024" 는 8
+0x14020a89d  call 0x14004ba90 (r8d=4)  ; i32 magicLen
+0x14020a8bc  call 0x14004ba90 (r8=len) ; magic 바이트 (널 종단 없음)
+0x14020a945  call 0x14004ba90 (r8d=4)  ; i32 entryCount = (end-begin)/0x48
+  ── 엔트리 루프 0x14020a970 … 0x14020ab5a ──
+0x14020a970  mov  ecx, [r14+0x10]      ; nameLen = +0x00 문자열의 size
+0x14020a9da  call 0x14004ba90 (r8d=4)  ; i32 nameLen
+0x14020ab04  call 0x14004ba90          ; 이름 바이트
+0x14020ab1c  call 0x14004ba90 (r8d=4)  ; i32 offset  ← [rbp+0x648] = 누적 오프셋
+0x14020ab3c  call 0x14004ba90 (r8d=4)  ; i32 size    ← [r14+0x40]
+0x14020ab4b  add  esi, dword [r12]     ; ★ 누적 오프셋 += size   (r12 = r14+0x40)
+0x14020ab55  cmp  r14, [rsp+0x58] / jne 0x14020a970   ; 고정 횟수 — 센티널 없음
+  ── 페이로드 루프 0x14020ad00 … 0x14020aea8 ──
+0x14020ad9d  lea  rdx, [rbp+0x1f0]     ; 0x400 바이트 스택 버퍼
+0x14020ada4  mov  r8d, 0x400
+0x14020adb5  call qword [rax+0x40]     ; istream::read(buf, 0x400) — 읽은 수는 [rbp+0xe8]
+0x14020ae9c  call 0x14004ba90          ; 읽은 바이트를 **그대로** 이어 붙임
+0x14020aea1  cmp  r14, 0x400 / 0x14020aea8 jae 0x14020ad00   ; 짧게 읽힐 때까지 반복
+```
+
+> **[주의 — 죽은 가지]** 위 루프에는 같은 필드를 쓰는 자리가 두 벌씩 보인다(`0x14020a9c6`
+> `0x14020aa4b` `0x14020aaa8` `0x14020aaf5` `0x14020ae84`). 그쪽은 스트림이 아니라 힙 버퍼에
+> append 하는 가지이고, 진입 조건이 전부 `test rdi, rdi / jne`(`0x14020a978` · `0x14020aa5d` ·
+> `0x14020aab3` · `0x14020ae30`)인데 **`rdi` 는 루프 진입 직전 `0x14020a932 mov rdi, rsi` 로 0 이
+> 되고 그 뒤 `rdi != 0` 인 가지 안에서만 다시 대입된다.** 곧 이 빌드에서 버퍼 가지는 **도달하지
+> 않는다.** 위 표의 다섯 자리가 실제로 도는 유일한 경로다. (두 벌의 **쓰는 순서와 폭은 같다** —
+> 어느 쪽이 돌든 바이트 결과는 동일하다.)
+
+**여기서 곧바로 나오는 세 가지 확정**
+
+1. **엔트리 헤더에 미해석 필드가 없다.** 쓰는 쪽이 내보내는 것은 `nameLen · name · offset · size`
+   넷뿐이고, 읽는 쪽이 읽는 것도 정확히 그 넷이다(`wallpaper64.exe 0x1402769b0` · `0x140276a4d` ·
+   `0x140276a70` · `0x140276a82`). 예약 워드도, 플래그도, CRC 도, 타임스탬프도 **없다.** 종전에는
+   "코퍼스가 전건 파싱되니 없는 듯하다" 는 **부재 추론**이었는데, 이제 생산자 코드가 직접 말한다.
+2. **offset 은 0 에서 시작하는 크기 누적합**이다(`0x14020a85d` 초기화, `0x14020ab4b` 누적).
+   곧 페이로드는 **색인 순서대로 빈틈없이** 놓이고 정렬·패딩·간극이 없다.
+   `corpus_scan/pkgv_parse.py` 머리말의 "관측된 모든 파일에서 연속" 은 그 파서가 **검사하는**
+   조건이 아니라 관찰 서술이었다 — 이제 규약으로 확정된다.
+3. **압축 판정 지점 자체가 없다.** 페이로드 루프는 원본 바이트를 0x400 씩 읽어 그대로 잇는다.
+   압축기 호출도, "압축했다" 를 알리는 플래그도, 엔트리별 헤더도 없다. §3 이 읽는 쪽에서 확인한
+   "무압축" 이 쓰는 쪽에서 **판정 지점의 부재**로 다시 확인된다.
+
+**매직 길이의 불변식 하나가 여기서 닫힌다.** 쓰는 쪽은 `strlen(magic)` 을 그대로 magicLen 으로
+쓰고(`0x14020a871` → `0x14020a89d`), 읽는 쪽의 길이 접두 문자열 리더는 `maxLen = 8`
+(`wallpaper64.exe 0x14027692f mov r8d, 8`)을 넘으면 **빈 문자열 + 스트림 미전진**으로 파스를
+통째로 밀어 버린다(§2.3). 곧 **8자보다 긴 매직을 쓰면 자기 리더가 못 읽는다** — `"PKGV%04d"` 가
+정확히 8자인 것은 우연이 아니다.
+
+### 10.2 경로 정규화는 **비대칭**이다 — 쓰기는 구분자만, 읽기는 대소문자만
+
+두 수집기 모두 레코드를 벡터에 넣기 **직전에** 두 문자열을 같은 함수에 통과시킨다:
+
+| 수집기 | 레코드 슬롯 | 원본 경로(+0x20) | 내부 이름(+0x00) | 크기(+0x40) |
+| --- | --- | --- | --- | --- |
+| CLI `packProject`(`0x140131830`) | `rbp+0x130`/`+0x150`/`+0x170` | `0x1401333b0` → `0x1401333b7 call 0x14000c3f0` | `0x1401333be` → `0x1401333c5 call 0x14000c3f0` | `0x1401333a3 call 0x14000ee30` → `0x1401333aa mov dword [rbp+0x170], eax` |
+| UI 인프로세스(`0x140209ba0`) | `rbp-0x60`/`-0x40`/`-0x20` | `0x14020a3e8` → `0x14020a3ec call 0x14000c3f0` | `0x14020a3f3` → `0x14020a3f7 call 0x14000c3f0` | `0x14020a3c4 call 0x1408e72b0` → `0x14020a3e5 mov dword [rbp-0x20], ebx` |
+
+`wallpaperui.exe 0x14000c3f0(std::string&, char sep)` 이 하는 일을 직접 떴다. `sep` 은 네 호출
+모두 `dl = 0x2f`(`'/'`)다.
+
+```
+wallpaperui.exe
+0x14000c3fd  mov  ebp, 0x5c                 ; 반대쪽 구분자 후보 '\'
+0x14000c402  mov  eax, 0x2f                 ;                     '/'
+0x14000c407  cmp  dl, bpl
+0x14000c414  cmove ebp, eax                 ; sep='/' 이므로 ebp='\' (= 바꿔야 할 쪽)
+0x14000c43d  call 0x1408e5eb0               ; find(first, last, '\')
+0x14000c45d  mov  byte [rcx+rax], r15b      ; ★ 찾은 자리를 sep('/')로 덮어씀 — 루프(0x14000c497 jne)
+0x14000c4c1  call 0x1408e5eb0               ; 이후 sep 를 찾아
+0x14000c509  cmp  byte [rax+rsi+1], r15b    ;   바로 뒤가 또 sep 이면
+0x14000c541  call 0x1409d12d0               ;   memmove 로 한 칸 지우고
+0x14000c546  mov  qword [rbx+0x10], rdi     ;   size 를 줄인다 — ★ 연속 구분자 축약
+```
+
+곧 **쓰는 쪽 규약은 ⑴ 역슬래시→슬래시 ⑵ 연속 구분자 축약**이고, **대소문자는 손대지 않는다.**
+후자는 눈으로만 확인한 게 아니라 전수로 확인했다 — CLI 수집기(`0x140131830`–`0x1401347e6`) ·
+UI 수집기(`0x140209ba0`–`0x14020a65c`) · 패커(`0x14020a660`–`0x14020b170`) · 정규화기
+(`0x14000c3f0`) · 확장자 추출기(`0x14000dc90`) **어느 범위에도 CRT `tolower`(`0x14096d1fc`)
+호출이 0건**이고, 이미지 전역에 `CharLowerW`·`CharLowerBuffW`·`_wcslwr`·`towlower` 임포트가
+**0건**이다. 읽는 쪽은 정확히 반대다 — 바이트별 ASCII `tolower` 만 하고 구분자를 손대지 않는다
+(`wallpaper64.exe 0x140276ac4` 적재 · `0x140274003` 조회, §2.1b).
+
+**코퍼스가 이 비대칭을 그대로 보여 준다**(`entry-name-frequency.tsv` 전수 11,338 경로 · 19,777 출현):
+
+| 성질 | 값 | 어느 쪽이 만든 것인가 |
+| --- | ---: | --- |
+| 역슬래시 포함 | **0** | 쓰기 정규화 ⑴ |
+| 연속 구분자 `//` 포함 | **0** | 쓰기 정규화 ⑵ |
+| 선행 `./` · 절대경로(`/…`·`X:`) · `..`·`.` 성분 | **0** | 수집기가 루트 상대 경로만 만든다 |
+| 대문자 ASCII 포함 | **3,061 종**(27.0%) · 출현 3,764 | 쓰기가 대소문자를 **안** 접는다 |
+| 대문자 확장자 | `.MP3` **10** · `.TTF` **3** | 같음 |
+
+마지막 줄이 결정적이다 — 확장자까지 원문 그대로 실린다. §1.1b 의 확장자 표는 `pkgv_census.py` 가
+`os.path.splitext(name)[1].lower()` 로 **접어서** 센 값이라 이 사실이 가려져 있었다(§1.1b 각주).
+
+> **따름**: Waple 의 역슬래시 관용 색인(`entryByNormalizedName`)은 **WE 가 만든 pkg 에서는 절대
+> 히트하지 않는다.** 종전 근거는 "코퍼스에 역슬래시가 0건" 이라는 관측이었는데, 이제 생산자
+> 코드가 **구조적으로** 0임을 말한다. 그 색인은 손으로 만든 pkg 나 다른 도구가 만든 pkg 를 위한
+> 관용으로만 남는다(뺏지 않고 더하기만 하므로 무해하다 — §7.3·§7.8).
+
+### 10.3 디렉터리 엔트리와 확장자 없는 엔트리는 **애초에 레코드가 되지 않는다**
+
+CLI 수집기는 재귀 디렉터리 순회(`0x140133112` 구성 · `0x140133130` 루프 머리 · `0x140133412` 전진)
+에서 나온 항목마다 세 관문을 통과시킨다. **첫 관문이 확장자 유무다.**
+
+```
+wallpaperui.exe
+0x140133145  call 0x140071c40   ; 노드의 전체 경로(wide)를 [rbp-0x60] 로 복사
+0x14013314e  call 0x14000e3b0   ; ★ has_extension(path)
+0x140133159  je   0x140133409   ;   거짓이면 레코드를 안 만들고 다음 항목으로
+```
+
+`0x14000e3b0` 은 이름으로 판정한 것이 아니라 **본문 구조로** 확정했다: 끝의 구분자를 건너뛰고
+(`0x14000e3e3 cmp cx, 0x5c` · `0x14000e3e9 cmp cx, 0x2f`) 마지막 성분의 시작을 찾은 뒤
+(`0x14000e400` 역방향 루프) `':'` 를 배제하고(`0x14000e41f mov r8d, 0x3a`) 뒤에서 `'.'` 를 찾되
+(`0x14000e465 cmp word [rcx], 0x2e`) `"."`·`".."` 는 제외한다(`0x14000e43b`·`0x14000e44a`) —
+`std::filesystem::path::has_extension` 의 `_Find_extension` 그대로이고, 반환은 `setne al`
+(`0x14000e47a`)이다.
+
+**디렉터리는 확장자가 없으므로 여기서 전부 떨어진다.** 확장자 없는 **일반 파일**(`LICENSE` 같은
+것)도 같이 떨어진다 — 이쪽이 더 넓은 진술이다.
+
+나머지 두 관문:
+
+* 이름이 `blobsSM40` 이면 건너뛰고 **하위로 내려가지도 않는다**(집합 구성 `0x140133089` 의
+  `lea rdx, "blobsSM40"` → `0x1401330b4`, 조회 `0x1401331ae`, 히트 시 `0x1401331d8 mov byte [r14+0x64], 0`).
+  `[r14+0x64]` 가 MSVC `recursive_directory_iterator` 의 재귀 억제 플래그라는 것은 **추정**이다
+  (이 컨테이너에서 실행으로 확인할 수 없다). 건너뛴다는 사실 자체는 확정이다.
+* 확장자 필터(§10.4).
+
+그리고 살아남은 레코드도 **크기가 0이면 쓰기 직전에 지워진다**(`0x14020a7d1`, §10.1).
+곧 0바이트 엔트리도 구조적으로 생기지 않는다.
+
+**코퍼스가 세 결론을 그대로 확인한다**(전수 11,338 경로 · 19,777 출현):
+
+* **확장자 없는 경로 0건** · 후행 구분자로 끝나는 경로 0건 · 빈 이름 0건.
+* `chunk-type-census.md` 의 확장자별 도수 합이 **정확히 19,777**
+  (10,467+4,679+1,689+1,689+423+338+225+144+70+44+6+3)이고, 그 센서스는 확장자 없는 엔트리를
+  `(none)` 칸으로 찍게 돼 있는데 그 칸이 **없다**. 곧 **모든 엔트리가 확장자를 갖는다.**
+* 0바이트 엔트리의 도달도 이제 두 줄기다. 종전 §7.5·§8.2 의 근거는 "센서스의 `detect_type` 이
+  빈 blob 에서 `IndexError` 로 죽는데 예외 없이 끝났다" 는 **파생 추론**이었다. 여기에 생산자
+  코드의 삭제 루프가 더해져, **WE 가 만든 pkg 에 0바이트 엔트리는 구조적으로 없다**.
+
+읽는 쪽의 `size <= 0` 게이트(`wallpaper64.exe 0x14027412a`)와 정확히 맞물린다 — 생산자가 만들지
+않는 값을 소비자가 "없음" 으로 처리한다.
+
+> **Waple 의 `fromDirectory` 는 이 필터를 따라가면 안 된다.** 그쪽이 흉내 내는 것은 패커가 아니라
+> WE 의 **폴더 마운트**(`wallpaper64.exe 0x1402764d0`)이고, 폴더 마운트는 엔트리 표를 만들지 않고
+> 요청 경로로 파일을 바로 연다 — 확장자 없는 파일도 열린다. 확장자 필터를 `fromDirectory` 에
+> 넣으면 WE 가 여는 파일을 Waple 이 못 여는 **새 이탈**이 된다. 현행대로가 맞다(정정 없음).
+
+### 10.4 CLI 수집기가 **패키지에 넣지 않는** 확장자 22종
+
+확장자는 `0x1401331f3 call 0x14000dc90`(= `path::extension()` → `WideCharToMultiByte(CP_UTF8)`,
+IAT `0x1409e29a8`)로 뽑고 `0x140133200` 에서 UTF-8 std::string 으로 받는다. 그 다음
+`0x14013322a`–`0x1401332f9` 가 이렇게 판정한다(순서 그대로):
+
+| 순서 | 검사 | VA |
+| --- | --- | --- |
+| 1 | 길이 4 이고 `.mtl` 이면 표시 | `0x14013322a` 길이 · `0x140133237` 리터럴 |
+| 2 | 길이 5 이고 `.json` 이면 **바로 포함**(표를 안 본다) | `0x140133255` 길이 · `0x14013325e` 리터럴 · `0x140133270 je 0x1401332ff` |
+| 3 | 표 A 9종과 대조 | `0x140133284 mov rdx, [rsi + rdi*8 + 0xabab70]`, 종단 `0x14013329f cmp rdi, 9` |
+| 4 | 표 B 12종과 대조 | `0x1401332ac mov rdx, [rsi + rdi*8 + 0xababc0]`, 종단 `0x1401332c7 cmp rdi, 0xc` |
+| 5 | 1·3·4 중 하나라도 맞으면 **건너뜀** | `0x1401332cd test bl, bl` · `0x1401332cf jne 0x1401333fb` |
+| 6 | 길이 4 이고 `.mp4` 면 **건너뜀** | `0x1401332e2` 길이 · `0x1401332eb` 리터럴 · `0x1401332f9 je 0x1401333fb` |
+| — | 통과하면 레코드를 만든다 | `0x1401332ff` |
+
+`rsi` 는 `0x140133120 lea rsi, [rip-0x133127]` 로 **imagebase 자체**를 담는다 — 그래서 두 표는
+`[rsi + rdi*8 + disp32]` 로 읽히고 rip-상대 xref 스캔에 **안 걸린다**(방법론 함정 10).
+포인터 배열을 직접 역참조해 읽은 두 표:
+
+* 표 A `0x140abab70`: `.obj .fbx .blend .dae .3ds .x .lxo .gltf` **`.json`**
+  — 아홉 번째 `.json` 은 **죽은 칸**이다. `.json` 은 2번에서 이미 포함으로 빠져나가므로
+  이 루프에 도달하지 않는다(두 표는 다른 자리와 공유하는 일반 목록으로 **추정**된다).
+* 표 B `0x140ababc0`: `.png .tga .jpeg .jpg .jfif .bmp .psd .ico .gif .dds .tif .tiff`
+
+곧 실제 제외 집합은 **22종**: `.mtl` + 표 A 앞 8종 + 표 B 12종 + `.mp4`.
+
+비교는 `0x140042480(std::string&, const char* lit)` 이고 그 본문은 `strlen`(`0x1409d20d0`) →
+길이 동등 → `memcmp`(`0x1400424d0 call 0x1409d1dc0`)다. **바이트 대조라 대소문자를 접지 않는다.**
+확장자 추출기(`0x14000dc90`)도 접지 않는다(§10.2 의 전수 확인) — 곧 `.PNG` 같은 대문자 표기는
+이 필터를 **그냥 지나간다**.
+
+**코퍼스와 정확히 맞물린다.** §1.1b 가 실측한 엔트리 확장자 12종
+(`.json .tex .frag .vert .mdl .mp3 .ttf .otf .wav .ogg .flac .ttc`)에는 표 A·B 의 어느 항목도
+없고, 특히 `.png` **0건** · `.mp4` **0건**이다. 종전에는 "저작자가 안 넣었나 보다" 로밖에 설명할
+수 없던 0 이 이제 **도구가 거부한다**로 설명된다.
+
+> **범위 주의.** 위 필터는 **CLI 수집기**(`packProject`)의 것이다. UI 인프로세스 수집기
+> (`0x140209ba0`)는 파일 목록을 호출자에게서 **미리 받아** 돌므로 같은 필터가 그 앞단(자바스크립트
+> UI 쪽 포함)에 있는지는 확정하지 못했다. 코퍼스가 두 경로 중 어느 것으로 만들어졌는지도
+> 산출물로는 갈리지 않는다. **`[미해결]`**(§8.0b #3)
+
+### 10.5 출력 파일 이름도 `replace_extension("pkg")` 다
+
+UI 인프로세스 수집기(`0x140209ba0`)는 `project.json` 의 `file` 값(`0x140209bcf lea rdx` →
+`0x140ab2204 "file"`)을 받아 확장자를 `pkg` 로 바꿔 출력 경로를 만든다:
+`0x140209c28 call 0x14006dc70` 이 현재 확장자를 떼고, `0x140209c14 lea rdx` → `0x140acd728 "pkg"`
+(**점 없는 리터럴**)를 받아 `0x140209c4d cmp word [rax], 0x2e` 로 점이 없으면
+`0x140209c53 mov edx, 0x2e` / `0x140209c5c` 로 점을 먼저 붙인 뒤 `0x140209c74` 가 이어 붙인다.
+
+읽는 쪽의 폴백 규칙(§6 의 `wallpaper64.exe 0x14011e368 "pkg"` + `0x140060d90 replace_extension`)과
+**같은 규약**이다. 곧 `file:"scene.json"` 인 프로젝트는 `scene.pkg` 를, `file:"techno.json"` 인
+프로젝트는 `techno.pkg` 를 낸다.
+
+> **§7.7 의 도달에 대한 정정 방향.** §1.1 은 "워크샵 pkg 는 전건 `scene.pkg` + 내부 `scene.json`
+> 이라 그 갭의 **도달을 0으로 만든다**" 고 적었다. 관측은 그대로지만 **"0" 의 뜻이 바뀐다** —
+> `techno.pkg` 는 WE 자신의 저작 도구가 실제로 만들 수 있는 이름이라는 것이 이제 코드로 확인된다
+> (저작자가 씬 파일을 `techno.json` 으로 이름 지으면 그만이고, 설치본 `project.json` 361건에
+> `techno.json` 이 **실제로 1건 있다** — §1.2). 곧 도달은 "구조적으로 0" 이 아니라
+> **"관측된 161 표본에서 0"** 이다. 착지와 게이트가 이 과제의 소유 밖이라 여전히 `[미해결]` 이고,
+> 패치안은 §9.3 에 있다.
+
+### 10.6 쓰는 쪽이 만들 수 있는데 Waple 이 컨테이너째 거부하는 값 하나 — `size < 0`
+
+레코드의 크기는 파일 상태 조회 결과를 **i32 로 잘라** 넣는다. 두 수집기가 같은 헬퍼로 간다:
+
+* CLI: `0x1401333a3 call 0x14000ee30` → 그 안에서 `0x14000ee65 call 0x1408e72b0`,
+  `0x14000ee71 mov rbx, -1` / `0x14000ee78 cmove rbx, [rsp+0x48]` → `0x1401333aa mov dword [rbp+0x170], eax`
+* UI: `0x14020a3c4 call 0x1408e72b0` 직접, `0x14020a3cf mov rbx, -1` / `0x14020a3d6 cmove rbx, [rbp+0xc8]`
+  → `0x14020a3e5 mov dword [rbp-0x20], ebx`
+
+`0x1408e72b0` 은 `GetFileAttributesExW`(IAT `0x1409e2800`)와 `FindFirstFileW`(`0x1409e2818`)로
+파일 상태를 읽어 **구조체 +0x08 에 u64 크기**를 넣는다(`0x1408e73d8 shl rdx, 0x20` +
+`0x1408e73ec mov [rsi+8], rdx`) — 그래서 두 호출부의 `[…+8]` 이 크기다. 성공은 반환 0 이고,
+**실패하면 두 호출부 모두 `-1` 을 들고 나온다.** 그 값을 검사하는 자리는 어디에도 없고,
+패커의 삭제 조건은 `== 0` 이라(`0x14020a7d1`) **`-1` 은 살아남아 `0xFFFFFFFF` 로 기록된다.**
+
+같은 절단이 두 번째 경로도 연다: u64 → i32 이므로 **2 GiB 이상 파일은 음수**로, 4 GiB 이상은
+임의 값으로 기록된다.
+
+| | WE 읽는 쪽 | Waple |
+| --- | --- | --- |
+| `size == 0` | 그 엔트리만 "없음" → 디스크 폴백(`wallpaper64.exe 0x14027412a`) | 그 엔트리만 `nil`(§7.5) — **같다** |
+| `size < 0` | 같은 `jle` 가 잡는다 → 그 엔트리만 "없음" | `parse` 가 **컨테이너 전체를 `malformed`** 로 거부 |
+
+곧 크기 조회가 실패한 엔트리가 하나라도 있으면 WE 는 씬을 그리고 Waple 은 **적용 실패**가 된다.
+
+**그래도 고치지 않는다 — 의도적 이탈이다.** 이유는 §7.4·`testNegativeEntryCountIsRejectedUnlikeWE`
+가 이미 세워 둔 것과 같다: Waple 의 `i32` 는 **부호 없이** 읽으므로 `0xFFFFFFFF` 는 4,294,967,295 가
+되고, 그것을 "음수" 로 되살리려면 잘린 파일과 구별할 수 없는 값을 **선의로 해석**해야 한다.
+잘린 파일을 거부하는 그물(`testTruncatedEntryTableIsRejectedUnlikeWE`)과 맞바꾸는 셈이다.
+**도달은 미관측이다** — 워크샵 161 pkg · 19,777 엔트리에서 파스 오류 0건이고, 최대 단일 pkg 가
+712,246,205 B(0.66 GiB)라 2 GiB 절단 경로도 표본 안에 없다. 이 이탈은
+`ScenePackageWEParityTests.testNegativeEntrySizeIsRejectedUnlikeWE` 가 **의도임을 못 박는다.**
+
+### 10.7 `wallpaperui.exe` 는 **읽는 쪽도 갖고 있다** — §2 를 두 번째 이미지에서 재확인했다
+
+`wallpaperui.exe` 에는 `"Cannot open %s, version %i not supported.\n"`(파일 오프셋 `0xae77b8`,
+VA `0x140ae89b8`)와 `"VFS missing file: %s\n"`(`0xae7798` / `0x140ae8998`)이 **각 1건** 있다.
+곧 이 이미지는 패커와 로더를 **둘 다** 담는다. 첫 문자열의 유일한 xref 로 함수를 잡으면
+`wallpaperui.exe 0x140474430` 이고, `.pdata` 함수 시작에서 선형으로 떠서 §2 의 상수를 전부
+다시 만났다:
+
+| §2 의 사실 | `wallpaper64.exe` | `wallpaperui.exe`(이번에 새로 뜬 것) |
+| --- | --- | --- |
+| 매직 길이 > 4 일 때만 버전을 본다 | `0x140276946` | `0x140474765 cmp rax, 4` |
+| `atoi(magic + 4)` | `0x14027695f` | `0x14047477d` |
+| **버전 상한 24** | `0x140276964` / `0x140276967` | `0x140474782 cmp eax, 0x18` / `0x140474785 jle` |
+| `entryCount <= 0` 이면 표를 건너뛴다 | `0x140276996` | `0x1404747bf jle 0x140474bd6` |
+| **`nameLen` 상한 0x800** | `0x1402769bb` | `0x1404747e8 cmp eax, 0x800` / `0x1404747ed jbe` |
+| 이름을 **제자리에서 바이트별 ASCII tolower** | `0x140276ac0`–`0x140276ad6` | `0x140474910 movsx ecx, byte [rsi]` / `0x140474913 call 0x14096d1fc` / `0x14047491b mov [r14], al` |
+| 해시는 FNV-1a 64 | `0x1402778b4` | `0x14047493f movabs rsi, 0xcbf29ce484222325` |
+| 중복 키는 **뒤가 이긴다**(무조건 덮어쓰기) | `0x140276aef` · `0x140276af5` | `0x140474b50 mov [r14+0x30], eax` · `0x140474b57 mov [r14+0x34], eax` |
+| 루프 종단은 **고정 횟수뿐** | `0x140276b3c` / `0x140276b40` | `0x140474bcd cmp r15d, r12d` / `0x140474bd0 jl` |
+| 적재 후 전 엔트리에 `dataBase` 가산 | `0x140276b63` | `0x140474bf4 add dword [rax+0x30], edx` |
+
+`0x14096d1fc` 가 CRT `tolower` 라는 것도 본문으로 확인했다 —
+`0x14096d214 lea eax, [rcx-0x41]` / `cmp eax, 0x19` / `ja` / `add ecx, 0x20`,
+곧 `wallpaper64.exe 0x1402bfb1c` 와 **같은 빠른 경로**다.
+
+> **왜 중요한가.** §2.1b 의 "접힌 키 하나 · 중복은 뒤가 이긴다" 는 종전까지 **한 이미지의 한
+> 함수**에서만 나온 결론이었다. 이제 서로 다른 두 바이너리가 (한쪽은 맵 삽입을 호출로, 다른
+> 쪽은 인라인으로) **같은 규약**을 구현하는 것이 확인됐다. 남의 주석이 아니라 두 번의 독립
+> 디스어셈이다(방법론 함정 14).
 
 ---
 
@@ -1436,3 +1912,88 @@ vdis2.dis(0x14003fc80, 0x14003fd88)   # path::stem — 뒤에서 마지막 '.' �
 `0x140276700` 은 `.pdata` 가 `[0x140276700, 0x140276866)` + `[0x140276866, 0x140276bd2)` 두 조각
 으로 쪼개 두었지만 **둘 다 명령 경계에서 시작**해 어느 쪽에서 떠도 같은 결과가 나온다(확인함).
 반면 `0x14010df40` 조각은 함수 시작이 아니다 — `0x14010de40` 에서 떠야 한다(§9.4).
+
+### A.10 쓰는 쪽 디스어셈과 전 바이너리 토큰 전수 (§10) — 2026-08-21 신설
+
+`scripts/re/disasm.py` 는 `WE_ROOT/wallpaper64.exe` 를 고정으로 연다. **다른 이미지를 뜰 때는
+`disasm.BIN` 을 갈아 끼워라**(`va_citations.py --binary` 가 하는 것과 같다):
+
+```python
+import os, sys
+sys.path.insert(0, "scripts/re")
+import disasm
+disasm.BIN = os.path.join(os.environ["WE_ROOT"], "bin", "wallpaperui.exe")
+data, secs = disasm.load()          # 이 뒤로 off_of/cstr 이 wallpaperui 를 본다
+# python3 scripts/re/disasm.py <va> <n> 은 wallpaper64 고정이므로 §10 에는 쓰지 마라.
+```
+
+떠 볼 자리(전부 `.pdata` **함수 시작**이다 — 함정 15):
+
+```
+wallpaperui.exe 0x14020a660 - 0x14020b170   패커(TOC + 페이로드)
+wallpaperui.exe 0x140131830 - 0x1401347e6   CLI packProject 수집기(재귀 순회 + 확장자 필터)
+wallpaperui.exe 0x140209ba0 - 0x14020a65c   UI 인프로세스 수집기(출력 이름 + 정규화)
+wallpaperui.exe 0x14000c3f0 - 0x14000c4df   경로 정규화(구분자만)
+wallpaperui.exe 0x14000e3b0 - 0x14000e483   has_extension
+wallpaperui.exe 0x14000dc90 - 0x14000dde8   확장자 추출(WideCharToMultiByte)
+wallpaperui.exe 0x14000ee30 - 0x14000ee8c   파일 크기(실패 시 -1)
+wallpaperui.exe 0x140042480 - 0x1400424e5   확장자 == 리터럴(memcmp)
+wallpaperui.exe 0x14004ba90 - 0x14004bb9a   ostream::write
+wallpaperui.exe 0x140474430 - 0x140474c71   **같은 이미지 안의 pkg 로더**(§10.7)
+wallpaperui.exe 0x14096d1fc - 0x14096d226   CRT tolower
+```
+
+두 확장자 표는 rip-상대가 아니라 `[imagebase + idx*8 + disp32]` 로 읽히므로 xref 스캔에 안 걸린다.
+포인터 배열을 직접 역참조해야 한다:
+
+```python
+import struct
+for base, n in ((0x140abab70, 9), (0x140ababc0, 12)):
+    for i in range(n):
+        p = struct.unpack_from("<Q", data, disasm.off_of(base + 8 * i, secs))[0]
+        print(hex(base + 8 * i), disasm.cstr(data, secs, p))
+# -> 표 A: .obj .fbx .blend .dae .3ds .x .lxo .gltf .json
+#    표 B: .png .tga .jpeg .jpg .jfif .bmp .psd .ico .gif .dds .tif .tiff
+```
+
+전 바이너리 토큰 전수(§10.0 표) — A.8 을 MZ 헤더 기준으로 넓히고 토큰을 늘린 것:
+
+```python
+import os
+root = os.environ["WE_ROOT"]
+toks = [b"PKGV", b".pkg", b"scene.pkg", b"packProject", b"unpackProject",
+        b"Pkg file list empty for %s", b"TEXV", b"MDLV"]
+for dp, _, fns in os.walk(root):
+    for fn in fns:
+        p = os.path.join(dp, fn)
+        with open(p, "rb") as fh:
+            if fh.read(2) != b"MZ":
+                continue
+        d = open(p, "rb").read()
+        hit = {t.decode(): (d.count(t), d.count(t.decode().encode("utf-16-le"))) for t in toks
+               if d.count(t) or d.count(t.decode().encode("utf-16-le"))}
+        if hit:
+            print(os.path.relpath(p, root), hit)
+# -> MZ 156개 중 PKGV 보유는 bin/wallpaperui.exe 와 distribution/bin/wallpaperui.exe 뿐
+#    bin/resourcecompiler64.exe 는 TEXV 2 / MDLV 1 만 (pkg 토큰 0)
+```
+
+§10 의 VA 기계 대조(**반드시 이미지를 지정해서**):
+
+```bash
+WE_ROOT=/path/to/wallpaper_engine python3 scripts/re/va_citations.py \
+    --also "$WE_ROOT/bin/wallpaperui.exe" \
+    docs/re/package-format.md spec/formats/pkg.json scripts/spec/measure_corpus.py \
+    Sources/WapleCore/ScenePackage.swift Tests/WapleCoreTests/ScenePackageWEParityTests.swift
+# -> 경계 이탈 0 (그중 `다른 이미지에서 경계` 가 wallpaperui.exe 쪽 인용이다)
+```
+
+`--also` 없이 돌리면 `wallpaperui.exe` 인용이 통째로 "경계 이탈" 로 나온다(실측 **105건**,
+그 105건은 `bin/wallpaperui.exe` 에서 **전건 명령 경계**임을 따로 확인했다) — 두 이미지의
+imagebase 가 같아서다(방법론 함정 11 · §4.4b 의 한계 절).
+
+**기준 이미지를 뒤집으면 안 된다.** 같은 다섯 파일을 `--binary bin/wallpaperui.exe` 로 재면
+경계 OK 가 261 → 236 으로 줄고 이탈이 167 이며, `--also wallpaper64.exe` 를 줘도 11건이 남는다
+(`wallpaper64.exe` 의 `.rdata` 문자열 주소가 `wallpaperui.exe` 에서는 `.pdata` 범위 안에 들어가서다).
+곧 **기준은 `wallpaper64.exe`, 면죄용이 `bin/wallpaperui.exe`** 다. 이 짝을 도구가 자동으로
+고르게 하는 패치안은 §9.6 에 있다.

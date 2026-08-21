@@ -74,6 +74,18 @@ public struct ScenePackage {
     ///   · `entryByNormalizedName` — 그 위에 역슬래시까지 접은 **Waple 전용 관용 폴백**.
     /// 이러면 관용 색인은 예전처럼 **히트를 더하기만 하고 뺏지 않는다**(§7.3 의 그 성질이 살아난다).
     ///
+    /// **[2026-08-21(2차) 독립 재확인 — 두 번째 이미지]** 위 ①~④ 는 종전까지 `wallpaper64.exe`
+    /// **한 함수**에서만 나온 결론이었다. `bin/wallpaperui.exe` 에도 같은 로더가 있고
+    /// (`"Cannot open %s, version %i not supported.\n"` 이 그 이미지에 1건, 유일한 xref 로
+    /// `wallpaperui.exe 0x140474430`), `.pdata` 함수 시작에서 선형으로 떠서 같은 규약을 다시 만났다:
+    /// 바이트별 ASCII `tolower`(`wallpaperui.exe 0x140474913`, CRT 본체 `0x14096d1fc` 의 빠른 경로는
+    /// `0x14096d214 lea eax, [rcx-0x41]`) · FNV-1a 64 베이시스(`0x14047493f`) ·
+    /// **무조건 덮어쓰기**(`0x140474b50` offset · `0x140474b57` size) · 고정 횟수 종단
+    /// (`0x140474bd0`) · `dataBase` 가산(`0x140474bf4`). 그쪽은 맵 삽입이 **인라인**이라 구현이
+    /// 다른데 **규약은 같다** — 곧 last-wins 는 한 함수의 우연이 아니다.
+    /// (`docs/re/package-format.md` §10.7. 그 이미지를 기계 대조하려면
+    /// `va_citations.py --also "$WE_ROOT/bin/wallpaperui.exe"` 로 재라 — 두 이미지의 imagebase 가 같다.)
+    ///
     /// **`.directory`(언팩 폴더 마운트)에는 last-wins 를 적용하지 않는다.** WE 의 폴더 마운트
     /// (`0x1402764d0`)는 엔트리 표를 만들지 않고 요청 경로로 파일을 **바로 연다** — 그쪽에서
     /// WE 와 같은 답을 내는 것은 정확 일치이므로 `entryByName` 을 먼저 본다(§7.5 의 0바이트
@@ -195,6 +207,26 @@ public struct ScenePackage {
             entries.append(Entry(name: name, offset: off, size: sz))
         }
         let blobBase = p
+        // [2026-08-21(2차) — docs/re/package-format.md §10.6] **`size < 0` 은 쓰는 쪽이 실제로
+        // 만들 수 있는 값이고, 여기서 Waple 은 WE 와 갈린다 — 그리고 그것이 의도다.**
+        //
+        // 패커(`bin/wallpaperui.exe 0x14020a660`)에 들어가는 레코드의 크기는 파일 상태 조회
+        // (`wallpaperui.exe 0x1408e72b0`, `GetFileAttributesExW`/`FindFirstFileW`)가 준 **u64 를
+        // i32 로 자른** 값이다(CLI `0x1401333aa` · UI `0x14020a3e5`). 조회가 실패하면 두 호출부
+        // 모두 `-1` 을 들고 나오고(CLI `0x14000ee71` · UI `0x14020a3cf`) 그 값을 검사하는 자리가
+        // 없다 — 패커의 삭제 조건은 `== 0`(`0x14020a7d1`)이라 `-1` 은 살아남아 `0xFFFFFFFF` 로
+        // 기록된다. 같은 절단이 2 GiB 이상 파일도 음수로 만든다.
+        //
+        // WE 읽는 쪽은 그 엔트리 **하나만** "없음" 으로 처리한다(`wallpaper64.exe 0x14027412a`
+        // 의 `jle` 가 0 과 음수를 같이 잡는다). Waple 은 **컨테이너 전체를 `malformed`** 로 끊는다.
+        // 되살리려면 `i32` 를 부호 있게 읽어야 하는데, 그러면 `0xFFFFFFFF` 를 "잘린 파일" 과
+        // 구별할 수 없는 값으로 **선의 해석**하게 된다 — `testTruncatedEntryTableIsRejectedUnlikeWE`
+        // 가 지키는 그물과 맞바꾸는 셈이다. `testNegativeEntryCountIsRejectedUnlikeWE` 와 같은
+        // 이유로 **엄격한 쪽을 고른다.**
+        //
+        // 도달: 워크샵 161 pkg · 19,777 엔트리에서 파스 오류 0건이고, 최대 단일 pkg 가
+        // 712,246,205 B(0.66 GiB)라 2 GiB 절단 경로도 표본 안에 없다 — **미관측**이다.
+        // 잠금: `ScenePackageWEParityTests.testNegativeEntrySizeIsRejectedUnlikeWE`.
         for e in entries {
             guard e.offset >= 0, e.size >= 0, blobBase + e.offset + e.size <= total else {
                 throw ScenePackageError.malformed
@@ -233,6 +265,13 @@ public struct ScenePackage {
             // 빈 blob 을 받으면 mp3 검사의 `head[0]` 에서 `IndexError` 로 죽는다. 센서스가
             // 예외 없이 끝났고 `parse-errors.tsv` 본문이 0행이므로 빈 엔트리가 없다).
             // 곧 이 가드는 무회귀이고, 근거는 코퍼스가 아니라 로더 코드다.
+            //
+            // **[2026-08-21(2차) 근거 보강 — 생산자 쪽]** 위 도달 서술은 센서스 예외 부재에서
+            // 끌어낸 **파생 추론**이었다. 이제 생산자 코드가 직접 말한다: 패커는 쓰기 직전에
+            // `size == 0` 인 레코드를 벡터에서 **지우고**(`bin/wallpaperui.exe 0x14020a7d1` 비교,
+            // 압축 루프 `0x14020a7db` - `0x14020a824`), 남은 게 없으면 실패한다(`0x14020a83e`).
+            // 곧 **WE 가 만든 pkg 에 0바이트 엔트리는 구조적으로 없다.** 이 가드가 지키는 것은
+            // 손으로 만든 pkg 와 다른 도구의 산출물이다(§10.3).
             guard e.size > 0 else { return nil }
             let start = blob.startIndex + blobBase + e.offset
             return blob.subdata(in: start ..< start + e.size)
@@ -301,6 +340,16 @@ public struct ScenePackage {
     }
 
     /// 엔트리 목록으로부터 패키지를 조립(파싱 결과와 동일 구조). 테스트/리패킹용.
+    ///
+    /// **이것은 WE 패커의 재현이 아니다 — 일부러 아니다.** WE 의 패커
+    /// (`bin/wallpaperui.exe 0x14020a660`, `docs/re/package-format.md` §10)는 쓰기 전에 두 가지를
+    /// 더 한다: ⑴ 확장자 없는 항목을 수집 단계에서 버리고(`wallpaperui.exe 0x140133159`)
+    /// ⑵ `size == 0` 인 레코드를 지운다(`0x14020a7d1`). 여기서 **둘 다 하지 않는다.**
+    /// 이유는 이 함수의 용도다 — `ScenePackageWEParityTests` 가 0바이트 엔트리를 가진 합성 pkg 를
+    /// 지어 §7.5 의 조회 게이트를 재는데, 여기서 0바이트를 버리면 그 테스트가 잴 것을 잃는다.
+    /// 곧 이 함수는 **컨테이너 프레이밍만** 재현한다(오프셋 누적합 규약은 WE 와 같다 —
+    /// `wallpaperui.exe 0x14020a85d` 초기화 · `0x14020ab4b` 누적).
+    /// 잠금: `testAssembleKeepsZeroSizeEntriesUnlikeWEPacker` · `testAssembleOffsetsAreCumulativeLikeWEPacker`.
     public static func assemble(_ files: [(name: String, data: Data)]) -> ScenePackage {
         var blob = Data()
         var entries: [Entry] = []
@@ -325,6 +374,12 @@ public struct ScenePackage {
     /// 그래서 엔트리 이름을 루트 상대 경로로 만들고 구분자를 `/` 로 고정한다.
     ///
     /// - Note: 심볼릭 링크는 건너뛴다(루트 밖 탈출 차단). 숨김 파일도 건너뛴다.
+    /// - Note: **WE 패커의 확장자 필터를 여기에 옮기지 마라.** 패커는 확장자 없는 항목을 버리고
+    ///   (`bin/wallpaperui.exe 0x14013314e` `has_extension` → `0x140133159` 건너뜀) 이미지·모델
+    ///   원본 22종을 제외한다(§10.4). 이 함수가 흉내 내는 것은 패커가 아니라 WE 의 **폴더 마운트**
+    ///   (`wallpaper64.exe 0x1402764d0`)이고, 폴더 마운트는 엔트리 표를 만들지 않고 요청 경로로
+    ///   파일을 **바로 연다** — 확장자 없는 파일도 열린다. 필터를 넣으면 WE 가 여는 파일을
+    ///   Waple 이 못 여는 **새 이탈**이 된다.
     public static func fromDirectory(_ root: URL) -> ScenePackage? {
         let fm = FileManager.default
         var isDir: ObjCBool = false
