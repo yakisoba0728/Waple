@@ -254,7 +254,16 @@ CRLF 가 섞인 입력에서 `split(separator: "\n")` 이 조용히 다르게 �
 ```bash
 WE_ROOT=/path/to/wallpaper_engine python3 scripts/re/va_citations.py            # 전수
 WE_ROOT=... python3 scripts/re/va_citations.py docs/re/tonemapping.md           # 일부
+WE_ROOT=... python3 scripts/re/va_citations.py \
+    --binary "$WE_ROOT/bin/webwallpaper64.exe" docs/re/web-wallpaper-bridge.md  # 다른 이미지
 ```
+
+**`--binary` 는 장식이 아니다.** `wallpaper64.exe` 로만 재면 다른 이미지의 인용이 통째로
+"명령 경계 아님" 으로 나온다. 실측: `docs/re/web-wallpaper-bridge.md` + 웹 관련 소스·테스트가
+`wallpaper64.exe` 기준으로는 **153건**이었는데 `bin/webwallpaper64.exe` 로 재니 **3건**이 됐고,
+그 3건 중 둘은 문서가 `wallpaper64.exe` 라고 **밝혀 둔** 줄이라 정상이었다. 남은 하나가 진짜였다
+(`WallpaperBridgeJS.swift` 의 `0x14001f569` → `0x14001f568`, 그리고 그 주석은 **어느 바이너리인지
+아예 안 적고 있었다**).
 
 **툼스톤과 충돌하지 않게** — 옛 주소를 남긴 줄에 마커 `[VA-정정]` 을 넣으면 그 줄의 VA 는
 판정에서 빠진다. 정정할수록 보고서가 더러워지는 모순을 없애면서, 면제가 **명시적**이라

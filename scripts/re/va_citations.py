@@ -184,7 +184,25 @@ def main(argv):
         return 1
     md = Cs(CS_ARCH_X86, CS_MODE_64)
 
-    roots = argv[1:] or list(DEFAULT_TARGETS)
+    args = argv[1:]
+    # `--binary <경로>` 로 **다른 WE 바이너리**를 재게 한다(함정 11). WE 는 여러 이미지로 나뉘고
+    # 전부 imagebase 가 같아서, 한 이미지로만 재면 다른 이미지의 인용이 통째로 오탐이 된다.
+    if args and args[0] == "--binary":
+        if len(args) < 2:
+            print("--binary 다음에 경로가 필요하다")
+            return 1
+        disasm.BIN = args[1]
+        args = args[2:]
+        if not os.path.exists(disasm.BIN):
+            print(f"[va-citations] 바이너리가 없다: {disasm.BIN}")
+            return 1
+        data, secs = disasm.load()
+        funcs = pdata_functions(data, secs)
+        if not funcs:
+            print("[va-citations] .pdata 를 못 읽었다")
+            return 1
+        print(f"[va-citations] 기준 바이너리: {disasm.BIN}")
+    roots = args or list(DEFAULT_TARGETS)
     files = []
     for r in roots:
         p = pathlib.Path(r)

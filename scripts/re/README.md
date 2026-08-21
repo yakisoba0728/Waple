@@ -23,6 +23,7 @@ python scripts/re/xref.py flags perspective sphererandom
 python scripts/re/disasm.py 0x1401c55e4 200
 python scripts/re/va_citations.py                    # Sources·Tests·docs·spec 전수
 python scripts/re/va_citations.py docs/re/tonemapping.md
+python scripts/re/va_citations.py --binary "$WE_ROOT/bin/webwallpaper64.exe" docs/re/web-wallpaper-bridge.md
 python scripts/re/playlist_transition.py
 ```
 

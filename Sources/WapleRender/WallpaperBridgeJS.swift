@@ -84,8 +84,14 @@ enum WallpaperBridgeJS {
       defineBridge('wallpaperOnVideoEnded', function () {});
       defineBridge('wallpaperRequestTakeScreenshotResponse', function () {});
       // WE 의 `___STAHP` 스크립트(주입 원문 @0x119ca0, 5936바이트)가 여는 공용 훅.
-      // WE 자신이 플러그인 로드 통지를 이 위에 얹고(0x14001f569 가 만드는
-      // `window.___wpxShared.onLoad(function(){...onPluginLoaded(...)})`), 벽지도 쓸 수 있다.
+      // WE 자신이 플러그인 로드 통지를 이 위에 얹고(`bin/webwallpaper64.exe` 0x14001f568 의
+      // `call` 직후 `lea rdx,[rip+0xfdfec]` → 0x14011d560 =
+      // `"window.___wpxShared.onLoad(function(){window.wallpaperPluginListener && window.wallpaperPluginListener.onPluginLoaded("`),
+      // 벽지도 쓸 수 있다.
+      // **[2026-08-21 정정]** 종전 주소 0x14001f569 는 그 `call` 의 한복판(+1)이었고 **어느  [VA-정정]
+      // 바이너리인지도 안 적혀 있었다**. 두 이미지가 imagebase 가 같아 `wallpaper64.exe` 로 뜨면
+      // 전혀 다른 코드가 나온다(거기 0x14001f565 는 `lea rdx,[rip+0x45555c]` 다).  [VA-정정]
+      // `scripts/re/va_citations.py --binary <경로>` 로 잡았다.  [VA-정정]
       // 원본과 같은 의미론: load 이후 등록하면 즉시 호출, 이전이면 큐잉.
       if (!window.___wpxShared) {
         var wpxShared = {
