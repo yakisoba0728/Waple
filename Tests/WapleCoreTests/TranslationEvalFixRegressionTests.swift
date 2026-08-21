@@ -65,21 +65,37 @@ final class TranslationEvalFixRegressionTests: XCTestCase {
     /// 여기 남은 것은 **실물에도 없거나 우리가 일부러 안 받는 것**뿐이다:
     ///  · 삼항 `?:` — 실물 렉서가 "그 외 문자"(코드 0x19)로 떨어뜨린다.
     ///  · 잔여 토큰 — 실물은 관용이지만 우리는 "오역보다 폴터" 규약대로 거부한다.
-    ///  · 소수 리터럴 — 실물은 소수부를 버리고 정수부만 쓴다(0x140167021-0x140167046). 미구현.
+    ///
+    /// **[2026-08-21] 소수 리터럴은 이 목록에서 빠졌다.** 종전엔 `#if 1.5` 와
+    /// `#define K 1.5` 가 여기 있었고 위 주석도 "미구현" 이라고 적고 있었다. 실물은
+    /// `0x140167021` 에서 `.` 을 isdigit 검사 **전에** 무조건 소비하고
+    /// `0x140167031`-`0x140167046` 이 소수부를 읽되 누적기를 안 건드린다 → `#if 1.5` = 1.
+    /// 16진 분기도 `0x140166ff1` 로 같은 자리에 합류한다 → `#if 0x10.5` = 16.
+    /// "오역보다 폴터" 를 뒤집는 자리라 근거는 `ShaderPreprocessor` 주석에 적혀 있고,
+    /// 지금 그 계약을 잠그는 것은 `ShaderPreprocessorConformanceTests` 와
+    /// `ShaderPreprocessorRequireTests` 다. 여기서는 **아래 대조군**으로만 남긴다.
     func testUnsupportedIfExpressionsAreRefused() {
         let cases = [
             "#if A ? 1 : 0\nyes\n#endif",
             "#if 1 0\nyes\n#endif",
             "#if A == 1\none\n#elif A ? 1 : 0\ntwo\n#endif",
-            "#if 1.5\nyes\n#endif",
             "#if A @ 1\nyes\n#endif",
-            // `#define K 1.5` — d 미등재로 #if K 는 0 인데 본문 치환은 "1.5" 이던 불일치 경로.
-            "#define K 1.5\n#if K\nyes\n#endif",
         ]
         for src in cases {
             XCTAssertNil(ShaderPreprocessor.preprocessStrict(src, combos: ["A": 3]), src)
             XCTAssertEqual(ShaderPreprocessor.preprocess(src, combos: ["A": 3]), "", src)
         }
+    }
+
+    /// 위 목록에서 빠진 두 입력이 **실물대로 평가된다**는 대조군. 이게 없으면 소수 리터럴이
+    /// 어느 쪽으로 가는지 이 파일만 봐서는 알 수 없다(종전 문면은 거부라고 적고 있었다).
+    func testDecimalLiteralsInIfEvaluateInsteadOfRefusing() {
+        for src in ["#if 1.5\nyes\n#endif", "#define K 1.5\n#if K\nyes\n#endif"] {
+            XCTAssertNotNil(ShaderPreprocessor.preprocessStrict(src, combos: ["A": 3]), src)
+            XCTAssertTrue(ShaderPreprocessor.preprocess(src, combos: ["A": 3]).contains("yes"), src)
+        }
+        // 소수부는 **버린다** — 0.5 는 거짓이어야 한다(정수부 0).
+        XCTAssertFalse(ShaderPreprocessor.preprocess("#if 0.5\nyes\n#endif", combos: [:]).contains("yes"))
     }
 
     /// 거부 오발 방지: 지원 문법(비교·논리·defined·괄호·10진 정수·콤보)은 기존과 동일하게 평가.
