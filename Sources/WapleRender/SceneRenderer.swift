@@ -724,7 +724,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         case .high, .ultra: return sceneIsHDR ? .rgba16Float : .bgra8Unorm
         }
     }
-    /// H7: 품질 설정(general.quality) — 파스 시점 스냅샷.
+    /// H7: 품질 설정 스냅샷. **WE 키가 아니라 Waple 확장이다**(바이너리 전수에서 `quality` 는
+    /// `uiquality` 하나뿐이고 씬 general 어휘 39종에 없다) — SceneDocument.Quality 주석 참조.
     var sceneQuality: SceneDocument.Quality = .ultra
     /// 씬당 라이트 유니폼(상수) — forwardLit=false(라이트 씬 아님)면 전 레이어 f_main(무회귀).
     var forwardLit = false

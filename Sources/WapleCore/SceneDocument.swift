@@ -184,7 +184,24 @@ public struct SceneLayer: Equatable {
     /// 단 Waple 은 compose 레이어별 자식 RT 가 없어 "자식 RT 대신 무(無)" 로 근사한 것 — 필터형 체인엔
     /// 타당하나 생성형(입력과 무관하게 색을 새로 쓰는) 체인의 콘텐츠 손실까지 보장하는 것은 아니다.
     public var copyBackground: Bool = true
-    public var clampUVs: Bool = false
+    /// **[2026-08-20] 기본값 정정 false → true.** 렌더러블 생성자가 플래그 dword 를
+    /// `[obj+0x304] = 0x8040`(0x1401e69e8) 으로 초기화한다 — bit6 `copybackground` **와**
+    /// bit15 `clampuvs` 가 **둘 다** 서는 값이다. 바로 위 `copyBackground = true` 는 그 상수의
+    /// bit6 을 이미 반영한 것인데 같은 상수의 bit15 만 안 따라와 있었다.
+    /// 비트 극성 확인: 세터 0x14019bf40 이 `btr eax,0xf` / `bts r9d,0xf` 후 입력이 0 이면
+    /// `cmove` 로 지운 쪽을 고르고, 게터 0x14019bf80 은 `shr edx,0xf; and dl,1` 이다.
+    ///
+    /// **오늘의 화면은 바뀌지 않는다** — 이 필드를 읽는 곳이 없다. 샘플러 주소지정을 정하는 것은
+    /// `TexImage.clampUVs`(`.tex` 헤더 flags bit1)뿐이고(SceneRendererResources:1182·1191),
+    /// 씬 JSON 에서 파스한 이 값은 저장만 되고 소비처가 없다. 그래서 이건 동작 수정이 아니라
+    /// **모델 수정**이다 — 나중에 소비를 붙이는 사람이 틀린 기본값을 물려받지 않게 한다.
+    ///
+    /// 도달: 동봉+설치본 scene.json 355개 중 `clampuvs` 명시 6건이고 **전건 `true`** 다.
+    /// 즉 명시 자산조차 기본값과 같아서, 이 기본값이 사실상 전 자산의 실효값이다.
+    ///
+    /// 미해결: 씬 JSON 의 `clampuvs` 와 `.tex` 헤더의 flags bit1 이 어긋날 때 어느 쪽이
+    /// 이기는지는 확인 못 했다 — 소비를 붙일 때 먼저 정해야 한다.
+    public var clampUVs: Bool = true
     public var noInterpolation: Bool = false
     public var spacing: Float? = nil
     public var lockTransforms: Bool = false
@@ -246,7 +263,8 @@ public struct SceneParticle: Equatable {
     /// 오브젝트-레벨 전파/렌더 플래그 파스·보존.
     public var disablePropagation: Bool = false
     public var copyBackground: Bool = true
-    public var clampUVs: Bool = false
+    /// 기본 true — 위 SceneLayer.clampUVs 주석 참조(렌더러블 ctor 0x8040 의 bit15).
+    public var clampUVs: Bool = true
     public var noInterpolation: Bool = false
     public var lockTransforms: Bool = false
     public var isSolid: Bool = false
@@ -320,7 +338,8 @@ public struct SceneTextLayer: Equatable {
     /// 오브젝트-레벨 전파/렌더 플래그 파스·보존.
     public var disablePropagation: Bool = false
     public var copyBackground: Bool = true
-    public var clampUVs: Bool = false
+    /// 기본 true — 위 SceneLayer.clampUVs 주석 참조(렌더러블 ctor 0x8040 의 bit15).
+    public var clampUVs: Bool = true
     public var noInterpolation: Bool = false
     public var spacing: Float? = nil
     public var lockTransforms: Bool = false
@@ -903,8 +922,21 @@ public struct SceneDocument: Equatable {
     public var gravityStrength: Float = 1
     public var gravityDirection: Vec3 = Vec3(x: 0, y: -1, z: 0)
 
-    /// H7: WE 품질 설정(general.quality) — low/medium/high/ultra. 픽셀 포맷 분기에 사용.
-    /// 부재 시 ultra(기존 hdr 플래그 결정자와 동일 — 무회귀).
+    /// H7: 품질 설정 — low/medium/high/ultra. 픽셀 포맷 분기에 사용. 부재 시 ultra(무회귀).
+    ///
+    /// **[2026-08-20 정정] 이것은 WE 키가 아니라 Waple 확장이다.** 종전 주석은
+    /// "WE 품질 설정(general.quality)" 이라고 적었는데, `wallpaper64.exe` 전수 검색에서
+    /// `quality` 를 포함하는 문자열은 **`uiquality` 하나뿐**이고(VA 0x1404747d0, UI 스킨 설정)
+    /// UTF-16LE 은 0건이다. 씬의 `general` 에 `quality` 라는 키는 **존재하지 않는다**.
+    ///
+    /// 자산 실측도 같은 말을 한다 — 동봉+설치본 scene.json 355개의 `general` 이 실제로 쓰는
+    /// 키는 39종이고 `quality` 는 그중에 없다(도달 0/355). 그래서 이 값은 **항상 `.ultra`** 이고
+    /// low/medium 분기는 한 번도 안 탄다.
+    ///
+    /// WE 의 실제 품질 노브는 **씬이 아니라 사용자 설정**에 있다(`config.json` 의
+    /// `msaa`/`resolution`/`postprocessing`/`shadows`). 씬 단위로 품질을 낮추는 개념 자체가 없다.
+    /// 필드를 남겨 두는 이유는 public API 이고 도달 0 이라 무해하기 때문이다 — 다만
+    /// **"WE 가 이렇게 한다" 는 근거로 쓰면 안 된다.**
     public enum Quality: String, Equatable {
         case low, medium, high, ultra
     }
@@ -961,7 +993,8 @@ extension SceneDocument {
         let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 1
         // 부재 시 0(즉시) — 무회귀. 실물은 전부 필드 보유(기본 0.1).
         let parallaxDelay = max(0, float(general["cameraparallaxdelay"]) ?? 0)
-        // H7: 품질 설정(general.quality) — low/medium/high/ultra. 부재 시 ultra(무회귀).
+        // H7: 품질 설정. **WE 키가 아니라 Waple 확장이다** — 선언부(`SceneDocument.Quality`) 주석 참조.
+        // 동봉+설치본 355개 씬 전건 부재라 실질적으로 항상 .ultra 다.
         let quality = Quality(rawValue: (general["quality"] as? String)?.lowercased() ?? "ultra") ?? .ultra
 
         // 3D 카메라(orthogonalprojection 이 딕셔너리가 아닌 3D 씬 + camera{eye,center,up}+fov 존재 시). 2D=nil.
@@ -1326,7 +1359,7 @@ extension SceneDocument {
         // M7/M5: object-level render flags + config passthrough.
         layer.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
         layer.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? true
-        layer.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? false
+        layer.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? true   // WE ctor 0x8040 bit15 — 선언부 주석 참조
         layer.noInterpolation = (unwrap(obj["nointerpolation"]) as? Bool) ?? false
         layer.spacing = float(obj["spacing"])
         layer.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
@@ -1614,7 +1647,7 @@ extension SceneDocument {
         // M7: object-level render flags.
         t.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
         t.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? true
-        t.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? false
+        t.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? true   // WE ctor 0x8040 bit15 — 선언부 주석 참조
         t.noInterpolation = (unwrap(obj["nointerpolation"]) as? Bool) ?? false
         t.spacing = float(obj["spacing"])
         t.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
@@ -2221,7 +2254,7 @@ extension SceneDocument {
         // M7: object-level render flags.
         p.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
         p.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? true
-        p.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? false
+        p.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? true   // WE ctor 0x8040 bit15 — 선언부 주석 참조
         p.noInterpolation = (unwrap(obj["nointerpolation"]) as? Bool) ?? false
         p.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
         p.isSolid = (unwrap(obj["solid"]) as? Bool) ?? false
