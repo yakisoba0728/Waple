@@ -65,6 +65,8 @@ WapleRender 는 `import Metal`/`MetalKit`/`AppKit` 이라 리눅스에서 `swift
 | `JavaScriptCore` | `javascriptcore.swift` | `JSContext`, `JSValue` |
 | `CryptoKit` | `cryptokit.swift` | `SHA256` |
 | `Compression` | `compression.swift` | `compression_decode_buffer` |
+| `WebKit` | `webkit.swift` | `WKWebView`·`WKNavigationDelegate`·`WKScriptMessageHandler`·`WKURLSchemeHandler` — **리눅스 Foundation 결손분**(`FoundationNetworking` 재수출, `autoreleasepool`)도 여기서 낸다 |
+| `UniformTypeIdentifiers` | `uniformtypeidentifiers.swift` | `UTType(filenameExtension:)`·`preferredMIMEType` 뿐 |
 | `simd` | `simd.swift`(기존) + `simd-extra.swift`(신규) | `simd-extra` 는 렌더 계층이 쓰는 것만 보탠다 |
 | `WapleCore` | 실제 소스 + `corefoundation.swift` | 매 실행 다시 만든다 |
 
@@ -79,32 +81,53 @@ Foundation 이 CoreFoundation 을 재수출하기 때문이다. 스크립트가 
 
 ## 커버 범위
 
-`Sources/WapleRender/**` 의 `.swift` **55개 중 51개**가 타입체크된다(행 기준 약 95% —
-제외 4파일이 1,274행이고 트리 전체가 약 24,250행. 행수는 계속 바뀌므로 파일 수가 정본이다).
+`Sources/WapleRender/**` 의 `.swift` **55개 전부**가 타입체크된다. 제외는 **0건**이다.
 
-> **[2026-08-21] 49 → 51.** `VideoRenderer.swift`·`FFmpegConverter.swift` 가 KVO
-> (`NSKeyValueObservation`·`observe(_:options:changeHandler:)`)와 `AVPlayerLayer` 심이
-> 붙으면서 들어왔다. 이제 남은 제외는 **WebKit 한 덩어리뿐**이다.
-실측(2026-08-21, 4코어 컨테이너): 심 모듈 빌드 ~5초 + `WapleCore` emit-module ~22초 +
-**타입체크 32초**. 락 대기는 별도다.
-목록은 스크립트의 `COVERED` 배열이 정본이고 `--list` 로 볼 수 있다.
-`OggVorbis/` 하위 6개도 포함한다.
+> **[2026-08-21] 49 → 51 → 55.**
+> · 49→51: `VideoRenderer.swift`·`FFmpegConverter.swift`. KVO 심
+>   (`NSKeyValueObservation`·`NSKeyValueObservingOptions`·`NSKeyValueObservedChange`·
+>   `AVPlayerItem.observe(_:options:changeHandler:)`)은 **이미 `avfoundation.swift` 에 있었고**
+>   커버 목록에만 안 들어가 있었다. 실제로 모자랐던 것은 KVO 가 아니라 다섯 개뿐이었다 —
+>   `AVPlayer.defaultRate` · `AVPlayerItem.audioTimePitchAlgorithm`(+`AVAudioTimePitchAlgorithm`) ·
+>   `AVAsset.load` 의 2·3인자 오버로드 · `.tracks` 비동기 프로퍼티 · `AVAssetTrack.mediaType` ·
+>   `CAAutoresizingMask` · `NSWindow.didChangeOcclusionStateNotification`.
+> · 51→55: WebKit 덩어리 4파일. `webkit.swift`(신규, WK* 16종) +
+>   `uniformtypeidentifiers.swift`(신규, `UTType` 하나) + `appkit.swift` 보강
+>   (`NSTrackingArea`·`NSWindowDelegate`·`NSResponder` 입력 이벤트·`NSEvent.keyCode`/
+>   `scrollingDelta*`/`charactersIgnoringModifiers`·`NSRect.fill()`·`NSString.draw(at:withAttributes:)`·
+>   `NSImage.draw(in:from:operation:fraction:)`·`NSCompositingOperation`).
+>   덤으로 **리눅스 Foundation 의 결손 두 개**가 드러났다(아래 "리눅스 Foundation 결손" 참조).
+
+`OggVorbis/` 하위 6개도 커버에 포함된다.
+실측(2026-08-21, 4코어 컨테이너, 55파일): 심 모듈 빌드 ~7초 + `WapleCore` emit-module ~22초 +
+**타입체크 29~36초**(같은 트리에서 5회 측정). 도구 자체가 쓴 CPU 는 `user+sys` 약 63초다.
+락 대기는 별도이고, 8개 에이전트가 동시에 도는 동안 벽시계는 2분 39초까지 갔다.
+`spec` 잡의 `timeout-minutes: 10`(실측 잡 전체 15~28초) 안에는 여유롭게 들어간다.
+
+**이 문서의 숫자는 스냅샷이다.** 정본은 스크립트의 `COVERED`/`EXCLUDED` 배열이고
+`--list` 로 읽어라 — 커버가 늘어도(줄어도) 스크립트가 먼저 바뀌고 이 문단은 뒤따른다.
+숫자가 어긋나면 `--list` 를 믿어라.
 
 스크립트는 **커버/제외 목록이 실제 트리와 정확히 일치하는지** 매 실행 검사하고 어긋나면
 실패한다. 새 파일이 조용히 커버 밖으로 떨어지는 것을 막는다(이런 도구가 죽는 가장 흔한 방식).
+실측(2026-08-21): 목록에서 `QuadShaders.swift` 를 빼고 없는 `NotInTree.swift` 를 넣어 돌리니
+양쪽 다 잡고 심 빌드 전에 `exit 1` 했다.
 
 ### 제외 파일과 이유
 
-| 파일 | 행 | 이유 |
-|---|---|---|
-| `WebRenderer.swift` | 704 | WebKit(`WKWebView`·`WKNavigationDelegate`·`WKScriptMessageHandler`·`WKUserContentController`) 심 미작성 |
-| `WebInputProxyView.swift` | 177 | WebKit + `NSTrackingArea`/`NSColor`/`NSCoder` 등 AppKit 심층 표면 |
-| `WallpaperSchemeHandler.swift` | 346 | WebKit(`WKURLSchemeHandler`·`WKURLSchemeTask`) + `UniformTypeIdentifiers`(`UTType`) |
-| `RendererFactory.swift` | 47 | `WebRenderer(mode:)` 를 직접 생성 — 위 셋이 들어와야 같이 들어온다 |
+**없다.** `EXCLUDED` 배열은 빈 채로 남겨 둔다 — 새 프레임워크를 쓰는 파일이 생기면 심을 쓰기
+전까지 거기 넣고 이 절에 사유를 적는다.
 
-합계 1,274행(전체의 약 5%). **넷이 전부 WebKit 한 덩어리다** — `WKWebView`·
-`WKNavigationDelegate`·`WKScriptMessageHandler`·`WKURLSchemeHandler`(+`UTType`) 심을
-쓰면 네 파일이 한꺼번에 들어와 55/55 가 된다.
+### 리눅스 Foundation 결손 (WebKit 커버가 드러낸 것)
+
+`WallpaperSchemeHandler.swift` 는 `Foundation`+`WebKit` 만 import 하는데 리눅스 Foundation 에
+둘이 없어서 `webkit.swift` 가 대신 낸다. **둘 다 WebKit API 가 아니고**, 애플에서는 Foundation 이
+항상 주는 것이라 여기 있어도 거짓 통과를 만들지 않는다(macOS 에서는 무조건 보인다):
+
+| 심볼 | 리눅스 실태 | 실측 오류 |
+|---|---|---|
+| `HTTPURLResponse`(+`URLRequest`/`URLResponse`) | 실물은 `FoundationNetworking`, Foundation 에는 `AnyObject` 별칭만 | `'HTTPURLResponse' (aka 'AnyObject') cannot be constructed because it has no accessible initializers` |
+| `autoreleasepool` | **아예 없다** | `cannot find 'autoreleasepool' in scope` |
 
 ## 한계 — 이 도구가 **못** 하는 것
 
@@ -123,12 +146,21 @@ Foundation 이 CoreFoundation 을 재수출하기 때문이다. 스크립트가 
    - 열거형 원시값(예: `MTLPixelFormat`)은 이름만 맞추었다. 코드가 `rawValue` 로 왕복을
      시작하면 그때부터 거짓이 된다.
 
-③ **`@objc optional` 프로토콜 요구사항의 셀렉터 어긋남을 못 잡는다.** `SCStreamOutput` 과
-   `AVAudioPlayerDelegate` 는 애플에서 optional 이라 이름이 어긋나도 컴파일이 통과하고
-   콜백만 조용히 안 온다. 심은 기본 구현으로 그 성질을 재현하므로 **같은 함정을 그대로 둔다.**
+③ **`@objc optional` 프로토콜 요구사항의 셀렉터 어긋남을 못 잡는다.** `SCStreamOutput`,
+   `AVAudioPlayerDelegate`, **`WKNavigationDelegate`, `NSWindowDelegate`** 는 애플에서 optional
+   이라 이름이 어긋나도 컴파일이 통과하고 콜백만 조용히 안 온다. 리눅스에는 ObjC 런타임이 없어
+   `@objc optional` 자체를 쓸 수 없으므로 심은 **프로토콜 확장의 기본 구현**으로 그 성질을
+   재현한다 — **같은 함정을 그대로 둔다.** 특히 `WebRenderer.swift:271~` 이 기록한 사고
+   (CI run 32214982769: `decidePolicyFor` 의 witness 자격 상실로 내비게이션 보안 게이트가
+   무음으로 꺼졌다)는 **이 도구가 못 잡는 부류다.** 그 자리의 감시자는 여전히
+   `WebRendererSecurityTests` 두 건이다.
 
 ④ **동시성 진단(`@MainActor`·`Sendable`)은 macOS 와 다를 수 있다.** 애플 SDK 의 격리
    어노테이션(과 `@preconcurrency` 강등)이 심에는 없다. 심의 타입은 전부 비격리다.
+   WebKit 이 특히 그렇다 — 애플의 `WKWebView`/`WKNavigationDelegate`/`WKURLSchemeHandler` 는
+   전부 `@MainActor` 라 `WebRenderer`·`WallpaperSchemeHandler` 의 `nonisolated` 표기와
+   `RendererFactory` 의 "비격리 컨텍스트에서 메인액터 초기화자" 경고가 거기서 나온다.
+   **여기서는 그 표기를 지워도 통과한다.** 그 계약의 판정자는 macOS CI 다.
 
 ⑤ **런타임 동작은 전혀 검증하지 않는다.** 심 본문은 `fatalError("linux shim")`/더미값이다.
 
@@ -155,7 +187,7 @@ scripts/dev/linux-render-typecheck.sh --replace SceneRendererResources.swift=/tm
 
 ```
 == 치환: SceneRendererResources.swift → …/SceneRendererResources-990aa2a.swift
-== 타입체크: 49 파일 (제외 6) ==
+== 타입체크: 55 파일 (제외 0) ==
 …/SceneRendererResources-990aa2a.swift:1214:51: error: cannot find 'texW' in scope
 …/SceneRendererResources-990aa2a.swift:1214:69: error: cannot find 'texH' in scope
 == FAIL (rc=1)
@@ -166,7 +198,7 @@ scripts/dev/linux-render-typecheck.sh --replace SceneRendererResources.swift=/tm
 심이 그 이름을 우연히 정의해 버렸거나, `--replace` 가 실제로 안 먹은 경우다(**실제로 겪었다**:
 락 재실행이 인자를 잃어 도구가 원본을 검사하고 rc=0 을 줬다. 그래서 이 대조가 필요하다).
 
-음성 대조는 인자 없이 돌리는 것 자체다(현 트리에서 rc=0, 타입체크 32초).
+음성 대조는 인자 없이 돌리는 것 자체다(현 트리 55파일에서 rc=0, 타입체크 34초 — 2026-08-21 실측).
 
 추가로 잰 것(같은 방식의 `--replace` 돌연변이 3종):
 
@@ -175,6 +207,23 @@ scripts/dev/linux-render-typecheck.sh --replace SceneRendererResources.swift=/tm
 | `Scene3DMath.swift` — `simd_determinant(upper)` → `simd_determinant("upper")` | 잡힘 | rc=1, `85:27 no exact matches in call to global function 'simd_determinant'` |
 | `TextRasterizer.swift` — `ascent` → `ascentt`(스코프에 없는 이름) | 잡힘 | rc=1, `117:26 cannot find 'ascentt' in scope` |
 | `Mesh3DShaders.swift` — MSL 리터럴 안 주석에 `\n` 삽입(`b98db0a` 재현) | **못 잡음** | rc=0 ← 한계 ① 의 실측 근거 |
+
+새로 커버된 6파일의 양성 대조(2026-08-21, `--replace` 로 한 파일씩만 갈아끼움 — 12/12 잡힘):
+
+| 파일 | 돌연변이 | 실측 |
+|---|---|---|
+| `VideoRenderer.swift` | `item.observe(\.status,…)` → `\.statuss` | `139:42 value of type 'AVPlayerItem' has no member 'statuss'` |
+| `VideoRenderer.swift` | `tracks` → `trackss`(스코프 밖) | `154:32 cannot find 'trackss' in scope` |
+| `FFmpegConverter.swift` | `contains(url.pathExtension…)` → `contains(42)` | `13:36 cannot convert value of type 'Int' to expected argument type 'String'` |
+| `FFmpegConverter.swift` | `VideoRenderer.unsupportedExtensions` → `…sionss` | `11:70 type 'VideoRenderer' has no member 'unsupportedExtensionss'` |
+| `WebRenderer.swift` | `webView.url` → `webView.urll` | `296:49`·`316:49 value of type 'WKWebView' has no member 'urll'` |
+| `WebRenderer.swift` | `return .allow` → `.alloww` | `363:17 type 'WKNavigationActionPolicy' has no member 'alloww'` |
+| `WebRenderer.swift` | `injectionTime: .atDocumentStart` → `42` | `102:55 cannot convert value of type 'Int' to expected argument type 'WKUserScriptInjectionTime'` |
+| `WebInputProxyView.swift` | `event.keyCode` → `keyCodee` | `138:47 value of type 'NSEvent' has no member 'keyCodee'` |
+| `WebInputProxyView.swift` | `web.takeSnapshot` → `takeSnapshott` | `38:17 value of type 'WKWebView' has no member 'takeSnapshott'` |
+| `WallpaperSchemeHandler.swift` | `task.didFinish()` → `didFinishh()` | `217:22`·`271:18`·`292:14 value of type 'any WKURLSchemeTask' has no member 'didFinishh'` |
+| `WallpaperSchemeHandler.swift` | `UTType(filenameExtension: ext)` → `42` | `340:49 cannot convert value of type 'Int' to expected argument type 'String'` |
+| `RendererFactory.swift` | `WebRenderer(mode: .web)` → `.webb` | `21:39 type 'WebRenderer.Mode' has no member 'webb'` |
 
 ## CI
 
@@ -196,7 +245,7 @@ scripts/dev/linux-render-typecheck.sh --replace SceneRendererResources.swift=/tm
 ### 미해결 — 그래서 아직 게이트가 아니다
 
 1. **버전이 다르다.** 이 도구를 검증한 로컬 툴체인은 **6.0.3** 이고 러너는 **6.3.3** 이다.
-   심 15종은 애플 헤더에서 기계 생성한 것이 아니라 **손으로 적은 것**이라(한계 ②), 새 컴파일러가
+   심 17종은 애플 헤더에서 기계 생성한 것이 아니라 **손으로 적은 것**이라(한계 ②), 새 컴파일러가
    추가 진단을 내면 그대로 빨간불이 된다. 여기서는 잴 수 없다.
 2. **기본 언어 모드를 모른다.** 이 도구는 `-swift-version` 을 넘기지 않으므로 러너 기본 모드가
    5 여야 전제가 선다. 6.0.3 에서는 기본이 5 다(아래 프로브의 음성 대조 참조).

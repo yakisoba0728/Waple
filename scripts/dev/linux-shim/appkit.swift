@@ -2,8 +2,11 @@
 // 배경·규약은 `metal.swift` 머리말과 같다.
 //
 // **AppKit 전체를 흉내내지 않는다.** `Sources/WapleRender/**` 중 커버 대상 파일이 실제로 쓰는
-// 심볼만 있다. 그래서 WebKit 계열(`WebRenderer`·`WebInputProxyView`·`WallpaperSchemeHandler`)은
-// 커버 대상이 아니다 — `docs/dev/linux-typecheck.md` 의 제외 목록 참조.
+// 심볼만 있다. [2026-08-21] 커버가 55/55 가 되면서 WebKit 계열
+// (`WebRenderer`·`WebInputProxyView`·`WallpaperSchemeHandler`)이 쓰는 표면도 여기 들어왔다:
+// `NSTrackingArea`, `NSWindowDelegate`, `NSResponder` 의 마우스/키 이벤트, `NSEvent.keyCode`·
+// `scrollingDelta*`·`charactersIgnoringModifiers`, 그리고 파일 끝의 그리기 오버레이
+// (`NSRect.fill()`·`NSString.draw(at:withAttributes:)`·`NSImage.draw(in:from:operation:fraction:)`).
 //
 // 리눅스 Foundation 이 이미 주는 것(다시 선언하면 충돌한다):
 //   NSObject, NSNumber, NSString, NSAttributedString, NSLock, NSNull, NSRange, NSLog,
@@ -135,9 +138,48 @@ open class NSScreen: NSObject {
 
 // MARK: - 뷰 · 창
 
-/// 실제: `open class NSResponder: NSObject { ... }`
+/// 실제: `open class NSResponder: NSObject {
+///        open var acceptsFirstResponder: Bool { get }
+///        open func mouseDown(with event: NSEvent); mouseDragged / mouseUp / mouseMoved
+///        open func scrollWheel(with event: NSEvent); keyDown / keyUp }`
 open class NSResponder: NSObject {
     public override init() { super.init() }
+    open var acceptsFirstResponder: Bool { false }
+    open func mouseDown(with event: NSEvent) {}
+    open func mouseDragged(with event: NSEvent) {}
+    open func mouseUp(with event: NSEvent) {}
+    open func mouseMoved(with event: NSEvent) {}
+    open func scrollWheel(with event: NSEvent) {}
+    open func keyDown(with event: NSEvent) {}
+    open func keyUp(with event: NSEvent) {}
+}
+
+/// 실제: `open class NSTrackingArea: NSObject {
+///        public init(rect: NSRect, options: NSTrackingArea.Options, owner: Any?, userInfo: [AnyHashable: Any]?)
+///        open var options: NSTrackingArea.Options { get } }`
+open class NSTrackingArea: NSObject {
+    /// 실제: `public struct NSTrackingArea.Options: OptionSet { public let rawValue: UInt }`
+    /// 원시값은 헤더의 비트 배치(mouseEnteredAndExited=0x01, mouseMoved=0x02, …,
+    /// activeInKeyWindow=0x20, inVisibleRect=0x200)를 적었다. **확신 없음** — 이름만 확실하다.
+    public struct Options: OptionSet {
+        public let rawValue: UInt
+        public init(rawValue: UInt) { self.rawValue = rawValue }
+        public static let mouseEnteredAndExited = Options(rawValue: 0x01)
+        public static let mouseMoved = Options(rawValue: 0x02)
+        public static let cursorUpdate = Options(rawValue: 0x04)
+        public static let activeWhenFirstResponder = Options(rawValue: 0x10)
+        public static let activeInKeyWindow = Options(rawValue: 0x20)
+        public static let activeInActiveApp = Options(rawValue: 0x40)
+        public static let activeAlways = Options(rawValue: 0x80)
+        public static let assumeInside = Options(rawValue: 0x100)
+        public static let inVisibleRect = Options(rawValue: 0x200)
+        public static let enabledDuringMouseDrag = Options(rawValue: 0x400)
+    }
+    public let options: Options
+    public init(rect: NSRect, options: Options, owner: Any?, userInfo: [AnyHashable: Any]?) {
+        self.options = options
+        super.init()
+    }
 }
 
 /// 실제: `open class NSView: NSResponder { public init(frame frameRect: NSRect)
@@ -179,6 +221,14 @@ open class NSView: NSResponder {
     open func viewDidMoveToWindow() {}
     open func viewDidMoveToSuperview() {}
     open func setNeedsDisplay(_ invalidRect: NSRect) {}
+    /// 실제: `open func draw(_ dirtyRect: NSRect)`
+    open func draw(_ dirtyRect: NSRect) {}
+    /// 실제: `open var trackingAreas: [NSTrackingArea] { get }`
+    ///        `open func addTrackingArea(_ trackingArea: NSTrackingArea)`
+    ///        `open func removeTrackingArea(_ trackingArea: NSTrackingArea)`
+    public var trackingAreas: [NSTrackingArea] { [] }
+    open func addTrackingArea(_ trackingArea: NSTrackingArea) {}
+    open func removeTrackingArea(_ trackingArea: NSTrackingArea) {}
 }
 
 /// 실제: `open class NSWindow: NSResponder { ... }`
@@ -233,6 +283,12 @@ open class NSWindow: NSResponder {
     public var screen: NSScreen? { nil }
     public var occlusionState: OcclusionState { [] }
     public var frame: NSRect { .zero }
+    /// 실제: `open var title: String`; `open var isReleasedWhenClosed: Bool`
+    ///        `open var isVisible: Bool { get }`; `weak open var delegate: (any NSWindowDelegate)?`
+    public var title: String = ""
+    public var isReleasedWhenClosed: Bool = true
+    public var isVisible: Bool { false }
+    public weak var delegate: (any NSWindowDelegate)?
 
     /// 실제: `public init(contentRect: NSRect, styleMask style: NSWindow.StyleMask,
     ///        backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool)`
@@ -245,6 +301,30 @@ open class NSWindow: NSResponder {
     /// 실제: `open func convertPoint(fromScreen point: NSPoint) -> NSPoint` (macOS 10.12+)
     open func convertPoint(fromScreen point: NSPoint) -> NSPoint { point }
     open func convertPoint(toScreen point: NSPoint) -> NSPoint { point }
+    /// 실제: `open func center()`
+    ///        `open func makeFirstResponder(_ responder: NSResponder?) -> Bool` (@discardableResult 아님)
+    open func center() {}
+    @discardableResult
+    open func makeFirstResponder(_ responder: NSResponder?) -> Bool { false }
+}
+
+/// 실제: `public protocol NSWindowDelegate: NSObjectProtocol { ... }` — 요구사항이 전부
+/// **optional @objc** 다. 리눅스에는 ObjC 런타임이 없어 기본 구현으로 대체한다
+/// (= 셀렉터 어긋남을 못 잡는다 — `docs/dev/linux-typecheck.md` 한계 ③).
+public protocol NSWindowDelegate: NSObjectProtocol {
+    func windowWillClose(_ notification: Notification)
+    func windowDidResize(_ notification: Notification)
+}
+public extension NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {}
+    func windowDidResize(_ notification: Notification) {}
+}
+
+/// 실제: `extension NSWindow { public class let didChangeOcclusionStateNotification: NSNotification.Name }`
+/// (원시값 `NSWindowDidChangeOcclusionStateNotification`)
+extension NSWindow {
+    public static let didChangeOcclusionStateNotification =
+        NSNotification.Name("NSWindowDidChangeOcclusionStateNotification")
 }
 
 // MARK: - 이벤트
@@ -270,6 +350,15 @@ open class NSEvent: NSObject {
     public var type: EventType { .mouseMoved }
     public var locationInWindow: NSPoint { .zero }
     public var window: NSWindow? { nil }
+    /// 실제: `open var scrollingDeltaX: CGFloat { get }` / `scrollingDeltaY`
+    ///        `open var charactersIgnoringModifiers: String? { get }`
+    ///        `open var keyCode: UInt16 { get }`
+    /// (앞의 셋은 잘못된 이벤트 타입에서 읽으면 애플에서는 예외/0 이지만 타입은 동일하다.)
+    public var scrollingDeltaX: CGFloat { 0 }
+    public var scrollingDeltaY: CGFloat { 0 }
+    public var charactersIgnoringModifiers: String? { nil }
+    public var characters: String? { nil }
+    public var keyCode: UInt16 { 0 }
     /// 실제: `open class var mouseLocation: NSPoint { get }` (화면 좌표)
     public class var mouseLocation: NSPoint { .zero }
     /// 실제: `open class func addGlobalMonitorForEvents(matching mask: NSEvent.EventTypeMask,
@@ -308,5 +397,46 @@ open class NSApplication: NSResponder {
     public static let shared = NSApplication()
     public var keyWindow: NSWindow? { nil }
     public var windows: [NSWindow] { [] }
+    /// 실제: `open func activate(ignoringOtherApps flag: Bool)` (macOS 14 에서 deprecated 되고
+    /// `activate()` 가 권장되지만 시그니처 자체는 그대로 남아 있다)
+    open func activate(ignoringOtherApps flag: Bool) {}
 }
 public let NSApp: NSApplication! = nil
+
+
+// MARK: - 그리기 유틸(AppKit 오버레이)
+
+/// 실제: `public enum NSCompositingOperation: UInt { case clear = 0, copy = 1, sourceOver = 2, ... }`
+public enum NSCompositingOperation: UInt {
+    case clear = 0, copy = 1, sourceOver = 2, sourceIn = 3, sourceOut = 4, sourceAtop = 5
+    case destinationOver = 6, destinationIn = 7, destinationOut = 8, destinationAtop = 9
+    case xor = 10, plusDarker = 11, plusLighter = 13
+}
+
+/// 실제: AppKit 스위프트 오버레이의 `extension NSRect { public func fill(using operation: NSCompositingOperation) }`
+/// 와 인자 없는 `fill()`. 확신 없음: 기본 인자 형태인지 오버로드 두 개인지 헤더로 확인하지 못했다.
+/// 여기서는 호출부(`bounds.fill()`)만 만족시키는 오버로드 둘로 둔다.
+public extension NSRect {
+    func fill() {}
+    func fill(using operation: NSCompositingOperation) {}
+}
+
+/// 실제: `extension NSColor { open func setFill(); open func set() }`
+public extension NSColor {
+    func setFill() {}
+    func set() {}
+}
+
+/// 실제: `extension NSString { open func draw(at point: NSPoint,
+///        withAttributes attrs: [NSAttributedString.Key: Any]?) }`
+/// (애플에서는 AppKit 이 Foundation 의 `NSString` 에 그리기 API 를 얹는다.)
+public extension NSString {
+    func draw(at point: NSPoint, withAttributes attrs: [NSAttributedString.Key: Any]?) {}
+}
+
+/// 실제: `extension NSImage { open func draw(in rect: NSRect, from fromRect: NSRect,
+///        operation op: NSCompositingOperation, fraction delta: CGFloat) }`
+public extension NSImage {
+    func draw(in rect: NSRect, from fromRect: NSRect,
+              operation op: NSCompositingOperation, fraction delta: CGFloat) {}
+}
