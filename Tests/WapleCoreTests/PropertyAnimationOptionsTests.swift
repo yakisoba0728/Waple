@@ -28,9 +28,11 @@ import XCTest
 ///
 /// `wraploop: true` 2블록은 **둘 다 non-preview** 이고 같은 파일이다
 /// (`scenes/particleelementpreviews/maintaindistancebetweencontrolpoints/scene.json`).
-/// 다만 그중 하나(`/objects/1/instanceoverride/controlpoint1`)는 `SceneDocument` 가
-/// `instanceoverride` 애니를 드롭해 **씬 마운트에는 닿지 않는다** — 지금 실제로 랩되는 것은
-/// `/objects/0/origin` 하나다(⑧).
+/// **둘 다 씬 마운트에 닿는다**(2026-08-21 후속 — 클러스터 M 이 `SceneDocument` 의
+/// `instanceoverride` 애니 드롭을 고쳐 `SceneParticle.instanceOverrideAnimations` 로 보존한다:
+/// `SceneDocumentFidelityTests.testInstanceOverrideAnimationBindingIsCaptured`).
+/// 그래서 실제로 랩되는 블록은 `/objects/0/origin` 과
+/// `/objects/1/instanceoverride/controlpoint1` **둘**이다(⑧).
 final class PropertyAnimationOptionsTests: XCTestCase {
 
     // MARK: - 헬퍼
@@ -53,8 +55,9 @@ final class PropertyAnimationOptionsTests: XCTestCase {
     /// (여기서는 `c0` 슬롯에 넣는다 — 이 파일의 헬퍼는 성분 0 만 샘플링한다).
     /// `length 60` 인데 키프레임은 frame 0/30 뿐 — wraploop 이 후반 절반을 되살리는 자리이고,
     /// 값 범위(291.04387)가 코퍼스에서 가장 커서 랩 여부가 가장 크게 드러난다.
-    /// (그 블록 자체는 `SceneDocument` 가 `instanceoverride` 애니를 드롭해 씬 마운트에는 닿지 않는다.
-    ///  이 테스트는 `PropertyAnimation.parse` 를 직접 부르므로 무관하다 — 실제로 마운트에 닿는
+    /// (그 블록은 이제 `SceneParticle.instanceOverrideAnimations` 로 보존된다 — 클러스터 M,
+    ///  `SceneDocumentFidelityTests.testInstanceOverrideAnimationBindingIsCaptured`. 이 테스트는
+    ///  `PropertyAnimation.parse` 를 직접 부르므로 그 캡처 경로와는 무관하다 — 같은 파일의
     ///  `/objects/0/origin` 블록은 아래 ⑧ 에서 원본 형태 그대로 본다.)
     private func corpusBlock(wraploopLiteral: String?, mode: String = "loop") -> String {
         let wrap = wraploopLiteral.map { ", \"wraploop\": \($0)" } ?? ""
@@ -783,5 +786,169 @@ final class PropertyAnimationOptionsTests: XCTestCase {
         XCTAssertEqual(numeric.fps, 15)
         XCTAssertEqual(numeric.tracks[0][0].frontX, 1, accuracy: 1e-6)
         XCTAssertEqual(numeric.tracks[0][0].frontY, 50, accuracy: 1e-6)
+    }
+
+    // MARK: - ⑩ 퇴화 옵션 · 비숫자 키프레임 · i32 화 (2026-08-21 클러스터 Q)
+
+    /// `PropertyAnimation.parse` 를 **언랩하지 않고** 부른다 — 드롭(nil)을 단언하는 테스트용.
+    private func parseRaw(_ json: String, file: StaticString = #filePath, line: UInt = #line) throws
+        -> PropertyAnimation? {
+        let data = try XCTUnwrap(json.data(using: .utf8), file: file, line: line)
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                                file: file, line: line)
+        return PropertyAnimation.parse(obj)
+    }
+
+    private func block(_ options: String, c0: String = #"[{"frame": 0, "value": 10.0}, {"frame": 30, "value": 40.0}]"#)
+        -> String {
+        #"{"animation": {"c0": \#(c0), "options": \#(options)}}"#
+    }
+
+    /// **`fps <= 0` / `length <= 0` 은 애니가 아예 없는 것과 같다.**
+    ///
+    /// `AnimOptions::init`(0x1401a8c10)은 `comiss xmm2(0.0), xmm1(fps)` → `jae 0x1401a8cc4`
+    /// (0x1401a8c21)로 `fps <= 0` 에서, `comiss xmm2(0.0), xmm0(length/fps)` → `jae`
+    /// (0x1401a8c43)로 `length/fps <= 0` 에서 false 를 돌린다. **정확히 0 이든 음수든 같은
+    /// 명령 한 자리**다(`0 >= fps`). 호출부는 `test al,al` → `je 0x1401a57e1`(0x1401a56c0)로
+    /// c0..c3 파스를 통째로 건너뛰어 트랙 수 0 이 되고, 등록기의 성분 수 일치 게이트
+    /// (`sete al` 0x14017679e → `mov byte ptr [r15+0x18], al` 0x1401767a1)가 0 을 굽는다.
+    /// per-frame 소비자는 그 바이트가 0 이면 트랙을 한 번도 평가하지 않으므로
+    /// (0x14017241f `cmp byte ptr [rbx+0x18], 0` → `je 0x1401726ad`) **바인딩의 정적 `value`
+    /// 가 그대로 남는다**. `parse` 가 nil 을 돌리면 호출부(`SceneDocument`)가 `anims[key]` 를
+    /// 세우지 않아 정확히 같은 결과가 된다.
+    ///
+    /// 종전 Waple 은 `fps: 0` 에서 `frame = t*0 = 0`, `length: 0` 에서 `min(frame, 0)` 으로
+    /// **첫 키프레임 값(10.0)에 고착**했다 — 정적 `value` 가 아니다. 코퍼스 도달 0.
+    func testDegenerateFpsOrLengthDropsTheWholeAnimation() throws {
+        for degenerate in [#"{"fps": 0, "length": 30, "mode": "loop"}"#,
+                           #"{"fps": -30, "length": 30, "mode": "loop"}"#,
+                           #"{"fps": -0.5, "length": 30, "mode": "loop"}"#,
+                           #"{"fps": 30, "length": 0, "mode": "loop"}"#,
+                           #"{"fps": 30, "length": -60, "mode": "loop"}"#,
+                           #"{"fps": 0, "length": 0, "mode": "loop"}"#,
+                           // `length: 0.5` 는 `asInt`(0x1401a9815) 가 0 으로 절단해 같은 자리에서 걸린다.
+                           #"{"fps": 30, "length": 0.5, "mode": "loop"}"#] {
+            XCTAssertNil(try parseRaw(block(degenerate)),
+                         "\(degenerate): 애니 전체 드롭 → 정적 value 로 떨어져야 한다")
+        }
+        // 경계 바로 위는 살아야 한다 — 게이트가 `<= 0` 이지 `< 1` 이 아니다.
+        let alive = try XCTUnwrap(try parseRaw(block(#"{"fps": 0.5, "length": 1, "mode": "loop"}"#)))
+        XCTAssertEqual(alive.fps, 0.5)
+        XCTAssertEqual(alive.length, 1)
+        // `fps`/`length` **부재**는 종전 관용 그대로다(실물은 여기서도 드롭 — 도달 0).
+        let lenient = try XCTUnwrap(try parseRaw(block("{}")))
+        XCTAssertEqual(lenient.fps, 30, "부재 → 30fps 관용")
+        XCTAssertEqual(lenient.length, 30, "부재 → 마지막 키프레임 프레임")
+    }
+
+    /// 관용 폴백이 **퇴화 길이**를 만들면 그것도 드롭이다 — 키프레임이 frame 0 하나뿐이고
+    /// `options.length` 가 없으면 폴백 길이가 0 이 된다. 실물은 `length` 부재 자체로 이미
+    /// 드롭이므로(태그 게이트 0x1401a9714) nil 쪽이 원본에 더 가깝다.
+    func testFallbackLengthOfZeroAlsoDrops() throws {
+        XCTAssertNil(try parseRaw(block("{}", c0: #"[{"frame": 0, "value": 7.0}]"#)))
+        XCTAssertNotNil(try parseRaw(block("{}", c0: #"[{"frame": 0, "value": 7.0}, {"frame": 1, "value": 8.0}]"#)))
+    }
+
+    /// **`value`/`frame` 이 숫자가 아니면 그 키프레임만 건너뛴다** — 애니 전체가 아니다.
+    ///
+    /// 두 태그 게이트 `dec eax; cmp eax,2; ja`(0x1401a8e7d `value` · 0x1401a8e8e `frame`)의
+    /// 분기 타깃 `0x1401a9319` 는 **함수 탈출이 아니라 루프 진행부**다 — 거기서
+    /// `mov rax,[rbx+0x10]` / `cmp byte ptr [rax+0x19], 0`(0x1401a9319–0x1401a931d)으로
+    /// 트리 이터레이터를 전진시키고 `jmp 0x1401a8db6`(0x1401a9356 · 0x1401a938c)으로 루프
+    /// 머리로 되돌아간다. 함수의 유일한 정상 탈출은 0x1401a9398 이고 거기서
+    /// `setne al`(0x1401a93ac)로 "벡터가 비지 않았는가" 를 돌려준다.
+    /// 종전 Waple 은 여기서 `return nil` 로 **애니 전체**를 버렸다. 코퍼스 도달 0.
+    func testNonNumericKeyframeSkipsOnlyThatKeyframe() throws {
+        let mixed = try parseJSON(block(#"{"fps": 30, "length": 30, "mode": "loop"}"#, c0: """
+        [{"frame": 0, "value": 10.0},
+         {"frame": "bad", "value": 999.0},
+         {"frame": 15, "value": null},
+         {"frame": 20, "value": {"nested": 1}},
+         {"frame": 30, "value": 40.0}]
+        """))
+        XCTAssertEqual(mixed.tracks[0].count, 2, "숫자가 아닌 세 항목만 빠진다")
+        XCTAssertEqual(mixed.tracks[0].map { $0.frame }, [0, 30])
+        XCTAssertEqual(mixed.tracks[0].map { $0.value }, [10, 40])
+        // 배열 원소가 객체가 아니어도 그 항목만 빠진다(실물은 `find` 결과 태그 0 으로 같은 게이트에 걸린다).
+        let nonObject = try parseJSON(block(#"{"fps": 30, "length": 30, "mode": "loop"}"#, c0: """
+        [{"frame": 0, "value": 10.0}, 7, "x", [1, 2], {"frame": 30, "value": 40.0}]
+        """))
+        XCTAssertEqual(nonObject.tracks[0].count, 2)
+        // 전부 빠지면 트랙이 비고, 뒤가 전부 비면 `parse` 가 nil 을 돌린다(정적 value).
+        XCTAssertNil(try parseRaw(block(#"{"fps": 30, "length": 30, "mode": "loop"}"#,
+                                        c0: #"[{"frame": "a", "value": "b"}]"#)))
+        // `c0` 자체가 배열이 아니면 종전대로 애니 전체 드롭이다(실물도 캐스케이드 + 성분 수 게이트로
+        // 같은 결과 — 트랙 0개 ≠ 성분 수).
+        XCTAssertNil(try parseRaw(block(#"{"fps": 30, "length": 30, "mode": "loop"}"#, c0: "5")))
+    }
+
+    /// 키프레임 `frame` 은 **i32** 다 — `asInt`(0x1401a8fb5 → 0x140085ee0)가 태그 3 을
+    /// `cvttsd2si`(0x140085f12) 로 **0 방향 절단**하고 저장부가 `mov dword ptr [r14], r12d`
+    /// (0x1401a9145) 로 구조체 +0x00 에 i32 로 굽는다. 코퍼스 도달 0(frame 전수 int).
+    func testKeyframeFrameIsTruncatedTowardZero() throws {
+        let anim = try parseJSON(block(#"{"fps": 30, "length": 30, "mode": "loop"}"#, c0: """
+        [{"frame": -0.5, "value": 0.0}, {"frame": 10.9, "value": 10.0}, {"frame": 20.2, "value": 20.0}]
+        """))
+        XCTAssertEqual(anim.tracks[0].map { $0.frame }, [0, 10, 20], "0 방향 절단 — -0.5 → 0(−1 이 아니다)")
+        // 절단으로 겹친 프레임은 정렬이 **안정**이라 저작 순서를 유지한다(비결정 순서 금지).
+        let collided = try parseJSON(block(#"{"fps": 30, "length": 30, "mode": "loop"}"#, c0: """
+        [{"frame": 0, "value": 0.0}, {"frame": 10.2, "value": 5.0},
+         {"frame": 10.9, "value": 50.0}, {"frame": 20, "value": 100.0}]
+        """))
+        XCTAssertEqual(collided.tracks[0].map { $0.frame }, [0, 10, 10, 20])
+        XCTAssertEqual(collided.tracks[0].map { $0.value }, [0, 5, 50, 100],
+                       "동률에서 저작 순서 유지 — 실물은 뒤를 `jle`(0x1401a8fc1) 로 버린다")
+    }
+
+    /// `length` 를 **한 번** i32 화한다 — 실물이 `asInt`(0x1401a9815) 한 번으로 끝점 프레임
+    /// (`[r13+0x48]` → 0x1401a5780)과 루프 주기(`+0x08 = (float)length/fps`,
+    /// 0x1401a8c37–0x1401a8c46)를 **같은 정수**로 쓰기 때문이다. 종전 Waple 은 끝점만 절단하고
+    /// `length` 는 Float 로 남겨 45–45.9 구간이 끝점 값에 고정됐다. 코퍼스 도달 0(전수 정수).
+    func testLengthTruncationGovernsLoopPeriodNotJustWrapEndpoint() throws {
+        let anim = try parseJSON(block(#"{"fps": 1, "length": 45.9, "mode": "loop"}"#, c0: """
+        [{"frame": 0, "value": 0.0}, {"frame": 45, "value": 45.0}]
+        """))
+        XCTAssertEqual(anim.length, 45, "45.9 → 45(0 방향 절단) — 끝점만이 아니라 length 자체")
+        // fps 1 이라 t 초 = t 프레임. 랩이 45 에서 일어나면 t=45 는 frame 0 = 0.0 이다.
+        XCTAssertEqual(anim.value(component: 0, atTime: 45, base: 0), 0, accuracy: 1e-4,
+                       "주기가 45 면 t=45 는 다시 첫 프레임")
+        XCTAssertEqual(anim.value(component: 0, atTime: 45.5, base: 0), 0.5, accuracy: 0.05)
+        // wraploop 끝점도 같은 정수를 쓴다(종전 테스트가 못박던 자리 — 이제 두 자리가 한 값이다).
+        let wrapped = try parseJSON(#"""
+        {"animation": {
+          "c0": [{"frame": 0, "value": 1.0}, {"frame": 10, "value": 2.0}],
+          "options": {"fps": 30, "length": 45.9, "mode": "loop", "wraploop": true}}}
+        """#)
+        XCTAssertEqual(wrapped.length, 45)
+        XCTAssertEqual(wrapped.tracks[0].count, 3)
+        XCTAssertEqual(wrapped.tracks[0].last?.frame, 45)
+    }
+
+    /// **빈 트랙은 base 를 유지한다 — 고치지 않는다.** 실물이 쓰는 규칙은 "빈 트랙 → 0.0" 이
+    /// 아니라 **트랙 수 == 프로퍼티 성분 수** 라는 전부-아니면-전무 게이트이고
+    /// (0x140176750–0x1401767a1 → 소비자 게이트 0x14017241f), `PropertyAnimation` 은 성분 수를
+    /// 모른다. 게이트 없이 0.0 만 옮기면 **누락 채널이 base 대신 0 으로 눌린다** — 실물이 하지
+    /// 않는 일이다(실물은 그 경우 애니를 끈다). 이 테스트는 그 결정을 못박는다.
+    func testMissingChannelKeepsBaseAndDoesNotCollapseToZero() throws {
+        // c0 과 c2 만 있는 저작: Waple 은 c1 자리를 빈 트랙으로 지키고 base 를 돌려준다.
+        let holed = try parseJSON(#"""
+        {"animation": {
+          "c0": [{"frame": 0, "value": 1.0}, {"frame": 30, "value": 2.0}],
+          "c2": [{"frame": 0, "value": 5.0}, {"frame": 30, "value": 6.0}],
+          "options": {"fps": 30, "length": 30, "mode": "loop"}}}
+        """#)
+        XCTAssertEqual(holed.tracks.count, 3, "c1 자리를 빈 트랙으로 지킨다")
+        XCTAssertTrue(holed.tracks[1].isEmpty)
+        XCTAssertEqual(holed.value(component: 1, atTime: 0.5, base: 77), 77, "0 이 아니라 base")
+        XCTAssertEqual(holed.value(component: 0, atTime: 0, base: 0), 1, accuracy: 1e-4)
+        XCTAssertEqual(holed.value(component: 2, atTime: 0, base: 0), 5, accuracy: 1e-4)
+        // 명시적 빈 배열도 같은 자리로 떨어진다(실물은 여기서만 0.0 을 돌린다 — 도달 0).
+        let explicitEmpty = try parseJSON(#"""
+        {"animation": {
+          "c0": [{"frame": 0, "value": 1.0}, {"frame": 30, "value": 2.0}],
+          "c1": [],
+          "options": {"fps": 30, "length": 30, "mode": "loop"}}}
+        """#)
+        XCTAssertEqual(explicitEmpty.value(component: 1, atTime: 0.5, base: 77), 77)
     }
 }

@@ -31,6 +31,12 @@
 | 19 | `step` 이 서면 **핸들을 안 읽는다** | `mov r13d,4`(0x1401a8fed) → `jmp 0x1401a910a` 로 back/front 블록 두 개를 통째로 건너뛴다 — flags bit0·bit1 미설정, 좌표 넷 전부 0 | `step` 만 담고 핸들은 그대로 파스 → **step 키프레임의 오른쪽 구간이 다른 곡선** | 도달 0(`step` 키 0/38 키프레임) · 합성 반례에서 40.535 ↔ 25.000 | **수정**(2026-08-21 클러스터 K) |
 | 20 | 구간 **왼쪽 끝점 정확 일치** | 곡선을 풀지 않고 `kf[i-1].value`(0x1401a9d0f `cmp r9d,ebx` → `je 0x1401a9ec0`) | 항상 이분법으로 풀었다 | 도달 0(코퍼스 `front.x` 전수 양수라 X(u) 단조) · 합성 반례에서 166.081 ↔ 100.000 | **수정**(동상) |
 | 21 | **숫자 자리의 태그 게이트** | 숫자 여덟 자리 전부 태그 **1..3만** 통과(`dec eax; cmp eax,2; ja`) — bool(태그 5)은 탈락 | 리눅스 Foundation 이 `true` 를 `NSNumber` 로 줘서 `as? Double` == **1.0** → `{"x":true}` 가 좌표 1.0, `{"fps":true}` 가 1fps | 도달 0(여덟 자리 값 타입 census 전건 int/float) | **수정**(동상 — `isJSONBool` 게이트) |
+| 22 | **애니 유효 게이트** | **트랙 수 == 프로퍼티 성분 수** 일 때만 애니가 산다 — 등록기가 `sete al`(0x14017679e) → `mov byte ptr [r15+0x18], al`(0x1401767a1), 소비자가 그 바이트로 게이트(0x14017241f) | (해당 없음 — `PropertyAnimation` 은 성분 수를 모른다) | 도달 0 | 문서화 + 넘길 것(§6.7) |
+| 23 | `fps <= 0` / `length <= 0` | `init` false(0x1401a8c21 / 0x1401a8c43) → 트랙 0개 → 22 의 게이트가 꺼져 **정적 `value`** | `fps: 0` → 프레임 0 고착 · `length: 0` → 첫 키프레임 고착 | 도달 0 | **수정**(`parse` → `nil`) |
+| 24 | `value`/`frame` 비숫자 | **그 키프레임만** 건너뛴다(0x1401a8e7d/0x1401a8e8e → `0x1401a9319` = **루프 진행부**) | 애니 **전체** 드롭 | 도달 0 | **수정** |
+| 25 | `length` · 키프레임 `frame` 의 **i32 화** | `asInt` 한 번(0x1401a9815 / 0x1401a8fb5, 태그 3 은 `cvttsd2si` = 0 방향 절단) — 끝점 프레임과 루프 주기가 같은 정수 | `length` 는 Float 유지(끝점만 절단) · `frame` 도 Float | 도달 0(전수 정수) | **수정** |
+| 26 | 키프레임 0개 트랙 | **0.0**(0x1401a9bfd) — 단 22 의 게이트를 통과했을 때만 도달 | `base` 유지 | 도달 0 | **유지**(§5.1 — 22 없이 옮기면 더 나빠진다) |
+| 27 | `condition` 의 equality/relational | **두 레벨** · 각각 좌결합 **반복**(vendor.js @167616 / @167789) | 여덟 연산자 한 레벨 · **1회** 소비 → 연쇄는 파스 실패 | 도달 0(연쇄 22건 중 **0건**) | **수정**(§7.4) |
 
 ---
 
@@ -116,6 +122,16 @@ non-preview** 이고 같은 파일이다 —
 `lockangle`/`locklength`/`magic` 은 **여기 없다**(바이너리 전체 xref 0건).
 
 - `value`·`frame` 은 숫자 타입(1..3)이어야 한다(0x1401a8e73/0x1401a8e83). `frame` 은 `asInt`(0x1401a8fb5) — **i32**.
+  **두 게이트의 실패 분기 `ja 0x1401a9319` 는 함수 탈출이 아니라 루프 진행부다**(2026-08-21
+  클러스터 Q 확정). 0x1401a9319 부터가 `mov rax,[rbx+0x10]` / `cmp byte ptr [rax+0x19], 0` 으로
+  red-black 트리 이터레이터를 전진시키는 코드이고, 0x1401a9356 · 0x1401a938c 의 `jmp 0x1401a8db6`
+  이 루프 머리로 되돌아간다. 함수의 유일한 정상 탈출은 0x1401a9398 이고 거기서
+  `mov rax,[rbp+8]; cmp [rbp],rax; setne al`(0x1401a939c/0x1401a93ac) 로 **"벡터가 비지
+  않았는가"** 를 돌려준다. 즉 **비숫자 `value`/`frame` 은 그 키프레임 하나만 버린다.**
+  (호출부는 이 반환값을 **읽지 않는다** — 0x1401a56ec 다음이 곧바로 0x1401a56fc 의 push 다.
+   그래서 빈 배열 `"cN": []` 도 **빈 트랙으로 push 된다**.)
+  `asInt`(0x140085ee0)는 태그 1/2 를 `mov eax,[rcx]`(하위 32비트), 태그 3 을
+  `cvttsd2si eax`(0x140085f12 — **0 방향 절단**), 태그 5 를 0/1 로 준다.
 - 직전 프레임을 `[rsp+0xe8]` 에 들고 `frame <= 직전` 이면 **그 키프레임을 버린다**(0x1401a8fc1 `jle`).
   초기값 `0xFFFFFFFF = −1`(0x1401a8d26) → 음수 프레임도 탈락. 즉 **정렬하지 않고 강한 단조만 통과**.
 - `step` 이 true 면 flags = 4 로 두고 **핸들을 아예 읽지 않는다**(0x1401a8fed).
@@ -187,8 +203,8 @@ cmp byte ptr [rcx+8], 7` → `jne 0x1401a989b`(= `xor al,al; ret`)이고, 호출
 | 키 | jsoncpp 태그 게이트 | WE 의 부재 동작 | Waple |
 | --- | --- | --- | --- |
 | `options`(블록) | 7 object — 0x1401a56a6 / 0x1401a96bb | **애니 전체 드롭** | 빈 딕셔너리로 관용 |
-| `length` | 1–3 numeric — 0x1401a9714 (`dec eax; cmp eax,2; ja`) | **애니 전체 드롭** | 마지막 키프레임 frame |
-| `fps` | 1–3 numeric — 0x1401a9723 | **애니 전체 드롭**(추가로 `fps<=0`·`length/fps<=0` 도 드롭) | 30 |
+| `length` | 1–3 numeric — 0x1401a9714 (`dec eax; cmp eax,2; ja`) | **애니 전체 드롭** | 마지막 키프레임 frame(부재/타입 불일치) · `<= 0` 이면 **`parse` → nil** |
+| `fps` | 1–3 numeric — 0x1401a9723 | **애니 전체 드롭**(추가로 `fps<=0`·`length/fps<=0` 도 드롭) | 30(부재/타입 불일치) · `<= 0` 이면 **`parse` → nil** |
 | `mode` | 4 string — 0x1401a9828 `cmp dl,4`; 아니면 `xor ecx,ecx`(NULL) | NULL → stricmp 건너뜀 → flags 0 = **loop** (0x1401a8c67 `test rcx,rcx`, 0x1401a8c6c 빈 문자열도 동일) | 같음 |
 | `random` | 5 bool — 0x1401a97f9 | **false** (그리고 세워도 읽는 곳이 없다 — §2.6) | 파스 안 함 |
 | `startpaused` | 5 bool — 0x1401a97df | **false** | 같음 |
@@ -281,10 +297,12 @@ first frame, resulting in a smooth loop that ends exactly where it starts."*
 (0x1401a9881). 즉 `{"mode":"mirror","wraploop":true}` 는 "랩된 트랙을 미러 재생" 으로 **둘 다**
 걸린다. `"loop"` 강제는 에디터 저작 측 제약뿐이다(§4).
 
-**Waple 파스 도달은 코퍼스 도달과 다르다.** `true` 2블록 중
-`/objects/1/instanceoverride/controlpoint1` 은 `SceneDocument` 가 `instanceoverride` 애니를
-드롭해서(§6.1) `PropertyAnimation.parse` 에 닿지 않는다 — 지금 실제로 이 후처리를 타는 것은
-`/objects/0/origin` **하나**다.
+**Waple 파스 도달**(2026-08-21 후속). 종전 판은 `true` 2블록 중
+`/objects/1/instanceoverride/controlpoint1` 이 `SceneDocument` 의 `instanceoverride` 드롭
+때문에 `PropertyAnimation.parse` 에 닿지 않는다고 적었는데, **클러스터 M 이 그 드롭을 고쳤다** —
+이제 `SceneParticle.instanceOverrideAnimations` 로 보존된다
+(`SceneDocumentFidelityTests.testInstanceOverrideAnimationBindingIsCaptured`).
+그래서 `true` 2블록은 **둘 다** 이 후처리를 탄다.
 
 ### 2.5 애니 스키마의 bool 타입 게이트 — 태그 5 검사는 여섯 자리 다, 폴라리티는 둘
 
@@ -427,7 +445,7 @@ i 가 끝까지 가면                → kf[count-1].value          ; 0x1401a9c
 
 | 경계 | WE | Waple | 조치 |
 |---|---|---|---|
-| 키프레임 0개 | **0.0** | `value(component:)` 앞 가드가 **base 유지** | 유지 + 주석 — 누락 채널을 빈 트랙으로 자리만 지키는 관용(WE 는 캐스케이드로 채널을 버린다)과 **짝**이다. 자리를 지켜 놓고 0 을 돌리면 없는 채널이 0 으로 눌린다. 도달 0(트랙 20개 전수 키프레임 2개) |
+| 키프레임 0개 | **0.0** | `value(component:)` 앞 가드가 **base 유지** | **유지**(근거는 §5.1 에서 다시 세웠다 — 이 타입 안에서 닫을 수 없다). 도달 0(트랙 19개 전수 키프레임 2개, 빈 배열 0건) |
 | 키프레임 1개 | 두 분기가 같은 값 | 같음 | 확인 + 테스트 |
 | 왼쪽 끝점 정확 일치 | 곡선을 **안 푼다** | 항상 이분법으로 풀었다 | **수정** — `front.x < 0` 처럼 X(u) 가 구간 앞으로 튀어나가면 이분법이 **다른 근**을 잡는다. 합성 반례 **166.081 ↔ 100.000**. 도달 0(코퍼스 `front.x` = 1 · 0.50833333 전수 양수) |
 | 중복 시각 | 파스에서 버린다(0x1401a8fc1 `jle`) | 정렬로 관용 → 평가기까지 들어옴 | 유지 — 반개구간 탐색이 **마지막 중복**을 왼쪽 끝점으로 잡는다(테스트로 못박음). 도달 0 |
@@ -504,6 +522,48 @@ v     = track.at(f0)·(1 − frac) + track.at(f1)·frac      ; 0x140172460–0x1
 
 성분별로 이 짝을 반복한다(0x1401f2ad0 은 카메라 경로 3채널 × 3그룹).
 
+트랙 접근에 **경계 검사가 없다** — `mov rcx,[rbx+0x20]`(트랙 벡터의 begin) 에 `0x30`씩 더해
+`0x1401a9bc0` 을 부를 뿐이다(0x140172459 / 0x14017249d / 0x140172582 / 0x140172629).
+그래서 그 앞의 게이트(§3.4)가 하중을 받는다.
+
+### 3.4 애니 유효 게이트 — **트랙 수 == 프로퍼티 성분 수** (2026-08-21 클러스터 Q 신규)
+
+`0x140175880`(바인딩 등록기)의 애니 분기가 애니 객체를 등록하면서 이 바이트를 굽는다:
+
+```
+0x140176742  rcx = [r15+0x10]                 ; 프로퍼티 서술자
+0x140176750  edx = [rcx]                      ; 서술자 태그
+             tag 1 → r8 = 2   (0x140176771)   ; vec2
+             tag 2 → r8 = 3   (0x140176769)
+             tag 3 → r8 = 4   (0x140176761)
+             그 외  → r8 = rsi = 1            ; float (0x1401758ee / 0x140175d4a 가 esi=1)
+0x140176777  rax = ([r15+0x28] − [r15+0x20]) / 0x30      ; **트랙 개수**
+0x14017679b  cmp r8, rax
+0x14017679e  sete al
+0x1401767a1  mov byte ptr [r15+0x18], al      ; = (성분 수 == 트랙 수)
+```
+
+per-frame 소비단이 이 바이트 하나로 애니 전체를 켜고 끈다 —
+`0x14017241f cmp byte ptr [rbx+0x18], 0` → `je 0x1401726ad`. 0 이면 트랙을 **한 번도 평가하지
+않고** 다음 애니로 넘어가므로 **바인딩의 정적 `value` 가 그대로 남는다**.
+
+이 한 자리가 아래 셋을 한꺼번에 설명한다:
+
+1. **`fps<=0` / `length<=0`** — `init` 이 false 를 돌리면 호출부가 c0..c3 파스를 통째로
+   건너뛰므로(0x1401a56c0 `test al,al` → `je 0x1401a57e1`) 트랙 수가 **0** 이 되고 게이트가
+   꺼진다. **애니 객체 자체는 버려지지 않는다** — 실패 경로도 성공 경로와 0x1401a57e9 에서
+   합류해 등록기로 그대로 넘어간다. (종전 문서의 "호출부가 애니를 통째로 버린다" 는 결과는
+   맞지만 기전이 틀렸다 — 함정 16.)
+2. **`c0..c3` 캐스케이드** — c0+c2 처럼 채널이 비면 트랙 수가 1 이 되고, vec3 프로퍼티의 성분
+   수 3 과 어긋나 **애니 전체가 꺼진다**. "c2 만 유실" 이 아니다.
+3. **빈 트랙의 0.0 분기(0x1401a9bfd)에 닿는 유일한 입력** — 명시적 `"cN": []` 다. 배열이기만
+   하면 키프레임 파서의 반환값과 무관하게 push 되므로(§2.2) 트랙 수는 유지되고, 그 채널만
+   0.0 이 된다.
+
+Waple 은 프로퍼티의 성분 수를 모른다(그건 `origin`(vec3)인지 `alpha`(float)인지 아는
+`SceneDocument` 의 정보다). 그래서 이 게이트를 `PropertyAnimation` 안으로 옮길 수 없다 —
+§5.1 과 §6.7 을 볼 것.
+
 ---
 
 ## 4. 에디터(JS)가 알려주는 것
@@ -532,7 +592,33 @@ UTF-8 이라 두 값이 최대 238 만큼 다르므로 `grep -b` 로는 재현�
 
 ---
 
-## 5. 정수 프레임 양자화를 옮기지 않은 근거
+## 5. 옮기지 않은 것들 — 근거
+
+### 5.1 빈 트랙의 `0.0` (2026-08-21 클러스터 Q 재평가)
+
+클러스터 K 는 "누락 채널을 빈 트랙으로 자리만 지키는 관용과 **짝**이라 의도적 유지" 라고 적었다.
+방향은 맞았지만 근거가 약하다 — 실제 이유는 **WE 가 쓰는 규칙이 애초에 "빈 트랙 → 0.0" 이
+아니기 때문**이다.
+
+1. WE 의 규칙은 §3.4 의 **트랙 수 == 프로퍼티 성분 수** 라는 전부-아니면-전무 게이트다
+   (`sete al` 0x14017679e → `mov byte ptr [r15+0x18], al` 0x1401767a1 → 소비자 게이트
+   0x14017241f). 채널이 비면 WE 는 "그 채널만 0" 이 아니라 **애니 전체를 끈다**.
+2. `PropertyAnimation` 은 프로퍼티의 성분 수를 모른다. 그 정보는 `origin`(vec3)인지
+   `alpha`(float)인지 아는 `SceneDocument` 에만 있다. **그래서 WE 의 게이트를 이 타입 안으로
+   옮길 수 없다.**
+3. 게이트 없이 `0.0` 만 옮기면 **누락 채널이 base 대신 0 으로 눌린다** — 실물이 하지 않는
+   일이다(실물은 그 경우 애니를 끈다). 즉 지금보다 **더** 갈린다.
+4. Waple 의 빈 트랙은 두 입력을 뭉뚱그린다: (a) 채널 키 자체가 없음, (b) 명시적 `"cN": []`.
+   WE 에서 0.0 에 닿는 것은 (b) 뿐이다(§3.4). 둘을 갈라 (b) 에서만 0 을 돌리려면 트랙 배열
+   바깥에 "명시적 빈 채널" 표식을 하나 더 들고 다녀야 하는데, 그래도 1·2 때문에 실물과
+   같아지지 않는다.
+5. 도달 0 — 코퍼스 트랙 19개가 전수 키프레임 2개이고 빈 배열은 0건이다.
+
+**결론: 고치지 않는다.** 닫으려면 `parse`(또는 `value(component:)`)가 프로퍼티 성분 수를 받아야
+한다 — §6.7 의 넘길 것.
+잠금: `PropertyAnimationOptionsTests.testMissingChannelKeepsBaseAndDoesNotCollapseToZero`.
+
+### 5.2 정수 프레임 양자화를 옮기지 않은 근거
 
 동봉 자산의 애니 트랙을 두 방식(정수 2샘플 선형보간 ↔ 연속 프레임 직접 평가)으로 전수 대조했다.
 
@@ -554,42 +640,70 @@ UTF-8 이라 두 값이 최대 238 만큼 다르므로 `grep -b` 로는 재현�
 
 ## 6. 남은 파스 diff 후보 (`SceneDocument.swift` — 이 레인 밖)
 
-1. **`instanceoverride` 의 애니 바인딩이 드롭된다.** 자산 7블록 중 **5블록**이
-   `objects[].instanceoverride.controlpoint1` / `controlpointangle1` 아래에 있는데,
-   `particleInstanceOverride`(SceneDocument.swift:2497)가 `float()`/`vec3()` 로 정적 `value` 만
-   언랩한다. `PropertyAnimation.parse(bind)` 를 같은 자리에서 병행 캡처하면
-   `maintaindistancebetweencontrolpoints` 의 움직이는 컨트롤포인트가 살아난다
-   (`controlpointangle1` 4블록은 CP 회전 표현이 없어 별건).
+1. ~~**`instanceoverride` 의 애니 바인딩이 드롭된다.**~~ → **[2026-08-21 후속] 처리됐다.**
+   클러스터 M 이 `particleInstanceOverride` 에 `PropertyAnimation.parse(bind)` 병행 캡처를 넣어
+   `SceneParticle.instanceOverrideAnimations` 로 보존한다
+   (`SceneDocumentFidelityTests.testInstanceOverrideAnimationBindingIsCaptured`).
+   자산 7블록 중 **5블록**이 `objects[].instanceoverride.controlpoint1` /
+   `controlpointangle1` 아래에 있었고, `maintaindistancebetweencontrolpoints` 의 움직이는
+   컨트롤포인트가 이 수정으로 살아났다 — c1 트랙 `436.42032 → 145.37645` 가
+   `PropertyAnimation` 평가로 재현되는 것이 M 의 테스트로 잠겼다(이 레인 평가기의 독립 확인이다).
+   (`controlpointangle1` 4블록은 CP 회전 표현이 없어 여전히 별건.)
 2. **오브젝트 애니 키 목록이 5개로 고정돼 있다**(SceneDocument.swift:1352
    `["origin", "scale", "alpha", "angles", "color"]`). WE 의 바인딩 파서는 프로퍼티 키를
    가리지 않는다 — 어떤 바인딩에나 `animation` 이 붙을 수 있다.
-3. **[미해결] `length` 가 정수가 아니면 끝점 프레임과 루프 주기가 갈린다.** WE 는 `asInt`
-   (0x1401a9815)로 **한 번** i32 화해 끝점 프레임에도 루프 주기에도 같은 정수를 쓴다. Waple 은
-   끝점만 `length.rounded(.towardZero)` 로 절단하고 `PropertyAnimation.length` 는 Float 를
-   유지한다 — `length: 45.9` 면 끝점은 frame 45 인데 loop 랩은 45.9 에서 일어난다.
-   동봉·설치본 7블록의 `length` 는 전수 정수(60×6 · 30×1)라 **도달 0**. 고치지 않은 이유는
-   `length` 자체를 절단하면 wraploop 과 무관한 모든 애니의 loop/mirror 주기가 바뀌기 때문이다.
-   키프레임 `frame` 도 같은 성격이다(WE `asInt` 0x1401a8fb5 ↔ Waple Float, 코퍼스 전수 정수).
+3. ~~**[미해결] `length` 가 정수가 아니면 끝점 프레임과 루프 주기가 갈린다.**~~ →
+   **[2026-08-21 클러스터 Q] 닫았다.** `parse` 가 `length` 를 한 번 `rounded(.towardZero)` 해서
+   `PropertyAnimation.length` 자체를 정수로 만든다 — 실물이 `asInt`(0x1401a9815 → 0x140085ee0,
+   태그 3 은 `cvttsd2si` 0x140085f12) 한 번으로 끝점 프레임(`[r13+0x48]` → 0x1401a5780)과
+   루프 주기(`+0x08 = (float)length/fps`, 0x1401a8c37–0x1401a8c46)를 같은 정수로 쓰기 때문이다.
+   키프레임 `frame` 도 같이 닫았다(`asInt` 0x1401a8fb5 → 파스에서 0 방향 절단).
+   절단으로 프레임이 겹칠 수 있게 됐으므로 정렬을 **안정**으로 바꿨다(원 인덱스를 2차 키로).
+   도달 0(코퍼스 `length` 60×6·30×1 · `frame` int×38 전수 정수).
+   잔여: 태그 1/2(int/uint)에서 실물은 `mov eax,[rcx]` 로 **하위 32비트만** 취하고, 겹친
+   프레임에서 실물은 **앞의 것**을 남기는데(0x1401a8fc1 `jle`) Waple 은 정렬 관용 때문에 둘 다
+   들고 **뒤가 왼쪽 끝점**이 된다. 둘 다 도달 0.
+   잠금: `testKeyframeFrameIsTruncatedTowardZero` ·
+   `testLengthTruncationGovernsLoopPeriodNotJustWrapEndpoint`.
 4. `SceneDocument.swift` 의 상수 애니 주석이 `{animation:{...}}` 를 **"55씬/287건"** 이라고
    적는데, 동봉 트리에서 `"animation"` 키가 딕셔너리인 자리는 **전 트리 통틀어 7건**뿐이다
    (2026-08-21 전수 census). 그 수치는 다른 코퍼스(워크샵)에서 온 것으로 보인다 — 이 레인 밖이라
    손대지 않았지만, 동봉 도달을 그 숫자로 읽으면 안 된다.
-5. **[미해결] `fps <= 0` / `length <= 0` 은 "드롭" 이 아니라 "정지" 로 흐른다.** WE 는 둘 다
-   `init` 에서 false 를 돌려(0x1401a8c21 `comiss xmm2, xmm1` → `jae` · 0x1401a8c43) 호출부가
-   애니를 통째로 버리므로 **바인딩의 정적 `value` 가 그대로 쓰인다**. Waple 은 `"fps": 0` 이면
-   `frame = t·0 = 0` 으로 굳고 `"length": 0` 이면 `max(0, min(frame, 0))` 으로 굳어
-   **첫 키프레임 값에 고정**된다 — 정적 `value` 가 아니라 키프레임 0 이다.
-   §2.3 표의 "부재" 관용(30fps / 마지막 키프레임 길이)과는 다른 사안이다: 부재가 아니라
-   **명시된 퇴화 값**이고, 원본은 그걸 "애니 없음" 으로 읽는다. 고치려면 `parse` 가
-   `fps <= 0 || length <= 0` 에서 `nil` 을 돌리면 되고 그러면 원본과 **정확히 같아진다**
-   (호출부가 `anims[key]` 를 세우지 않아 정적 `value` 로 떨어진다). 도달 0(코퍼스 `fps` = 15/20/30,
-   `length` = 30/60)이라 이번 라운드의 무회귀 예산에서 뺐다 — 다음에 이 레인을 열 때 첫 항목.
+   **[2026-08-21 후속]** 클러스터 M 이 `SceneDocument.swift:11`·`:3077` 에 범위 라벨과 실측치를
+   붙였다(동봉 1,698 / 설치본 2,143 각각 `constantshadervalues` 밑 `{animation}` **1건/1파일**,
+   `"animation"` 딕셔너리 전체 **7블록/6파일**). 원 "55씬/287건" 의 출처는 여전히 **[미해결]**.
+5. ~~**[미해결] `fps <= 0` / `length <= 0` 은 "드롭" 이 아니라 "정지" 로 흐른다.**~~ →
+   **[2026-08-21 클러스터 Q] 닫았다.** `parse` 가 `fps <= 0 || length <= 0` 에서 `nil` 을 돌린다.
+   기전을 직접 다시 떠서 **종전 서술을 한 군데 정정**한다(함정 16):
+   `init`(0x1401a8c10)이 `comiss xmm2(0.0), xmm1(fps)` → `jae 0x1401a8cc4`(0x1401a8c21)로
+   `fps <= 0` 에서, `comiss xmm2(0.0), xmm0(length/fps)` → `jae`(0x1401a8c43)로
+   `length/fps <= 0` 에서 false 를 돌리는 것까지는 맞다(`fps` 는 0 이든 음수든 **같은 명령
+   한 자리**다). 호출부가 `test al,al` → `je 0x1401a57e1`(0x1401a56c0)로 c0..c3 파스를 통째로
+   건너뛰는 것도 맞다. 그러나 **애니 객체는 버려지지 않는다** — 실패 경로도 성공 경로와
+   0x1401a57e9 에서 합류해 등록기 0x140175880 으로 그대로 넘어간다. 애니를 실제로 끄는 것은
+   §3.4 의 성분 수 게이트다(트랙 0개 ≠ 성분 수 1..4 → `[anim+0x18] = 0` → 소비자가 건너뜀).
+   관측 결과는 종전 서술대로 "정적 `value` 가 그대로" 이고, `parse` 가 `nil` 을 돌리면
+   호출부(`SceneDocument.swift:1827` 등)가 `anims[key]` 를 세우지 않아 **정확히 같아진다**.
+   `length` 절단(§6.3)과 맞물려 `"length": 0.5` 도 같은 자리에서 걸린다 — 실물도 `asInt` 로
+   0 이 되어 같은 자리에서 걸린다. 도달 0(코퍼스 `fps` = 15/20/30 · `length` = 30/60).
+   잠금: `testDegenerateFpsOrLengthDropsTheWholeAnimation` · `testFallbackLengthOfZeroAlsoDrops`.
 6. `PropertyAnimation` 에 `wrapLoop` 필드가 생겼다. 라운드트립 걱정은 **지금은 없다** —
    `Sources/` 전체에서 `"animation"` 을 **쓰는**(직렬화하는) 자리가 0건이고
    `ProjectJSONBuilder.swift` 는 12행짜리로 애니를 다루지 않는다(2026-08-21 실측).
    애니를 다시 내보내는 자리가 생기면 그때 `options.wraploop` 를 함께 써야 한다 —
    `wrapLoop` 필드를 보존용으로 남겨 둔 이유가 그것이다(트랙에는 이미 구워져 있어서
    랩된 트랙을 그대로 쓰면 끝점 키프레임이 하나 늘어난 채로 나간다).
+7. **[넘길 것 — 신규] 애니 유효 게이트(§3.4)를 옮기려면 성분 수가 필요하다.** WE 는
+   `트랙 수 != 프로퍼티 성분 수` 인 애니를 **통째로 끈다**(0x1401767a1 → 0x14017241f).
+   Waple 은 채널 자리를 지켜 관용하므로 `{"c0":…, "c2":…}` 같은 저작에서 c0·c2 는 움직이고
+   c1 은 base 로 남는다 — 실물은 셋 다 정적 `value` 다. 닫으려면 호출부가 성분 수를 알려줘야
+   한다. 제안(이 레인 밖 — `SceneDocument.swift`):
+   `PropertyAnimation.parse(bind, components: Int?)` 로 선택 인자를 받아
+   `components` 가 주어졌고 `tracks.count != components` 면 `nil` 을 돌린다. 호출부는
+   `origin`/`scale`/`angles`/`color` → 3, `alpha`/`zoom`/`fov` → 1 을 넘긴다.
+   **지금 넣지 않은 이유**: 인자를 안 넘기는 호출부가 하나라도 남으면 규약이 반쪽이 되고,
+   `instanceoverride`/`constantshadervalues` 쪽은 성분 수가 값의 형태(스칼라/vec3/vec4)에서만
+   유도되므로 그 유도까지 함께 설계해야 한다. 도달 0(코퍼스 7블록 전수가 c0 연속).
 
 ---
 
@@ -655,20 +769,38 @@ unary          → ("+"|"-"|"!") unary | primary                        ; @16826
 값 없이(`[:]`) 문법 가능 여부만 묻는 경로를 살리기 위한 것이고, `replaceIncludes` 가 부재를
 "어느 리터럴과도 불일치" 로 접는 것과 같은 방향이다.
 
-### 7.4 남은 어긋남(고치지 않음, 도달 0 — 2026-08-21 재검증 + 테스트로 못박음)
+### 7.4 비교 연산의 레벨·결합 — **닫았다**(2026-08-21 클러스터 Q)
 
-§7.1 의 실물 사슬과 한 줄씩 대조했다. 셋 다 **설치본 조건 22건 / 고유 16종에 도달 0** 이고,
-지금은 `PropertyConditionEvaluatorTests` 가 "현재 이렇게 동작한다" 를 잠가 둔다
+K 는 이 항목을 "고치면 `canEvaluate` 가 뒤집혀 두 소비처가 함께 움직인다" 는 이유로 문서화만
+했다. 그 두 소비처를 실제로 재서 **움직이는 건수가 0** 임을 확인하고 고쳤다.
+
+**소비처 실측**
+
+| 소비처 | 코드 | `canEvaluate` 가 false→true 로 바뀌면 |
+|---|---|---|
+| `WallpaperCompatibilityAnalyzer` | `:468` `!canEvaluate(condition)` → `.warning .propertyDisplayCondition` | 경고가 **줄기만** 한다 |
+| `DeepScan` | `:343` `canEvaluate(c) && evaluate(c, …) != nil` → `conditionsEvaluable += 1` | 집계가 **늘기만** 한다 |
+
+두 소비처 모두 `canEvaluate` 의 **단조 함수**이고, 이 문법 확장 자체가 **단조 확대**다
+(지금 파스되는 식은 전부 그대로, 같은 값으로 파스된다 — 종전에 실패하던 연쇄만 새로 성공한다).
+설치본 `condition` **22건 / 고유 16종**을 재수집해 비교 연산자가 둘 이상 연쇄하는 식이
+**0건**임을 확인했다(전부 `&&` 로만 이어진다 — §7.2 의 분포가 그대로 재현됐다).
+따라서 **설치본 코퍼스 위에서 두 소비처의 수치는 한 건도 움직이지 않는다.**
+`WallpaperCompatibilityAnalyzerTests` 의 `propertyDisplayCondition` 단언은 "경고가 나오지
+않는다" 쪽이라 방향이 같다.
+
+**바뀐 것**: `parseComparison` 을 `parseEquality`/`parseRelational` 두 레벨로 갈라 각각
+좌결합으로 반복시켰다. 이제 `a == b == c` → `(a==b)==c` · `a > b == c` → `(a>b)==c` ·
+`a == b > c` → `a == (b>c)` 로 Angular 와 같이 읽는다(종전엔 셋 다 파스 실패 → 표시).
+잠금: `PropertyConditionEvaluatorTests.testComparisonChainsFollowAngularTwoLevelLeftAssociation`
+(좌결합/우결합을 가르는 값까지 포함).
+
+### 7.5 아직 남은 어긋남(고치지 않음, 도달 0 — 테스트로 못박음)
+
+§7.1 의 실물 사슬과 한 줄씩 대조한 나머지다. 둘 다 **설치본 조건 22건 / 고유 16종에 도달 0**
+이고, `PropertyConditionEvaluatorTests` 가 "현재 이렇게 동작한다" 를 잠가 둔다
 (문법을 Angular 에 맞추면 그 테스트들이 깨져야 한다 — 그때 의도적으로 갱신할 것).
 
-- **비교 연산의 레벨·결합**: Angular 는 `equality`(@167616)와 `relational`(@167789)이 **두 레벨**이고
-  각각 **좌결합 반복**이다. Waple 의 `parseComparison` 은 여덟 연산자를 한 레벨로 묶고 **한 번만**
-  소비한다. 그래서 `a == b == c`(Angular `(a==b)==c`) · `a > b == c`(`(a>b)==c`) ·
-  `a == b > c`(`a == (b>c)`)를 전부 **파스 실패(nil)** 로 흘린다.
-  실패 방향이 "숨김" 이 아니라 **"표시"** 라 조건을 못 읽어도 토글이 사라지지는 않는다.
-  코퍼스 22건에 비교 연산자 연쇄는 **0건**(전부 `&&` 로만 이어진다).
-  고치려면 두 레벨로 갈라 `while` 을 씌우면 되지만, 그러면 `canEvaluate` 가 지금 false 인 입력에서
-  true 가 되어 `WallpaperCompatibilityAnalyzer` 경고와 `DeepScan` 집계가 함께 움직인다.
 - **산술 연산자**: `additive`(@167960) · `multiplicative`(@168124) · 단항 `+`/`-`(@168262)가
   Waple 에 없다. 토크나이저가 미지 연산자를 만나면 조건 **전체를 파스 실패**로 돌린다
   (부분 평가 금지 — 의도된 설계). 코퍼스 도달 0.
