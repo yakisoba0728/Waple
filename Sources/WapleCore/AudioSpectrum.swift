@@ -12,8 +12,9 @@ import Foundation
 /// ```
 ///   PCM s
 ///    → ×127, +127            (시간영역 상수만 — **창 함수 없음**, 사각창)
-///    → 제로패딩 (window → N)
-///    → 복소 FFT (정규화 없음)
+///    → 패딩 (window → N)      (원본은 0 이 아니라 무음값 127 로 채운다 — bin 0 에만 떨어지므로
+///                              소비 빈에서는 우리의 0 패딩과 등가. `sampleBias` 주석 참조)
+///    → 복소 FFT (정규화 없음)  (허수부는 0 이 아니라 `1/(127·s+127)` — 잔차 ≤ −85 dB, §2.5)
 ///    → power = Re²+Im²        (bin 0 = DC 제외, bin 1..B-1)
 ///    → sqrt(w · power)        ← 틸트: 진폭에 sqrt(w)
 ///    → band[b] = MAX(...)     ← 축약: 평균이 아니라 최댓값 (`maxss` 0x1400d1d04)
@@ -22,7 +23,10 @@ import Foundation
 ///
 /// ## 우리 쪽 한 가지 의도적 이탈 — FFT 길이
 /// 원본은 `N = int(max(rate/44100, 1) · 1920)`, `B = 640` 고정이다. N 을 레이트에 비례시키고
-/// B 를 고정해서 **빈 폭이 항상 ≈22.97 Hz, 상한이 항상 ≈14677 Hz** 가 되게 만든 설계다.
+/// B 를 고정해서 **빈 폭이 항상 ≈22.97 Hz, 상한이 항상 ≈14677 Hz** 가 되게 만든 설계다 —
+/// 단 그 불변식은 `max(…, 1)` 클램프 때문에 **44.1 kHz 이상에서만** 성립한다(32 kHz 면
+/// N 이 1920 에 묶여 상한이 10650 Hz 로 내려간다). 그래서 `binCount(fftLength:sampleRate:)` 는
+/// 상수 `topFrequency` 가 아니라 `engineTopFrequency(sampleRate:)` 를 쓴다.
 /// 문제는 그 N 이 2의 거듭제곱이 아니라는 것이다 — 원본은 FFTS mixed-radix 를 쓰고,
 /// 48 kHz 에서는 N = 2089(소수)까지 나온다. vDSP 는 임의 길이 실수 FFT 를 못 한다.
 ///
@@ -68,10 +72,77 @@ public enum AudioSpectrum {
     public static let referenceFFTLength = 1920
     public static let referenceBinCount = 640
 
-    /// 원본이 실제로 소비하는 최고 주파수. 44.1 kHz 에서 bin 639 × (44100/1920) 이다.
-    /// 레이트가 바뀌어도 N 이 비례하므로 이 값은 상수다 — 그게 원본 설계의 요점이다.
+    /// 원본이 44.1 kHz 에서 실제로 소비하는 최고 주파수 — bin 639 × (44100/1920).
+    ///
+    /// **레이트 무관 상수가 아니다.** N 이 레이트에 비례하는 것은 `max(rate/44100, 1)`
+    /// 때문에 **44.1 kHz 이상에서만**이고(`0x1400cf5f4` 의 `comiss`/`ja`), 그 아래에서는
+    /// N 이 1920 에 고정돼 상한이 함께 내려간다 — 32 kHz 면 639 × (32000/1920) = 10650 Hz 로
+    /// 27% 낮다. 레이트를 아는 자리는 `engineTopFrequency(sampleRate:)` 를 써라.
+    /// 이 상수는 "44.1 kHz 기준값" 이라는 뜻으로만 남는다.
     public static let topFrequency: Double =
         Double(referenceBinCount - 1) * (referenceRate / Double(referenceFFTLength))   // 14677.03125
+
+    // MARK: 캡처단 — 원본이 레이트에서 N·B·W 를 뽑는 식
+
+    /// 시간영역 DC 바이어스 겸 게인 `s → 127·s + 127`(`0x1400d15dd` `mulss` · `0x1400d15e2` `addss`).
+    ///
+    /// 두 몫이 다르다. `×127` 은 진짜 게인이라 아래 `gain` 에 흡수돼 있고, `+127` 은
+    /// **패딩 기준선 맞춤**이다 — 원본은 창 뒤 `[W, N)` 을 0 이 아니라 무음 값 127 로 채우므로
+    /// (`0x1400d141d` 가 `0x42FE0000`=127.0f, `0x1400d1425` 가 `0x3C010204`=1/127 을 심는다)
+    /// 버퍼 전체가 `127 + 127·s(t)·1[t<W]` 이고, 상수 127 은 길이 N 전 구간에 걸려 **bin 0 에만**
+    /// 떨어진다. 소비 구간이 `i ≥ 1` 이라 우리의 0 패딩과 소비 빈에서 정확히 등가다.
+    /// 자세한 것은 `docs/re/audio-capture.md` §2.4.
+    public static let sampleBias: Float = 127
+
+    /// 원본 FFT 길이 `N = int(max(rate/44100, 1) · 64 · 30)`(`0x1400cf5e4`-`0x1400cf619`).
+    ///
+    /// float32 연산 순서까지 원본 그대로다 — `cvttss2si` 는 반올림이 아니라 **절삭**이고,
+    /// 48 kHz 에서 2089.7959 → 2089 처럼 소수까지 걸린다. 실무 레이트에서 이 N 은
+    /// **한 번도 2의 거듭제곱이 아니라서**(1920·2089·3840·4179·8359) 원본은 항상 Bluestein
+    /// 경로를 탄다(`0x1400d05e9` 의 `test r12, r12-1`).
+    public static func engineFFTLength(sampleRate: Double) -> Int {
+        guard sampleRate.isFinite, sampleRate > 0 else { return referenceFFTLength }
+        var scale = Float(sampleRate) / Float(referenceRate)
+        if !(scale > 1) { scale = 1 }
+        let n = scale * engineFactorScale * engineFFTLengthFactor
+        // 정본 가드. 기본 경로에서는 절대 안 걸리지만(192 kHz 도 8359), 레이트가 오염돼
+        // 오면 `Int(_:)` 는 클램프가 아니라 트랩이다.
+        guard let widened = safeInt(Double(n)), widened >= 2 else { return referenceFFTLength }
+        return widened
+    }
+
+    /// 그 N 에서의 원본 창 길이. `engineFFTLength` 과 `windowLength` 의 합성이다.
+    public static func engineWindowLength(sampleRate: Double) -> Int {
+        windowLength(fftLength: engineFFTLength(sampleRate: sampleRate))
+    }
+
+    /// 이 레이트에서 원본이 실제로 소비하는 최고 주파수 = `bin(B−1) = (B−1)·rate/N`.
+    /// 44.1 kHz 이상이면 14677~14683 Hz 로 거의 상수고, 그 아래에서는 레이트에 비례해 내려간다.
+    public static func engineTopFrequency(sampleRate: Double) -> Double {
+        let n = engineFFTLength(sampleRate: sampleRate)
+        guard n > 0, sampleRate.isFinite, sampleRate > 0 else { return topFrequency }
+        return Double(referenceBinCount - 1) * (sampleRate / Double(n))
+    }
+
+    /// 원본 게인식 그대로 — `AP[0x0C](=1.0) · 0.001 · B / (N/2)`(`0x1400d1d3f`-`0x1400d1d5d`).
+    /// 이건 **비정규화 DFT 진폭**에 걸리는 값이라 우리 `gain`(1/N 정규화 진폭 기준)과 규약이 다르다.
+    /// 둘의 관계는 `sampleBias × engineRawBandGain(B, N) × N == gain`(B=640 에서) 이고,
+    /// `AudioSpectrumWEParityTests` 가 그 항등식을 고정한다.
+    public static func engineRawBandGain(binCount b: Int, fftLength n: Int) -> Float {
+        guard n > 0 else { return 0 }
+        return 1.0 * 0.001 * Float(b) / (Float(n) * 0.5)
+    }
+
+    /// AudioProcessor `+0xEC`(생성자 `0x1400c0d6d`) — N 계수 30.0.
+    /// **오프셋 기준선 주의**: 생성자의 `this` 와 오디오 스레드의 `rdi` 는 8 어긋나 있다
+    /// (생성자가 `lea rbx,[rcx+8]` 로 밴드 버퍼를 심는다 — `0x1400c0cb4`). 여기 적은 오프셋은
+    /// 스레드 기준(정본 `spec/engine/effect-fbo-audio.json` 과 같은 기준)이라 생성자 즉시값
+    /// VA 에서 보이는 오프셋보다 8 작다.
+    public static let engineFFTLengthFactor: Float = 30
+    /// AudioProcessor `+0xF0`(생성자 `0x1400c0d77`) — B 계수 10.0. `B = int(10 × 64) = 640` 고정.
+    public static let engineBinCountFactor: Float = 10
+    /// 두 계수에 공통으로 곱해지는 64.0(`0x1404928e4`).
+    public static let engineFactorScale: Float = 64
 
     /// 최종 게인. 1/N 정규화 진폭(`|DFT|/N`)에 곱한다.
     /// `127 × 0.001 × 2 × 640 = 162.56`. 원본 코드상으로는
@@ -82,10 +153,28 @@ public enum AudioSpectrum {
 
     // MARK: 창/길이 규약
 
-    /// 원본의 창 길이 규약 `N − int(N × 10/30)` (`0x1400d1491`-`0x1400d14a0`).
-    /// 나머지는 제로패딩이고 **오버랩은 없다**(FFT 직후 `xor r13d, r13d` 로 카운터 리셋).
+    /// 원본의 창 길이 규약 (`0x1400d1491`-`0x1400d14a0`). 명령 넷이 전부다:
+    ///
+    /// ```
+    ///   divss xmm10, xmm12   ; 10.0f / 30.0f = 0.33333334f
+    ///   mulss xmm10, xmm11   ; × (float)N
+    ///   subss xmm11, xmm10   ; (float)N − 위
+    ///   cvttss2si edi, xmm11 ; **절삭**
+    /// ```
+    ///
+    /// **절삭이 몫이 아니라 차에 걸린다.** 종전 구현은 `n - n/3`(정수 나눗셈)이었는데,
+    /// 그건 `N − int(N/3)` 이라 절삭 위치가 한 단계 앞이다. `N % 3 == 0` 이면 같지만
+    /// 아니면 1 씩 어긋난다 — 48 kHz(N=2089)에서 1393 vs 실물 **1392**, 우리 N=2048 에서
+    /// 1366 vs **1365**. 한 샘플이라 관측 차이는 0.07% 지만, 원본이 float 로 재는 것을
+    /// 정수로 바꿔 적을 이유는 없다.
+    ///
+    /// 나머지 `[W, N)` 은 패딩이고 **오버랩은 없다**(FFT 직후 `xor r13d, r13d` — `0x1400d1e21`).
     public static func windowLength(fftLength n: Int) -> Int {
-        max(1, n - n / 3)
+        guard n > 0 else { return 1 }
+        let length = Float(n)
+        let dropped = (engineBinCountFactor / engineFFTLengthFactor) * length   // 10/30 = 0.33333334f
+        guard let widened = safeInt(Double(length - dropped)) else { return max(1, n - n / 3) }
+        return max(1, widened)
     }
 
     /// 이 FFT 길이/샘플레이트에서 원본과 **같은 상한 주파수**까지 덮는 빈 개수.
@@ -99,7 +188,11 @@ public enum AudioSpectrum {
         // 낮은 sampleRate 나 큰 n 이 들어오면 몫이 Int 범위를 넘고 그 한 줄이 프로세스를 죽인다.
         // 직접 클램프를 적을 수도 있지만 그러지 않는다 — F530 스윕이 확인한 지배적 실패 방식은
         // "가드가 없다" 가 아니라 **"가드가 넷인데 아무도 안 거친다"** 였다(JSONNumerics 주석).
-        let raw = (topFrequency / binWidth).rounded()
+        // **상수 `topFrequency` 가 아니라 레이트별 상한**을 쓴다. 44.1 kHz 이상에서는 둘이
+        // 0.04% 안쪽이라 48/44.1/96 kHz 의 B(627/683/314)가 그대로지만, 그 아래에서는
+        // 원본이 N 을 1920 에 묶어 상한을 함께 낮춘다 — 32 kHz 에서 상수를 쓰면 B=940 이 되어
+        // 원본의 10650 Hz 대신 14672 Hz 까지 덮고 64밴드가 통째로 밀린다.
+        let raw = (engineTopFrequency(sampleRate: sampleRate) / binWidth).rounded()
         guard let widened = safeInt(raw), widened >= 0 else { return min(half, referenceBinCount) }
         return max(2, min(half, min(widened, half) + 1))
     }
@@ -209,4 +302,110 @@ public enum AudioSpectrum {
         }
         return out
     }
+}
+
+/// 채널별 링버퍼 — 콜백 패킷을 누적해 정확히 `windowSize` 개가 채워질 때만 창을 방출한다
+/// (홉 = 창 크기, 겹침 없음). 제로패드 없음 — 창 미만 잔여는 다음 패킷에 이어진다.
+///
+/// **`WapleRender` 에서 여기로 옮겨 왔다**(동작 무변경). 캡처 API 가 하나도 안 들어가는 순수
+/// 값 타입인데 macOS 전용 모듈에 있어서 리눅스 테스트가 못 봤다. `WapleRender` 는 타입
+/// 별칭으로 재수출하므로 호출부는 그대로다.
+///
+/// 실물 대응(`0x1400d02b0` 오디오 스레드):
+/// - 채움 카운터 `r13d` 가 창 길이 `W` 에 닿을 때만 FFT(`0x1400d1b6b` 의 `cmp r13d, edi`).
+/// - FFT 커밋 직후 카운터를 0 으로(`0x1400d1e21` `xor r13d, r13d`) — 오버랩 없음.
+/// - 무음/실패 패킷도 카운터를 0 으로(`0x1400d1f58`) — 우리 `reset()` 이 그 자리다.
+///
+/// **한 가지는 일부러 다르다.** 원본은 창이 찬 뒤 남은 프레임을 캐리에 넣지 않고 버린다 —
+/// `ReleaseBuffer(numFramesAvailable)`(`0x1400d1b19`)가 소비량이 아니라 **패킷 전체**를
+/// 반납하기 때문이다. 그래서 원본의 실효 홉은 창 길이가 아니라 폴 간격 33 ms 이고
+/// 매 폴마다 ~4 ms 를 버린다. 우리는 푸시 콜백이라 버릴 이유가 없어 전량 캐리한다
+/// (시간 지터만 다르고 샘플은 안 잃는다 — `docs/re/audio-capture.md` §4 #5).
+public struct AudioWindowAccumulator {
+    public let windowSize: Int
+    private var bufL: [Float] = []
+    private var bufR: [Float] = []
+
+    public init(windowSize: Int) {
+        self.windowSize = Swift.max(1, windowSize)
+        bufL.reserveCapacity(self.windowSize * 2)
+        bufR.reserveCapacity(self.windowSize * 2)
+    }
+
+    /// 아직 창을 이루지 못한 잔여 샘플 수(진단/테스트용).
+    public var pendingCount: Int { bufL.count }
+
+    /// 패킷(L/R 동일 길이)을 누적하고, 채워진 완전 창을 선두부터 모두 방출(0개 이상, 순서 보존).
+    public mutating func append(left l: [Float], right r: [Float]) -> [(left: [Float], right: [Float])] {
+        bufL.append(contentsOf: l)
+        bufR.append(contentsOf: r)
+        // F840: 길이 어긋남 정렬. 종전에는 잔여 길이가 갈리면 짧은 쪽이 영원히 창을 못 채워
+        // 긴 쪽이 무한 증가한다(캡처 세션 내내 누적 = OOM). 어긋난 시점에서 이미 L/R 동일 길이
+        // 계약이 깨진 것이므로 긴 쪽의 꼬리(최신 샘플)를 버려 다시 맞춘다 — 앞쪽 정렬은 보존된다.
+        if bufL.count != bufR.count {
+            let aligned = Swift.min(bufL.count, bufR.count)
+            bufL.removeLast(bufL.count - aligned)
+            bufR.removeLast(bufR.count - aligned)
+        }
+        var out: [(left: [Float], right: [Float])] = []
+        // F840: 종전 조건은 bufL 만 봤는데 removeFirst(windowSize) 는 bufR 에도 걸린다 —
+        // 호출부가 `r.isEmpty` 만 특수 처리하므로 **길이가 다른** 스테레오 패킷
+        // (non-interleaved 버퍼 두 개의 mDataByteSize 가 갈리는 경우)이 오면 트랩이었다.
+        while bufL.count >= windowSize && bufR.count >= windowSize {
+            out.append((Array(bufL.prefix(windowSize)), Array(bufR.prefix(windowSize))))
+            bufL.removeFirst(windowSize)
+            bufR.removeFirst(windowSize)
+        }
+        return out
+    }
+
+    /// 미완성 창 잔여 폐기(캡처 세션 경계 — 실물의 무음/실패 경로 카운터 리셋 `0x1400d1f58` 대응).
+    public mutating func reset() {
+        bufL.removeAll(keepingCapacity: true)
+        bufR.removeAll(keepingCapacity: true)
+    }
+}
+
+/// 캡처 앞단의 **순수 판정부** — 무음 게이트와 폴 규약 상수.
+///
+/// 캡처 API(WASAPI ↔ ScreenCaptureKit)는 플랫폼마다 다르지만 여기 있는 것은 전부
+/// 산술이라 리눅스에서 돈다. 근거는 `docs/re/audio-capture.md` §1.5, §3.6.
+public enum AudioCaptureGate {
+
+    /// 실물이 창 피크를 재는 방식: **채널 0 만**, 부호 있는 max, 0 바닥.
+    ///
+    /// `0x1400d1a36` 이 stride 를 `nChannels · 4` 로 잡고 `[base + idx·stride]` 를 훑는다 —
+    /// 즉 프레임마다 **첫 채널** 하나다. 시작값은 `xorps xmm4, xmm4`(0)이고 비교는 `maxss`
+    /// (`0x1400d1a95`)라 절댓값이 아니다. 우리는 종전에 L·R 둘 다 봤는데, 그러면 하드
+    /// 우측 팬 신호에서 판정이 갈린다(실물은 무음, 우리는 통과). 기본 threshold 가 0
+    /// (비활성)이라 실사용 영향은 없지만 파리티는 파리티다.
+    ///
+    /// 비유한 샘플은 무시한다 — 실물은 `maxss` 라 NaN 을 그냥 흘리지만 우리 쪽에서 그러면
+    /// 비교가 전부 false 가 되어 게이트가 조용히 열린다.
+    public static func windowPeak(_ channel0: [Float]) -> Float {
+        var peak: Float = 0
+        for s in channel0 where s.isFinite && s > peak { peak = s }
+        return peak
+    }
+
+    /// 무음 판정. 활성 조건은 `threshold > FLT_EPSILON`(`0x1400d1a1b` 의 `comiss`/`jbe`),
+    /// 활성 시 `threshold > peak` 이면 그 창은 무음이다(`0x1400d1ad6`). 경계 `==` 는 통과.
+    /// 기본 threshold 0 이면 항상 비활성이라 무회귀다.
+    public static func isSilenced(peak: Float, threshold: Float) -> Bool {
+        threshold > Float.ulpOfOne && peak < threshold
+    }
+
+    /// 오디오 스레드의 폴 간격(ms). AudioProcessor `+0x14`, 생성자 `0x1400c0ccf` 의 `0x21`,
+    /// 소비는 `0x1400d0404`-`0x1400d0407` 의 `Sleep`. 우리는 푸시 콜백이라 폴링하지 않는다 —
+    /// 실물의 실효 프레임 간격을 기술하는 값으로만 둔다.
+    public static let pollIntervalMilliseconds = 33
+
+    /// 패킷이 한 건도 안 오는 상태가 이만큼 이어지면 실물은 출력 128 float 을 0 으로 지운다
+    /// (`0x1400d14ac` 의 `comiss xmm7, 1000.0` → `0x1400d1f5b` 의 memset). 누산기는 폴
+    /// 간격을 더하고(`0x1400d14c8`), 패킷이 하나라도 오면 0 으로 리셋된다(`0x1400d14ce`).
+    public static let idleSilenceTimeoutMilliseconds: Double = 1000
+
+    /// 실물이 요구하는 샘플 폭 — `wBitsPerSample == 32`(`0x1400cf5bb`). 아니면
+    /// "WASAPI processor requires 32 bit per sample."(`0x140486660`)를 **로그만 하고 진행**한다.
+    public static let requiredBitsPerSample = 32
 }

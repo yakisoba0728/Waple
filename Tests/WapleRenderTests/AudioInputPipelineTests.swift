@@ -1,6 +1,7 @@
 import XCTest
 import Foundation
 import Accelerate
+@testable import WapleCore
 @testable import WapleRender
 
 /// 오디오 입력 파이프라인(링버퍼 누적 + 무음 게이트/입력 볼륨) 테스트 — 신규.
@@ -86,11 +87,16 @@ final class AudioInputPipelineTests: XCTestCase {
         XCTAssertFalse(SystemAudioSpectrumProvider.isSilenced(peak: 0.5, threshold: 0.5))
     }
 
-    /// 창 피크: 채널 합산, 부호 있는 raw max, 0 바닥(:378-417 — 절댓값 아님).
-    func testWindowPeakIsRawMaxAcrossChannelsWithZeroFloor() {
+    /// 창 피크: **채널 0(왼쪽)만**, 부호 있는 raw max, 0 바닥(`0x1400d1a36` stride ·
+    /// `0x1400d1a95` maxss — 절댓값 아님). 종전엔 L·R 합산이었다.
+    /// 판정 본체의 전수 단언은 리눅스에서 도는 `WapleCoreTests/AudioCaptureParityTests` 에 있고,
+    /// 여기서는 프로바이더 래퍼가 그쪽으로 위임하는지만 본다.
+    func testWindowPeakIsChannelZeroRawMaxWithZeroFloor() {
         XCTAssertEqual(SystemAudioSpectrumProvider.windowPeak([-0.9, 0.3], [0.2, -0.4]), 0.3)
         XCTAssertEqual(SystemAudioSpectrumProvider.windowPeak([-0.9], [-0.4]), 0)
         XCTAssertEqual(SystemAudioSpectrumProvider.windowPeak([], []), 0)
+        // 오른쪽만 큰 창은 원본에서 **무음**이다 — 종전 구현은 0.8 을 냈다.
+        XCTAssertEqual(SystemAudioSpectrumProvider.windowPeak([-0.1], [0.8]), 0)
     }
 
     /// 게이트 통과 창은 nil(호출자가 0 스펙트럼 공급), 기본 threshold 에선 동일 창도 분석된다.

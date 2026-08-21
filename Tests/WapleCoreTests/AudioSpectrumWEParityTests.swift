@@ -176,11 +176,18 @@ final class AudioSpectrumWEParityTests: XCTestCase {
         XCTAssertTrue(out.allSatisfy { $0 > 0 }, "나머지 빈은 정상적으로 밴드를 채운다")
     }
 
-    /// 창 길이 규약 `N − N/3`, 오버랩 없음. 나머지 1/3 은 제로패딩이다.
+    /// 창 길이 규약 `int(N − (10/30)·N)`, 오버랩 없음. 나머지 1/3 은 패딩이다.
+    ///
+    /// **1366 → 1365 는 정정이다.** 종전 구현은 `n - n/3`(정수 나눗셈)이라 절삭이 몫에
+    /// 걸렸는데, 원본은 `subss` 뒤 `cvttss2si`(`0x1400d149b`-`0x1400d14a0`)라 **차**에 걸린다.
+    /// `N % 3 == 0` 이면 같고 아니면 1 어긋난다 — 아래 2089(실물 48 kHz)가 그 증거다.
     func testWindowLengthFollowsTheOriginalTwoThirdsRule() {
-        XCTAssertEqual(AudioSpectrum.windowLength(fftLength: 1920), 1280, "원본 44.1 kHz 값")
-        XCTAssertEqual(AudioSpectrum.windowLength(fftLength: 2048), 1366, "우리 구성")
+        XCTAssertEqual(AudioSpectrum.windowLength(fftLength: 1920), 1280, "원본 44.1 kHz 값(N%3==0 이라 두 방식이 같다)")
+        XCTAssertEqual(AudioSpectrum.windowLength(fftLength: 2089), 1392, "실물 48 kHz — 정수 나눗셈이면 1393")
+        XCTAssertEqual(AudioSpectrum.windowLength(fftLength: 2048), 1365, "우리 구성 — 정수 나눗셈이면 1366")
         XCTAssertEqual(AudioSpectrum.windowLength(fftLength: 1), 1, "퇴화 입력에서도 0 이 아니어야 한다")
+        XCTAssertEqual(AudioSpectrum.windowLength(fftLength: 0), 1)
+        XCTAssertEqual(AudioSpectrum.windowLength(fftLength: -8), 1)
     }
 
     /// 퇴화 입력 방어.
@@ -235,9 +242,9 @@ final class AudioSpectrumWEParityTests: XCTestCase {
     /// `norm = 1/(2 * fftSize)` 가 바뀌면 전 레벨이 두 배가 되는데 이 테스트는 못 본다.
     func testAbsoluteOutputLevelOfFullScaleSine() {
         let n = 2048
-        let window = AudioSpectrum.windowLength(fftLength: n)                    // 1366
+        let window = AudioSpectrum.windowLength(fftLength: n)                    // 1365
         let bins = AudioSpectrum.binCount(fftLength: n, sampleRate: 48000)       // 627
-        XCTAssertEqual(window, 1366)
+        XCTAssertEqual(window, 1365)
         XCTAssertEqual(bins, 627)
 
         // 자기검증 — 규약이 |X|/N 이라는 것을 테스트 안에서 증명한다.
