@@ -55,6 +55,40 @@
 
 ---
 
+## 0.1 추가분 — 2026-08-21, 클러스터 AJ (effect.json 전수 재대조)
+
+> **이 절은 §5 표의 키를 지우지 않는다 — 툼스톤(해소)만 더한다.** `effect.json` 루트 키
+> 7개를 원본 파서와 대조해 **전부 "갭 아님" 으로 닫는다**. 그중 `dependencies` 는 §3(b)
+> 리터럴 판정기가 **동명이키(homonym)** 로 속을 뻔한 자리라 근거를 길게 적었다.
+> 모집단은 `effect.json` **동봉 128 + 설치본 135 = 263개**(관대 파서로 전건 파싱 성공,
+> 각 27개가 `//` 줄 주석·후행 콤마 때문에 엄격 파스 실패).
+> 대조 대상은 원본 이펙트 매니페스트 파서 **`0x1401e7170`–`0x1401e8a9d`** 가 실제로 `find` 하는
+> 키 집합이다(전문·표는 `Sources/WapleCore/EffectManifest.swift` 의 "AJ-B2 스키마 전수" 주석).
+
+| 키 | 동봉 | 설치본 | 판정 | 근거 |
+| --- | ---: | ---: | --- | --- |
+| `dependencies`(effect.json) | **128/128** | **135/135** | **해소 — 갭 아님(동명이키)** | §3(b) 가 "구현됨" 으로 센 리터럴(`SceneDocument.swift:2079`·`:2499`)은 **씬 오브젝트** `dependencies` = **정수 배열**(오브젝트 id)이고, effect.json 의 것은 **문자열 배열**(`["materials/effects/tint.json","shaders/effects/tint.frag","shaders/effects/tint.vert"]`)이다. **원본의 리더는 하나뿐이고 그것이 문자열을 버린다** — 씬 오브젝트 베이스 ctor `0x1401ddbb0`–`0x1401de19b` 가 `find`(`0x1401dddb2`) 후 원소마다 `0x1401dde9d` `call 0x140088800`(=`isUInt64`: 태그1 `int64≥0` / 태그2 true / 태그3 `0≤d<2^64 && frac==0` / 그 외 false)로 거르고, 거짓이면 `0x1401ddea4 je 0x1401de0c6` 로 건너뛴다. 통과분만 `0x140086000`(정수 접근자)으로 받아 8바이트 FNV-1a 로 `unordered_set`(`this+0x210`, 마스크 `+0x228`, 로드팩터 `+0x1f8`)에 넣는다. 즉 **effect.json 의 문자열 배열은 엔진에서도 죽은 키**다 |
+| `gizmos` | 21 | 21 | **해소 — 갭 아님** | 문자열이 `wallpaper64.exe` 에 ASCII·UTF-16 어느 쪽에도 **없다**(§2 의 "바이너리에 아예 없음" 목록과 일치). 에디터 전용 |
+| `performance` | 12 | 12 | **해소 — 갭 아님** | 같음(바이너리 문자열 0). 값은 `"expensive"`×10 / `"veryexpensive"`×2 |
+| `editable` | 2 | 2 | **해소 — 갭 아님** | 같음(바이너리 문자열 0) |
+| `replacementkey` | 68 | 68 | **해소 — 우리가 더 넓다** | 바이너리 문자열 0인데 `EffectManifest.swift:551` 이 파스한다(셰이더 관례 경로 폴백용). 원본보다 관대한 쪽이라 무해 |
+| `group` | 128 | 135 | **해소 — 갭 아님** | 문자열 `0x140474dfc` 는 있으나 xref 4곳이 전부 `0x140021e50`–`0x14002e6e0`(프로퍼티/UI 스키마)이고 이펙트 파서가 아니다. 값은 `colorize` 47 · `animate` 19 · `image` 18 · `distort` 14 · `blur` 8 · `enhance` 7 · `interactive` 6 · `composite` 5 · `geometry` 2 · `localeffects` 2 |
+| `preview`(effect.json) | 99 | 106 | **해소 — 갭 아님** | 문자열 `0x140489ca8` xref 6곳이 전부 `0x14011d3b0`/`0x14011d7d0`(project 프리뷰 이미지 경로)이고 이펙트 파서가 아니다 |
+
+`name`(127/134)·`description`(125/132)·`version`(69/75)도 이펙트 파서가 안 읽는다 —
+`description`/`version` 은 §5.2 #1·#2 의 "리더 0" 판정과 같은 결론이고, `name` 은 에디터 표시명이다.
+
+**결론: `effect.json` 루트 키 중 엔진이 런타임에 읽는 것은 `fbos`/`passes`/`functions` 셋뿐이다.**
+파서 `0x1401e7170`–`0x1401e8a9d` 가 `find`/`operator[]` 하는 키를 전수로 떠서 확인했다.
+따라서 이 절이 추가한 7개 키 전부 **실질 갭이 아니다** — §0 의 "남은 실질 갭 0개" 결론은 유지된다.
+
+**방법론 함정으로 남길 것**: §3(b) 의 리터럴 판정기는 **키 이름만** 보고 **부모 경로도 값 타입도
+안 본다**. 같은 이름이 서로 다른 스키마에 있으면(`dependencies`, `duration`, `version`, `name`,
+`preview`, `group`, `scale`, `format` …) 한쪽만 구현해도 "구현됨" 으로 센다.
+`dependencies` 는 그 위에 **값 타입까지 다른**(int[] vs string[]) 사례라 두 겹으로 속는다.
+판정을 믿기 전에 **부모 경로와 값 타입까지 맞춰 세라** — §5 표에 `부모 경로` 와
+`값 타입 · 실측 분포` 열이 둘 다 있는 이유가 이것이다.
+
 ## 1. 후보 추출 기준
 
 `.rdata` 원시 바이트를 정규식으로 훑는다. 디스어셈블을 거치지 않으므로 동기 어긋남이 없다.

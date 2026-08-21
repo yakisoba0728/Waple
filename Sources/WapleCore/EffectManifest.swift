@@ -3,6 +3,58 @@ import Foundation
 /// effect.json 매니페스트(실물 스키마): 멀티패스 + 이름 있는 FBO(다운스케일 타깃).
 /// bind.name "previous" = 효과 입력(레이어 베이스 또는 이전 효과 출력), 그 외 = fbos 의 이름.
 /// target 부재 = 효과 출력에 기록.
+///
+/// ## AJ-B2 스키마 전수 (2026-08-21)
+///
+/// **원본 파서는 `0x1401e7170`–`0x1401e8a9d` 하나뿐이다**(`.pdata` 단일 조각 — `merged()` 도
+/// 같은 범위). 그 함수가 `Json::Value::find`/`operator[]` 로 부르는 키 **전부**를 떠 보면:
+///
+/// | 층 | 키 | 비고 |
+/// | --- | --- | --- |
+/// | 루트 | `fbos` `passes` `functions` | 그 외 루트 키는 이 함수가 **한 번도 안 본다** |
+/// | `fbos[]` | `name` `format` `scale` `fit` `width` `height` `uvs` `unique` `clear` `conditions` | `name`/`format` 둘 다 문자열이라야 선언이 산다(`0x1401e7440`) |
+/// | `passes[]` | `material` `command` `source` `target` `bind` `compose` `conditions` | |
+/// | `bind[]` | `name` `index` `conditions` | 원소가 태그 7 이라야 하고(`0x1401e7e8b`), `name` 은 태그 4, `index` 는 태그 1/2/3(`0x1401e7ea3` `dec`+`cmp 2`+`ja`). `conditions` 는 **파스 시점에 평가**해 거짓이면 그 bind 를 아예 안 만든다(`0x1401e7ed6`) |
+/// | `functions.<이름>` | `action` `fbos` | |
+///
+/// 파서가 아는 **문자열 값**도 닫혀 있다:
+/// `command` = `"copy"`(`0x1401e7ba1`, 길이 4 `memcmp`) → 1 · `"swap"`(`0x1401e7bcf`) → 2 ·
+/// 그 외 전부 **0 = 보통 셰이더 패스**(에러가 아니다). `uvs` = `"repeat"` 만.
+/// `format` 은 `rgba_backbuffer`/`rgb_backbuffer` 선처리 후 19종 해시맵(§Format).
+/// `action` 은 `"clear"` 뿐.
+///
+/// ### 이 파서가 **안 읽는** effect.json 키 — 동봉/설치본 전수
+///
+/// (동봉 `Sources/WapleRender/Resources/WEAssets` effect.json **128개** ·
+///  설치본 `wallpaper_engine` effect.json **135개**. 관대 파서 필요분 각 27개 = `//` 주석·후행 콤마.)
+///
+/// | 키 | 동봉 파일 | 설치본 파일 | wallpaper64.exe 에서 |
+/// | --- | ---: | ---: | --- |
+/// | `dependencies` | **128 (100%)** | **135 (100%)** | **동명이키다 — effect.json 쪽은 엔진이 안 읽는다.** 문자열 `0x140490248` 의 리더는 씬 오브젝트 베이스 ctor `0x1401ddbb0`–`0x1401de19b` 하나뿐이고(`find` `0x1401dddb2`), 원소마다 `0x1401dde9d` `isUInt64`(`0x140088800` — 태그1 은 `int64>=0`, 태그2 는 true, 태그3 은 `0≤d<2^64 && frac==0`, 그 외 false)로 **정수인지 먼저 거른다**. 아니면 `0x1401ddea4 je 0x1401de0c6` 로 그 원소를 건너뛴다. effect.json 의 `dependencies` 는 **자산 경로 문자열 배열**이라 전건 탈락 → 집합이 빈다. 정수 갈래(= 씬 `objects[].dependencies`)는 우리도 읽는다(`SceneDocument.swift:2079`·`:2499`) |
+/// | `group` | 128 | 135 | 문자열 `0x140474dfc` 는 있으나 xref 4곳이 전부 `0x140021e50`–`0x14002e6e0`(프로퍼티/UI 스키마)이고 이펙트 파서가 아니다 |
+/// | `name` | 127 | 134 | 이펙트 파서 미참조(에디터 표시명) |
+/// | `description` | 125 | 132 | 정본 판정과 동일 — 리더 0(`docs/re/unimplemented-json-keys.md` §5.2 #2) |
+/// | `preview` | 99 | 106 | 문자열 `0x140489ca8` xref 6곳 전부 `0x14011d3b0`/`0x14011d7d0`(project 프리뷰 이미지) |
+/// | `version` | 69 | 75 | 정본 판정과 동일 — 자산 스키마 리더 없음(§5.2 #1) |
+/// | `replacementkey` | 68 | 68 | **바이너리에 문자열 자체가 없다**(ASCII·UTF-16 전수 0). 우리는 파스한다 — 셰이더 관례 경로 폴백용(아래 `replacementKey`)이라 원본보다 넓은 쪽이고 무해하다 |
+/// | `gizmos` `performance` `editable` | 21 · 12 · 2 | 21 · 12 · 2 | **셋 다 바이너리에 문자열 없음** → 에디터 전용. 안 읽는 게 맞다 |
+///
+/// 즉 **effect.json 루트 키 중 엔진이 런타임에 읽는 것은 `fbos`/`passes`/`functions` 셋뿐**이고
+/// 나머지는 전부 에디터·패키징 메타다. 우리 파서가 추가로 읽는 `replacementkey` 는 원본보다
+/// 넓은 쪽(셰이더 관례 경로 폴백)이라 무해하다.
+///
+/// **동명이키 주의** — `dependencies` 는 두 스키마에 같은 이름으로 있고 **타입이 다르다**:
+/// 씬 `objects[].dependencies` 는 **정수 배열**(오브젝트 id, 우리도 읽는다)이고
+/// effect.json 의 것은 **문자열 배열**(자산 경로)이다. 원본의 유일한 리더가 `isUInt64` 게이트를
+/// 걸어 문자열을 통째로 버리므로 후자는 엔진에서도 죽은 키다.
+///
+/// ### `passes[].combos` 는 effect.json 이 아니라 **씬 쪽**이다
+///
+/// 파서가 `"combos"`(`0x14048b4c4`)를 부르는 자리는 `0x1401e7319` 하나이고, 대상이 루트 문서
+/// (`[rbp+0xc0]`, `fbos`/`passes` 를 읽는 그 객체)가 **아니라** 호출자가 넘긴 씬 이펙트 인스턴스
+/// (`rsi`)다. 실제로 동봉·설치본 effect.json 전 263개에 `passes[].combos` 는 **0건**이고
+/// (`passes[].shader` 도 0건 — effect.json 은 전건 `material` 로만 셰이더를 가리킨다),
+/// `constantshadervalues` 는 머티리얼 JSON 쪽 키다(`docs/re/material-blend.md` §1, 107파일).
 public struct EffectManifest: Equatable {
     /// X-⑪(G-A5-07/G-B2-05): `conditions` — fbo·pass·bind 를 콤보 값으로 켜고 끄는 게이트.
     ///

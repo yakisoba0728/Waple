@@ -1,6 +1,19 @@
 import Foundation
 import WapleCore   // F530-sweep: safeInt(_:) — 신뢰 경계 밖 상수의 정수 좁힘 가드(정본 하나로 모은다)
 
+/// 손포팅 이펙트(WE `assets/effects/**/shaders/effects/*.frag` 의 MSL 재작성) 모음.
+///
+/// **AJ-B1 주의 — 여기의 `BLENDMODE` 는 오브젝트 `colorBlendMode` 와 다른 필드다.**
+/// 이펙트 패스의 `BLENDMODE` 는 **패스 콤보**이고(`combos` 로 저작, 씬
+/// `objects[].effects[].passes[].combos` 오버라이드), 원본 셰이더에서 `#if BLENDMODE == n` 으로
+/// 컴파일 타임에 갈린다. Waple 은 콤보 퍼뮤테이션을 굽지 않고 `BlendMSL.applyBlending` 에
+/// 런타임 정수로 넘기는데, **범위 밖 값에서도 동작이 같다** — 원본은 `#if` 가 하나도 안 맞아
+/// `ApplyBlending` 마지막 줄(BlendNormal)로 떨어지고, 여기는 `switch` 의 `default: r = B` 로
+/// 같은 식이 된다(도메인·근거 전문은 `BlendMSL` 주석 "AJ-B1 도메인 확정").
+/// `colorBlendMode` 쪽 native 특례(0·31 이 셰이더를 안 타는 것)는 **여기에 적용되지 않는다** —
+/// 그 분기는 오브젝트 머티리얼 합성기(`0x140206be0`)에만 있고 이펙트 패스 콤보는 손대지 않는다.
+///
+/// 각 포트의 `[COMBO] default` 는 원본 `.frag` 주석에서 그대로 가져왔다(tint 30 / pulse 9).
 enum EffectShaders {
     /// 효과 이름 → MSL(공유 vert ev_main + 효과 frag ef_main).
     /// frag uniform: constant float* P (P[0]=time, P[1..]=params, 효과별 순서).
