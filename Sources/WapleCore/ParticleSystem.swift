@@ -1314,13 +1314,48 @@ public struct ParticleSystemDef: Equatable {
         self.children = children
     }
 
-    /// remapvalue 출력 문자열 → 동사. 레거시 "velocity"/"speed" 는 엔진 어휘 setvelocity/multiplyspeed
-    /// 계열로 해석해 같은 동사에 매핑(레거시 비트동일 경로는 확장 키 부재 시에만 — 위 파스 분기 참조).
-    private static func remapVerb(_ output: String?) -> RemapVerb? {
-        switch output {
-        case "velocity", "setvelocity": return .setVelocity
-        case "speed", "multiplyspeed": return .multiplySpeed
-        default: return output.flatMap { RemapVerb(rawValue: $0) }
+    /// remapvalue 출력 문자열 → 동사.
+    ///
+    /// **[2026-08-21] `RemapVerb` 는 실물 어휘가 아니다.** 실물은 `output` 과 `input` 이 **같은
+    /// 20항 채널 테이블**(0x140484e80)을 쓰고, 매퍼(0x140260f50)가 `stricmp` 선형 탐색으로
+    /// 인덱스를 낸다(`cmp ebx, 0x14` = 20항, 못 찾으면 **0x15 = 21** 을 돌려주는 센티넬).
+    /// 저장은 `[op+0x04]` = input(0x1401ce71e) · `[op+0x08]` = output(0x1401ce759) 이다.
+    /// 채널 20종은 순서대로:
+    ///   lifetimefraction · maxlifetime · size · opacity · speed · rotation · angularspeed ·
+    ///   distancetocontrolpoint · positionbetweentwocontrolpoints · runtime · timeofday ·
+    ///   particlesystemtime · layertime · **color**(13) · position · velocity · controlpoint ·
+    ///   deltatocontrolpoint · directiontocontrolpoint · layerorigin
+    /// (그 **바로 뒤**(0x140484f20)가 이미 이식한 `operation` 4종 표다 — 두 표가 한 배열에 붙어 있다.)
+    ///
+    /// Waple 의 `RemapVerb` 는 그 **채널과 operation 을 융합한 표현**이다. 종전 구현은 채널 이름을
+    /// 그대로 `RemapVerb(rawValue:)` 에 먹여서, 실물이 쓰는 채널명이 오면 **nil → 오퍼레이터 통째
+    /// 드롭**이었다. 동봉 실측으로 3건이 그렇게 사라지고 있었다 —
+    /// `output:"color"`(1건, `operation:"remap"`)와 `output:"opacity"`(2건, operation 부재).
+    ///
+    /// 그래서 (채널, operation) 쌍으로 동사를 고른다. `operation` 부재 기본은 `remap`(= set)이다.
+    ///
+    /// > **미확정 — 시뮬 쪽 감사가 필요하다.** 직전 커밋 `461ec82` 은 `operation` 을 "값 곡선을
+    /// > 바꾸는 것"(subtract → `v = 1 − v01`)으로 이식했는데, 이 표의 배치(채널 표 바로 뒤)와
+    /// > 여기 쓰임을 보면 `operation` 이 **적용 방식(동사) 자체**일 가능성이 크다. 두 해석이
+    /// > 양립하지 않으므로 시뮬 소비단을 따로 재야 한다. 이 함수는 **파스에서 드롭되던 것을
+    /// > 살리는 데까지만** 손대고 시뮬 의미는 건드리지 않는다.
+    private static func remapVerb(_ output: String?, operation: RemapOperation?) -> RemapVerb? {
+        guard let raw = output?.lowercased() else { return nil }
+        // 이미 Waple 융합 어휘로 적힌 경우(직접 조립한 def·기존 테스트)는 그대로 받는다.
+        if let direct = RemapVerb(rawValue: raw) { return direct }
+        let op = operation ?? .remap
+        switch raw {
+        case "color":        return op == .multiply ? .multiplyColor : .setColor
+        case "opacity":      return op == .multiply ? .multiplyOpacity : .setOpacity
+        case "size":         return op == .multiply ? .multiplySize : .setSize
+        case "rotation":     return op == .add || op == .subtract ? .addRotation : .setRotation
+        case "angularspeed": return op == .add || op == .subtract ? .addAngularVelocity : .setAngularVelocity
+        case "velocity":     return op == .add || op == .subtract ? .addVelocity : .setVelocity
+        // speed 는 Waple 에 배수 동사만 있다 — 실물 채널로 오면 그쪽으로 보낸다.
+        case "speed":        return .multiplySpeed
+        // 나머지 채널(위치·컨트롤포인트 계열 등)은 Waple 에 대응 동사가 없다. 지어내지 않고
+        // 종전대로 nil 을 돌려 드롭한다 — 동봉 도달 0이다.
+        default:             return nil
         }
     }
 
@@ -1817,6 +1852,8 @@ public struct ParticleSystemDef: Equatable {
                                "outputcontrolpoint0", "outputcontrolpoint1", "component",
                                "inputrangemin", "inputrangemax"]
                 let hasExt = extKeys.contains { o[$0] != nil }
+                // `operation` 은 동사 선택(아래 remapVerb)과 RemapSpec 양쪽이 쓴다 — 한 번만 판다.
+                let parsedOperation = (o["operation"] as? String).flatMap { RemapOperation(rawValue: $0.lowercased()) }
                 if !hasExt, outputName == "velocity" {
                     ops.append(.remapValue(output: .velocity(min: pvec3OrScalar(o["outputrangemin"]) ?? Vec3(x: 0, y: 0, z: 0),
                                                              max: pvec3OrScalar(o["outputrangemax"]) ?? Vec3(x: 0, y: 0, z: 0)),
@@ -1825,11 +1862,11 @@ public struct ParticleSystemDef: Equatable {
                     ops.append(.remapValue(output: .speed(min: pfloat(o["outputrangemin"]) ?? 0,
                                                           max: pfloat(o["outputrangemax"]) ?? 1),
                                            fbm: fbm, inputScale: scale))
-                } else if let verb = remapVerb(outputName) {
+                } else if let verb = remapVerb(outputName, operation: parsedOperation) {
                     let spec = RemapSpec(
                         verb: verb,
                         input: (o["input"] as? String).flatMap { RemapInput(rawValue: $0.lowercased()) },
-                        operation: (o["operation"] as? String).flatMap { RemapOperation(rawValue: $0.lowercased()) } ?? .remap,
+                        operation: parsedOperation ?? .remap,
                         transform: (o["transformfunction"] as? String).flatMap { RemapTransform(rawValue: $0.lowercased()) },
                         octaves: max(1, pint(o["transformoctaves"]) ?? 3),
                         inputScale: scale,
