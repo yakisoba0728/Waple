@@ -269,7 +269,7 @@ final class Model3DTrailerSkeletonTailTests: XCTestCase {
     }
 
     /// T4a 중첩(u16 C3 | C3×u32 | C3 × (u16 D | D×16B)) + T4b 링크 레코드 — 디컴파일 결락분을
-    /// 어셈블리(0x140262b04-0x140262ca0)로 복구한 구조. 값은 cat11_puppet 실측 축약.
+    /// 어셈블리(0x140262a34-0x140262bd0)로 복구한 구조. 값은 cat11_puppet 실측 축약.
     /// 착지는 말미 NUL(EOF-1) 경로로 검증.
     func testSkeletonTailNestedGroupsAndLinks() throws {
         var d = makeHeader("MDLV0023", 1)

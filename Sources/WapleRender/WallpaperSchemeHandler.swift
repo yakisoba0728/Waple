@@ -164,8 +164,12 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
 
     /// zcompat 대상이면 패치된 전체 바이트를, 아니면 nil(= 기존 스트리밍 경로 그대로).
     ///
-    /// WE 는 이 치환을 **사용자의 워크샵 파일에 직접 덮어쓴다**(0x14000cee4 에서 출력 스트림을
-    /// 열고 0x14000cf3b 로 쓴다 — 실패하면 `"Failed writing compat fix at %S\n"`). Waple 은
+    /// WE 는 이 치환을 **사용자의 워크샵 파일에 직접 덮어쓴다**(`bin/webwallpaper64.exe` 의
+    /// 0x14000cee4 에서 출력 스트림을 열고 0x14000cf3b 로 쓴다 — 실패하면
+    /// `"Failed writing compat fix at %S\n"`). **[2026-08-21] 어느 바이너리인지 적혀 있지
+    /// 않았다** — zcompat 은 `wallpaper64.exe` 에 없고 CEF 서브프로세스 쪽이다
+    /// (`docs/re/web-wallpaper-bridge.md`). 둘은 imagebase 가 같아서(0x140000000) 바이너리를
+    /// 안 밝히면 다른 이미지에서 그 주소를 떠 보고 엉뚱한 명령을 읽는다. Waple 은
     /// 서빙 시점에 메모리에서만 바꾼다: 결과 바이트는 같고 남의 파일을 건드리지 않는다.
     /// (그래서 WE 가 필요로 한 "패치 후에는 needle 이 사라지므로 재실행이 안전하다" 는 멱등성
     ///  논증에 기대지 않아도 된다 — 매 요청이 원본에서 출발한다.)

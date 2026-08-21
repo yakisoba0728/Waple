@@ -69,7 +69,20 @@ DEFAULT_TARGETS = ("Sources", "Tests", "docs/re", "docs/dev", "scripts/spec", "s
 # 키는 `line.strip()` 전문 일치다 — **줄 번호로 걸지 않는다**(줄 번호로 건 예외가 무관한
 # 편집을 막고 조용히 낡는 사고를 이 리포가 실제로 당했다. `check_spec_shrink_guard.py` 머리말).
 # 쓰이지 않는 항목은 낡은 흉터이므로 실행 끝에 지목한다.
+# 줄 문면 전문 대신 **명시 마커**로 면제하는 길. 주석·문서 한 줄에 이 마커를 넣으면 그 줄의
+# VA 는 "정정 기록" 으로 보고 판정하지 않는다. 툼스톤 규약(옛 주소를 남긴다)을 지킬수록
+# 보고서가 더러워지는 모순을 없애면서, **면제가 명시적**이라 heuristic 처럼 조용히 넓어지지 않는다.
+# JSON 정본처럼 마커를 넣을 수 없는 자리만 아래 `CORRECTION_LINES` 전문 일치를 쓴다.
+CORRECTION_MARKER = "[VA-정정]"
+
 CORRECTION_LINES = {
+    # `decompilation-provenance.json` 의 두 목록은 **일부러** 비경계 주소를 담는다 —
+    # `needsMinus0xD0List` 는 주입본 주소이고 `indeterminateList` 는 어느 쪽도 아닌 것들이다.
+    # 그게 그 정본의 존재 이유이므로 이탈로 세면 안 된다.
+    '"0x14009c690",': "decompilation-provenance.json needsMinus0xD0List",
+    '"0x1400d8060",': "decompilation-provenance.json needsMinus0xD0List",
+    '"0x140261950"': "decompilation-provenance.json needsMinus0xD0List(마지막 원소)",
+    '"0x140064fa0",': "decompilation-provenance.json indeterminateList",
     "> | `0x140020ee6` | `0x140020ee3` | `lea r8, [rip + 0x453d30]` → `0x140474c1a` | disp32 필드 위치 |":
         "scene-object-model.md 정정 표",
     "> | `0x140259458` | `0x140259455` | `mov rax, [rip + 0x23841c]` → `0x140491878` | disp32 필드 위치 |":
@@ -88,6 +101,10 @@ CORRECTION_LINES = {
         "particle-world-basis.md 정정 표",
     "> | `0x1401ecf1c` | `0x1401ecf20` | `mov dword ptr [rax + 0xb2c], 0x3f800000` | 범위 **끝** — 마지막 명령 내부(+6)였다 |":
         "particle-world-basis.md 정정 표",
+    "> 종전 `0x1401872cb` → `0x1401872ca` · 종전 `0x140227539` → `0x140227535` · 종전 `0x1401ee98c` → `0x1401ee98a`":
+        "camera-motion.md 부록 C 정정 기록",
+    "> **[툼스톤] 종전 이 문서가 적던 값**(전부 disp32 필드 자리 — 명령 시작이 아니다): `0x140110cbe` `0x140111c76` `0x140112686` `0x1401c2d84` `0x1401c70a6` `0x1401d1773` `0x1401d2292` `0x14021c625` `0x1402268c1` `0x140237fb7` `0x140238a33` `0x14026f1b7` `0x1401a9d28` `0x140216102` · 그리고 명령 한복판(+1)이던 `0x1402cd760`.":
+        "skeleton-animation.md 부록 A 툼스톤 줄",
 }
 SUFFIXES = (".swift", ".md", ".py", ".json")
 
@@ -181,7 +198,7 @@ def main(argv):
             mixed[str(f)] = others
         for line in txt.splitlines():
             stripped = line.strip()
-            record = stripped in CORRECTION_LINES
+            record = CORRECTION_MARKER in stripped or stripped in CORRECTION_LINES
             for m in VA_RE.finditer(line):
                 va = int(m.group(0), 16)
                 if record:
@@ -269,7 +286,12 @@ def main(argv):
             # 밀려 있다(`spec/engine/decompilation-provenance.json`). 디컴파일 창의 주소를 그대로
             # "어셈블리 0x…" 로 적으면 여기서 경계 이탈로 나온다. `va - 0xD0` 이 **경계면** 그게
             # 답이다 — 임의의 주소가 경계일 확률이 낮으므로(명령 평균 길이의 역수) 신호가 강하다.
-            if is_boundary(va - GHIDRA_SHIFT):
+            # **다만 disp32 설명이 이미 붙었으면 그쪽을 이긴다.** 두 가설이 동시에 성립할 수
+            # 있는데(2026-08-21 실사례: `0x14015cc13` 은 `0x14015cc10 lea r8,[rip+…]` 의 disp32
+            # 자리이면서 `-0xD0` = `0x14015cb43` 도 경계다), disp32 는 **어긋난 바이트 수까지**
+            # 설명하므로 더 강한 설명이다. 실제로 그 자리의 원문 주장은 `"condition"` 로드였고
+            # `0x14015cc10` 이 정확히 그것이다 — `0x14015cb43` 은 무관한 `jne` 다.
+            if kind == "명령 내부" and is_boundary(va - GHIDRA_SHIFT):
                 kind = f"주입본 주소(Ghidra, +{GHIDRA_SHIFT:#x})"
                 hint = f"  → 원본은 {va - GHIDRA_SHIFT:#x}"
             off.append((va, kind, hint, sorted(cited[va])))
@@ -284,7 +306,10 @@ def main(argv):
           f"범위 끝 {len(range_end)}(판정 안 함) · "
           f"정정 기록 {len(corrections)}(판정 안 함) · "
           f"경계 OK {ok} · **경계 이탈 {len(off)}**")
-    stale = set(CORRECTION_LINES) - used_corrections
+    # 낡은-면제 검사는 **전수 스캔일 때만** 한다. 일부 파일만 지정해 돌리면 다른 파일의
+    # 면제가 당연히 안 쓰이므로, 그걸 "낡았다" 고 찍으면 부분 스캔이 늘 붉어진다.
+    full_scan = not argv[1:]
+    stale = (set(CORRECTION_LINES) - used_corrections) if full_scan else set()
     if stale:
         print()
         print(f"  ※ 쓰이지 않는 정정 기록 면제 {len(stale)}건 — 낡았다. 지워라:")

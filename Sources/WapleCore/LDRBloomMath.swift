@@ -33,9 +33,12 @@ import simd
 /// 0x14017f9f7  movss xmm0, [scene+0x3c0]      ; general.bloomthreshold
 /// 0x14017f9ea  lea   rdx, "bloomthreshold"    ; 0x14048e3a8,  r9d=1
 /// 0x14017fa28  movsd xmm0, [scene+0x3d8]      ; general.bloomtint.xy
-/// 0x14017fa2f  mov   eax,  [scene+0x3e0]      ; general.bloomtint.z
+/// 0x14017fa30  mov   eax,  [scene+0x3e0]      ; general.bloomtint.z
 /// 0x14017fa1b  lea   rdx, "bloomtint"         ; 0x14048e368,  r9d=3
 /// ```
+/// **[2026-08-21 정정]** `0x14017fa30` 은 종전 `0x14017fa2f` 로 **한 바이트 앞**이었다  [VA-정정]
+/// (`0x14017fa28 movsd` 의 한복판 +7). `scripts/re/va_citations.py` 전수 대조로 잡았다.
+///
 /// 셋 다 rcx = `[composite+0x3160]` = **추출(quarter) 머티리얼 한 곳뿐**이다. 블러 두 패스
 /// (`[+0x3170]`·`[+0x3178]`)에는 어떤 상수도 실리지 않는다.
 ///

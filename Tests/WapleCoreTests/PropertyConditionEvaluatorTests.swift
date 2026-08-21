@@ -285,8 +285,10 @@ final class PropertyConditionEvaluatorTests: XCTestCase {
     /// cameraparallax · alignment · alignment{position,x,y,z} · alignmentfliph · wcc_v · wcc_amt ·
     /// wec_e · wec_{brs,con,sa,hue})에 `condition` 을 **10자리**에서 쓴다(고유 5종).
     /// 이미지 전체 disp32 스캔으로 `"condition"`(0x140474a60) xref **16자리** 중 10 이 이 함수다
-    /// (나머지: 씬 `user` 바인딩 파서 0x1401a4f1b · 0x14017512c · TEXB 변형 0x14015cc13/0x14015cd74 ·
-    ///  0x14001f39b · 0x140134c81). **이 바이너리 어디에도 이 식을 평가하는 자리는 없다** —
+    /// **[2026-08-21 정정]** 이 절의 주소 넷은 종전 `0x14001f39b`·`0x140134c81`·`0x14015cc13`·  [VA-정정]
+    /// `0x14015cd74` 였다 — 전부 xref 스캔이 준 `disp32` 위치(명령보다 3바이트 뒤)다.  [VA-정정]
+    /// (나머지: 씬 `user` 바인딩 파서 0x1401a4f1b · 0x14017512c · TEXB 변형 0x14015cc10/0x14015cd71 ·
+    ///  0x14001f398 · 0x140134c7e). **이 바이너리 어디에도 이 식을 평가하는 자리는 없다** —
     /// `checkPositionVisibility()` 는 브라우저 스코프 함수이기 때문이다(scripts.js char@106119).
     ///
     /// 그래서 이 다섯은 우리 파서가 **닿을 일이 없다**(project.json 도달 0). 다만 문법 커버리지의

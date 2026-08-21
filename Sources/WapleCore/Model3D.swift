@@ -72,8 +72,26 @@ import simd
 /// ⚠️ **이 이름은 Ghidra 주소공간이다 — 원본 바이너리에서는 `0x140261880`**(−0xD0).
 /// Ghidra 가 매핑한 것이 rich header 주입본이라 디컴파일 산출물의 주소가 전부 208바이트 밀려 있다.
 /// 원본 .pdata 14,792개 함수 시작 대조로 확인했다. `spec/engine/decompilation-provenance.json` 참조 —
-/// 인용 39개 중 27개는 보정이 필요 없고 이것을 포함한 3개만 밀려 있다. 발견 자체는 실물
-/// 바이트 트레이스로 확인된 것이므로 결론은 유효하다. 밀린 것은 **찾아가는 주소뿐**이다.
+/// 그 정본의 인용 분류는 **주소 39개**를 보고 27개는 보정 불필요 / 7개는 −0xD0 필요 / 5개는
+/// 판정 불가로 갈랐다. 발견 자체는 실물 바이트 트레이스로 확인된 것이므로 결론은 유효하다.
+/// 밀린 것은 **찾아가는 주소뿐**이다.
+///
+/// **[2026-08-21 정정 · [VA-정정] — 이 파일 안에서 규약이 갈려 있었다]** 위 경고를 적어 두고도 **트레일러·
+/// 스켈레톤 절의 "어셈블리 0x…" 인용은 주입본 주소 그대로였다.** `scripts/re/va_citations.py`
+/// 전수 대조가 잡았다(경계 이탈 8건이 전부 `−0xD0` 하면 명령 경계다). 결정적 대조 하나:
+/// 종전 `0x140261ca7` 을 `cmp edi,0x17`(v≥23 게이트)이라고 적었는데 **원본 이미지의 그 주소는  [VA-정정]
+/// `mov r12d,[rdi]`** 이고, `0x140261bd7`(=−0xD0)이 정확히 `cmp edi,0x17` 이다.
+/// 전부 원본 주소로 옮겼다:
+///   0x140261c3b→0x140261b6b · 0x140261c6b→0x140261b9b · 0x140261ca7→0x140261bd7  [VA-정정]
+///   0x140261cb0→0x140261be0 · 0x14026269a→0x1402625ca · 0x1402626a0→0x1402625d0  [VA-정정]
+///   0x14026292f→0x14026285f · 0x140262b04→0x140262a34 · 0x140262d9b→0x140262ccb  [VA-정정]
+///   범위 끝과 Ghidra 이름도 같이 — `FUN_14009c630`→`0x14009c560`(readU32) ·
+///   `func_0x000140261780`→`0x1402616b0`
+/// 반대로 **메시 프레이밍 절의 주소는 원본이 맞다**(같은 스윕에서 전건 통과). 아래
+/// `0x140263c61`(`movabs rax, 0xe38e38e38e38e38f`)와 `0x140263c8c`/`0x140263c95`(`int 0x29`)도
+/// 원본 이미지에서 그 명령이 맞다 — 즉 **한 파일 안에 두 주소공간이 섞여 있었다.**
+/// 정본의 "39개 중 7개" 는 이 8건을 **안 본 것**이다(그 분류의 표본이 39개뿐이다). 리포 전수
+/// 스윕 실측은 주입본 79개다.
 /// 헤더 3필드가 **정확히 offset 9 부터 시작하는 단일 u32 formatFlag**(문서 corpus_scan/mdl-format.md 의
 /// "0x08 오프셋 lo/hi u16 쌍, hi=0x8000" 주장은 매직 cstring 리더가 byte8 의 NUL(=formatFlag 하위바이트
 /// 우연 일치)을 종단문자로 소비해 이후 리드가 1바이트 밀리는 것을 못 잡은 오프바이원 — 우리 구현이 이미
@@ -135,7 +153,7 @@ public struct Model3D: Equatable {
     }
 
     /// 메시 트레일러 gateA 블롭 — u32 word + u32 size + size 바이트
-    /// (어셈블리 0x140261c3b-0x140261c66: u8 게이트 ≠ 0 시 u32(FUN_14009c630, 값 미소비) +
+    /// (어셈블리 0x140261b6b-0x140261b96: u8 게이트 ≠ 0 시 u32(0x14009c560, 값 미소비) +
     /// 블롭(FUN_14009c690 = u32 size + bytes)).
     public struct GateBlob: Equatable {
         public let word: UInt32
@@ -144,8 +162,8 @@ public struct Model3D: Equatable {
     }
 
     /// v≥23 모프/마스크 레코드 — 스트림: u64 id | cstring name | u32 flags | u32 n1 | n1×u32 |
-    /// u32 n2 | n2×u32 (디컴파일 :1227-1457 + 어셈블리 0x140261cb0-0x1402620e3 — 첫 리드는
-    /// func_0x000140261780 = u64, 두 번째가 FUN_14009c5d0 cstring). 인덱스들은 gateB 16B 레코드
+    /// u32 n2 | n2×u32 (디컴파일 :1227-1457 + 어셈블리 0x140261be0-0x140262013 — 첫 리드는
+    /// 0x1402616b0 = u64, 두 번째가 FUN_14009c5d0 cstring). 인덱스들은 gateB 16B 레코드
     /// 참조(엔진은 레코드 수 N 이상 시 trap — 어셈블리 `cmp r12d,[rbp+0x110]`). 실물 12파일:
     /// name 은 전부 "masks/clipping_mask_*". 모프 렌더 소비는 범위 밖 — 파스·보존.
     public struct MorphTarget: Equatable {
@@ -228,18 +246,18 @@ public struct Model3D: Equatable {
     }
 
     /// MDLS0002/0003/0004 스켈레톤 꼬리(T1..T7) — 본 레코드 뒤·다음 섹션 앞 블록들의 타입화 파스.
-    /// 근거: 디컴파일 FUN_140261950:262-1059 + 어셈블리(wallpaper64.exe 0x14026269a-0x140263a00,
+    /// 근거: 디컴파일 FUN_140261950:262-1059 + 어셈블리(wallpaper64.exe 0x1402625ca-0x140263930,
     /// 디컴파일 결락분 복구) + 실물 418파일 전수 착지 검증(2026-07-28 — 다음 섹션 매직/말미 NUL
     /// 로의 정확 착지). **전부 파스·보존, 런타임 소비 보류** — IK/스프링을 포즈 평가에 반영하는
     /// 소비처 공식은 이 디코더 함수 밖에 있어 이번 대조에서 읽히지 않는다(추측 구현 금지).
     /// 스트림 레이아웃(본 레코드 직후 순서):
-    ///   T1  u16 C1 | C1 × (cstring tag | u32 bone | u32 flags | 64B mat4)     [어셈 0x1402626a0-0x1402627d9]
+    ///   T1  u16 C1 | C1 × (cstring tag | u32 bone | u32 flags | 64B mat4)     [어셈 0x1402625d0-0x140262709]
     ///   T2  u8 gate | gate≠0: 본수 × 64B mat4                                 [디컴 :284-328]
     ///   T3  u32 C2 | C2 × (u32 bone | f32 | f32 | [MDLS≥4: u32 flags | flags&2: f32 f32])
-    ///                                                               [어셈 0x14026292f-0x140262a22, v 게이트 `cmp r15d,4`]
-    ///   T4a u16 C3 | C3×u32 | C3 × (u16 D | D × (u32 | f32 | f32 | u32))      [어셈 0x140262b04-0x140262ca0 — 디컴파일 결락]
+    ///                                                               [어셈 0x14026285f-0x140262952, v 게이트 `cmp r15d,4`]
+    ///   T4a u16 C3 | C3×u32 | C3 × (u16 D | D × (u32 | f32 | f32 | u32))      [어셈 0x140262a34-0x140262bd0 — 디컴파일 결락]
     ///   T4b u16 C4 | C4 × (u32 bone | u32 B | B×u32 | u16 C | C × (u32 idx | u16 D |
-    ///               D × (16B | u16 E | E×u32)))                             [어셈 0x140262d9b-0x140263500]
+    ///               D × (16B | u16 E | E×u32)))                             [어셈 0x140262ccb-0x140263430]
     ///   T5  u8 gate | gate≠0: 본수 × (3f + mat4) = 76B                        [디컴 :857-940]
     ///   T6  u8 gate | gate≠0: 본수 × u32                                      [디컴 :941-1002]
     ///   T7  [MDLS≥3] u8 gate | gate≠0: 본수 × u32                             [디컴 :1003-1059, v 게이트 `2 < ver`]
@@ -692,7 +710,7 @@ public struct Model3D: Equatable {
                                materials: materialList))
 
             // 메시 트레일러(v≥21) — 엔진 정본 게이트 구조 정식 파스(디컴파일 FUN_140261950:1214-1457 +
-            // 어셈블리 0x140261c3b-0x1402620e3; 실물 418파일 전수 착지 검증 2026-07-28):
+            // 어셈블리 0x140261b6b-0x140262013; 실물 418파일 전수 착지 검증 2026-07-28):
             //   u8 gateA[≠0: u32 word + u32 size + blob] | u8 gateB[≠0: u32 size + blob(16B×N)]
             //   | (v≥23) u32 모프count + 레코드.
             // 전부 0 이면 v23 은 정확히 6바이트(= 종전 '6바이트 구분자'와 바이트 동형 — Kirby 의
@@ -943,9 +961,9 @@ public struct Model3D: Equatable {
 
     /// 메시 트레일러 정식 파스(v≥21) — 성공 시 (끝 오프셋, 트레일러), 구조 불일치(트렁케이트/폭주
     /// 카운트)는 nil(호출측 폴백). 근거: 디컴파일 FUN_140261950:1214-1457 + 어셈블리
-    /// (wallpaper64.exe): gateA 0x140261c3b-0x140261c66(u8 | u32 + u32 size + blob),
-    /// gateB 0x140261c6b-0x140261ca7(u8 | u32 size + blob, size>>4 = 16B 레코드 수),
-    /// 모프 0x140261ca7 `cmp edi,0x17`(v≥23 게이트) — 레코드: u64(func_0x000140261780) |
+    /// (wallpaper64.exe): gateA 0x140261b6b-0x140261b96(u8 | u32 + u32 size + blob),
+    /// gateB 0x140261b9b-0x140261bd7(u8 | u32 size + blob, size>>4 = 16B 레코드 수),
+    /// 모프 0x140261bd7 `cmp edi,0x17`(v≥23 게이트) — 레코드: u64(0x1402616b0) |
     /// cstring(FUN_14009c5d0) | u32 flags | u32 n1 | n1×u32 | u32 n2 | n2×u32.
     private static func parseMeshTrailer(bytes: [UInt8], at p: Int, version: Int) -> (end: Int, trailer: MeshTrailer)? {
         var t = MeshTrailer()
@@ -1003,7 +1021,7 @@ public struct Model3D: Equatable {
         func f32(_ o: Int) -> Float? { u32(o).map { Float(bitPattern: $0) } }
         var tail = SkeletonTail()
         var o = start
-        // T1 태그 레코드(어셈블리 0x1402626a0-0x1402627d9: u16 C1 | C1 × (cstring | u32 | u32 | 64B)).
+        // T1 태그 레코드(어셈블리 0x1402625d0-0x140262709: u16 C1 | C1 × (cstring | u32 | u32 | 64B)).
         // 캡은 방어용(실물 최대 8) — 엔진 자체는 본수 상한 0x80 만 강제(디컴파일 :242).
         guard let c1 = u16(o), c1 <= 1024 else { return nil }
         o += 2
@@ -1026,7 +1044,7 @@ public struct Model3D: Equatable {
                 o += 64
             }
         } else { o += 1 }
-        // T3 u32 C2 | 엔트리(어셈블리 0x14026292f-0x140262a22; 4번째 워드는 MDLS≥4 전용 `cmp r15d,4`).
+        // T3 u32 C2 | 엔트리(어셈블리 0x14026285f-0x140262952; 4번째 워드는 MDLS≥4 전용 `cmp r15d,4`).
         guard let c2 = u32(o), c2 <= 1_048_576 else { return nil }
         o += 4
         for _ in 0..<Int(c2) {
@@ -1047,7 +1065,7 @@ public struct Model3D: Equatable {
             tail.constraints.append(SkeletonTail.Constraint(bone: bone, a: a, b: b, flags: flags, extra: extra))
         }
         // T4a u16 C3 | C3×u32 | C3 × (u16 D | D × 16B) — 디컴파일 결락분(어셈블리
-        // 0x140262b04-0x140262ca0 로 복구: 외측 루프 C3 회 `cmp r13d,ebx`, 내측 D × (u32|2f|u32)).
+        // 0x140262a34-0x140262bd0 로 복구: 외측 루프 C3 회 `cmp r13d,ebx`, 내측 D × (u32|2f|u32)).
         guard let c3 = u16(o), c3 <= 1024 else { return nil }
         o += 2
         if c3 > 0 {
@@ -1072,7 +1090,7 @@ public struct Model3D: Equatable {
             tail.groups = SkeletonTail.GroupBlock(values: values, groups: groups)
         }
         // T4b u16 C4 | C4 × (u32 bone | u32 B | B×u32 | u16 C | C × (u32 idx | u16 D |
-        // D × (16B | u16 E | E×u32))) — 어셈블리 0x140262d9b-0x140263500.
+        // D × (16B | u16 E | E×u32))) — 어셈블리 0x140262ccb-0x140263430.
         guard let c4 = u16(o), c4 <= 1024 else { return nil }
         o += 2
         for _ in 0..<c4 {
