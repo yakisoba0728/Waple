@@ -1,12 +1,34 @@
-# 리눅스에서 WapleRender 타입체크하기
+# 리눅스에서 타입체크하기 (WapleRender · 테스트 · 앱 계층)
 
-`scripts/dev/linux-render-typecheck.sh` 는 `Sources/WapleRender/**` 를 **리눅스에서
+`scripts/dev/linux-render-typecheck.sh` 는 macOS 전용 타깃을 **리눅스에서
 `swiftc -typecheck`** 한다. macOS CI 왕복(약 10분) 없이 스코프·타입 오류를 커밋 전에 잡는다.
 
 ```bash
-scripts/dev/linux-render-typecheck.sh          # 커버 대상 전체 타입체크
+scripts/dev/linux-render-typecheck.sh          # 소스 55파일(WapleRender)
+scripts/dev/linux-render-typecheck.sh --tests  # + Tests/WapleRenderTests 152
+scripts/dev/linux-render-typecheck.sh --compat # + WapleCompatCore 5 · WapleCompat 1 · 테스트 4
+scripts/dev/linux-render-typecheck.sh --lib    # + WapleLibrary 7 · WaplePolicy 1 · 테스트 8
+scripts/dev/linux-render-typecheck.sh --app    # + Sources/Waple 46/48 · WapleAppTests 34/36
 scripts/dev/linux-render-typecheck.sh --list   # 커버/제외 목록만
 ```
+
+**[2026-08-21] 커버 총계**(`--compat --lib --app` 한 번):
+
+| 축 | 소스 | 테스트 | 플래그 |
+|---|---|---|---|
+| WapleRender | 55/55 | 152/152 | (기본) · `--tests` |
+| WapleCompatCore + WapleCompat | 5 + 1 | 5 | `--compat` |
+| WapleLibrary + WaplePolicy | 7 + 1 | 8 | `--lib` |
+| Waple(앱 계층) | **46/48** | **34/36** | `--app` |
+| **합** | **115** | **199** | |
+
+**이 표는 스냅샷이다** — 정본은 스크립트가 매 실행 찍는 `== OK — …` 줄이다(트리가 자라면
+따라 늘어난다). 실측 소요는 **CPU `user+sys` 2분 39초**이고 벽시계는 락 대기에 좌우된다
+(에이전트 8개가 도는 중에 8분 27초까지 갔다). CI 관측 스텝은 **플래그 없이** 도므로
+이 확장이 CI 예산을 건드리지 않는다.
+
+빠진 넷(`AppDelegate.swift`·`main.swift`·`AppUIV06RegressionTests.swift`·`WorkshopPagingTests.swift`)은
+전부 **심으로 메울 수 없는 컴파일러/툴체인 제약**이다 — 아래 `--app` 절에 진단 원문과 함께 적었다.
 
 작업 디렉터리는 `WAPLE_LINUX_TYPECHECK_DIR`(기본 `$TMPDIR/waple-linux-render-typecheck`).
 
@@ -66,9 +88,31 @@ WapleRender 는 `import Metal`/`MetalKit`/`AppKit` 이라 리눅스에서 `swift
 | `CryptoKit` | `cryptokit.swift` | `SHA256` |
 | `Compression` | `compression.swift` | `compression_decode_buffer` |
 | `WebKit` | `webkit.swift` | `WKWebView`·`WKNavigationDelegate`·`WKScriptMessageHandler`·`WKURLSchemeHandler` — **리눅스 Foundation 결손분**(`FoundationNetworking` 재수출, `autoreleasepool`)도 여기서 낸다 |
-| `UniformTypeIdentifiers` | `uniformtypeidentifiers.swift` | `UTType(filenameExtension:)`·`preferredMIMEType` 뿐 |
+| `UniformTypeIdentifiers` | `uniformtypeidentifiers.swift` | `UTType(filenameExtension:)`·`preferredMIMEType` + `--app` 이 요구한 `.fileURL`/`.text`/`.folder`/`.zip`/`.movie` |
 | `simd` | `simd.swift`(기존) + `simd-extra.swift`(신규) | `simd-extra` 는 렌더 계층이 쓰는 것만 보탠다 |
+| `Combine` | `combine.swift`(**2026-08-21 신규**) | `ObservableObject`·`@Published`·`AnyCancellable`·`NotificationCenter.publisher(for:)` 뿐 |
+| `Security` | `security.swift`(**신규**) | Keychain 3함수 + `kSec*` 8종 + `errSec*` 5종(**값이 실제 단언에 흘러가서 진짜 값**) |
+| `ServiceManagement` | `servicemanagement.swift`(**신규**) | `SMAppService.mainApp`·`.status`·`register()`·`unregister()` |
+| `SwiftUI` | `swiftui.swift`(**신규, 1,300줄**) | 뷰 60여종 + 수식어 90여종 + 프로퍼티 래퍼 7종. **다른 심보다 훨씬 관대하다** — 아래 `--app` 절 |
+| `AppKit` | `appkit.swift` + `appkit-app.swift`(**신규**) | 뒤쪽이 앱 계층 표면(`NSOpenPanel`·`NSViewController`·`NSItemProvider`·`NSColorSpace`·`NSWorkspace` 확장) |
 | `WapleCore` | 실제 소스 + `corefoundation.swift` | 매 실행 다시 만든다 |
+
+모듈이 아니라 **대상 모듈에 함께 컴파일되는 파일**도 셋 있다:
+
+| 파일 | 언제 | 무엇 |
+|---|---|---|
+| `corefoundation.swift`(sed 파생) | 항상 | `WapleCore` 에 `CFGetTypeID`/`CFBooleanGetTypeID` 를 public 으로 |
+| `zz-linux-url-bookmark.swift` | `--lib` | `WapleLibrary` 에 `URL` 보안 스코프 북마크 API(리눅스 Foundation 결손) |
+| `zz-test-implicit-imports.swift` / `zz-app-implicit-imports.swift` | `--tests`·`--compat` / `--app` **테스트 단계만** | 애플의 Clang 모듈 전이 노출 흉내(서곡) |
+
+> **[2026-08-21] `CFGetTypeID`/`CFBooleanGetTypeID` 를 `coregraphics.swift` 에서 뺐다.**
+> 종전엔 CoreGraphics 심과 `WapleCore` 둘 다 같은 이름의 public 함수를 내고 있었고,
+> **두 모듈이 동시에 보이는 파일에서 호출이 통째로 모호해진다.** `--app` 을 열면서 드러났다:
+> `WorkshopAPI.swift:140:58: error: type of expression is ambiguous without a type annotation`
+> (그 파일은 `Foundation`+`Security`+`WapleCore` 만 import 하지만, **`Security` 심이
+> CoreGraphics 를 재수출**해서 둘 다 보인다 — 애플에서도 Security 는 CoreFoundation 을 끌고 온다).
+> 렌더 축에서는
+> `CFGetTypeID` 호출부가 `UserPropertyStore.swift` 하나뿐이라 드러나지 않던 **잠재 결함**이다.
 
 `simd.swift` 와 `corefoundation.swift` 는 `linux-core-tests.sh`(코어 테스트) 자산이라 건드리지
 않았다. `simd-extra.swift` 는 이 스크립트만 함께 컴파일하며, `simd.swift` 에 이미 있는 것을
@@ -137,6 +181,10 @@ scripts/dev/linux-render-typecheck.sh --tests
 소스만 볼 때(약 35초)보다 2~3배 든다 — 그래서 기본값이 아니라 **명시 플래그**다.
 `Tests/**` 를 건드린 작업은 푸시 전에 반드시 이걸 돌려라.
 
+**모든 플래그가 명시인 이유도 같다.** `--compat --lib --app` 을 전부 켜면 CPU 2분 39초다
+(실측 2026-08-21). CI 관측 스텝은 여전히 **플래그 없이** 돌므로 이 확장이 CI 예산
+(`timeout 420`)을 건드리지 않는다.
+
 #### 수렴 기록 — 열 번 돌려서 rc=0 이 됐다
 
 이 축은 한 번에 열리지 않았다. **앞 파일의 오류가 뒤 파일을 가리는 구조**라 실행할 때마다
@@ -183,6 +231,10 @@ scripts/dev/linux-render-typecheck.sh --tests
 모듈을 다시 만들 필요가 없으므로, 고친 심 모듈만 재빌드하고 테스트 단계만 다시 도는 편이
 훨씬 빠르다(실측 **34초**). 위 표의 뒷부분은 그렇게 돌렸다.
 
+`--app` 을 수렴시킬 때도 같은 방식을 썼다 — 고친 심 모듈만 `-emit-module` 하고
+`Sources/Waple` 만 `-typecheck` 하면 **한 바퀴 5~15초**다. `--app` 수렴 기록의 15줄은 전부
+그렇게 돌렸고, 전체 파이프라인은 마지막에 한 번만 돌렸다.
+
 #### 서곡 파일 — 애플의 "Clang 모듈 전이 노출" 을 흉내 낸다
 
 두 번째 실행에서 새 오류가 났다:
@@ -220,6 +272,9 @@ scripts/dev/linux-render-typecheck.sh --compat     # --tests 를 포함한다
 
 `--tests` 가 통과한 뒤 `WapleCompatCore` 를 `-enable-testing` 으로 emit 하고
 `Tests/WapleCompatCoreTests/**` 와 `Tests/WapleSnapshotTests/**` 를 타입체크한다.
+[2026-08-21] 실행파일 타깃 `Sources/WapleCompat/**`(`main.swift` 하나, 인자 파싱·종료코드)도
+여기서 본다 — 모듈이 이미 섰으니 공짜다(1초 미만). `main.swift` 는 최상위 코드라
+테스트 파일들과 섞지 않고 **따로** 부른다.
 새로 필요했던 심은 `darwin.swift` 하나다(`ProfilePipeline.physFootprint()` 의 mach VM 질의 —
 `task_vm_info_data_t`/`task_info`/`mach_task_self_`/`TASK_VM_INFO`/`KERN_SUCCESS` 등).
 
@@ -227,12 +282,164 @@ scripts/dev/linux-render-typecheck.sh --compat     # --tests 를 포함한다
 > 실물은 30개가 넘으므로 **`MemoryLayout<...>.stride` 가 다르다** — `count` 산술의 정합은
 > 이 심으로 검증되지 않는다. 타입만 맞을 뿐이고, 그 산술은 macOS 실행만이 답한다.
 
+### `--lib` — `WapleLibrary`·`WaplePolicy` 와 그 테스트 (2026-08-21 신설)
+
+둘 다 종전에 **어떤 리눅스 검증도 못 받았다**. 이유는 렌더와 정반대다 — 애플 프레임워크를
+써서가 아니라, 이 하네스가 `WapleRender` 만 보게 만들어져 있었기 때문이다.
+`Sources/WapleLibrary/**`(7파일)는 `Foundation`+`WapleCore`, `Sources/WaplePolicy/**`(1파일)는
+`Foundation` 하나뿐이라 **심이 거의 필요 없었다.**
+
+```
+scripts/dev/linux-render-typecheck.sh --lib      # 3초 (심·WapleCore 가 이미 선 뒤)
+```
+
+실제로 모자랐던 것은 **하나**다: 리눅스 Foundation 에 `URL` 의 보안 스코프 북마크 API가
+**아예 없다**. `linux-shim/zz-linux-url-bookmark.swift` 가 `WapleLibrary` 컴파일에 **모듈이
+아니라 파일로** 함께 들어가 그 자리를 메운다(`URL` 확장이라 대상 모듈 안에 있어야 보인다).
+
+| 심볼 | 리눅스 실태 | 실측 오류 |
+|---|---|---|
+| `URL.bookmarkData(options:includingResourceValuesForKeys:relativeTo:)` | 없다 | `value of type 'URL' has no member 'bookmarkData'` |
+| `URL(resolvingBookmarkData:options:relativeTo:bookmarkDataIsStale:)` | 없다 | `no exact matches in call to initializer` (note 가 `fileURLWithPath:`·`filePath:` 둘만 댄다) |
+
+**서곡을 여기엔 넣지 않는다.** macOS 에서 `@testable import WapleLibrary` 가 흘리는 것은
+`WapleLibrary` 가 실제로 임포트한 것뿐이라, 서곡을 넣으면 모델이 실물보다 관대해진다.
+실측으로 서곡 없이 rc=0 이므로 넣지 않았다.
+
+> **[2026-08-21 함정] `swiftc` 는 진단이 나도 `.swiftmodule` 을 남긴다.** `WapleLibrary` emit 이
+> `URL.bookmarkData` 부재로 rc=1 인데 83KB 짜리 모듈이 기록됐고, 그 뒤 테스트 타입체크가
+> **rc=0** 을 줬다. 그래서 emit 의 rc 를 보지 않으면 **스테일 모듈로 다음 단계가 조용히
+> 통과한다.** 스크립트의 `emit_testing` 호출부가 전부 `|| exit 1` 인 이유다.
+
+### `--app` — `Sources/Waple`·`Tests/WapleAppTests` (2026-08-21 신설)
+
+이 리포에서 **마지막으로 남아 있던 큰 사각지대**다. `Sources/Waple/**` 는 48파일 8,842줄이고
+`SwiftUI`(31파일)·`AppKit`(21)·`Combine`·`Security`·`ServiceManagement`·`CFPreferences` 를 쓴다.
+
+```
+scripts/dev/linux-render-typecheck.sh --app     # `--tests` 와 `--lib` 를 포함한다
+```
+
+순서는 ① 소스 타입체크 → ② `Waple` 모듈 emit(`-enable-testing`) → ③ 테스트 타입체크다.
+**서곡(prelude)은 테스트 단계에만 넣는다.** 소스 46파일은 **서곡 없이 rc=0** 이다(실측) —
+각자 필요한 것을 명시적으로 임포트하고 있고, 유일한 전이 의존이던 `ObservableObject`(Combine)는
+`swiftui.swift` 가 **애플과 똑같이 `@_exported import Combine`** 으로 낸다(실물 SwiftUI 도
+Combine 을 재수출한다). 서곡을 안 쓰면 `MainWindowView.swift:28~33` 이
+`generic struct 'ObservedObject' requires that 'StatusBannerModel' conform to 'ObservableObject'`
+로 막혔었다 — 그 자리는 서곡이 아니라 **재수출**로 푸는 것이 맞다.
+테스트는 다르다: `AppUIFixRegressionTests.swift:242` 가 `import AppKit` 없이 `NSBitmapImageRep`
+을 쓰는데 macOS 에서는 `@testable import Waple` 의 Clang 모듈 전이 노출로 빌드된다.
+서곡을 빼면 거기서만 `cannot find 'NSBitmapImageRep' in scope` 로 깨진다(실측).
+
+**①을 따로 두는 이유는 확정이 아니라 신중이다.** 드라이버는 `-emit-module` 에
+`-experimental-skip-non-inlinable-function-bodies-without-types` 를 붙인다(크래시 덤프의
+frontend argv 로 확인). 이름만 보면 본문을 건너뛸 것 같은데 **실측으로는 건너뛰지 않았다** —
+`SettingsView` 의 `.foregroundStyle(.secondaryy)` 돌연변이를 emit 만으로도 잡았고,
+`--lib` 쪽도 `FavoritesStore` 본문의 `ids.contains(42)` 를 emit 만으로 잡았다(그래서 `--lib` 은
+emit 하나로 소스를 덮는다). 그 플래그의 **정확한 적용 범위는 미확정**이므로, `--app` 에서는
+소스 오류가 모듈이 기록되기 전에 파일 단위로 드러나도록 ①을 남겼다(7초).
+
+#### 커버 밖 넷 — 전부 심으로 못 메운다
+
+목록은 스크립트의 `APP_EXCLUDED`/`APP_TEST_EXCLUDED` 이고 `--list` 로 읽는다. 렌더 축과 달리
+**제외 목록 방식**이다 — 새 파일은 자동으로 커버되고, 여기 적힌 것만 빠진다. 대신 목록의
+파일이 트리에 없으면 **심 빌드 전에** 실패시켜 스테일 제외를 막는다(실측으로 확인).
+
+| 파일 | 사유(실측 진단) |
+|---|---|
+| `Sources/Waple/AppDelegate.swift`(1,386줄) | `@objc`/`#selector` 24곳 |
+| `Sources/Waple/main.swift`(47줄) | `#selector(NSText.cut(_:))` 4곳 + `AppDelegate` 참조 |
+| `Tests/WapleAppTests/AppUIV06RegressionTests.swift` | `AppDelegate.swift:11` 의 `ScreenCountBaseline` 을 쓴다 — 위가 빠지니 따라 나간다 |
+| `Tests/WapleAppTests/WorkshopPagingTests.swift` | `@MainActor` 테스트 클래스가 `override func tearDown()` 에서 격리 상태를 만진다 |
+
+**`@objc`/`#selector` 축을 왜 못 여는가** — 2026-08-21에 끝까지 파 본 결과를 남긴다.
+기본 설정에서는 셋 다 오류다:
+
+```
+error: Objective-C interoperability is disabled
+error: '#selector' can only be used with the Objective-C runtime
+error: cannot find 'Selector' in scope
+```
+
+`-Xfrontend -enable-objc-interop` 을 켜면 앞의 둘이 사라지고 `error: import the 'ObjectiveC'
+module to use '#selector'` 로 바뀐다. `Selector` 만 든 `ObjectiveC` 대역 모듈 + 서곡의
+`@_exported import ObjectiveC` 를 붙이면 **최소 예제는 통과한다**(실측 rc=0). 그런데 거기서
+두 개가 새로 막힌다:
+
+1. `error: only classes that inherit from NSObject can be declared @objc` — 리눅스 Foundation 의
+   `NSObject` 가 interop 없이 빌드된 스위프트 클래스라 **어떤 클래스 타입도 ObjC 표현이 안 된다.**
+   그래서 `AppDelegate.swift:1381` 의 `@objc func applyRecent(_ sender: NSMenuItem)` 이
+   `method cannot be marked @objc because the type of the parameter cannot be represented in
+   Objective-C` 로 막힌다. 심으로 못 고친다 — `@objc` 를 붙일 수 있는 클래스를 만들 수 없다.
+2. `error: broken standard library: cannot find intrinsic operations on UnsafeMutablePointer<T>` —
+   interop 을 켜면 **모든 `inout`→포인터 변환**이 깨진다(`func take(_ p: UnsafeMutablePointer<Int>)`
+   에 `take(&s)` 하는 최소 예제로 재현). 리눅스 stdlib 에 `AutoreleasingUnsafeMutablePointer` 가
+   없기 때문이다. `SteamCmdDownloader.swift` 의 `fileExists(atPath:isDirectory:&)` 두 곳이 바로 걸린다.
+3. 덤으로 `-emit-module` 은 `@objc` 선언이 있으면 **세그폴트**한다(signal 11,
+   `swift::DeclContext::getASTContext()`). `-Xfrontend -experimental-skip-all-function-bodies`
+   를 함께 주면 피할 수 있지만, 그러면 emit 단계가 본문을 안 본다.
+
+즉 **플래그를 켜도 1번은 못 넘고, 켜는 순간 2번이 새로 생긴다.** 그래서 켜지 않는다.
+`NSMenu`·`NSMenuItem`·`NSMenuDelegate`·`NSStatusBar`·`NSStatusItem`·`NSApplicationDelegate`·
+`NSText` 를 `appkit-app.swift` 에 **일부러 넣지 않은** 것도 같은 이유다 — 그 일곱은 위 두
+파일에서만 쓰이므로(실측 grep) 심에 넣어도 쓰일 자리가 없다.
+
+**`WorkshopPagingTests` 는 툴체인 차이다.** 리눅스 swift-corelibs-xctest 의 `tearDown()` 은
+스위프트 메서드라 오버라이드가 `nonisolated` 로 고정되고, `@MainActor` 클래스의 저장 프로퍼티를
+못 만진다(`main actor-isolated property 'tempDirs' can not be referenced from a nonisolated
+context`). 애플 XCTest 는 ObjC 메서드라 클래스의 `@MainActor` 가 살아 있다. XCTest 는 툴체인이
+주는 모듈이라 심으로 갈아끼울 수 없다(갈아끼우면 나머지 198개 테스트 파일의 검증이 약해진다).
+
+#### SwiftUI 심 — 무엇이 검증되고 무엇이 안 되는가
+
+SwiftUI 는 `some View` + 결과 빌더 + 수식어 사슬로 **타입이 계속 감기는** 라이브러리다.
+실물의 `VStack<TupleView<(Text, Button<…>)>>` 같은 타입을 손으로 재현하는 것은 불가능하다.
+그래서 이 심은 **두 곳에서 타입을 접는다**: `ViewBuilder` 의 모든 `build*` 와 `View` 의 모든
+수식어가 `AnyView` 를 돌려준다.
+
+| | |
+|---|---|
+| **검증된다** | 식별자 존재(오타·이름 변경) · 인자 라벨 · 인자 타입 · 선행 점 이름(`.secondary`·`.bordered`) · 프로퍼티 래퍼 투영(`$x`) 결합 · 뷰모델/스토어 API 시그니처 · `if`/`switch` 분기 내용물 |
+| **검증되지 않는다** | 수식어를 붙일 수 **없는** 자리에 붙인 것 · 제네릭 제약 위반 · `some View` 반환 타입의 구조 · 런타임 레이아웃 |
+
+**`@MainActor` 는 흉내 냈다.** 다른 심들과 달리 `View`/`ViewModifier`/`NSViewRepresentable` 에
+`@preconcurrency @MainActor` 를 붙였다. 안 붙이면 macOS 에서 정상인 코드가 여기서 깨진다:
+
+- 안 붙였을 때: `AnimatedPreviewView.swift`(`NSViewRepresentable` + `@MainActor Coordinator`)가
+  `main actor-isolated property 'url' can not be referenced from a nonisolated context` 4건.
+- `@preconcurrency` 가 없으면: `DiscoverView.swift:17` 의 `.task { workshopVM.hasAPIKey }` 가
+  `expression is 'async' but is not marked with 'await'` 로 막힌다(실물은 `@preconcurrency` 가
+  Swift 5 모드에서 그 진단을 경고로 강등한다).
+- 반대로 `Color`·도형의 생성자는 **`nonisolated`** 로 뒀다. 실물 `Color` 는 `Sendable` 이고,
+  안 그러면 `DesignSystem/ColorRole.swift` 의 전역 `static let` 7개가 전부 막힌다.
+
+#### 수렴 기록 — `--app`
+
+`--tests` 때와 같은 "앞 파일이 뒤 파일을 가린다" 구조라 한 번에 열리지 않았다.
+
+| # | 걸린 곳 | 없던 표면 |
+| --- | --- | --- |
+| 1 | `AnimatedPreviewView` | `View` 의 `@MainActor`(심이 실물보다 **덜** 격리돼 있었다) |
+| 2 | `ColorRole` | `Color` 생성자의 `nonisolated` |
+| 3 | `Badges` | `.accessibilityValue(Text)` |
+| 4 | `Motion` | `withAnimation` |
+| 5 | `DesktopVisibilityMonitor` | `CGWindowListCopyWindowInfo` + `kCGWindow*` 5종 |
+| 6 | `PropertyEditorView` | `Slider(onEditingChanged:)` · `NSOpenPanel()` · `Color(red:green:blue:)` · `NSColorSpace.sRGB` · `NSColor(Color)` |
+| 7 | `ScreenSaverController` | `CFPreferences*` 3함수 + `kCFPreferences*` 4상수 · `NSWorkspace.open` |
+| 8 | `SelectionPanelView` | `FocusState.init()` 의 제약(멤버와이즈 이니셜라이저가 막혔다) · `.help(Text)` |
+| 9 | `SettingsView` | `Section(content:header:footer:)` |
+| 10 | `DiscoverView` | `View` 의 `@preconcurrency` |
+| 11 | `RemoteTile` | `Text + Text` · `.accessibilityAction(_:)`(named 없는 형) |
+| 12 | `VideoImport` | `NSBitmapImageRep(cgImage:)` |
+| 13 | `WallpaperGridView` | `UTType.folder/.zip/.movie` |
+| 14 | `WorkshopAPI` | **심 문제가 아니었다** — `CFGetTypeID` 중복 선언(위 CoreGraphics 주석) |
+| 15 | `WorkshopAPITests` | `errSecAuthFailed`·`errSecParam` |
+
 #### 아직 못 하는 것
 
-- `Tests/WapleAppTests/**`(36파일)는 `SwiftUI`·`Combine`·`Security` 심이 없어 커버 밖이다.
-- `Tests/WapleCompatCoreTests/**`·`Tests/WapleSnapshotTests/**` 는 `--compat` 이 덮는다.
-  `Tests/WapleLibraryTests/**`(7파일)·`Tests/WaplePolicyTests/**`(1파일)는 아직이다 —
-  `WapleLibrary`/`WaplePolicy` 모듈을 세우면 붙는다.
+- 위 표의 **네 파일**(`AppDelegate.swift`·`main.swift` + 테스트 2). 심이 아니라 컴파일러/툴체인 제약이다.
+- `Sources/WapleSaver/**` 는 `.swift` 가 **0개**다(`WapleSaverView.m` 하나뿐이고 `Package.swift` 에
+  타깃도 없다). `swiftc` 로 볼 것이 없다 — 이 도구의 사정권 밖이다.
 - `Tests/WapleCoreTests/**` 는 여기 대상이 아니다 — `scripts/dev/linux-core-tests.sh` 가
   **실제로 실행**한다(타입체크보다 강하다). 다만 **실행한다고 macOS 를 대변하지도 않는다** —
   리눅스는 swift-corelibs-foundation 이고 macOS 는 Apple Foundation 이다. 2026-08-21 실측
@@ -243,8 +450,13 @@ scripts/dev/linux-render-typecheck.sh --compat     # --tests 를 포함한다
 
 ### 제외 파일과 이유
 
-**없다.** `EXCLUDED` 배열은 빈 채로 남겨 둔다 — 새 프레임워크를 쓰는 파일이 생기면 심을 쓰기
-전까지 거기 넣고 이 절에 사유를 적는다.
+`Sources/WapleRender/**` 는 **없다.** `EXCLUDED` 배열은 빈 채로 남겨 둔다 — 새 프레임워크를
+쓰는 파일이 생기면 심을 쓰기 전까지 거기 넣고 이 절에 사유를 적는다.
+
+`--app` 의 제외는 `APP_EXCLUDED`/`APP_TEST_EXCLUDED` 에 있고 넷이다(위 `--app` 절의 표).
+**두 목록의 성격이 다르다**: 렌더는 *커버* 목록(빠지면 실패), 앱은 *제외* 목록(새 파일은
+자동 커버). 앱 쪽은 파일이 훨씬 자주 늘어서 커버 목록으로 두면 매번 목록 수정이 강제된다 —
+새 파일이 조용히 새는 위험은 제외 목록 쪽이 오히려 낮다.
 
 ### 리눅스 Foundation 결손 (WebKit 커버가 드러낸 것)
 
@@ -284,13 +496,25 @@ scripts/dev/linux-render-typecheck.sh --compat     # --tests 를 포함한다
    `WebRendererSecurityTests` 두 건이다.
 
 ④ **동시성 진단(`@MainActor`·`Sendable`)은 macOS 와 다를 수 있다.** 애플 SDK 의 격리
-   어노테이션(과 `@preconcurrency` 강등)이 심에는 없다. 심의 타입은 전부 비격리다.
+   어노테이션(과 `@preconcurrency` 강등)이 심에는 대개 없다. **예외는 `swiftui.swift` 하나** —
+   거기만 `@preconcurrency @MainActor` 를 재현했다(그러지 않으면 macOS 에서 정상인 코드가
+   여기서 깨진다. 위 `--app` 절 참조). 나머지 심의 타입은 전부 비격리다.
    WebKit 이 특히 그렇다 — 애플의 `WKWebView`/`WKNavigationDelegate`/`WKURLSchemeHandler` 는
    전부 `@MainActor` 라 `WebRenderer`·`WallpaperSchemeHandler` 의 `nonisolated` 표기와
    `RendererFactory` 의 "비격리 컨텍스트에서 메인액터 초기화자" 경고가 거기서 나온다.
    **여기서는 그 표기를 지워도 통과한다.** 그 계약의 판정자는 macOS CI 다.
 
 ⑤ **런타임 동작은 전혀 검증하지 않는다.** 심 본문은 `fatalError("linux shim")`/더미값이다.
+
+⑤b **SwiftUI 축은 다른 축보다 훨씬 관대하다.** 결과 빌더와 수식어 반환 타입을 전부 `AnyView`
+   로 접기 때문에 "이 수식어를 이 뷰에 붙일 수 있는가" 가 검증되지 않는다. 무엇이 되고 무엇이
+   안 되는지는 위 "SwiftUI 심" 표에 있다. `Sources/Waple/**` 의 rc=0 은 **"이름과 인자가 맞다"**
+   까지이고, 레이아웃·수식어 적용 가능성은 여전히 macOS 빌드가 판정자다.
+
+⑤c **`@objc`/`#selector` 를 쓰는 파일은 리눅스에서 원리적으로 타입체크할 수 없다.**
+   `-enable-objc-interop` 을 켜도 (1) 리눅스 `NSObject` 가 interop 없이 빌드돼 클래스 타입이
+   ObjC 표현 불가이고 (2) 켜는 순간 모든 `inout`→포인터 변환이 깨진다. 진단 원문은 위
+   `--app` 절. **이 축에 새 파일이 들어오면 그 파일도 커버 밖이 된다.**
 
 ⑥ 다른 작업이 같은 트리에서 `Sources/WapleCore/**` 를 고치는 중이면 swiftc 가
    `input file ... was modified during the build` 로 죽는다. 스크립트가 3회까지 재시도한다.
@@ -352,6 +576,23 @@ scripts/dev/linux-render-typecheck.sh --replace SceneRendererResources.swift=/tm
 | `WallpaperSchemeHandler.swift` | `task.didFinish()` → `didFinishh()` | `217:22`·`271:18`·`292:14 value of type 'any WKURLSchemeTask' has no member 'didFinishh'` |
 | `WallpaperSchemeHandler.swift` | `UTType(filenameExtension: ext)` → `42` | `340:49 cannot convert value of type 'Int' to expected argument type 'String'` |
 | `RendererFactory.swift` | `WebRenderer(mode: .web)` → `.webb` | `21:39 type 'WebRenderer.Mode' has no member 'webb'` |
+
+새로 연 축(`--lib`·`--app`)의 양성 대조(2026-08-21 — **7/7 잡힘**). `--replace` 는 렌더 커버
+전용이라, 원본을 건드리지 않고 **스크래치패드 사본 하나만 갈아끼워** 같은 명령을 손으로 돌렸다:
+
+| 축 | 돌연변이 | 실측 |
+|---|---|---|
+| `--lib` 테스트 | `LibraryStoreTests` 의 `store.importFolder(` → `importFolderr(` | `32:31 value of type 'LibraryStore' has no member 'importFolderr'` |
+| `--lib` 소스 | `LibraryStore.swift` 의 `ProjectJSONParser` → `ProjectJSONParserr` | `91:27 cannot find 'ProjectJSONParserr' in scope` |
+| `--lib` 테스트 | `PlaybackPolicyTests` 의 `.pauseAll` → `.pauseAlll` | `19:39 type 'PlaybackAction' has no member 'pauseAlll'` |
+| `--compat` 실행파일 | `WapleCompat/main.swift` 의 `NSHomeDirectory()` → `NSHomeDirectoryy()` | `7:28 cannot find 'NSHomeDirectoryy' in scope` |
+| `--app` 뷰 | `SettingsView` 의 `.foregroundStyle(.secondary)` → `.secondaryy` | `83:60 type 'ShapeStyle' has no member 'secondaryy'` |
+| `--app` 뷰모델 | `DiscoverViewModel.loadIfNeeded` → `loadIfNeededd` (호출부는 `DiscoverView`) | `DiscoverView.swift:17:48 ... has no dynamic member 'loadIfNeeded'` |
+| `--app` 테스트 | `AppLogicTests` 의 `RendererSwap.apply` → `applyy` | `96:35 type 'RendererSwap' has no member 'applyy'` |
+
+**목록 가드의 음성 대조도 다시 쟀다**(2026-08-21): `APP_EXCLUDED` 에 트리에 없는
+`NotInTree.swift` 를 넣고 `--app` 을 돌리니 **심 빌드 전에** `!! APP_EXCLUDED 에 있는데 트리에
+없다: Sources/Waple/NotInTree.swift` 로 `exit 1` 했다.
 
 ## CI
 
@@ -535,5 +776,11 @@ rc 는 세 갈래로 갈라 적는다: `0`(승격 근거가 섰다) · `124`(진
   (조용한 실패가 없다). 해당 심 파일에 선언을 보태고 **실제 시그니처를 주석으로 남겨라.**
 - **심 시그니처가 틀렸다고 의심되면** macOS `swift build` 가 유일한 심판이다. 심이 통과시킨
   코드가 macOS 에서 깨졌다면 그 자리를 심에 반영하고 이 문서의 "확신도" 목록을 갱신해라.
-- **새 소스 파일을 추가하면** 스크립트가 목록 불일치로 실패한다. `COVERED` 나 `EXCLUDED` 에
-  넣고 이 문서의 표를 갱신해라.
+- **새 소스 파일을 추가하면**(`Sources/WapleRender/**`) 스크립트가 목록 불일치로 실패한다.
+  `COVERED` 나 `EXCLUDED` 에 넣고 이 문서의 표를 갱신해라.
+- **`Sources/Waple/**` 에 새 파일을 추가하면** 자동으로 커버된다(제외 목록 방식). 다만 그 파일이
+  `@objc`/`#selector` 를 쓰면 위 ⑤c 때문에 반드시 실패한다 — 그때는 `APP_EXCLUDED` 에 넣고
+  이 문서의 표에 사유를 적어라. **그리고 그 파일은 리눅스에서 영영 못 본다는 뜻이므로,
+  가능하면 순수 로직을 `AppLogic.swift` 처럼 별도 파일로 빼는 쪽이 낫다.**
+- **AppKit 심은 두 파일이다.** 렌더가 쓰는 창·뷰는 `appkit.swift`, 앱 계층이 쓰는 패널·
+  워크스페이스·뷰컨트롤러는 `appkit-app.swift` 다. 어느 쪽에 넣을지는 호출부가 정한다.

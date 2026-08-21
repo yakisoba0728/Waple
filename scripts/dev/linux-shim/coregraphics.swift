@@ -33,16 +33,21 @@ public typealias CFTimeInterval = Double
 /// (2001-01-01 UTC 기준 초. `Date().timeIntervalSinceReferenceDate` 와 같은 기준점이다.)
 public func CFAbsoluteTimeGetCurrent() -> CFAbsoluteTime { Date().timeIntervalSinceReferenceDate }
 
-/// 실제: `public func CFGetTypeID(_ cf: CFTypeRef) -> CFTypeID`
-/// macOS 는 `CFGetTypeID(n) == CFBooleanGetTypeID()` 로 JSON true/false 를 숫자와 가른다.
-/// 리눅스에는 그 타입 태그가 없어 `objCType == "c"`(char) 로 같은 판정을 한다 —
-/// `linux-shim/corefoundation.swift`(WapleCore 쪽)와 **같은 규약**이다.
-public func CFGetTypeID(_ cf: CFTypeRef) -> CFTypeID {
-    guard let n = cf as? NSNumber else { return 0 }
-    return String(cString: n.objCType) == "c" ? 1 : 0
-}
-/// 실제: `public func CFBooleanGetTypeID() -> CFTypeID`
-public func CFBooleanGetTypeID() -> CFTypeID { 1 }
+// **`CFGetTypeID`/`CFBooleanGetTypeID` 는 여기 없다 — 일부러 뺐다.** [2026-08-21]
+//
+// 이 리포에서 그 둘을 내는 자리는 **`WapleCore` 하나**다: 스크립트가 `corefoundation.swift` 를
+// `sed` 로 그 두 심볼만 public 으로 바꿔 `WapleCore` 스냅샷에 넣는다(스크립트 주석 참조).
+// 종전에는 이 파일에도 같은 이름의 public 함수가 있었고, **두 모듈이 동시에 보이는 파일에서
+// 호출이 통째로 모호해진다**. 실측 2026-08-21(`--app` 을 열면서 드러났다):
+//
+//   Sources/Waple/WorkshopAPI.swift:140:58: error: type of expression is ambiguous
+//                                                  without a type annotation
+//     guard let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { … }
+//
+// 그 파일은 `Foundation`+`Security`+`WapleCore` 만 import 하지만, `Security` 심이
+// `CoreGraphics` 를 재수출하고 서곡이 `AppKit`(역시 CG 재수출)을 흘려서 둘 다 보인다.
+// 렌더 축에서는 `CFGetTypeID` 를 부르는 파일이 `UserPropertyStore.swift`(Foundation+WapleCore)
+// 하나뿐이라 지금까지 드러나지 않았을 뿐이다 — **잠재 결함이었지 앱 계층의 문제가 아니다.**
 
 // MARK: - CGAffineTransform
 
@@ -202,3 +207,78 @@ public enum CGWindowLevelKey: Int32 {
 
 /// 실제: `public func CGWindowLevelForKey(_ key: CGWindowLevelKey) -> CGWindowLevel`
 public func CGWindowLevelForKey(_ key: CGWindowLevelKey) -> CGWindowLevel { 0 }
+
+// MARK: - [2026-08-21] `--app` 이 요구한 표면 — CGWindowList
+//
+// `Sources/Waple/DesktopVisibilityMonitor.swift:146~165` 이 온스크린 창 목록을 떠서 데스크탑이
+// 가려졌는지 판정한다. `--app` 이전에는 커버 밖이라 이 표면이 심에 없었다.
+
+/// 실제: `public struct CGWindowListOption: OptionSet { public static var optionOnScreenOnly
+///          / optionOnScreenAboveWindow / optionOnScreenBelowWindow / optionIncludingWindow
+///          / excludeDesktopElements: CGWindowListOption }`
+/// 확신 없음: 각 비트의 실제 값은 확인하지 못했다 — 호출부가 값을 읽지 않고 인자로만 넘긴다.
+public struct CGWindowListOption: OptionSet {
+    public let rawValue: UInt32
+    public init(rawValue: UInt32) { self.rawValue = rawValue }
+    public static let optionAll = CGWindowListOption(rawValue: 0)
+    public static let optionOnScreenOnly = CGWindowListOption(rawValue: 1 << 0)
+    public static let optionOnScreenAboveWindow = CGWindowListOption(rawValue: 1 << 1)
+    public static let optionOnScreenBelowWindow = CGWindowListOption(rawValue: 1 << 2)
+    public static let optionIncludingWindow = CGWindowListOption(rawValue: 1 << 3)
+    public static let excludeDesktopElements = CGWindowListOption(rawValue: 1 << 4)
+}
+
+/// 실제: `public typealias CGWindowID = UInt32` · `public let kCGNullWindowID: CGWindowID` (= 0)
+public typealias CGWindowID = UInt32
+public let kCGNullWindowID: CGWindowID = 0
+
+/// 실제: `public func CGWindowListCopyWindowInfo(_ option: CGWindowListOption,
+///          _ relativeToWindow: CGWindowID) -> CFArray?`
+public func CGWindowListCopyWindowInfo(_ option: CGWindowListOption,
+                                       _ relativeToWindow: CGWindowID) -> CFArray? { nil }
+
+/// 실제: `CGWindow.h` 의 `extern const CFStringRef kCGWindowOwnerName;` 등.
+/// 값은 딕셔너리 **키**로만 쓰이고 비교되지 않으므로 더미다 — 다만 서로 달라야 한다.
+/// 확신 없음: 실제 raw 문자열은 `"kCGWindowOwnerName"` 계열이지만 여기서 확정할 근거가 없다.
+public let kCGWindowOwnerName: CFString = "shim.kCGWindowOwnerName" as NSString
+public let kCGWindowOwnerPID: CFString = "shim.kCGWindowOwnerPID" as NSString
+public let kCGWindowLayer: CFString = "shim.kCGWindowLayer" as NSString
+public let kCGWindowAlpha: CFString = "shim.kCGWindowAlpha" as NSString
+public let kCGWindowBounds: CFString = "shim.kCGWindowBounds" as NSString
+public let kCGWindowNumber: CFString = "shim.kCGWindowNumber" as NSString
+
+// MARK: - [2026-08-21] `--app` 이 요구한 표면 — CFPreferences
+//
+// `Sources/Waple/ScreenSaverController.swift` 가 화면보호기 선택(`com.apple.screensaver` 의
+// `moduleDict`, ByHost)을 CFPreferences 로 직접 읽고 쓴다 — 호출 18곳.
+// 애플에서는 Foundation 이 CoreFoundation 을 재수출해서 들어오므로 그 파일은 `import AppKit`
+// 하나뿐이다. 이 심 모듈이 그 자리를 대신한다(파일 머리말의 CF 최소분과 같은 이유).
+
+/// 실제: `public let kCFPreferencesCurrentUser: CFString` 등 6종(`CFPreferences.h`).
+/// 값은 도메인 지정에만 쓰이고 비교되지 않으므로 더미다 — 다만 서로 달라야 한다.
+/// 확신 없음: 실제 raw 문자열은 `"kCFPreferencesCurrentUser"`·`"kCFPreferencesAnyHost"` 계열이다.
+public let kCFPreferencesCurrentUser: CFString = "shim.kCFPreferencesCurrentUser" as NSString
+public let kCFPreferencesAnyUser: CFString = "shim.kCFPreferencesAnyUser" as NSString
+public let kCFPreferencesCurrentHost: CFString = "shim.kCFPreferencesCurrentHost" as NSString
+public let kCFPreferencesAnyHost: CFString = "shim.kCFPreferencesAnyHost" as NSString
+public let kCFPreferencesCurrentApplication: CFString = "shim.kCFPreferencesCurrentApplication" as NSString
+
+/// 실제: `public func CFPreferencesCopyValue(_ key: CFString!, _ applicationID: CFString!,
+///          _ userName: CFString!, _ hostName: CFString!) -> CFPropertyList!`
+/// 확신 없음: 실물의 인자는 전부 **암묵적 언랩 옵셔널(`CFString!`)** 이고 반환은
+/// `CFPropertyList!` 다. 여기서는 반환을 `CFTypeRef?`(= `AnyObject?`)로 뒀다 — 호출부가
+/// `as? [String: Any]` 로 캐스팅하므로 통한다.
+public func CFPreferencesCopyValue(_ key: CFString!, _ applicationID: CFString!,
+                                   _ userName: CFString!, _ hostName: CFString!) -> CFTypeRef? { nil }
+
+/// 실제: `public func CFPreferencesSetValue(_ key: CFString!, _ value: CFPropertyList!,
+///          _ applicationID: CFString!, _ userName: CFString!, _ hostName: CFString!)`
+public func CFPreferencesSetValue(_ key: CFString!, _ value: CFTypeRef?,
+                                  _ applicationID: CFString!, _ userName: CFString!,
+                                  _ hostName: CFString!) {}
+
+/// 실제: `public func CFPreferencesSynchronize(_ applicationID: CFString!, _ userName: CFString!,
+///          _ hostName: CFString!) -> Bool`
+@discardableResult
+public func CFPreferencesSynchronize(_ applicationID: CFString!, _ userName: CFString!,
+                                     _ hostName: CFString!) -> Bool { true }

@@ -324,6 +324,16 @@ open class NSWindow: NSResponder {
     /// 창을 `alphaValue = 0` 으로 숨긴다).
     public var alphaValue: CGFloat = 1
     public weak var delegate: (any NSWindowDelegate)?
+    /// [2026-08-21] `--app` 이 요구한 표면(`AppDelegate.swift` 의 라이브러리/설정 창).
+    /// 실제: `open var styleMask: NSWindow.StyleMask` · `open var toolbarStyle: NSWindow.ToolbarStyle`
+    ///        `open var minSize/maxSize: NSSize` · `open var contentMinSize/contentMaxSize: NSSize`
+    ///        `open var isMiniaturized: Bool { get }`
+    public var styleMask: StyleMask = []
+    public var minSize: NSSize = .zero
+    public var maxSize: NSSize = .zero
+    public var contentMinSize: NSSize = .zero
+    public var contentMaxSize: NSSize = .zero
+    public var isMiniaturized: Bool { false }
 
     /// 실제: `public init(contentRect: NSRect, styleMask style: NSWindow.StyleMask,
     ///        backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool)`
