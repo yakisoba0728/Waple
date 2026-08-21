@@ -22,8 +22,31 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
     private var activeTasks = Set<ObjectIdentifier>()  // 시작됐고 아직 stop 안 된 태스크(use-after-stop 방지)
     private let chunkSize = 64 * 1024
 
-    public init(rootURL: URL) {
+    /// WE `assets/zcompat/web/<워크샵ID>.json` 전표(없으면 빈 값). 규칙·주소 근거는
+    /// `WapleCore/WebCompatPatch.swift` 헤더 참조.
+    private let compatPatches: WebCompatPatch.PatchSet
+    /// 전표가 언급하는 파일들(정규화된 상대 경로). 요청마다 액션 배열을 훑지 않기 위한 게이트.
+    private let compatFiles: Set<String>
+
+    /// 호환성 패치를 위해 통째로 메모리에 올릴 파일의 상한. 동봉 5건의 대상은 전부 번들된
+    /// JS(수백 KB)다 — 상한을 넘으면 패치를 포기하고 원본을 그대로 스트리밍한다(무회귀).
+    /// 스트리밍 경로가 64KB 청크인 이유와 같은 이유로, 여기서만 예외적으로 전체를 읽는다:
+    /// 치환은 파일 전역을 봐야 하고 청크 경계에 needle 이 걸치면 매치를 놓친다.
+    nonisolated private static let maxCompatPatchBytes: Int64 = 32 * 1024 * 1024
+
+    public convenience init(rootURL: URL) {
+        // WE 는 `index.html` 의 상위 폴더명을 워크샵 ID 로 쓴다(0x14000c29e). Waple 의 프로젝트
+        // 루트 폴더명이 같은 값이다(`WallpaperProject.id` = 폴더명 = 워크샵 ID).
+        let id = rootURL.standardizedFileURL.lastPathComponent
+        self.init(rootURL: rootURL,
+                  compatPatches: WebCompatPatch.load(projectID: id, in: BaseAssetsSettings.searchRoots))
+    }
+
+    /// 지정 이니셜라이저 — 전표를 직접 주입한다(테스트/상위 계층이 다른 경로에서 찾은 경우).
+    public init(rootURL: URL, compatPatches: WebCompatPatch.PatchSet) {
         self.root = rootURL.standardizedFileURL
+        self.compatPatches = compatPatches
+        self.compatFiles = compatPatches.referencedFiles
         super.init()
     }
 
@@ -90,7 +113,8 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
                url.scheme == WallpaperSchemeHandler.scheme,
                url.host == WallpaperSchemeHandler.host,
                let fileURL = WallpaperSchemeHandler.fileURL(forRequestPath: url.path, root: root) {
-                self.respondFile(task, id: id, requestURL: requestURL, rangeHeader: rangeHeader, fileURL: fileURL)
+                self.respondFile(task, id: id, requestURL: requestURL, rangeHeader: rangeHeader,
+                                 fileURL: fileURL, requestPath: url.path)
             } else {
                 DispatchQueue.main.async {
                     guard self.isTaskLive(id) else { return }
@@ -138,7 +162,25 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         return .partial(start..<upperBound)
     }
 
-    private func respondFile(_ task: WKURLSchemeTask, id: ObjectIdentifier, requestURL: URL?, rangeHeader: String?, fileURL: URL) {
+    /// zcompat 대상이면 패치된 전체 바이트를, 아니면 nil(= 기존 스트리밍 경로 그대로).
+    ///
+    /// WE 는 이 치환을 **사용자의 워크샵 파일에 직접 덮어쓴다**(0x14000cee4 에서 출력 스트림을
+    /// 열고 0x14000cf3b 로 쓴다 — 실패하면 `"Failed writing compat fix at %S\n"`). Waple 은
+    /// 서빙 시점에 메모리에서만 바꾼다: 결과 바이트는 같고 남의 파일을 건드리지 않는다.
+    /// (그래서 WE 가 필요로 한 "패치 후에는 needle 이 사라지므로 재실행이 안전하다" 는 멱등성
+    ///  논증에 기대지 않아도 된다 — 매 요청이 원본에서 출발한다.)
+    private func compatPatchedData(fileURL: URL, requestPath: String, size: Int64) -> Data? {
+        guard !compatFiles.isEmpty else { return nil }
+        guard size > 0, size <= WallpaperSchemeHandler.maxCompatPatchBytes else { return nil }
+        let actions = compatPatches.actions(forRelativePath: requestPath)
+        guard !actions.isEmpty else { return nil }
+        guard let raw = try? Data(contentsOf: fileURL, options: [.mappedIfSafe]) else { return nil }
+        let patched = WebCompatPatch.applied(raw, actions: actions)
+        return patched == raw ? nil : patched   // 바뀐 게 없으면 스트리밍 경로가 더 싸다
+    }
+
+    private func respondFile(_ task: WKURLSchemeTask, id: ObjectIdentifier, requestURL: URL?,
+                             rangeHeader: String?, fileURL: URL, requestPath: String) {
         guard let handle = try? FileHandle(forReadingFrom: fileURL),
               let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else {
             DispatchQueue.main.async {
@@ -150,6 +192,33 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         }
         defer { try? handle.close() }
         let total = Int64(size)
+
+        // zcompat: 패치 대상이면 Range 를 무시하고 **패치된 전체**를 200 으로 낸다.
+        // Range 를 못 지키는 이유는 단순하다 — 치환이 길이를 바꾸므로 원본 오프셋 기준 범위가
+        // 결과와 대응하지 않는다. WebKit 이 스크립트/문서에 Range 를 보내지 않으므로 실제
+        // 도달이 없고(도달하더라도 200 전체 응답은 RFC 7233 상 허용되는 축소), 그래서
+        // `Accept-Ranges: none` 으로 명시해 재요청을 유도하지 않는다.
+        if let patched = compatPatchedData(fileURL: fileURL, requestPath: requestPath, size: total) {
+            let target = requestURL ?? URL(string: "waple-asset://wallpaper/")!
+            let response = HTTPURLResponse(
+                url: target, statusCode: 200, httpVersion: "HTTP/1.1",
+                headerFields: [
+                    "Content-Type": WallpaperSchemeHandler.mimeType(for: fileURL),
+                    "Accept-Ranges": "none",
+                    "Content-Length": String(patched.count),
+                    "Access-Control-Allow-Origin": "\(WallpaperSchemeHandler.scheme)://\(WallpaperSchemeHandler.host)",
+                    "Content-Security-Policy": WallpaperSchemeHandler.contentSecurityPolicy,
+                ]
+            )!
+            guard withLiveTask(id, { task.didReceive(response) }) else { return }
+            guard withLiveTask(id, { task.didReceive(patched) }) else { return }
+            DispatchQueue.main.async {
+                guard self.isTaskLive(id) else { return }
+                task.didFinish()
+                self.finishTask(id)
+            }
+            return
+        }
 
         var headers = [
             "Content-Type": WallpaperSchemeHandler.mimeType(for: fileURL),
