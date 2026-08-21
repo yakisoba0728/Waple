@@ -3,8 +3,10 @@ import AppKit
 import CoreText
 import CoreGraphics
 
-/// 텍스트 → 흰색 글리프 + straight 알파 RGBA 비트맵(CoreText).
-/// 색/알파는 레이어 tint 경로가 적용하므로 여기선 항상 흰색(규약 일관 — QuadShaders f_main).
+/// 텍스트 → straight 알파 RGBA 비트맵(CoreText).
+/// 단색 글리프는 흰색으로 그리고 색/알파는 레이어 tint 경로가 적용한다(규약 일관 — QuadShaders f_main).
+/// 컬러 폰트(이모지 sbix/CBDT/COLR) 글리프만 CTLineDraw 가 그린 자체 색을 그대로 보존한다
+/// (WE 실물 동작 — 근거는 render() 의 un-premultiply 블록 주석에 VA 로 인용).
 public enum TextRasterizer {
     public struct Raster { public let rgba: Data; public let width: Int; public let height: Int }
     private static let maxPointSize: Float = 8192
@@ -124,6 +126,11 @@ public enum TextRasterizer {
                   let ctx = CGContext(data: base, width: w, height: h, bitsPerComponent: 8,
                                       bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            // 그레이스케일 AA 고정: 서브픽셀(LCD) 스무딩이 켜지면 채널별 커버리지가 달라져 아래
+            // un-premultiply 뒤 단색 글리프가 순백을 벗어난다(종전엔 rgb=255 강제가 이를 덮었다).
+            // WE 도 단색 글리프는 FT_PIXEL_MODE_GRAY 단일 커버리지 경로다(0x1401afa25 `cmp al, 2`).
+            ctx.setAllowsFontSmoothing(false)
+            ctx.setShouldSmoothFonts(false)
             // F2(flip②): CGBitmapContext 메모리 row0 = 그려진 이미지의 top(1회 실측 확인 — 아래 flip 제거
             // 근거). 첫 줄을 사용자공간 최상단(y=h-1-ascent)에 그리면 이미 row0=첫 줄이라 텍스처 규약
             // (row0=top)과 그대로 정합한다. 형제 4곳(TexDecoder.swift 등)과 동일하게 무반전으로 통일.
@@ -141,10 +148,44 @@ public enum TextRasterizer {
                 ctx.textPosition = CGPoint(x: x, y: CGFloat(h) - 1 - ascent - CGFloat(i) * lineH)
                 CTLineDraw(line, ctx)
             }
-            // premultiplied → straight (흰색 글리프라 rgb=alpha; 255 로 통일해 tint 가 온전히 색을 결정)
+            // ── premultiplied → straight ─────────────────────────────────────────────────
+            // 종전엔 알파>0 픽셀의 rgb 를 무조건 255 로 밀었다. 흰색 글리프(rgb=alpha)에는 맞지만,
+            // CoreText 캐스케이드가 컬러 폰트(Apple Color Emoji=sbix, Noto Color Emoji=CBDT,
+            // COLR/CPAL)로 폴백하면 CTLineDraw 는 foregroundColor 를 무시하고 **글리프 자체 색**을
+            // 그린다 — 255 강제는 그 색을 흰 실루엣으로 파괴한다(이모지가 흰 덩어리가 됨).
+            //
+            // WE 실물은 컬러 글리프의 RGB 를 살린다(wallpaper64.exe, imagebase 0x140000000;
+            // FreeType+HarfBuzz 정적 링크. 글리프 래스터 함수 0x1401ae080):
+            //   · 0x1401ae282  test dword [rbx+8], 0x4000  ← FT_HAS_COLOR(face)
+            //                  (FT_FACE_FLAG_COLOR = 1<<14, LLP64 FT_FaceRec.face_flags = +8)
+            //   · 0x1401ae28b  mov r8d, 0x100004           ← FT_LOAD_COLOR|FT_LOAD_RENDER 로
+            //                  FT_Load_Glyph(0x1402f12d0) 호출. MSDF 를 끈 경로(0x1401ae2e3)도 동일 플래그.
+            //                  컬러 폰트가 아니면 0x1401ae2b7 이 FT_LOAD_NO_BITMAP(8) 로 윤곽만 읽는다.
+            //   · 0x1401ae2a2  cmp byte [rax+0x82], 7      ← slot->bitmap.pixel_mode == FT_PIXEL_MODE_BGRA
+            //                  (LLP64 FT_GlyphSlotRec: format=+0x60, bitmap=+0x68, pixel_mode=+0x82)
+            //   · 0x1401ae392  cmp byte [r9+0x42], 7       ← FT_BitmapGlyph 쪽 동일 검사 → 글리프별 "컬러" 플래그
+            //   · 0x1401afa2d–0x1401afb29  BGRA 아틀라스 블릿: 행 memcpy 후 마스크 0xFF00FF00 /
+            //                  0x00FF00FF (상수 0x140492ce0 / 0x1404930b0) 로 **B↔R 스왑만** 한다.
+            //                  G·A 는 손대지 않고 화이트닝도 없다. GRAY(2) 는 0x1401afb2b 의 1B/px 경로.
+            //   · 0x1401ac9af–0x1401ac9b9  컬러/MSDF 아틀라스는 4B/px(512×512×4 = 0x100000),
+            //                  순수 흑백만 1B/px(0x40000). 0x1401ac8aa 가 "__font_atlas_color_" RGBA
+            //                  텍스처를 따로 만든다(0x1401ac7f0–0x1401ac8c4).
+            //   · 0x1401b3a16  컬러 글리프 배치는 materials/fonts/basefontrgba.json(COLORFONT=1)로 그린다.
+            //                  assets/shaders/font.frag: `gl_FragColor = vec4(_sample.rgb, _sample.a * g_Color4.a)`
+            //                  — 샘플 RGB 를 그대로 내보내고 레이어 색은 알파에만 곱한다.
+            // 따라서 255 강제 대신 나눗셈으로 straight RGB 를 복원한다. 흰색 글리프는 rgb=alpha 라
+            // 결과가 정확히 255 로 수렴해 종전 출력과 비트동일하다(무회귀).
+            //
+            // 남은 차이(별건): WE 는 컬러 글리프에 tint.rgb 를 곱하지 않지만 Waple 은 레이어 tint 를
+            // 쿼드 전체에 곱한다(QuadShaders f_main: `c.rgb * tint.rgb * a`). 기본 흰색 tint 에선 동일,
+            // 유색 tint 에서만 이모지가 물든다 — 분리하려면 글리프별 컬러 마스크가 필요하다(BACKLOG).
             let px = base.assumingMemoryBound(to: UInt8.self)
-            for i in stride(from: 0, to: w * h * 4, by: 4) where px[i + 3] > 0 {
-                px[i] = 255; px[i + 1] = 255; px[i + 2] = 255
+            for i in stride(from: 0, to: w * h * 4, by: 4) {
+                let a = Int(clamping: px[i + 3])   // UInt8→Int 는 확대라 트랩 없음(라벨은 인구조사용)
+                if a == 0 || a == 255 { continue }   // 0=투명(rgb 무의미), 255=premul==straight
+                px[i]     = unpremultiply(px[i], alpha: a)
+                px[i + 1] = unpremultiply(px[i + 1], alpha: a)
+                px[i + 2] = unpremultiply(px[i + 2], alpha: a)
             }
             return true
         }
@@ -153,6 +194,16 @@ public enum TextRasterizer {
         // 텍스트 쿼드 uv(0,0)=TL)도 무반전을 전제한다.
         guard ok else { return nil }
         return Raster(rgba: pixels, width: w, height: h)
+    }
+
+    /// premultiplied 채널 → straight: `round(v · 255 / alpha)`(255 클램프).
+    /// 흰색 글리프는 v == alpha 라 정확히 255 를 돌려준다 — 종전 `px[i] = 255` 와 비트동일(무회귀).
+    /// 컬러 글리프(이모지)는 원래 색이 복원된다. alpha == 0 은 호출측이 걸러내지만 방어로 v 를 그대로 낸다.
+    static func unpremultiply(_ v: UInt8, alpha: Int) -> UInt8 {
+        guard alpha > 0 else { return v }
+        // `clamping:` 은 인구조사 라벨 겸 실제 가드다 — premultiplied 불변식이 깨진 입력
+        // (v > alpha) 에서도 트랩 대신 255 로 포화한다.
+        return UInt8(clamping: (Int(clamping: v) * 255 + alpha / 2) / alpha)
     }
 
     private static func makeFont(fontData: Data?, systemFontName: String?, pointSize: CGFloat) -> CTFont {
