@@ -323,6 +323,8 @@ CI 에서만 터진 실패 이력이 있다(`db90fc2` 타입체커 폭발, `14dc
 
 ## 함정
 
+> **WE 를 실측(리버스 엔지니어링)하려면 [docs/dev/re-methodology.md](docs/dev/re-methodology.md) 를 먼저 읽어라.** 아래는 Swift 코드베이스 쪽 함정이고, 그쪽은 바이너리·자산·정본을 다룰 때 **실제로 틀렸던** 방식 26개다(남의 VA 베끼기 · 거꾸로 디스어셈 · 주입을 소비로 착각 · 리눅스 초록을 macOS 초록으로 착각 …).
+
 **타입체커 폭발.** 긴 식을 합치면 `unable to type-check this expression in reasonable time`
 이 난다. 이건 이 리포에서 실제로 4번 일어났다. 식은 **쪼개는 방향으로만** 바꿔라.
 추출한 함수의 파라미터·반환 타입은 명시적으로 적어라. SwiftUI 뷰 빌더는 특히 취약하다.
