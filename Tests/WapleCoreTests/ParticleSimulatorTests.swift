@@ -681,8 +681,13 @@ final class ParticleSimulatorTests: XCTestCase {
         XCTAssertEqual(a[0].color.z, 0.0, accuracy: 0.001)
     }
 
-    /// hue 범위가 넓으면(magic_color_sparkle 실물: 0.49~0.93) 스폰된 파티클 색이 다양해야 한다
-    /// (종전: case 미인식으로 initializer 통째 drop → 전 파티클 백색 고정, 다양성 0).
+    /// **[2026-08-21 전제 정정]** 종전 이 테스트는 "hue 범위가 넓으면 색이 다양해야 한다" 를
+    /// 요구했는데, 실물은 **`huesteps` 없이는 hue 를 랜덤화하지 않는다.** 파스가 굽는
+    /// `hueStep` 이 0 이 되고(0x1401c79ef 가드 → 0x1401c7a52 에 0 저장) 런타임 인덱스도 0 으로
+    /// 고정돼(0x14023b786/0x14023b78d) `hue = huemin` 한 색이 된다. 동봉 magic_color_sparkle 은
+    /// 실제로 `huesteps` 를 안 적으므로 실물에서 **단일 색**이다.
+    ///
+    /// 그래서 이 테스트는 두 가지를 함께 고정한다 — 키 없으면 단색, 키 있으면 그 계단 수만큼.
     func testHSVColorRandomProducesVariedColors() {
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
@@ -693,11 +698,24 @@ final class ParticleSimulatorTests: XCTestCase {
         let ps = sim.step(0.1)
         XCTAssertGreaterThan(ps.count, 4)
         let distinctR = Set(ps.map { ($0.color.x * 1000).rounded() }).count
-        XCTAssertGreaterThan(distinctR, 1, "hue 랜덤이 적용됐다면 R 채널이 파티클마다 달라야 한다")
+        XCTAssertEqual(distinctR, 1, "huesteps 부재 → 실물은 hue 를 huemin 으로 고정한다(0x14023b78d)")
         for p in ps {
             XCTAssertFalse(p.color.x.isNaN); XCTAssertFalse(p.color.y.isNaN); XCTAssertFalse(p.color.z.isNaN)
             XCTAssertGreaterThanOrEqual(p.color.x, 0); XCTAssertLessThanOrEqual(p.color.x, 1)
         }
+
+        // `huesteps` 를 적으면 그때 비로소 갈린다 — 그리고 **이산**이다(계단 수 이하).
+        let stepped = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100),
+                           .hsvColorRandom(hueMin: 0, hueMax: 1, satMin: 1, satMax: 1,
+                                           valMin: 1, valMax: 1, hueSteps: 6)],
+            operators: [], renderer: .sprite, maxCount: 64, startTime: 0, material: nil)
+        var s2 = ParticleSimulator(def: stepped, seed: 99)
+        let qs = s2.step(0.1)
+        let distinctQ = Set(qs.map { "\(($0.color.x * 1000).rounded())/\(($0.color.y * 1000).rounded())" }).count
+        XCTAssertGreaterThan(distinctQ, 1, "huesteps=6 이면 색이 갈려야 한다")
+        XCTAssertLessThanOrEqual(distinctQ, 6, "이산 계단이라 6색을 넘을 수 없다")
     }
 
     /// hue 범위가 비유한을 낳을 수 있는 극단값(Float.greatestFiniteMagnitude)이어도 Int(hh) 트랩
