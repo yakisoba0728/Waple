@@ -78,7 +78,7 @@ public struct TexImage {
         /// 다르면 nil → 해당 변형은 절대 매치 안 됨(안전 폴백: 기본 image 사용).
         public init?(json: String) {
             guard let data = json.data(using: .utf8),
-                  let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let root = AssetJSON.dictionary(data),
                   let inner = root["condition"] as? [String: Any],
                   let name = inner["name"] as? String else { return nil }
             self.name = name

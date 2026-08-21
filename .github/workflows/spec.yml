@@ -148,6 +148,25 @@ jobs:
       - name: Canon regenerability
         run: python3 scripts/spec/check_canon_generator_keys.py
 
+      # 자산 JSON 관용 파스의 **도달**과 **배선**을 함께 본다.
+      #
+      # WE 는 jsoncpp 의 allowComments/allowTrailingCommas 를 둘 다 켠다(0x140091fe2·0x1400920b3).
+      # 관용은 이펙트 매니페스트만의 성질이 아니라 WE 가 읽는 **모든 JSON 의 성질**이고, WE 자기
+      # 자산이 실제로 거기 의존한다. 종전 Waple 은 EffectManifest 만 관용이라
+      # `fantasticcar/materials/car/glass.json:6`(줄 주석)이 통째로 파스 실패했고 —
+      # `models/car/body.mdl` 이 그 경로를 담으므로 그 메시의 textures·blending·
+      # constantshadervalues 가 전부 유실됐다.
+      #
+      # 게이트는 셋을 본다. ① 두 자산 트리에서 엄격 파스 실패 건을 세고 **전건이 관용으로
+      # 복구되는지** ② 그 목록에 고정 자산 둘이 실제로 들어 있는지 ③ **자산 리더가 AssetJSON 을
+      # 실제로 부르는지**(함정 ③ 주입≠소비 — 관용 파서가 있어도 리더가 안 부르면 아무 일도
+      # 안 일어난다. 실제로 그 상태였다). 하한으로 "측정이 조용히 0건" 도 막는다.
+      #
+      # 설치본 `ui/` 는 범위에서 뺐다 — WE UI(Chromium) 캐시라 벽지 자산이 아니고, 그 안에
+      # 루트 뒤 추가 데이터를 가진 JSONL 이 있어 관용으로도 안 읽힌다(읽을 이유도 없다).
+      - name: Lenient asset JSON
+        run: python3 scripts/spec/check_lenient_json_reach.py
+
       # 씬을 **어떻게 마운트하는가**가 렌더러와 호환성 스캐너에서 갈려 있었다. 스캐너의 계약은
       # "이슈 없음 = 렌더 가능" 이라, 규약이 갈리는 순간 그 보장이 양방향으로 거짓이 된다.
       # 실측(리눅스 드라이버 6케이스, 수정 전): 이름이 관례가 아닌 `.pkg` 씬은 렌더러가 정상으로

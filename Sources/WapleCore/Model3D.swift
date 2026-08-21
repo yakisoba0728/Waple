@@ -816,7 +816,7 @@ public struct Model3D: Equatable {
             var e = i
             let cap = min(bytes.count, i + 256)   // 이벤트 이름은 짧다(실측 ≤ 32B) — 폭주 방지 캡
             while e < cap, bytes[e] != 0 { e += 1 }
-            if let obj = (try? JSONSerialization.jsonObject(with: Data(bytes[i ..< e]))) as? [String: Any],
+            if let obj = AssetJSON.dictionary(Data(bytes[i ..< e])),
                let name = obj["name"] as? String, let frame = (obj["frame"] as? NSNumber)?.floatValue {
                 out.append(AnimationMarker(name: name, frame: frame))
             }

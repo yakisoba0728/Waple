@@ -604,7 +604,7 @@ public enum WallpaperCompatibilityAnalyzer {
         // 둘이 갈리는 순간 위 ②가 그대로 재발한다.
         let sceneCandidates: [String] = [project.fileName, "scene.json", "gifscene.json"].compactMap { $0 }
         guard let sceneData = sceneCandidates.compactMap({ package.data(for: $0) }).first,
-              let scene = try? JSONSerialization.jsonObject(with: sceneData) as? [String: Any] else {
+              let scene = AssetJSON.dictionary(sceneData) else {
             let candidateList = sceneCandidates.joined(separator: ", ")
             // 같은 프로젝트에 대해 `analyzeTypeAndFiles` 가 이미 같은 코드의 치명 이슈를 냈다면 중복
             // 보고하지 않는다. 그쪽(:314)은 **선언된 메인 파일이 디스크에 있는가**를 보고, 여기는
@@ -755,7 +755,7 @@ public enum WallpaperCompatibilityAnalyzer {
 
     private static func rawProjectJSON(folderURL: URL) -> [String: Any]? {
         guard let data = try? Data(contentsOf: folderURL.appendingPathComponent("project.json")),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+              let object = AssetJSON.dictionary(data) else {
             return nil
         }
         return object

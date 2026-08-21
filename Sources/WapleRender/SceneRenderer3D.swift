@@ -225,7 +225,7 @@ extension SceneRenderer {
     /// scene.json 부재/파스 실패/general 부재 시 fog 비활성(기본값) — 어떤 입력에도 throw 없음.
     static func parseScene3DFog(package: ScenePackage) -> Scene3DFog {
         guard let data = package.data(for: "scene.json"),
-              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let json = AssetJSON.dictionary(data),
               let general = json["general"] as? [String: Any] else { return Scene3DFog() }
         return Scene3DFog.parse(general: general)
     }
@@ -769,7 +769,7 @@ extension SceneRenderer {
             return nil
         }
         if let d = quietAssetData(path, package: package),
-           let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+           let j = AssetJSON.dictionary(d),
            let p0 = (j["passes"] as? [Any])?.first as? [String: Any] {
             // ③: textures[0] 슬롯만 albedo 후보 — "첫 non-null 문자열"(구규약)이면 textures[0]=null 인
             // 재질(예: {"textures":[null,"foil_silver_normal"]})에서 slot1 노멀맵이 알베도로 승격된다.
