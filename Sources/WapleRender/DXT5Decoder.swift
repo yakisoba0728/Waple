@@ -3,10 +3,20 @@ import Foundation
 public enum DXT5Decoder {
     /// 565 엔드포인트 채널 정수 보간(4-색 팔레트 슬롯 t=1,2). BC3/BC1 공용.
     private static func lerp3(_ x: Int, _ y: Int, _ t: Int) -> Int { (x * (3 - t) + y * t) / 3 }
-    /// 565 → RGB8(정수). BC1/BC2/BC3 공용.
+    /// 565 → RGB8(정수). BC1/BC2/BC3 공용. **비트 복제**(상위비트를 하위로 되풀이)가 정본이다.
+    ///
+    /// 종전은 `c * 255 / 31`(·`/63`)이었다. 두 식은 대부분 같은 값을 내지만 **일부 채널값에서 1 씩
+    /// 어긋난다**(예 r=13: 복제 107 vs 나눗셈 106, r=5: 41 vs 41 은 같음). 어긋나는 쪽이 우리다:
+    ///   · WE 자체 디코더(resourcecompiler64 `-transcode`) 가 비트 복제다 —
+    ///     spec/formats/tex-deep.json `format.tex.bcDecodeRounding`(status 확정, 12표본 바이트 동일).
+    ///   · Metal/D3D 하드웨어 BC 디코드도 비트 복제다. 즉 종전 규칙은 Waple 의 CPU 경로를
+    ///     **자기 GPU 경로(TexDecoder.nativeBC)와도** 어긋나게 하고 있었다.
+    /// 동봉 자산 실측(2026-08-21, format 4 BC3 9개 mip0 전수): 두 규칙의 RGB 바이트 차이가
+    /// `splash_1_normal` 1,010,677B · `fern1` 24,916B · `flatnormal` 256B(= 전 픽셀) — 전부 ±1.
+    /// 노멀맵에서 특히 나쁘다(flatnormal 은 (128,128,255) 여야 하는데 한 채널이 1 낮게 나왔다).
     private static func color565(_ c: Int) -> (Int, Int, Int) {
         let r = (c >> 11) & 0x1f, g = (c >> 5) & 0x3f, b = c & 0x1f
-        return (r * 255 / 31, g * 255 / 63, b * 255 / 31)
+        return ((r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2))
     }
     /// 리틀엔디안 u16(블록 엔드포인트 읽기 — 픽셀 루프 밖이라 정적 호출 무해).
     private static func u16(_ src: [UInt8], _ o: Int) -> Int { Int(src[o]) | (Int(src[o + 1]) << 8) }
@@ -25,6 +35,13 @@ public enum DXT5Decoder {
                 let o = (byi * bx + bxi) * 16
                 // --- alpha (BC4) ---
                 let a0 = Int(src[o]), a1 = Int(src[o + 1])
+                // ⚠️ **미적용 파리티 갭**: WE(그리고 D3D/Metal 하드웨어)는 이 보간을 **반올림**한다 —
+                // `((7-i)*a0 + i*a1 + 3) / 7`, 6단은 `+ 2) / 5`(spec `format.tex.bcDecodeRounding`, 확정).
+                // 아래는 floor 라 알파가 최대 1 낮게 나온다(동봉 BC3 9개 실측: splash_1 11,608B ·
+                // splash_1_normal 48,400B 가 ±1 불일치). 고치려면 `DXT5DecoderTests
+                // .testDecodesEightValueAlphaRamp` 의 기댓값 [218,182,145,109,72,36] 을
+                // [219,182,146,109,73,36] 으로 함께 바꿔야 하는데 그 파일은 이 작업의 담당 범위 밖이라
+                // 손대지 않았다. 색(color565)만 먼저 맞췄다.
                 var alpha = [Int](repeating: 0, count: 8)
                 alpha[0] = a0; alpha[1] = a1
                 if a0 > a1 {
