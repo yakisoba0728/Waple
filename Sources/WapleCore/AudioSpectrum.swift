@@ -124,13 +124,91 @@ public enum AudioSpectrum {
         return Double(referenceBinCount - 1) * (sampleRate / Double(n))
     }
 
-    /// 원본 게인식 그대로 — `AP[0x0C](=1.0) · 0.001 · B / (N/2)`(`0x1400d1d3f`-`0x1400d1d5d`).
+    /// 원본 게인식 그대로 — `AP[0x0C] · 0.001 · B / (N/2)`(`0x1400d1d3f`-`0x1400d1d5d`).
     /// 이건 **비정규화 DFT 진폭**에 걸리는 값이라 우리 `gain`(1/N 정규화 진폭 기준)과 규약이 다르다.
     /// 둘의 관계는 `sampleBias × engineRawBandGain(B, N) × N == gain`(B=640 에서) 이고,
     /// `AudioSpectrumWEParityTests` 가 그 항등식을 고정한다.
-    public static func engineRawBandGain(binCount b: Int, fftLength n: Int) -> Float {
+    ///
+    /// **`apVolume` 은 상수가 아니다 — 사용자 설정이다.** 종전에는 이 자리에 리터럴 `1.0` 이
+    /// 박혀 있었고 주석도 `AP[0x0C](=1.0)` 이라고 단정했는데, 그 1.0 은 **생성자 기본값**이지
+    /// 실행값이 아니다. 실행값은 `config.json` 의 `user.audioinputvolume` 에서 온다 —
+    /// `inputVolumeGain(setting:)` 참조. 기본 설정 50 이 정확히 1.0 을 만들기 때문에
+    /// 둘이 우연히 같아 보였던 것이다.
+    public static func engineRawBandGain(binCount b: Int, fftLength n: Int,
+                                         apVolume: Float = 1.0) -> Float {
         guard n > 0 else { return 0 }
-        return 1.0 * 0.001 * Float(b) / (Float(n) * 0.5)
+        return apVolume * 0.001 * Float(b) / (Float(n) * 0.5)
+    }
+
+    // MARK: 입력 설정 — `user.audioinputvolume` / `user.audioinputthreshold`
+
+    /// `config.json` 의 `user.audioinputvolume` 정수를 AP `+0x0C`(게인 곱수)로 바꾸는 계수.
+    ///
+    /// **확정.** 설정 로더 `0x14006c722`-`0x14006c766` 의 다섯 명령이 전부다:
+    ///
+    /// ```
+    ///   0x14006c72c  lea   rdx, "audioinputvolume"      ; rdx=begin, r8=end(+0x10) → 길이 16
+    ///   0x14006c739  call  0x140086de0                  ; Json::Value 조회
+    ///   0x14006c741  call  0x140085ee0                  ; asInt (태그 5 는 1/0 — 함정 18)
+    ///   0x14006c757  movd  xmm0, eax
+    ///   0x14006c75b  cvtdq2ps xmm0, xmm0
+    ///   0x14006c75e  mulss xmm0, [0x14049262c]          ; = 0.019999999552965164f
+    ///   0x14006c766  movss [0x1404e55b4], xmm0
+    /// ```
+    ///
+    /// **클램프가 없다** — asInt 와 저장 사이에 `minss`/`maxss`/`comiss` 가 한 개도 없다.
+    /// 상수 `0x14049262c` 의 적재 자리는 이미지 전체에서 **4곳**뿐이고
+    /// (`0x14006c75e`·`0x1401020f5`·`0x140180e9a`·`0x1401bf730`), 오디오 경로의 것은 첫 번째뿐이다.
+    ///
+    /// **소비까지 짚었다**(함정 3). 저장 주소 `0x1404e55b4` 는 전역 AudioProcessor 의 `+0x0C` 다:
+    /// 생성자 `0x1400c0c80` 은 `0x140064d0f: lea rcx, [0x1404e55a0]` / `0x140064d28: call` 로
+    /// **그 전역에** 대해 불리고, 스레드 기준 베이스는 `+8` 이라 `0x1404e55a8` 이며
+    /// (`0x1400c0ca6: lea rbx,[rcx+8]`), `0x1404e55a8 + 0x0C = 0x1404e55b4` 다. 그리고 캡처
+    /// 스레드 `0x1400d02b0` 은 `{this=0x1404e55a8, fn=0x1400d02b0}` 클로저로 뜬다
+    /// (`0x14006e525`/`0x14006e52f`, 재시도 분기 `0x14006e5ac`/`0x14006e5b6`). 스레드 안에서
+    /// `AP+0x0C` 를 읽는 자리는 **게인 한 곳뿐**이다(`0x1400d1d3f  movss xmm2,[rdi+0xc]`).
+    /// 교차 확인: 같은 호출이 넘기는 `rcx=0x1404e568c` 가 정확히 `AP+0xE4`(상수 4개 묶음)다.
+    ///
+    /// 스칼라가 곱해지는 **위치**는 우리와 다르지만(실물은 비정규화 진폭에, 우리는 밴드 출력에)
+    /// 곱셈은 결합적이라 관측 결과는 같다.
+    public static let inputVolumeScaleFactor: Float = 0.019999999552965164
+
+    /// `user.audioinputvolume` 의 UI 슬라이더 범위 — `floor:0, ceil:200`
+    /// (`ui/dist/scripts/scripts.js` 의 `audioSlider={hideLimitLabels:!0,floor:0,ceil:200,…}`).
+    /// **0…100 이 아니다.** 곱수 도메인은 `[0, 4]` 이고 중립점이 50 이다.
+    public static let inputVolumeSettingRange: ClosedRange<Int> = 0...200
+
+    /// 배포 `config.json` 의 `user.audioinputvolume` 값. `50 × 0.02f` 는 float32 에서
+    /// **정확히 1.0** 이라(반올림 오차 2.2e-8 < 반ULP 3.0e-8) 기본 설치에서 게인이 `162.56` 이다.
+    public static let defaultInputVolumeSetting: Int = 50
+
+    /// `user.audioinputthreshold` → AP `+0x10`(무음 게이트 임계) 계수.
+    /// `0x14006c776  call 0x140086220`(asFloat) → `0x14006c77b  mulss xmm0,[0x140492608]`(=0.001)
+    /// → `0x14006c794  movss [0x1404e55b8]`, 그리고 `0x1404e55a8 + 0x10 = 0x1404e55b8` 이다.
+    /// 읽는 자리는 `0x1400d1a15  movss xmm5,[r14+0x10]` 하나뿐이다(`r14 = [rbp+0x330] = this`).
+    /// 슬라이더는 `floor:0, ceil:10, step:.1` 이라 임계 도메인은 `[0, 0.01]`, 기본 0 = 비활성.
+    public static let inputThresholdScaleFactor: Float = 0.0010000000474974513
+
+    /// 배포 `config.json` 의 `user.audioinputthreshold` 값(0 = 게이트 비활성).
+    public static let defaultInputThresholdSetting: Float = 0
+
+    /// 설정 정수 → AP `+0x0C` 곱수. 실물처럼 **클램프하지 않는다**(위 주석의 명령 다섯 개가 전부).
+    /// 정수 변환은 `asInt` 가 이미 끝낸 것이므로 여기 입력은 정수다.
+    public static func inputVolumeGain(setting: Int) -> Float {
+        Float(setting) * inputVolumeScaleFactor
+    }
+
+    /// 설정 실수 → AP `+0x10` 무음 임계.
+    public static func inputThreshold(setting: Float) -> Float {
+        setting * inputThresholdScaleFactor
+    }
+
+    /// 그 설정에서의 최종 게인(1/N 정규화 진폭 기준). `gain` 은 `setting = 50` 인 경우다.
+    ///
+    /// 실측 대응표 — float32 에서 전부 정확히 떨어진다:
+    /// `0 → 0` · `25 → 81.28` · `50 → 162.56` · `100 → 325.12` · `200 → 650.24`.
+    public static func gain(inputVolumeSetting setting: Int) -> Float {
+        gain * inputVolumeGain(setting: setting)
     }
 
     /// AudioProcessor `+0xEC`(생성자 `0x1400c0d6d`) — N 계수 30.0.
@@ -146,9 +224,14 @@ public enum AudioSpectrum {
 
     /// 최종 게인. 1/N 정규화 진폭(`|DFT|/N`)에 곱한다.
     /// `127 × 0.001 × 2 × 640 = 162.56`. 원본 코드상으로는
-    /// `AP[0x0C](=1.0) × 0.001 × B / (N/2)`(0x1400d1d44-0x1400d1d5d)를 **비정규화 DFT 진폭**에
+    /// `AP[0x0C] × 0.001 × B / (N/2)`(0x1400d1d44-0x1400d1d5d)를 **비정규화 DFT 진폭**에
     /// 곱하고, 시간영역에서 이미 샘플에 127 을 곱해 뒀다(`0x1400d15dd`). 두 규약을 합치면 위 값이다.
     /// B 가 레이트 무관 640 고정이라 N 이 상쇄돼 **모든 샘플레이트에서 같은 상수**가 된다.
+    ///
+    /// **이 상수는 `user.audioinputvolume = 50`(배포 기본값)에서의 값이다.** `AP[0x0C]` 는
+    /// 생성자 기본값 1.0 을 갖지만 설정 로더가 `설정 × 0.02` 로 덮어쓰고, 슬라이더가 0…200 이라
+    /// 실사용 게인은 `0 … 650.24` 범위를 돈다. 레이트 무관인 것과 **설정 무관인 것은 다르다** —
+    /// 설정을 아는 자리는 `gain(inputVolumeSetting:)` 을 써라.
     public static let gain: Float = 162.56
 
     // MARK: 창/길이 규약

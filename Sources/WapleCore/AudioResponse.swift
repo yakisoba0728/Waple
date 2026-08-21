@@ -67,11 +67,75 @@ public enum AudioResponse {
     /// `uniform vec2 g_AudioBounds` 선언 자체도 같은 3줄이라 다른 이름의 형제 키는 없다.
     /// 그래서 표가 두 줄로 닫힌다.
     ///
-    /// 모르는 이름은 `pulse` 쪽으로 떨어뜨린다 — 워크샵 이펙트가 자기 어노테이션을 갖고 올 수
-    /// 있으나 우리는 그걸 파싱하지 않으므로 어차피 추정이고, 스톡 다수가 `pulse` 값이다.
-    /// 정공법은 셰이더 어노테이션을 실제로 파싱하는 것이다 — **[미해결]**.
+    /// 모르는 이름은 `pulse` 쪽으로 떨어뜨린다. 이 폴백은 **셰이더 원문이 없을 때만** 쓴다 —
+    /// 원문이 있으면 `declaredDefaults(shaderSource:)` 가 어노테이션을 실제로 읽는다(아래).
+    ///
+    /// [해소 2026-08-21] 종전 주석의 "우리는 어노테이션을 파싱하지 않으므로 어차피 추정이고 …
+    /// 정공법은 셰이더 어노테이션을 실제로 파싱하는 것이다 — **[미해결]**" 은 닫혔다.
     public static func declaredDefaults(effectName: String) -> ShaderDefaults {
         effectName.lowercased() == "shake" ? shakeDefaults : pulseDefaults
+    }
+
+    /// 오디오 어노테이션 다섯 키. **유니폼 이름이 아니라 `"material"` 값으로 건다**(함정 8) —
+    /// 씬의 `constantshadervalues` 도 이 이름으로 붙는다. 유니폼 이름은 딴판이다:
+    /// `audioexponent → g_AudioPower`, `audioamount → g_AudioMultiply`
+    /// (`g_AudioExponent`/`g_AudioAmount` 는 두 코퍼스 전수에서 **0건**이다 — 이름으로 걸었으면
+    /// 다섯 중 둘을 놓쳤다).
+    public static let audioAnnotationMaterialKeys = [
+        "frequencymin", "frequencymax", "audioexponent", "audiobounds", "audioamount"
+    ]
+
+    /// 셰이더 원문의 `uniform … ; // {"material":…,"default":…}` 어노테이션에서 선언 기본값을 읽는다.
+    ///
+    /// 다섯 키 중 **하나도 없으면 `nil`** 이다(= 오디오 어노테이션이 없는 셰이더). 일부만 있으면
+    /// 나머지는 `pulseDefaults` 로 채운다 — 스톡 셋은 항상 다섯을 다 선언하지만 워크샵 셰이더가
+    /// 일부만 적을 수 있고, WE 도 없는 어노테이션은 유니폼 초기값(사실상 0)이 아니라 머티리얼
+    /// 기본값 경로를 탄다.
+    ///
+    /// **도달(2026-08-21 실측).** 오디오 어노테이션 줄은 설치본(`ui/` 제외) **3파일 15줄**
+    /// (`assets/effects/pulse` · `assets/effects/shake` · `projects/defaultprojects/razer_bedroom`),
+    /// 동봉 `WEAssets` **2파일 10줄**(앞의 pulse·shake)이다. 워크샵은 미측정.
+    /// 다섯 키 × 파일 수로 정확히 나누어떨어진다 — 부분 선언은 두 코퍼스에 없다.
+    ///
+    /// **파스 규약은 코퍼스에서 재서 정했다.**
+    /// - 값 형태는 숫자(`"default":0`, `"default":1.0`)와 **따옴표 문자열**(`"default":"0.5 1.0"`)
+    ///   둘뿐이다. 배열형 `"default":[…]` 은 동봉·설치 셰이더 전수에서 **0건**이라 지원하지 않는다.
+    /// - 문자열 벡터의 구분자는 **공백과 쉼표 둘 다**다. 오디오 키는 전부 공백이지만
+    ///   같은 코퍼스의 다른 어노테이션에 `"default":"0.0, 1.0"` · `"default":"0.02, 0.02"` ·
+    ///   `"default":"0.0, 360.0"` · `"default":"0.315, 0.135, 0.1125"`(동봉 2파일 4건)이 있고,
+    ///   공백만으로 쪼개면 `Float("0.0,")` 가 nil 이라 성분이 **소리 없이 사라진다**.
+    /// - `//` 앞이 `uniform` 으로 시작하는 줄만 본다 — 주석 처리된 선언
+    ///   (`//uniform float g_AudioSpectrum16[16];`, 동봉 2건)을 집지 않기 위해서다.
+    public static func declaredDefaults(shaderSource: String) -> ShaderDefaults? {
+        var out = pulseDefaults
+        var found = false
+        for rawLine in shaderSource.split(separator: "\n", omittingEmptySubsequences: false) {
+            guard let slashes = rawLine.range(of: "//") else { continue }
+            let code = rawLine[rawLine.startIndex..<slashes.lowerBound]
+                .trimmingCharacters(in: .whitespaces)
+            guard code.hasPrefix("uniform ") else { continue }
+            let ann = String(rawLine[slashes.upperBound...])
+            guard let material = audioAnnString(ann, "material"),
+                  audioAnnotationMaterialKeys.contains(material),
+                  let values = audioAnnFloats(ann, "default"), !values.isEmpty else { continue }
+            found = true
+            switch material {
+            case "frequencymin":  out.freqMin = values[0]
+            case "frequencymax":  out.freqMax = values[0]
+            case "audioexponent": out.power = values[0]
+            case "audioamount":   out.multiply = values[0]
+            case "audiobounds":
+                out.bounds = SIMD2<Float>(values[0], values.count > 1 ? values[1] : out.bounds.y)
+            default: break
+            }
+        }
+        return found ? out : nil
+    }
+
+    /// 원문이 있으면 그것을, 없으면 이름표를 쓴다. 호출부가 쓰기 좋은 형태.
+    public static func declaredDefaults(effectName: String, shaderSource: String?) -> ShaderDefaults {
+        if let src = shaderSource, let parsed = declaredDefaults(shaderSource: src) { return parsed }
+        return declaredDefaults(effectName: effectName)
     }
 
     public static func compute(left: [Float], right: [Float], mode: Int,
@@ -137,6 +201,49 @@ public enum AudioResponse {
         resp = saturate(powf(max(0, resp), power)) * multiply
         return resp
     }
+}
+
+/// 어노테이션 `{"key":"값"}` 의 문자열 값. 없으면 nil.
+private func audioAnnString(_ s: String, _ key: String) -> String? {
+    guard let r = s.range(of: "\"\(key)\"") else { return nil }
+    let rest = s[r.upperBound...]
+    guard let colon = rest.firstIndex(of: ":") else { return nil }
+    let after = rest[rest.index(after: colon)...].drop(while: { $0.isWhitespace })
+    guard after.first == "\"" else { return nil }
+    let body = after.dropFirst()
+    guard let end = body.firstIndex(of: "\"") else { return nil }
+    return String(body[body.startIndex..<end])
+}
+
+/// 어노테이션 `{"key":숫자}` 또는 `{"key":"a b"}`/`{"key":"a, b"}` 의 성분들.
+///
+/// **`GLSLTranslator.jsonFloats` 와 갈리는 자리가 하나 있다** — 저쪽은 문자열을 `split(separator: " ")`
+/// 로만 쪼개서 `"0.0, 1.0"` 이 `["0.0,", "1.0"]` → `Float("0.0,") == nil` → `[1.0]` 한 성분이 된다.
+/// 여기서는 쉼표도 구분자로 본다. (오디오 다섯 키는 전부 공백 구분이라 이 경로가 오디오에서
+/// 발동하지는 않는다 — 파서를 일반 규약으로 맞춰 두는 것이고, 저쪽 정정안은 보고서로 넘긴다.)
+private func audioAnnFloats(_ s: String, _ key: String) -> [Float]? {
+    guard let r = s.range(of: "\"\(key)\"") else { return nil }
+    let rest = s[r.upperBound...]
+    guard let colon = rest.firstIndex(of: ":") else { return nil }
+    let after = rest[rest.index(after: colon)...].drop(while: { $0.isWhitespace })
+    if after.first == "\"" {
+        let body = after.dropFirst()
+        guard let end = body.firstIndex(of: "\"") else { return nil }
+        let out = body[body.startIndex..<end]
+            .split(whereSeparator: { $0 == " " || $0 == "," || $0 == "\t" })
+            .compactMap { Float($0) }
+        return out.isEmpty ? nil : out
+    }
+    // 숫자 리터럴. `,` 나 `}` 에서 끊는다. 지수 표기 허용(`1e-3`).
+    var num = ""
+    for ch in after {
+        if ch == "," || ch == "}" { break }
+        if ch.isNumber || ch == "." || ch == "-"
+            || ((ch == "e" || ch == "E") && (num.last?.isNumber ?? false))
+            || (ch == "+" && (num.last == "e" || num.last == "E")) { num.append(ch) }
+        else if !ch.isWhitespace { break }
+    }
+    return Float(num).map { [$0] }
 }
 
 /// GLSL smoothstep(edge0, edge1, x).
