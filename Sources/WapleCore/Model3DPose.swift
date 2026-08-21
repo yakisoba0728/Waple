@@ -43,6 +43,8 @@ public enum Model3DPose {
     }
 
     /// 바인드 월드(부모 체인 합성) — PuppetPose.bindWorlds 의 Model3D.Bone 판. 부모 인덱스가 자신 이후면(비정상 순서) 루트 취급.
+    /// 합성 순서(`world[parent] * local`, 로컬 먼저)와 **스케일 상속**(4×4 전체 곱, 스케일 제거 없음)의
+    /// 실측 근거는 `PuppetPose.bindWorlds` 주석 단일 소스 — `0x14005ecb0` 산술 + 호출부 `0x1401fea8b`.
     private static func buildBindWorlds(_ bones: [Model3D.Bone]) -> [simd_float4x4] {
         var bw = [simd_float4x4](repeating: matrix_identity_float4x4, count: bones.count)
         for (i, b) in bones.enumerated() {
@@ -74,6 +76,12 @@ public enum Model3DPose {
     /// 커스텀 셰이더 경로용 CPU 정점 스키닝 — Mesh3DShaders mv_skin(MSL)과 같은 수학을 CPU 에서 수행해
     /// rigid 8f 패킹(pos3+normal3+uv2)으로 반환한다. matrices = skinMatrices 결과.
     /// 본 인덱스는 GPU 패킹과 같이 matrices.count-1 로 clamp, 가중치 합 0 이면 바인드 포즈 통과도 mv_skin 과 동치.
+    ///
+    /// **선형 블렌드 스키닝(LBS)** 이고 정점당 본은 정확히 4개다 — 네 슬롯을 가중치와 무관하게
+    /// 전부 더하는 것도 WE 셰이더와 같다(`genericimage3.vert:139-142` 외 8개). 듀얼 쿼터니언
+    /// 경로는 WE 에 없다(동봉 셰이더 137개 grep 0건). 법선도 같은 가중합의 3×3 부분을 쓴다
+    /// (`CAST3X3(g_Bones[…])` — `genericimage3.vert:170-173`). 근거 단일 소스는
+    /// `PuppetPose.skinnedPositions` 주석. wsum 나눗셈은 Waple 자체 셰이더 정합용 발산이다.
     public static func cpuSkinnedPacked(mesh: Model3D.Mesh, matrices: [simd_float4x4]) -> [Float] {
         guard !matrices.isEmpty else { return [] }
         let mx = UInt32(matrices.count - 1)

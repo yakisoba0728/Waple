@@ -20,6 +20,11 @@
 | 7 | 정점 본 가중치 정규화 | **안 한다**(셰이더 원시 가중합) | `wsum` 나눗셈 | 유지 + 반증 주석 |
 | 8 | slerp | 존재하지만 **본 물리/IK 전용**, 애니메이션 경로엔 없음 | 없음 | 기준선으로만 추가 |
 | 9 | 단서의 `0.9995f` / `0.0001f` | 이 빌드에 그런 slerp 상수 없음 | — | 반증 |
+| 10 | 계층 합성 피연산자 순서 | `world[i] = world[parent] ∘ local[i]`(로컬 먼저) — **실측 확정** | 자기정합 추정([미확정])이었음 | 확정(§2.4a) |
+| 11 | 스케일 상속 | **상속한다.** 4×4 전체 곱, 스케일 제거·정규직교화 없음 | 명시 안 됨(코드는 이미 상속) | 명문화(§2.4a) |
+| 12 | `g_Bones` 유니폼 id | **`0x71`**(`g_BonesAlpha` = `0x72`) | 초판이 `0x72`/`0x73` 으로 **한 칸 밀려** 적음 | 정정(§3) |
+| 13 | 2D 퍼펫 워프 대상 | **정점 위치만.** UV 는 `v_TexCoord.xy = a_TexCoord` 로 통과 | 미조사 | 추가(§3.2) |
+| 14 | 본 수 상한 | **128** — 넘으면 `int 0x29` 즉사 | 미조사 | 추가(§1.3) |
 
 ### 0.1 2차 재대조 결과 (2026-08-21)
 
@@ -35,6 +40,21 @@
 
 정정 A 가 코드까지 되돌린 유일한 항목이다. 커밋 `18a7ae6` 의 나머지 변경(nlerp·마스크·모드·
 `layerWeight`)은 재대조에서 **전부 옳았다** — 되돌리지 않았다.
+
+### 0.2 3차 (2026-08-21, 계층 합성 · 스키닝 · 퍼펫 워프)
+
+2차가 남긴 [미확정] 중 **첫 항목(`0x14005ecb0` 피연산자 순서)을 닫았다**. 함정 14("행/열 주도는
+레이아웃만으론 판정 불가")는 여기서 **무력하다** — 곱셈 함수의 산술 자체를 뜨면 두 읽기 방식이
+같은 답("r8 이 먼저 적용된다")으로 수렴하기 때문이다(§2.4a). 그리고:
+
+* **스키닝은 선형 블렌드(LBS)** 다. 듀얼 쿼터니언은 셰이더에도 바이너리에도 없다(§3.1).
+* **2D 퍼펫 워프는 정점 위치만 바꾸고 텍스처 좌표는 건드리지 않는다**(§3.2). 함정 7 대로
+  x86 을 뜨기 전에 셰이더를 grep 해서 나온 답이다.
+* 초판·2차가 적은 **`g_Bones` 유니폼 id 가 한 칸 밀려 있었다**(§3). 함정 16 의 그 패턴이다 —
+  디스크립터 테이블에서 `lea r8, slot` / `mov slot, ID` 가 **직전 호출 뒤**에 오므로,
+  "id 다음 줄의 이름" 이 아니라 "id 와 같은 슬롯을 r8 으로 받는 호출의 이름" 이 짝이다.
+* **본 수 상한 128**, 본 레코드 스트라이드 `0xf0` 과 필드 오프셋(§1.3).
+* 레이어 캐스케이드의 덮어쓰기 분기 판정 상수가 0 이 아니라 **1.0** 이라는 것(§2.4).
 
 ---
 
@@ -104,6 +124,12 @@ Waple 은 관용 리더로 읽는다 — 같은 게이트의 `MIN_LENIENT_NEEDED
 (`*.mdl` 과 같은 이름, 설치본 14개)에도 `skinning` 키는 **0건**이다 — `normals` /
 `tangentspace` / `seconduvchannel` / `skins` 뿐이다.
 
+**퍼펫/스켈레톤을 쓰는 실물은 코퍼스에 0건이다.** 위 3 655개 JSON 어디에도 `puppet*` /
+`animationlayers` 키가 없고, `.mdl` 30개 중 `MDLS`/`MDLA` 섹션을 가진 것도 0개다(§1.1).
+그러므로 **이 문서의 모든 결론은 도달 자산 0건**이며 근거는 바이너리·셰이더·에디터 스키마다.
+아래 각 절의 결론에 붙일 수 있는 "도달 건수" 는 전부 0 이다 — 렌더 실측 게이트가 없다는 뜻이고,
+그래서 수치 검증은 `Tests/WapleCoreTests/PuppetPoseWEParityTests` 의 **합성 포즈 대조**로 대신한다.
+
 퍼펫 본 스키마는 자산이 아니라 **엔진 문자열 테이블**과 **에디터**에 있다.
 
 `.rdata 0x140492140 – 0x1404921f1` 연속 블록(파서 `0x140265c30`–`0x140266f99`).
@@ -136,6 +162,33 @@ lamin lamax ltmax rax ikrd ikse ikfe ikrminl taz ikd ikg ikr ikrmaxl  blendtime
 퍼펫 계열 애셋 프로퍼티 키: `puppet`, `puppetdeformation`, `puppettopology`, `puppetblendshape`.
 씬스크립트 애니메이션 레이어 config: `blendin`, `blendout`, `blendtime`, `autosort`
 (`ui/dist/monaco/autocomplete/lib.sceneScript.d.ts:1426`).
+
+### 1.3 MDLS 본 레코드 (바이너리 실측)
+
+`0x140262530`–`0x1402625c0` 의 파스 루프. 런타임 본 구조체 **스트라이드 `0xf0`(240B)** —
+`imul rcx, rax, 0xf0` @`0x140262536`(`vector::size` 도 원소 240B: `sar rax,4` + `imul
+0xeeeeeeeeeeeeeef` @`0x1401d76b0`).
+
+| 파스 순서 | 오프셋 | 내용 | VA |
+|---|---|---|---|
+| 1 | `+0x00` | 이름 cstring | `0x140262545` → `0x14000ddd0` |
+| 2 | `+0x64` | u32 flags | `0x14026255a` → `0x140262564` |
+| 3 | `+0x60` | **i32 parent**(`-1` = 루트) | `0x140262567` → `0x140262570` |
+| 4 | `+0x20` | **64바이트 행렬**(부모상대 로컬 레스트) | `0x140262573`(`r8d=0x40`) → `0x1400d3ef0` |
+| 5 | `+0x68` | 본 제약 config(§1.2 키 블록) | `0x1402625a9` → `0x140265c30` |
+
+**본 수 상한은 128이다.** 섹션 헤더에서 u32 를 읽고(`0x1402624f4`) `cmp eax, 0x80`
+@`0x140262501` 을 넘으면 `int 0x29`(__fastfail) @`0x14026250a` 로 **즉사**한다. `g_Bones`
+유니폼 배열이 `mat4x3 × 128` = 6 144B 인 것과 맞는다. Waple 은 즉사하지 않고 그대로 읽는다
+(관용 파스 — 의도적 발산, `PuppetHostileInputTests` 가 그 경로를 덮는다).
+
+**역바인드는 파일에 없다.** 본 레코드에 행렬은 이 하나뿐이고 그건 부모상대 로컬 레스트다
+(근거: 이 행렬을 TRS 로 분해해 포즈 SoA 에 시딩한 뒤 §2.4a 가 부모 체인으로 다시 합성한다 —
+역바인드였다면 체인 합성이 성립하지 않는다. 그리고 코퍼스 실측 2809885105 에서 트랙 첫 키의
+평행이동이 이 행렬의 평행이동과 일치한다). 따라서 모델공간 바인드는 **런타임 합성**이다.
+
+MDLS 버전 ≥ 2(`cmp r14d, 2` @`0x1402625c6`)는 뒤에 u16 개수 + **128B 스트라이드**
+(`shl rdi, 7` @`0x140262608`) 이름-달린 항목 배열을 하나 더 읽는다 — 내용 미조사.
 
 ---
 
@@ -321,17 +374,119 @@ if (blendout) { if (min(D,bt) > eps) w *= min((D − T) / min(D·0.5, bt), 1) }
    * `additive` → 가산 `0x1401f9820`
 4. 본별 `blendvps` 마스크(`skel`/클립의 per-bone 배열, 로드 `0x1401f8c7b`, 선택 `0x1401f8c9f`) —
    **그 레이어가 건드리지 않는 본은 이전 값을 그대로 둔다.**
-5. `world[i] = world[parent] × local[i]` — `0x1401fea63`–`0x1401feada`
-   (부모 인덱스 = `bone+0x60` — `cmp dword [rax+0x60], -1` @`0x1401fea5d`, `-1`=루트;
-   4x4 곱 `call 0x14005ecb0` @`0x1401fea8b` 인자 `rcx`=출력 `rdx`=부모행렬 `r8`=자기 로컬).
-   ⚠️ `0x14005ecb0` 의 **피연산자 순서**(rdx×r8 인지 r8×rdx 인지)는 2차에서도 직접 떠 보지
-   않았다 — 함정 14 대로 레이아웃만으론 판정 불가다. Waple 은 `world[p] * local`(열벡터 규약)로
-   두었고, `skin = world × bindWorld⁻¹` 가 `t=0` 에 항등이 되는 자기정합으로만 지지된다.
-6. 스킨 팔레트 → `mat4x3 g_Bones[BONECOUNT]`(uniform id `0x72`, 등록 `0x140003fcb`).
-   `BONECOUNT` 콤보는 본 수(가상함수 `vtbl+0xd8`, `0x140207220`), `SKINNING` 콤보 = 1.
+5. `world[i] = world[parent] ∘ local[i]` — §2.4a. **3차에 피연산자 순서를 확정했다.**
+6. 스킨 팔레트 → `mat4x3 g_Bones[BONECOUNT]`(**uniform id `0x71`**, 등록 `0x140003fcb`).
+   `BONECOUNT` 콤보는 본 수(가상함수 `vtbl+0xd8` — `0x1402098b0`/`0x14020a660`/`0x14020abc9`
+   에서 호출), `SKINNING` 콤보 = 1(`0x140209883`).
+   ⚠️ 팔레트를 **실제로 채우는 지점은 아직 못 찾았다** — `0x1401fdf90` 안에는 4×4 역행렬
+   `0x14005f730` 호출이 **0건**이다(그 함수 호출자 33곳 중 스켈레톤 쪽은 `0x140207b50` 하나뿐이고
+   그건 레이어 변환 경로다). `skin = world × bindWorld⁻¹` 의 **곱 순서**는 여전히
+   자기정합(`t=0` 항등)으로만 지지된다 — [미해결].
 
 **가중치 정규화는 어디에도 없다.** 레이어 가중치는 순서대로 곱해 끌어당길 뿐이고
 (합이 1을 넘든 말든), 정점 본 가중치도 셰이더가 그대로 더한다(§3).
+
+**3차 재확인(명령 단위)**: 레이어 루프 몸통을 직접 떴다.
+```
+0x1401fed50  rdi = *layerIt
+0x1401fed54  test byte [rdi+0xd0], 1        ; visible 아니면 스킵 (je 0x1402001ca)
+0x1401fed81  xmm0 = dt(xmm13) * [rdi+0xc8]  ; rate 를 dt 에 곱한다 — 위상 적분
+0x1401fed89  call 0x1401a9f60               ; Playback::advance(&[rdi+0xf8], dt·rate, …)
+0x1401feda8  call 0x140170580               ; Playback::sample → f0, f1, t
+0x1401fee0c  call 0x14026c8b0               ; effectiveBlend → xmm8 = w
+0x1401fee15  ucomiss xmm8, xmm15            ; xmm15 = **1.0** (0x1401fed21, .rdata 0x140492704)
+0x1401fee1d  test byte [rdi+0xd0], 2        ; additive
+   → w == 1.0 && !additive : 덮어쓰기  call 0x1401f89a0 @0x1401fef20 / 0x1401fef7b
+   → !additive             : 가중 블렌드 call 0x1401f9020 @0x1401ff38e / 0x1401ff3ef
+   → additive              : 가산      call 0x1401f9820 @0x1401ff874 / 0x1401ff8e1
+```
+두 가지가 초판보다 정확해졌다.
+* 분기 상수는 **0 이 아니라 1.0** 이다. "유효 가중치가 정확히 1.0이고 가산이 아닐 때만"
+  덮어쓰기이고, **가중치 0 인 절대 레이어도 덮어쓰기가 아니라** `mix(…, 0)` = 무변화로 지나간다.
+* 블렌드 대상은 **포즈 SoA(`skel+0x230`) 자기 자신**이다(`mov r8,[rax+0x230]` `0x1401fee9b` 이
+  그대로 블렌드 인자로 들어간다) — 제자리 캐스케이드지 "레이어별 포즈의 가중 합" 이 아니다.
+* `rate` 는 **dt 에 곱해 위상을 적분**한다(`xmm13` = 이 함수의 2번째 인자 = dt, `0x1401fdfca`).
+  `time × rate` 순간위상이 아니다 — Waple `integratedCascadeFrame`(C④)의 독립 근거다.
+* 호출이 **두 번씩** 나오는 건 스켈레톤이 **두 채널**이기 때문이다(아래).
+
+**포즈 채널이 둘이다.** `0x1401fdf90` 은 같은 모양의 시딩·블렌드를 두 벌 돌린다:
+
+| 채널 | 원소 배열 | 개수 | 포즈 SoA | 시딩 루프 |
+|---|---|---|---|---|
+| A(본) | `skel+0x38`(스트라이드 `0xf0`) 또는 `skel+0x50` | `skel+0x228` | `skel+0x230` | `0x1401fe2f2`–`0x1401fe657` |
+| B | `skel+0x80` 또는 `skel+0x98` | `skel+0x22c` | `skel+0x240` | `0x1401fe670`–`0x1401fe9ea` |
+
+계층 합성(§2.4a)과 `world` 배열(`skel+0x2c8`)은 **A 에만** 있다 — B 는 평면이다. B 의 정체는
+미조사([미해결]).
+
+두 채널 모두 로컬 행렬 원본을 **두 군데 중에서** 고르고, 선택자는 **하나를 공유한다**:
+`r15b = vector::empty(skel+0x50)` (`call 0x1401fe2d7` → `movzx r15d, al` `0x1401fe2e6`.
+`0x1401d76a0` 은 `mov rax,[rcx+8]; cmp [rcx],rax; sete al` 세 줄짜리 leaf 다).
+`r15b != 0`(= 오버라이드 배열이 비었다) → 레코드 안의 레스트 행렬 `+0x20`,
+`r15b == 0` → 오버라이드 배열 `skel+0x50[i]` / `skel+0x98[i]`
+(분기 `0x1401fe2f5` 시딩A, `0x1401fe682` 시딩B, `0x1401fea1e` 합성).
+
+**본 알파는 기본 1.0 이다.** 캐스케이드 직전에 `skel+0x268` 배열 전체를 `0x3f800000`(=1.0)로
+채운다(`0x1401febf0`–`0x1401fec10`). 이게 `g_BonesAlpha`(§3)의 소스다.
+
+### 2.4a 계층 합성 — 피연산자 순서 확정 (3차)
+
+루프는 `0x1401fea10`–`0x1401feadf`:
+
+```
+rdi = local[i]                         ; bones[i]+0x20  또는  skel+0x50[i]  (0x1401fea1e–0x1401fea3b)
+cmp dword [rax+0x60], -1               ; 0x1401fea5d — 부모 인덱스, -1 = 루트
+ └ 루트   → world[i] = local[i]         ; 0x1401feaae–0x1401feaba (movups ×4, 64B 그대로)
+ └ 그 외  → rbx = skel+0x2c8            ; 0x1401fea63 (world 배열, 원소 64B — sar rax,6 @0x140215e67)
+            rax = world[ bones[i].parent ]        ; 0x1401fea76 → 0x1401fea79
+            rdx = rax                             ; 0x1401fea7e   ← A 피연산자
+            rcx = &tmp                            ; 0x1401fea81
+            r8  = rdi                             ; 0x1401fea88   ← B 피연산자
+            call 0x14005ecb0                      ; 0x1401fea8b
+            world[i] = tmp                        ; 0x1401feace–0x1401feadf (movups ×4)
+```
+
+`0x14005ecb0` 의 산술을 직접 떴다(`0x14005ecba`–`0x14005ee4b`). **A(rdx)는 4개씩 통째로**
+읽고(`movsd [rdx+8k]`), **B(r8)는 성분을 하나씩 읽어 `shufps ..,0` 으로 브로드캐스트**한다:
+
+```
+movss  xmm5, [r8]        0x14005ecd3      ; B[0]
+shufps xmm5, xmm5, 0     0x14005edd6
+mulps  xmm3, xmm5        0x14005edda      ; xmm3 = A[0..1] (movsd [rdx] 0x14005ecca)
+addps  xmm3, xmm0        0x14005edfc      ; += A[4..5]·B[1]
+addps  xmm3, xmm1        0x14005ee11      ; += A[8..9]·B[2]
+addps  xmm3, xmm2        0x14005ee29      ; += A[12..13]·B[3]
+movsd  [rcx], xmm3       0x14005ee3d
+```
+
+평탄 인덱스로 **`out[4j+i] = Σₖ A[4k+i]·B[4j+k]`** 다(다음 저장 `[rcx+8]` `0x14005ee4b`,
+`[rcx+0x10]` `0x14005eec0`, … 까지 같은 형태로 확인).
+
+**여기서 함정 14 가 무력화된다.** 같은 바이트를 어떻게 읽든 결론이 같기 때문이다:
+
+| 읽기 | 저장 해석 | 이 산술의 뜻 | 벡터 규약 | 먼저 적용되는 쪽 |
+|---|---|---|---|---|
+| 열 우선 `M[r][c]=m[4c+r]` | — | `out = A · B` | 열벡터 `p' = M p` | **B** |
+| 행 우선 `M[r][c]=m[4r+c]` | 위의 전치 | `out = B · A` | 행벡터 `p' = p M` | **B** |
+
+`r8` 이 자기 로컬이므로 **로컬 → 부모 순서**, 즉 열벡터 규약으로 쓰면
+`world[i] = world[parent] * local[i]` 다. Waple 이 이미 쓰던 식이 맞았고, 이제 추정이 아니다.
+
+**스케일은 상속된다.** 합성이 4×4 아핀 전체 곱이고 결과를 `movups` 64B 로 통째로 옮긴다 —
+스케일 분리·정규직교화 단계가 **없다**. 부모의 비균등 스케일은 자식의 회전 기저까지 늘려
+전단(shear)을 만든다. (`PuppetPoseWEParityTests.testNonUniformParentScaleIsInheritedAndShearsChild`)
+
+**부모 인덱스가 자신보다 뒤면** WE 는 아직 안 쓴 `world[parent]` 슬롯을 읽는다(전 프레임 잔값).
+Waple 은 `p < i` 게이트로 루트 취급한다 — 순환·역순 부모에서 무한재귀와 미정의값을 막는
+의도적 발산이다.
+
+**수치 검증**(코퍼스 도달 0건이라 합성 포즈로 대신): 무작위 6본 체인 **400건**(본 2 400개)에서
+위 산술을 그대로 옮긴 기준 구현과 Waple `bindWorlds` 를 대조 — 불일치 **0/2 400**.
+피연산자를 뒤바꾼 가설은 불일치 **2 000/2 400**(나머지 400은 루트 본이라 두 가설이 같다).
+
+⚠️ 한 가지 남는다: 이 루프는 레이어 캐스케이드(`0x1401fed50`)보다 **앞**에서 돈다. 즉 여기서
+합성되는 것은 (오버라이드 배열이 비었을 때) **레스트 월드** = `bindWorld` 다. 애니메이션이
+적용된 뒤의 월드를 어디서 합성하는지는 못 찾았다([미해결]) — 다만 합성 **규칙**은 이 하나뿐이다.
 
 ### 2.5 회전 보간 = nlerp (slerp 아님)
 
@@ -418,9 +573,101 @@ position.xyz = mul(vec4(position, 1.0),
 ```
 
 **정규화가 없다.** 합이 1이 아닌 데이터는 그대로 축소/확대되어 렌더된다(리소스 컴파일러가
-저작 시점에 정규화해 두는 전제). 법선/탄젠트도 같은 가중합의 3x3 부분을 쓴다.
-`SKINNING_ALPHA` 콤보가 켜지면 `g_BonesAlpha[BONECOUNT]`(uniform id `0x73`)의 가중합을
+저작 시점에 정규화해 두는 전제). 법선/탄젠트도 같은 가중합의 3x3 부분을 쓴다
+(`CAST3X3(g_Bones[…])` — `genericimage3.vert:170-173`, `181-184`).
+`SKINNING_ALPHA` 콤보가 켜지면 `g_BonesAlpha[BONECOUNT]`(**uniform id `0x72`**)의 가중합을
 `saturate` 해 정점 알파에 곱한다.
+
+**유니폼 id 정정(3차).** 초판·2차는 `g_Bones` = `0x72`, `g_BonesAlpha` = `0x73` 이라고 적었는데
+**한 칸 밀려 있었다**. 등록부 `0x140003f48`–`0x140004033` 은 항목마다
+`lea r8, slot` → `mov dword slot, ID` → `lea rdx, NAME` → `lea rcx, dst` → `call 0x14016f7a0`
+로 완전히 규칙적이고, 짝은 **같은 슬롯을 `r8` 으로 받는 호출의 이름**이다:
+
+| 슬롯 | id | 이름 | id 저장 VA |
+|---|---|---|---|
+| `[rbp-0x74]` | `0x6f` | `g_RenderVar3` | `0x140003f88` |
+| `[rbp-0x70]` | `0x70` | `g_RenderVar4` | `0x140003fa6` |
+| `[rbp-0x6c]` | **`0x71`** | **`g_Bones`** | `0x140003fc4`(이름 `lea` `0x140003fcb`) |
+| `[rbp-0x68]` | **`0x72`** | **`g_BonesAlpha`** | `0x140003fe2` |
+| `[rbp-0x64]` | `0x73` | `g_BlendMap` | `0x140004000` |
+
+초판은 "`0x140003fcb` 에서 `g_Bones` 를 등록" 이라고 **이름 `lea` 의 주소**를 적고 그 **앞줄**의
+id 를 짝지었다 — 그런데 그 앞줄(`mov [rbp-0x6c], 0x71`)이 바로 `g_Bones` 것이다.
+함정 16 이 경고한 한 칸 밀림과 같은 부류이니 재차 주의.
+
+### 3.1 선형 블렌드 스키닝이지 듀얼 쿼터니언이 아니다
+
+**범위**: 설치본 `assets/shaders/` **137개**(= `.vert` 59 + `.frag` 59 + `.h` 14 + `.geom` 4 +
+`declarations.json` 1, 하위 `base/`·`HLSL/`·`editor/` 포함) + 저장소 `WEAssets/shaders/` 137개
+(바이트 동일 사본).
+
+* `dualquat` / `dual_quat` / `DQS`(대소문자 무시) 식별자 — **셰이더 137개 전수 0건**.
+  (같은 정규식을 `WEAssets/` 트리 전체에 걸면 18건이 나오는데 **전부 `.tex`/`.tga` 바이너리 안의
+  우연한 바이트열**이다 — 텍스트 셰이더 파일로 한정하면 0건. 이런 오탐을 그대로 실으면 결론이
+  뒤집히므로 명시해 둔다.)
+* 바이너리 문자열 전수 스캔에서 `SKIN` 을 포함하는 콤보는 **`SKINNING` 과 `SKINNING_ALPHA` 둘뿐**,
+  `[Dd]ual[Qq]uat` 계열은 **0건**.
+* `g_Bones[` 를 쓰는 **9개** 전부가 가중 **행렬합**이다. 철자가 둘인데 아핀이라 대수적으로 동치다:
+
+```glsl
+// (a) 행렬을 먼저 섞고 한 번 곱한다 — 8개 파일
+//     base/model_vertex_v1.h:147-150, genericimage2.vert:86-89, genericimage3.vert:139-142,
+//     genericimage4.vert, generic3.vert:120-123, generic4.vert, clippingmaskimage4.vert:97-100,
+//     shadowcaster.vert:98-101
+mul(vec4(p,1), g_Bones[i.x]*w.x + g_Bones[i.y]*w.y + g_Bones[i.z]*w.z + g_Bones[i.w]*w.w)
+
+// (b) 각각 곱하고 나중에 섞는다 — passthroughblend.vert:19-22
+mul(vec4(p,1), g_Bones[i[0]])*w[0] + … + mul(vec4(p,1), g_Bones[i[3]])*w[3]
+```
+
+`Σ wᵏ·(Mᵏp) ≡ (Σ wᵏ·Mᵏ)p` 이므로 둘은 같은 LBS 다(부동소수 오차만 다르다.
+`PuppetPoseWEParityTests.testTwoShaderSpellingsOfLinearBlendSkinningAgree` 가 200건으로 대조 —
+불일치 0). 듀얼 쿼터니언이라면 같은 입력에서 결과가 **다르다**: 같은 축의 0°/180° 두 본을
+0.5/0.5 로 섞을 때 LBS 는 회전 기저가 상쇄돼 정점이 축으로 붕괴하고(사탕 포장지) DQ 는 90°
+회전을 낸다. Waple 은 붕괴하는 쪽을 고정점으로 박았다
+(`testSkinningCollapsesLikeLinearBlendNotDualQuaternion`).
+
+**가중치 0 슬롯은 건너뛰지 않는다.** 셰이더는 네 슬롯을 무조건 읽어 곱하므로 가중치가 0 이어도
+`g_Bones[idx]` 인덱싱 자체는 일어난다(범위 밖 인덱스는 GPU 미정의 — Waple 은 `count-1` 로
+clamp 한다). **음수 가중치도 그대로 빼진다.** Waple 은 정확히 0 인 슬롯만 건너뛴다 —
+값은 동일하고 퇴화 행렬의 `0×NaN` 전파만 막는다(종전 `w > 0` 게이트는 음수 슬롯을 통째로
+버려 WE 와 값이 달랐다 — 3차에 고쳤다).
+
+### 3.2 2D 퍼펫 워프는 **UV 를 건드리지 않는다**
+
+퍼펫 스키닝이 손대는 것은 `a_Position` 뿐이고, 텍스처 좌표는 그대로 통과한다:
+
+```glsl
+// genericimage2.vert:101-105 / genericimage3.vert:152-156 / clippingmaskimage4.vert:110-114
+#if SPRITESHEET
+    v_TexCoord.xy = g_Texture0Translation + a_TexCoord.x*g_Texture0Rotation.xy
+                                          + a_TexCoord.y*g_Texture0Rotation.zw;
+#else
+    v_TexCoord.xy = a_TexCoord;      // ← 본과 무관
+#endif
+```
+
+UV 를 바꾸는 유일한 콤보는 `SPRITESHEET`(시트 프레임 오프셋)이고 본/스킨과 아무 관계가 없다.
+즉 **2D 퍼펫은 "UV 고정 메시 워프"** 다 — 텍스처 좌표 워프가 아니다. 텍스처는 정지해 있고
+삼각형 그물이 움직인다.
+
+본이 UV·마스크에 간접적으로 개입하는 경로는 **하나뿐**이고, 그것도 워프가 아니라 **모프 가중치
+게이팅**이다 — `clippingmaskimage4.vert` 의 `MORPHING_MODIFIERS`(§1.2 의 `puppetblendshape`):
+
+```glsl
+uniform mat4x3 g_MorphBoneTransform[11];
+uniform vec3   g_MorphBoneRules[11];
+...
+vec3 preMorphPos            = mul(vec4(localPos,1.0), Σ g_Bones[i.k]*w.k);   // 먼저 스킨
+vec3 modifierInverseDelta   = mul(vec4(preMorphPos,1.0), g_MorphBoneTransform[t]);
+float bonePointRule = smoothstep(rules.y, rules.z, length(modifierInverseDelta.xy));
+float boneAxisRule  = smoothstep(rules.y, rules.z, modifierInverseDelta.x);
+morphAmount = mix(bonePointRule, boneAxisRule, rules.x);                     // 모프 가중치만 조절
+```
+
+즉 "본 기준 거리/축 거리로 블렌드셰이프 세기를 감쇠" 하는 것이고 UV 는 여전히 안 건드린다.
+모프 타깃 자체는 `g_Texture5` 텍스처에서 정점 델타로 읽는다(`MORPHING`).
+모프 경로 전체는 이 문서 범위 밖이다([미해결]).
 
 **범위 라벨**(2차 실측): 설치본 `assets/shaders/` **137개** 중 `g_Bones[` 를 쓰는 것은 **9개**
 (`base/model_vertex_v1.h`, `clippingmaskimage4.vert`, `generic3.vert`, `generic4.vert`,
@@ -452,21 +699,35 @@ Waple 의 `PuppetPose.skinnedPositions` / `Model3DPose.cpuSkinnedPacked` 는 `ws
   트랙 없는 본은 스킵. 바인드가 TRS 로 분해되지 않으면(스큐/거울) 종전 행렬 lerp 로 폴백.
   부모 합성은 `p < i` 게이트라 **순환 부모·범위 밖 부모는 루트로 떨어진다**(무한재귀 없음).
 - `addTRS` — 가산 레이어(위치 델타 + 쿼터니언 델타곱 + nlerp).
+- **[3차]** `bindWorlds` 주석에 §2.4a 전문(피연산자 순서 증명 + 스케일 상속)을 박았다.
+  코드는 그대로다 — 종전 식이 맞았고 추정이 확정으로 바뀐 것이다.
+- **[3차]** `skinnedPositions` 의 슬롯 게이트를 `w > 0` → **`w != 0`** 으로 고쳤다(§3.1).
+  음수 가중치를 버리던 것이 WE 와 값이 갈리는 지점이었다. `skinMatrices` 주석에 역바인드가
+  파일에 없다는 사실(§1.3)과 팔레트 생성 지점 미해결을 기재.
 
 `Sources/WapleCore/Model3DPose.swift`
 - `sampledTRS` 신설, `sampledLocal` 이 그것을 경유 — 3D 경로도 회전 nlerp.
   `PuppetPose.rotationQuaternion` 을 부르므로 §2.1 정정이 3D 경로에도 그대로 적용된다.
+- **[3차]** `buildBindWorlds` / `cpuSkinnedPacked` 주석에 §2.4a·§3.1 을 참조로 연결.
 
 `Sources/WapleCore/PuppetModel.swift` — `Key.angles` / `Animation.mode` 주석에 근거 VA 기재.
+**[3차]** `Bone.bind` 주석이 "바인드(모델→본) 행렬" 이라고 **반대로** 적고 있던 것을
+"부모상대 로컬 레스트" 로 고치고(§1.3) 본 레코드 오프셋·128 상한을 기재했다.
 
 `Sources/WapleCore/Model3D.swift` **[2차]** — `Animation.Key` 에 36B/`frameCount+1` 불변식과
 WE 의 `int 0x29` 즉사 지점(`0x140263c8c`/`0x140263c95`)을, `Animation.mode` 에 인식 문자열이
 둘뿐이라는 사실을 기재.
 
 테스트
-- `Tests/WapleCoreTests/PuppetPoseWEParityTests.swift` — 15건. **[2차]** 축 순서 테스트를
+- `Tests/WapleCoreTests/PuppetPoseWEParityTests.swift` — **22건**. **[2차]** 축 순서 테스트를
   `(X,Y,Z)` 로 교정하고 `testBakeMatchesEngineSlotExpressions`(엔진 굽기 식 + 슬롯 순서 고정) ·
   `testPublicApiEulerConventionMatchesFileConvention`(`setLocalBoneAngles` 행렬 원소 대조) 신설.
+  **[3차 신설 7건]** `testEngineMatMulFlatFormulaEqualsColumnVectorProduct`(0x14005ecb0 산술 전사) ·
+  `testHierarchyComposesParentThenLocalNumerically`(400건 대조, 뒤바꾼 가설 동시 계수) ·
+  `testNonUniformParentScaleIsInheritedAndShearsChild` ·
+  `testTwoShaderSpellingsOfLinearBlendSkinningAgree`(200건) ·
+  `testSkinningCollapsesLikeLinearBlendNotDualQuaternion`(LBS 판별식) ·
+  `testNegativeWeightSlotContributesAndZeroSlotDoesNot` · `testVertexHasExactlyFourBoneSlots`.
 - `Tests/WapleCoreTests/PuppetPoseTests.swift` — `key(_:_:rz:)` 헬퍼가 세 번째 슬롯(+0x14)에
   넣도록 교정.
 - `Tests/WapleCoreTests/PuppetHostileInputTests.swift` **[2차 신설, 13건]** — 신뢰 경계.
@@ -478,14 +739,23 @@ WE 의 `int 0x29` 즉사 지점(`0x140263c8c`/`0x140263c95`)을, `Animation.mode
 
 ## 5. 미확정 / 후속
 
-- **`0x14005ecb0`(4x4 곱)의 피연산자 순서** — §2.4 5번. 함정 14 라 레이아웃만으론 판정 불가고
-  2차에서도 직접 뜨지 않았다. Waple 은 자기정합(`t=0` 항등)으로만 지지된다.
+- ~~`0x14005ecb0`(4x4 곱)의 피연산자 순서~~ — **3차에 확정(§2.4a)**. 함정 14 는 이 자리에서
+  무력하다: 곱셈 산술 자체를 뜨면 두 읽기가 같은 답으로 수렴한다.
+- **`g_Bones` 팔레트를 실제로 채우는 지점** — 못 찾았다(§2.4 6번). `skin = world × bindWorld⁻¹`
+  의 **곱 순서**는 여전히 자기정합(`t=0` 항등)으로만 지지된다. 4×4 역행렬 `0x14005f730` 의
+  호출자 33곳을 훑었으나 스켈레톤 쪽은 `0x140207b50`(레이어 변환) 하나뿐이었다.
+- **애니메이션 적용 뒤의 월드 합성 지점** — `0x1401fea10` 루프는 레이어 캐스케이드보다 **앞**이라
+  레스트 월드(=`bindWorld`)를 만든다. 블렌드된 포즈로 다시 합성하는 곳은 미탐(§2.4a).
+- **두 번째 포즈 채널**(`skel+0x80`/`+0x98`, 개수 `skel+0x22c`, SoA `skel+0x240`)의 정체 — §2.4.
+  계층 합성이 없는 평면 채널이다.
+- MDLS 버전 ≥ 2 의 128B 스트라이드 항목 배열(§1.3) — 미조사.
 - 정확히 `T = D` 인 순간의 샘플 인덱스가 WE(`i=frameCount−1`)와 Waple(`i=frameCount`)에서
   갈리는 문제 — §2.2. 실효 차이는 부동소수 1 ulp 수준이라 정본화하지 않았다.
 - 가산 레이어의 **기준 포즈**(클립 프레임0 vs 본 레스트) — 구조는 확인, 인자 출처 미추적.
 - `wraploop`(재생 플래그 bit2)이 샘플링에 어떻게 쓰이는지.
 - 본 물리 / IK 솔버(`0x1401fdf90`) 전체 — `lamin`/`lamax`/`ikd`/`ikrd` 등 §1.2 키의 수식.
 - `MDLE0002` · `MDMP0001`(모프 타깃 추정) 섹션.
-- 동봉 코퍼스에 스킨 모델이 0개라 **렌더 실측 게이트가 없다**. 워크샵 퍼펫 `.mdl`
-  (`models/*_puppet.mdl`)을 확보하면 §2.1 축 순서를 **가장 먼저** 재확인할 것 — 이 문서가
-  같은 자리에서 한 번 틀렸다.
+- `MORPHING` / `MORPHING_MODIFIERS` 블렌드셰이프 경로 전체(§3.2) — 게이팅 식만 읽었다.
+- 동봉 코퍼스에 스킨 모델이 0개라 **렌더 실측 게이트가 없다**(도달 건수 0/3 655 JSON, 0/30 mdl).
+  워크샵 퍼펫 `.mdl`(`models/*_puppet.mdl`)을 확보하면 §2.1 축 순서를 **가장 먼저**
+  재확인할 것 — 이 문서가 같은 자리에서 한 번 틀렸다. 그다음이 §2.4a 합성 순서다.

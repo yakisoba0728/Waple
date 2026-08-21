@@ -23,10 +23,24 @@ public struct PuppetModel: Equatable {
         public let uv: SIMD2<Float>
     }
 
+    /// MDLS 본 레코드. WE 런타임 본 구조체는 **스트라이드 0xf0(240B)** 이고 파스 순서·오프셋은
+    /// `0x140262530`–`0x1402625c0` 에서: 이름 cstring → `+0x64` u32 flags → `+0x60` i32 parent
+    /// (`-1` = 루트, 계층 합성이 `cmp dword [rax+0x60], -1` @`0x1401fea5d` 로 이 필드를 본다) →
+    /// `+0x20` 64바이트 행렬 → `+0x68` 본 제약 config(파서 `0x140265c30`).
+    /// **본 수 상한은 128** — `cmp eax, 0x80` @`0x140262501` 를 넘으면 `int 0x29`(__fastfail,
+    /// `0x14026250a`)로 즉사한다. Waple 은 즉사하지 않고 그대로 읽는다(관용, 의도적 발산).
     public struct Bone: Equatable {
         public let name: String
         public let parent: Int32          // -1 = 루트
-        public let bind: simd_float4x4    // 바인드(모델→본) 행렬 — 실측: 평행이동 위주
+        /// **부모상대 로컬 레스트 변환**(모델→본 역바인드가 아니다). 근거 둘:
+        ///   · 시딩 루프 `0x1401fe2f2`–`0x1401fe657` 가 이 행렬(`bone+0x20`)을 TRS 로 분해해
+        ///     포즈 SoA 를 채우고, 계층 합성 `0x1401fea10`–`0x1401feadf` 가 그 자리에 다시
+        ///     `world[i] = world[parent] ∘ local[i]` 를 돌린다 — 역바인드면 체인 합성이 무의미하다.
+        ///   · 코퍼스 실측(2809885105): 트랙 첫 키의 평행이동이 이 행렬의 평행이동과 일치한다.
+        ///     키는 부모상대 로컬이므로 이 행렬도 같은 공간이다.
+        /// 모델공간 바인드는 `PuppetPose.bindWorlds` 가 부모 체인으로 합성해서 만든다.
+        /// (종전 주석은 "바인드(모델→본) 행렬" 이라고 적고 있었는데 코드가 하는 일과 반대였다.)
+        public let bind: simd_float4x4
     }
 
     public struct Key: Equatable {

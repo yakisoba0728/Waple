@@ -313,4 +313,219 @@ final class PuppetPoseWEParityTests: XCTestCase {
         XCTAssertTrue(p.x.isFinite && p.y.isFinite && p.z.isFinite, "폴백 경로도 유한값을 낸다")
         XCTAssertEqual(p.x, 7, accuracy: 1e-3, "weight=1 절대 레이어는 클립 포즈 그대로")
     }
+
+    // MARK: - 본 계층 합성 (0x14005ecb0 피연산자 순서 + 스케일 상속)
+
+    /// WE 의 4×4 곱 `0x14005ecb0` 을 **평탄 인덱스 산술 그대로** 옮긴 것.
+    ///
+    /// `0x14005ecba`–`0x14005ee4b`: A=rdx 는 8바이트씩 통째로 읽고(`movsd [rdx+8k]`),
+    /// B=r8 은 성분을 하나씩 읽어 `shufps ..,0` 으로 브로드캐스트해 곱한다
+    /// (`movss xmm5,[r8]` 0x14005ecd3 → `shufps xmm5,xmm5,0` 0x14005edd6 → `mulps xmm3,xmm5`
+    /// 0x14005edda → `addps` 0x14005edfc/0x14005ee11/0x14005ee29 → `movsd [rcx],xmm3` 0x14005ee3d).
+    /// 결과: `out[4j+i] = Σₖ A[4k+i]·B[4j+k]`.
+    /// 전원소 0 행렬. `simd_float4x4(0)` 은 애플 simd 에서 **대각** 행렬이라 쓸 수 없다.
+    private func zeroMatrix() -> simd_float4x4 {
+        simd_float4x4(SIMD4(0, 0, 0, 0), SIMD4(0, 0, 0, 0), SIMD4(0, 0, 0, 0), SIMD4(0, 0, 0, 0))
+    }
+
+    private func engineMatMul(_ a: simd_float4x4, _ b: simd_float4x4) -> simd_float4x4 {
+        func flat(_ m: simd_float4x4, _ n: Int) -> Float { m[n / 4][n % 4] }   // m[4c+r] = 열 c 행 r
+        var out = zeroMatrix()
+        for j in 0..<4 {
+            for i in 0..<4 {
+                var s: Float = 0
+                for k in 0..<4 { s += flat(a, 4 * k + i) * flat(b, 4 * j + k) }
+                out[j][i] = s
+            }
+        }
+        return out
+    }
+
+    /// 결정적 의사난수(테스트 재현성 — 플랫폼 RNG 에 기대지 않는다).
+    private struct LCG {
+        var s: UInt64
+        mutating func next() -> Float {   // [-1, 1)
+            s = s &* 6364136223846793005 &+ 1442695040888963407
+            return Float(Int32(bitPattern: UInt32(truncatingIfNeeded: s >> 33))) / Float(1 << 31)
+        }
+    }
+
+    /// 엔진 산술 전사(轉寫)와 `simd_float4x4` 곱이 같은지 — 열우선 규약 고정점.
+    /// 이게 깨지면 아래 계층 테스트의 기준선이 무너진 것이다.
+    func testEngineMatMulFlatFormulaEqualsColumnVectorProduct() {
+        var r = LCG(s: 0x5EED_1234)
+        var mismatches = 0
+        for _ in 0..<200 {
+            var a = zeroMatrix(), b = zeroMatrix()
+            for c in 0..<4 { for row in 0..<4 { a[c][row] = r.next() * 3; b[c][row] = r.next() * 3 } }
+            let engine = engineMatMul(a, b)
+            let simdp = a * b
+            for c in 0..<4 {
+                for row in 0..<4 where abs(engine[c][row] - simdp[c][row]) > 1e-3 * max(1, abs(simdp[c][row])) {
+                    mismatches += 1
+                }
+            }
+        }
+        XCTAssertEqual(mismatches, 0, "0x14005ecb0 전사 == simd 열우선 곱 (불일치 \(mismatches)/3200 성분)")
+    }
+
+    /// **부모→자식 합성 순서.** `0x1401fea10`–`0x1401feadf` 는 `0x14005ecb0(out, world[parent], local)`
+    /// 을 부르고(호출부 인자: `rdx` = 부모 월드 `0x1401fea7e`, `r8` = 자기 로컬 `0x1401fea88`),
+    /// 위 산술상 **r8 이 먼저 적용된다** — 곧 열벡터 규약의 `world[parent] * local` 이다.
+    /// 무작위 본 체인 400건으로 Waple 의 `bindWorlds` 와 대조하고, 뒤바꾼 순서도 함께 센다.
+    func testHierarchyComposesParentThenLocalNumerically() {
+        var r = LCG(s: 0xA11C_E5)
+        var okMismatch = 0, reversedMismatch = 0
+        let n = 400
+        for _ in 0..<n {
+            // 부모 인덱스가 항상 자신보다 앞인 6본 체인(가지 포함).
+            var bones: [PuppetModel.Bone] = []
+            for i in 0..<6 {
+                let t = SIMD3<Float>(r.next() * 20, r.next() * 20, r.next() * 20)
+                let a = SIMD3<Float>(r.next() * 3, r.next() * 3, r.next() * 3)
+                let s = SIMD3<Float>(0.4 + abs(r.next()), 0.4 + abs(r.next()), 0.4 + abs(r.next()))
+                let parent: Int32 = i == 0 ? -1 : Int32(Int(abs(r.next()) * Float(i)) % max(i, 1))
+                bones.append(.init(name: "b\(i)", parent: parent,
+                                   bind: PuppetPose.localMatrix(position: t, angles: a, scale: s)))
+            }
+            var m = PuppetModel(material: "m", vertices: [], indices: [])
+            m.bones = bones
+            let got = PuppetPose.bindWorlds(m)
+
+            // 엔진 규칙 그대로: world[i] = engineMatMul(world[parent], local[i])
+            var ref = [simd_float4x4](repeating: matrix_identity_float4x4, count: bones.count)
+            var rev = ref
+            for (i, b) in bones.enumerated() {
+                let p = Int(b.parent)
+                ref[i] = b.parent >= 0 ? engineMatMul(ref[p], b.bind) : b.bind
+                rev[i] = b.parent >= 0 ? engineMatMul(b.bind, rev[p]) : b.bind   // 뒤바꾼 가설
+            }
+            func differs(_ x: simd_float4x4, _ y: simd_float4x4) -> Bool {
+                for c in 0..<4 {
+                    for row in 0..<4 where abs(x[c][row] - y[c][row]) > 1e-2 * max(1, abs(y[c][row])) {
+                        return true
+                    }
+                }
+                return false
+            }
+            for i in 0..<bones.count {
+                if differs(got[i], ref[i]) { okMismatch += 1 }
+                if differs(got[i], rev[i]) { reversedMismatch += 1 }
+            }
+        }
+        print("AG-METRIC hierarchy: ok=\(okMismatch) reversed=\(reversedMismatch) total=\(n * 6)")
+        XCTAssertEqual(okMismatch, 0, "world[parent] × local 불일치 \(okMismatch)/\(n * 6)")
+        XCTAssertGreaterThan(reversedMismatch, n * 4,
+                             "뒤바꾼 순서는 대부분 어긋나야 한다 — 불일치 \(reversedMismatch)/\(n * 6)")
+    }
+
+    /// **스케일은 상속된다.** 합성이 4×4 아핀 전체 곱이고(`movups` 64B 복사 4번 `0x1401feace`–
+    /// `0x1401feadf`) 스케일 제거·정규직교화 단계가 없다 — 부모의 비균등 스케일이 자식의 회전
+    /// 기저까지 늘려 전단을 만든다.
+    func testNonUniformParentScaleIsInheritedAndShearsChild() {
+        var m = PuppetModel(material: "m", vertices: [], indices: [])
+        let parent = PuppetPose.localMatrix(position: .zero, angles: .zero, scale: SIMD3(2, 1, 1))
+        let child = PuppetPose.localMatrix(position: SIMD3(1, 0, 0), angles: SIMD3(0, 0, .pi / 2),
+                                           scale: SIMD3(1, 1, 1))
+        m.bones = [.init(name: "p", parent: -1, bind: parent), .init(name: "c", parent: 0, bind: child)]
+        let w = PuppetPose.bindWorlds(m)
+        // 평행이동이 부모 스케일을 먹는다: (1,0,0) → (2,0,0). 상속이 없었다면 1.0.
+        XCTAssertEqual(w[1].columns.3.x, 2, accuracy: 1e-5, "부모 스케일이 자식 평행이동에 곱해진다")
+        // 회전 기저도 비등방으로 늘어난다(전단): Rz(90°) 의 열1 = (-1,0,0) → (-2,0,0).
+        XCTAssertEqual(simd_length(SIMD3(w[1].columns.0.x, w[1].columns.0.y, w[1].columns.0.z)),
+                       1, accuracy: 1e-4, "열0 길이 1 (y 축 방향)")
+        XCTAssertEqual(simd_length(SIMD3(w[1].columns.1.x, w[1].columns.1.y, w[1].columns.1.z)),
+                       2, accuracy: 1e-4, "열1 길이 2 — 스케일이 회전 기저까지 상속돼 비등방이 된다")
+    }
+
+    // MARK: - 정점 스키닝: LBS (듀얼 쿼터니언 아님)
+
+    /// WE 셰이더의 두 철자가 대수적으로 같은지 — `genericimage3.vert:139-142`(행렬 먼저 섞기)와
+    /// `passthroughblend.vert:19-22`(각각 곱하고 섞기). 아핀이라 동치이고, Waple 은 후자 형태다.
+    func testTwoShaderSpellingsOfLinearBlendSkinningAgree() {
+        var r = LCG(s: 0xB1E4_D1)
+        var mismatches = 0
+        for _ in 0..<200 {
+            var mats: [simd_float4x4] = []
+            for _ in 0..<4 {
+                mats.append(PuppetPose.localMatrix(
+                    position: SIMD3(r.next() * 10, r.next() * 10, r.next() * 10),
+                    angles: SIMD3(r.next() * 3, r.next() * 3, r.next() * 3),
+                    scale: SIMD3(0.5 + abs(r.next()), 0.5 + abs(r.next()), 0.5 + abs(r.next()))))
+            }
+            var w = SIMD4<Float>(abs(r.next()), abs(r.next()), abs(r.next()), abs(r.next()))
+            let sum = w.x + w.y + w.z + w.w
+            guard sum > 1e-3 else { continue }
+            w /= sum
+            let p = SIMD4<Float>(r.next() * 30, r.next() * 30, r.next() * 30, 1)
+
+            // (a) 행렬을 먼저 가중합
+            var blended = zeroMatrix()
+            for k in 0..<4 {
+                blended.columns.0 += mats[k].columns.0 * w[k]
+                blended.columns.1 += mats[k].columns.1 * w[k]
+                blended.columns.2 += mats[k].columns.2 * w[k]
+                blended.columns.3 += mats[k].columns.3 * w[k]
+            }
+            let a = blended * p
+            // (b) 각각 곱하고 나중에 가중합
+            var b = SIMD4<Float>(0, 0, 0, 0)
+            for k in 0..<4 { b += (mats[k] * p) * w[k] }
+            for c in 0..<3 where abs(a[c] - b[c]) > 1e-2 * max(1, abs(b[c])) { mismatches += 1 }
+        }
+        print("AG-METRIC lbs-spellings: mismatches=\(mismatches)")
+        XCTAssertEqual(mismatches, 0, "LBS 두 철자는 동치 — 불일치 \(mismatches)")
+    }
+
+    /// **선형 블렌드 스키닝이지 듀얼 쿼터니언이 아니다.** 판별식은 고전적인 "사탕 포장지" 붕괴다:
+    /// 같은 축의 0°/180° 두 본을 0.5/0.5 로 섞으면 LBS 는 회전 기저가 상쇄돼 정점이 축으로
+    /// 눌린다(듀얼 쿼터니언이면 90° 회전이 나와 길이가 보존된다).
+    /// 근거: 동봉 셰이더 137개에 `dualquat`/`DQS` 식별자 0건, `g_Bones` 사용 9개 전부 가중 행렬합.
+    func testSkinningCollapsesLikeLinearBlendNotDualQuaternion() {
+        var m = PuppetModel(material: "m",
+                            vertices: [.init(position: SIMD3(1, 0, 0), boneIndices: SIMD4(0, 1, 0, 0),
+                                             weights: SIMD4(0.5, 0.5, 0, 0), uv: SIMD2(0, 0))],
+                            indices: [0])
+        m.bones = [.init(name: "a", parent: -1, bind: matrix_identity_float4x4),
+                   .init(name: "b", parent: -1, bind: matrix_identity_float4x4)]
+        let rot180 = PuppetPose.quaternionMatrix(PuppetPose.rotationQuaternion(SIMD3(0, 0, .pi)))
+        let p = PuppetPose.skinnedPositions(model: m, matrices: [matrix_identity_float4x4, rot180]).first!
+        XCTAssertEqual(simd_length(p), 0, accuracy: 1e-4,
+                       "LBS 는 0.5·I + 0.5·Rz(180°) 로 붕괴한다 — 듀얼 쿼터니언이면 길이 1 이 남는다")
+    }
+
+    /// 가중치 0 슬롯: WE 셰이더는 네 슬롯을 무조건 더하므로 **0 슬롯은 결과에 기여하지 않지만**
+    /// 인덱싱 자체는 일어난다. 음수 가중치는 그대로 빼진다 — Waple 도 `w != 0` 만 건너뛴다.
+    /// (종전 `w > 0` 게이트는 음수 슬롯을 통째로 버려 WE 와 값이 달랐다.)
+    func testNegativeWeightSlotContributesAndZeroSlotDoesNot() {
+        // 두 본: 본0 = 항등, 본1 = +x 로 10 이동. 가중치 (1.5, -0.5, 0, 0) → 합 1.0.
+        var m = PuppetModel(material: "m",
+                            vertices: [.init(position: SIMD3(0, 0, 0), boneIndices: SIMD4(0, 1, 1, 1),
+                                             weights: SIMD4(1.5, -0.5, 0, 0), uv: SIMD2(0, 0))],
+                            indices: [0])
+        m.bones = [.init(name: "a", parent: -1, bind: matrix_identity_float4x4),
+                   .init(name: "b", parent: -1, bind: matrix_identity_float4x4)]
+        var shift = matrix_identity_float4x4
+        shift.columns.3 = SIMD4(10, 0, 0, 1)
+        let p = PuppetPose.skinnedPositions(model: m, matrices: [matrix_identity_float4x4, shift]).first!
+        XCTAssertEqual(p.x, -5, accuracy: 1e-4,
+                       "1.5·0 + (−0.5)·10 = −5 — 음수 슬롯을 버리면 0 이 나온다")
+        // 0 슬롯(3, 4번째)은 기여가 없다: 같은 정점의 0 가중 슬롯 인덱스를 바꿔도 결과 불변.
+        var m2 = PuppetModel(material: "m",
+                             vertices: [.init(position: SIMD3(0, 0, 0), boneIndices: SIMD4(0, 1, 0, 0),
+                                              weights: SIMD4(1.5, -0.5, 0, 0), uv: SIMD2(0, 0))],
+                             indices: [0])
+        m2.bones = m.bones
+        let p2 = PuppetPose.skinnedPositions(model: m2, matrices: [matrix_identity_float4x4, shift]).first!
+        XCTAssertEqual(p2.x, p.x, accuracy: 0, "가중치 0 슬롯의 본 인덱스는 결과에 영향이 없다")
+    }
+
+    /// 정점당 본은 정확히 4개 — 5번째 슬롯이 있다면 `SIMD4` 로는 담기지 않는다는 구조적 고정점.
+    /// (정점 포맷 비트 0x00800000 = boneIndices 4×u32, 0x01000000 = weights 4×f32.)
+    func testVertexHasExactlyFourBoneSlots() {
+        let v = PuppetModel.Vertex(position: .zero, boneIndices: SIMD4(0, 1, 2, 3),
+                                   weights: SIMD4(0.25, 0.25, 0.25, 0.25), uv: .zero)
+        XCTAssertEqual(v.weights.scalarCount, 4)
+        XCTAssertEqual(v.boneIndices.scalarCount, 4)
+    }
 }
