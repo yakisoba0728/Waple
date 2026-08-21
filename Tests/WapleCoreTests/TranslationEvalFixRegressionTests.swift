@@ -55,24 +55,26 @@ final class TranslationEvalFixRegressionTests: XCTestCase {
 
     // MARK: - F421 (F-11): #if 미지원 패턴 — 안전 거부(폴터)
 
-    /// 미지원 연산자(%, 비트, 시프트, 삼항)/16진·접미 리터럴은 조용한 오분기 대신 전처리 거부.
+    /// 렉서·파서가 모르는 식은 조용한 오분기 대신 전처리 거부.
+    ///
+    /// **[G2 2026-08-21] 이 목록이 크게 줄었다.** 종전에는 `%`·비트(`& | ^ ~`)·시프트·16진/접미
+    /// 리터럴도 여기 있었는데, 실물 렉서(0x140166a90-0x1401670ba)와 파서 사슬
+    /// (0x1401670d0 `||` → … → 0x140167b80 `*`/`/`/`%` → 0x140167c00 원자)이 **전부 지원**함을
+    /// 디스어셈으로 확정하고 `ExprEval` 을 그만큼 넓혔다. 그 계약은
+    /// `ShaderPreprocessorRequireTests` 의 G2 절이 갖는다.
+    /// 여기 남은 것은 **실물에도 없거나 우리가 일부러 안 받는 것**뿐이다:
+    ///  · 삼항 `?:` — 실물 렉서가 "그 외 문자"(코드 0x19)로 떨어뜨린다.
+    ///  · 잔여 토큰 — 실물은 관용이지만 우리는 "오역보다 폴터" 규약대로 거부한다.
+    ///  · 소수 리터럴 — 실물은 소수부를 버리고 정수부만 쓴다(0x140167021-0x140167046). 미구현.
     func testUnsupportedIfExpressionsAreRefused() {
         let cases = [
-            "#if A % 2\nyes\n#endif",
-            "#if A & 1\nyes\n#endif",
-            "#if A | 1\nyes\n#endif",
-            "#if A ^ 1\nyes\n#endif",
-            "#if ~A\nyes\n#endif",
-            "#if A << 1\nyes\n#endif",
-            "#if A >> 1\nyes\n#endif",
             "#if A ? 1 : 0\nyes\n#endif",
-            "#if 0x10\nyes\n#endif",
-            "#if A == 0x10\nyes\n#endif",
-            "#if 1u\nyes\n#endif",
             "#if 1 0\nyes\n#endif",
-            "#if A == 1\none\n#elif A % 2\ntwo\n#endif",
-            // `#define X 0x10` — d 미등재로 #if X 는 0 인데 본문 치환은 "0x10" 이던 불일치 경로.
-            "#define X 0x10\n#if X\nyes\n#endif",
+            "#if A == 1\none\n#elif A ? 1 : 0\ntwo\n#endif",
+            "#if 1.5\nyes\n#endif",
+            "#if A @ 1\nyes\n#endif",
+            // `#define K 1.5` — d 미등재로 #if K 는 0 인데 본문 치환은 "1.5" 이던 불일치 경로.
+            "#define K 1.5\n#if K\nyes\n#endif",
         ]
         for src in cases {
             XCTAssertNil(ShaderPreprocessor.preprocessStrict(src, combos: ["A": 3]), src)
@@ -90,14 +92,16 @@ final class TranslationEvalFixRegressionTests: XCTestCase {
         XCTAssertTrue(ShaderPreprocessor.preprocess("#if (A > 2) && !(B <= 1)\nyes\n#endif",
                                                     combos: ["A": 3, "B": 2]).contains("yes"))
         XCTAssertEqual(ExprEval.evalChecked("1 + 2 * 3", defines: [:]), 7)
-        XCTAssertNil(ExprEval.evalChecked("A % 2", defines: ["A": 3]))
-        XCTAssertNil(ExprEval.evalChecked("0x10", defines: [:]))
+        // [G2] `%`·16진은 이제 평가된다(실물과 같게) — 거부로 남은 것은 잔여 토큰·삼항뿐.
+        XCTAssertEqual(ExprEval.evalChecked("A % 2", defines: ["A": 3]), 1)
+        XCTAssertEqual(ExprEval.evalChecked("0x10", defines: [:]), 16)
         XCTAssertNil(ExprEval.evalChecked("1 0", defines: [:]))
+        XCTAssertNil(ExprEval.evalChecked("A ? 1 : 0", defines: ["A": 1]))
     }
 
     /// 비활성 부모 안쪽의 미지원 #if 는 출력에 무영향 — 거부하지 않고 나머지를 정상 처리한다.
     func testUnsupportedIfInsideInactiveBlockIsTolerated() {
-        let src = "#if 0\n#if BAD % 2\ndead\n#endif\n#else\nlive\n#endif"
+        let src = "#if 0\n#if BAD ? 1 : 0\ndead\n#endif\n#else\nlive\n#endif"   // [G2] `%` 는 이제 지원 — 여전히 미지원인 삼항으로
         let r = ShaderPreprocessor.preprocess(src, combos: [:])
         XCTAssertTrue(r.contains("live"), r)
         XCTAssertFalse(r.contains("dead"), r)
@@ -109,7 +113,7 @@ final class TranslationEvalFixRegressionTests: XCTestCase {
         let frag = """
         varying vec2 v_TexCoord;
         void main() {
-        #if 0x10
+        #if A ? 1 : 0
             gl_FragColor = vec4(1.0);
         #else
             gl_FragColor = vec4(v_TexCoord, 0.0, 1.0);

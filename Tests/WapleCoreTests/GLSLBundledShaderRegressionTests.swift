@@ -155,7 +155,7 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
         ("정밀도 한정자", "(?<![A-Za-z0-9_])(?:highp|mediump|lowp)(?![A-Za-z0-9_])"),
         // `#include <metal_stdlib>` 은 우리가 방출하는 정당한 줄이다 — `include` 를 이 목록에 넣으면
         // **전건이 가짜로 걸린다**(실제로 당했다). GLSL 인클루드는 따옴표형이라 따로 본다.
-        ("전처리 잔재", "^[ \t]*#[ \t]*(?:if|ifdef|ifndef|else|elif|endif|define|extension|version)\\b"),
+        ("전처리 잔재", "^[ \t]*#[ \t]*(?:if|ifdef|ifndef|else|elif|endif|define|undef|require|extension|version|pragma|error|line)\\b"),
         ("GLSL #include 잔재", "^[ \t]*#[ \t]*include[ \t]*\""),
         ("GLSL 전용 함수",
          "(?<![A-Za-z0-9_])(?:inversesqrt|dFdx|dFdy|lessThan|greaterThan|notEqual|matrixCompMult|outerProduct|texture2D|textureLod|texelFetch|textureSize)\\s*\\("),
@@ -302,6 +302,47 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
         }
     }
 
+    /// **전처리 단계의 지시문 잔재.** 위 두 스윕은 방출 MSL 만 본다 — 그런데 번역기 조립부
+    /// (`GLSLTranslator.swift:2059`)는 **파스된 선언·함수만** 실어 나르므로, 전처리가 못 삼킨
+    /// 최상위 줄은 MSL 에 나타나지 않고 **조용히 사라진다**. 그래서 위 "전처리 잔재" 패턴에
+    /// `require` 를 넣어도 동봉 코퍼스에서 0건이 걸린다(실측). 즉 MSL 만 보는 린트로는 이 부류를
+    /// 못 잡는다 — 전처리 출력을 직접 봐야 한다.
+    ///
+    /// 계약: **WE 가 아는 9종 지시문**(`#define #ifdef #ifndef #else #endif #if #elif #require
+    /// #undef` — 디스패처 0x14016b0e0-0x14016c3f8)은 전처리를 통과해 살아남으면 안 된다.
+    /// `#version`/`#extension`/`#pragma` 는 실물도 지시문으로 인식하지 않아 그대로 남기므로 뺀다.
+    ///
+    /// 되돌림 실측(2026-08-21): `ShaderPreprocessor` 의 `#require` 소비 분기를 없애면
+    /// 이 테스트(선언 기본값 구성)에서 **6 파일**이 걸린다 — `fluidsimulation_combine` ·
+    /// `chroma4` · `foliage4` · `fur4` · `generic4` · `genericimage4`.
+    /// 나머지 2 파일(`genericparticle`/`genericropeparticle`)은 `#require` 가 depth 1 이라
+    /// 기본값에서는 안 보인다 — 그 둘은 `ShaderPreprocessorRequireTests` 의
+    /// `testAllBundledRequireFilesLoseTheDirective` 가 전 구성으로 덮는다.
+    /// **구성을 기본값 하나로 묶은 이유는 비용이다** — allOn 을 더하면 이 클래스가 79초 → 117초가
+    /// 된다(실측). 지시문 잔재는 조합이 아니라 구현에서 나는 결함이라 한 구성으로도 부류가 잡힌다.
+    func testNoEngineDirectiveSurvivesPreprocessing() throws {
+        guard let root = Self.assetsRoot() else { throw XCTSkip("WAPLE_WE_ASSETS 미지정") }
+        let pairs = Self.collectPairs(root: root)
+        XCTAssertGreaterThan(pairs.count, 200, "쌍이 이만큼도 안 나오면 경로가 틀린 것")
+        var found: [String: Set<String>] = [:]     // 지시문 → "id[스테이지]"
+        for p in pairs {
+            for (stage, src) in [("v", p.vert), ("f", p.frag)] {
+                let out = ShaderPreprocessor.preprocess(src, combos: p.comboDefaults, include: p.include)
+                let ns = out as NSString
+                for m in Self.engineDirectiveRe.matches(
+                    in: out, range: NSRange(location: 0, length: ns.length)) {
+                    found[ns.substring(with: m.range(at: 1)), default: []].insert("\(p.id)[\(stage)]")
+                }
+            }
+        }
+        XCTAssertEqual(found.mapValues { $0.sorted() }, [:],
+                       "전처리가 삼켰어야 할 지시문이 살아남았다")
+    }
+
+    private static let engineDirectiveRe = try! NSRegularExpression(
+        pattern: "^[ \t]*#[ \t]*(if|ifdef|ifndef|else|elif|endif|define|undef|require)\\b",
+        options: [.anchorsMatchLines])
+
     // MARK: - 남은 갭(근거 필수)
 
     /// **`PerformLighting_V1` 은 소스에 정의가 없다.** 동봉 자산·WE 설치본 어디에도 없고,
@@ -312,6 +353,26 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
     /// 즉 WE 는 씬의 라이트 개수를 보고 **컴파일 시점에 본문을 합성해 주입**한다.
     /// Waple 의 3D 라이팅은 이 경로를 재현하지 않고 `WapleRender/Mesh3DShaders.swift` 손-포팅이
     /// 전담하므로(번역 실패 → 폴백), 여기서는 "실패하되 조용하지 않게" 를 못 박는다.
+    ///
+    /// **[2026-08-21 확정] 주입에는 게이트가 있다.** 생성기(`0x140169140`-`0x14016b0d4`)는
+    /// (a) 요청 이름이 `LightingV1` 이고 (b) 매크로맵에 `LIGHTING` 이 있고 (c) 그 값이 0 이 아닐
+    /// 때만 문자열을 만든다(`0x1401691eb` · `0x14016920c` · `0x14016922a`). 셋 중 하나라도 아니면
+    /// **빈 문자열을 돌려주고 지시문 줄만 공백으로 덮는다**(`0x14016bc63`). 그래서 아래 두 집합이
+    /// 갈린다 — 선언 기본값이 `LIGHTING=1` 인 넷만 기본 구성에서 보이고, `LIGHTING=0` 인 넷은
+    /// allOn 스윕에서만 나타난다. `LIGHTING=0` 구성에서는 **우리도 실물과 똑같이 아무것도 안 한다**
+    /// (`ShaderPreprocessor` 의 `#require` 분기가 줄만 소비).
+    ///
+    /// **이 집합은 양방향 못박기다.** 여기 이름이 사라지면(= 호출부가 조용히 없어져 라이팅 빠진
+    /// 그림이 컴파일에 성공하면) 아래 `XCTAssertEqual(ids, …)` 가 먼저 터진다. 짝인 명시 단정은
+    /// `ShaderPreprocessorRequireTests.testLightingCallSiteSurvivesSoTheFailureStaysLoud`.
+    ///
+    /// **왜 "전처리 거부"(preprocessStrict nil)를 고르지 않았나.** 그 선택지도 검토했다
+    /// (거부하면 `LIGHTING != 0` 구성 12개가 번역 실패가 된다). 관측 결과가 **똑같기** 때문에
+    /// 안 했다 — 거부해도, 지금처럼 미정의 호출로 MSL 컴파일이 실패해도 결말은 폴백 + 로그다.
+    /// 반면 비용은 크다: 이 클래스의 "동봉 전건 번역 성공" 불변식
+    /// (`testEveryBundledShaderPairTranslatesAtDeclaredCombos`)이 선언 기본값에서 4건 깨져
+    /// 예외 목록이 필요해지고, 아래 두 `knownGaps` 집합(= 이 갭을 표현하는 기존 도구)이
+    /// 통째로 무의미해진다. 강한 불변식을 약화시켜 이미 표현된 사실을 다시 말할 이유가 없다.
     ///
     /// **모델 밖 엔진 심볼** 둘도 같은 성격이다:
     /// - `g_TextureNResolution` 의 **N ≥ 8**: `EngineU.texRes` 가 `float4[8]` 고정이라 치환 대상이
