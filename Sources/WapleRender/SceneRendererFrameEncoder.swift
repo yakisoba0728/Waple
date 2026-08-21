@@ -2080,7 +2080,54 @@ extension SceneRenderer {
                     fboTex.append(t)
                 }
             }
-            // 생성 1회 초기화 — 드로우 없는 클리어 전용 렌더 패스.
+            // T09-D1: `thisObject.executeMaterialFunction(name)` 요청 → 이번 프레임 FBO 클리어 예약.
+            //
+            // **자리**: 위 할당 루프가 끝나 `fboTex.count == fboSpecs.count` 가 성립하고, 아래 클리어
+            // 루프가 돌기 **직전**이다. 여기 넣은 인덱스는 같은 프레임 안에서 비워지고 곧바로
+            // `removeAll()` 된다 — 요청 1회 = 클리어 1회로, 실물이 호출 즉시 1회 비우는 것과 같다.
+            //
+            // **순서**: 스크립트 평가는 호출부의 `effectVisible(eff, time:)`(→ `gate.engine.evaluateBool`
+            // → JS `update()`)에서 이미 끝났고, 그 자리는 `applyEffect` 호출부 **다섯 곳 전건**에서
+            // 바로 앞줄이다(FrameEncoder 의 runFrameBufferLayer·buildTextDisplayTextures·
+            // buildDisplayTextures, SceneRenderer3D 의 빌보드 사전계산·프레임버퍼 빌보드).
+            // 즉 **평가 → 드레인 → 인코딩** 이 한 프레임 안에서 닫힌다. 드레인이 evaluateBool 앞에
+            // 있었다면 요청이 매번 한 프레임씩 밀렸을 것이다.
+            //
+            // **횟수**: 이펙트 인스턴스 하나는 프레임당 정확히 한 번 이 함수를 지난다. 다섯 호출부의
+            // 소유자가 서로소이고(프레임버퍼 레이어 / 텍스트 레이어 / 나머지 2D 레이어 /
+            // 비-프레임버퍼 빌보드 / 프레임버퍼 빌보드), 각 호출부가 프레임당 한 번만 돌기 때문이다.
+            // 2D 와 3D 도 겹치지 않는다 — 3D 경로는 SceneRenderer.draw 에서 buildDisplayTextures
+            // **전에** return 한다. buildDisplayTextures 진입점은 라이브 draw 와 헤드리스
+            // captureFrames 둘인데 한 프레임에 둘 다 도는 경로가 없다. 두 번 돌면 드레인이 비운 뒤라
+            // 두 번째가 요청을 잃는다 — 그래서 드레인은 `effectVisible` 과 1:1로 짝지어진 이 자리에만 둔다.
+            // (`effectVisible` 이 false 라 이 함수를 건너뛰면 요청은 JS 배열에 남아 다음에 보이는
+            //  프레임에서 소비된다. 안 보이는 동안은 이 이펙트의 패스가 돌지 않아 누적도 없으므로
+            //  결과가 같고, 배열은 상한 64로 막혀 있어 자라지도 않는다.)
+            //
+            // **unique 가 아닌 FBO 도 그대로 비운다.** 실물 0x1401ee440–0x1401ee4fe 의 클리어 루프에는
+            // unique 여부를 보는 분기가 없다 — 렌더 타깃으로 밀고(vtbl+0x48) `fbos[].clear` 색을 세워
+            // (vtbl+0x118) 색만 비운(vtbl+0x120, `dl=1`/`r8d=0`) 뒤 되돌릴 뿐이다. 아래 클리어 루프는
+            // `fboSpecs[i].clearColor ?? (0,0,0,0)` 을 쓰고 `fboTex[i]` 는 non-unique 면 이번 프레임
+            // 풀 텍스처라 그대로 비워진다(패스 타깃이기도 하면 그 패스의 `.clear` 가 한 번 더 덮으므로
+            // 무해하고, 소스로만 쓰이는 fbo 에서는 이 클리어가 유일한 초기화가 된다 — 실물과 동형).
+            //
+            // **[미해결] 실물은 인덱스 값을 안 쓴다.** 0x1401ee411–0x1401ee41b 은 `fboIndices` 벡터에서
+            // **원소 개수만** 꺼내고, 클리어 루프는 그 개수만큼 도는 카운터 `ebp` 로 `fbos` 를 직접
+            // 인덱싱한다(0x1401ee440–0x1401ee451: `rbx = [effect+0xe8]`(fbos.begin, stride 0x50) 에
+            // `10*ebp*8 = 80*ebp`). 벡터의 값을 읽는 명령이 루프 안에 **하나도 없다**. 파스는 이름을
+            // 제대로 풀어 넣는데(0x1401e8691) 소비가 그걸 버리는 것이라 원본 결함으로 보이고, 실제로
+            // 동봉 fluidsimulation 에서 `clearDye`(인덱스 [6,7], 개수 2)는 `fbos[0..1]`= velocity 를
+            // 비운다. 여기서는 **파스된 인덱스를 쓴다**(= 결함 미재현) — EffectManifest/TextScriptEngine
+            // 에 이미 커밋된 규약과 정합을 맞춘 선택이고, 재현으로 뒤집으려면 그 두 파일의 주석과
+            // 오라클도 함께 바꿔야 한다. 결정이 나기 전까지 이 문단이 근거다.
+            if !eff.functionClears.isEmpty, let gate = eff.visibleGate {
+                let requests = gate.engine.drainMaterialFunctionCalls()
+                for i in Self.materialFunctionClearTargets(requests, table: eff.functionClears,
+                                                           fboCount: fboTex.count) {
+                    uniqueStore.pendingClear.insert(i)
+                }
+            }
+            // 생성 1회 초기화(+ 위 머티리얼 함수 요청) — 드로우 없는 클리어 전용 렌더 패스.
             for i in uniqueStore.pendingClear.sorted() where i < fboTex.count {
                 let c = fboSpecs[i].clearColor ?? SIMD4<Float>(0, 0, 0, 0)
                 let rpd = MTLRenderPassDescriptor()
