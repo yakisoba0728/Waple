@@ -146,4 +146,47 @@ final class AudioResponseTests: XCTestCase {
         }
         XCTAssertEqual(resp(.peak), resp(.average), accuracy: 1e-4)
     }
+
+    // MARK: - 마지막 두 줄의 순서 (2026-08-21 재대조)
+
+    /// 셰이더 원문의 마지막 줄은
+    ///
+    ///     audioResponse = saturate(pow(audioResponse, g_AudioPower)) * g_AudioMultiply;
+    ///
+    /// 이고 **`saturate` 가 `× multiply` 안쪽**이다. 그래서 결과는 1 을 넘을 수 있다 —
+    /// `g_AudioMultiply` 의 선언 범위가 `[0,2]`(`"material":"audioamount"` 어노테이션)라
+    /// 상한이 정확히 **2.0** 이다. 곱을 saturate 안으로 옮기면 이 단언이 깨진다.
+    ///
+    /// 범위 라벨: 이 식은 설치본에서 `CreateAudioResponse` 를 담은 셰이더 **3파일 전건**
+    /// (`assets/effects/pulse`, `assets/effects/shake`, `projects/defaultprojects/razer_bedroom`)
+    /// 이 **바이트 동일**하게 갖고 있다(함수 본문 md5 3건 일치, 2026-08-21 실측).
+    func testMultiplyIsAppliedOutsideSaturateSoOutputCanExceedOne() {
+        let r = AudioResponse.compute(left: ones, right: ones, mode: 1, freqMin: 0, freqMax: 15,
+                                      bounds: SIMD2(0, 1), power: 1, multiply: 2)
+        XCTAssertEqual(r, 2.0, accuracy: 1e-5, "saturate 는 pow 만 감싼다 — 곱은 그 바깥이다")
+        // 곱이 saturate 안쪽이었다면 1.0 이 나온다. 그 회귀를 명시적으로 배제한다.
+        XCTAssertGreaterThan(r, 1.0)
+    }
+
+    /// **루프 경계는 `int()` 절삭인데 분모는 원시 float 이다.** 셰이더 원문:
+    ///
+    ///     for (int a = int(g_AudioFrequencyMin); a <= int(g_AudioFrequencyMax); ++a) …
+    ///     audioResponse /= (g_AudioFrequencyMax - g_AudioFrequencyMin + 1.0);
+    ///
+    /// 두 줄이 같은 유니폼을 **서로 다른 도메인**에서 읽는다. `0.5 … 5` 면 합산 항은 6개
+    /// (`a = 0…5`)인데 분모는 `5 − 0.5 + 1 = 5.5` 다. 실사용에서는 어노테이션이
+    /// `"int":true` 라 정수만 들어와 둘이 일치하지만, 규약 자체는 이렇게 어긋나 있고
+    /// 우리 구현이 그 어긋남까지 재현한다.
+    func testFractionalRangeSumsByTruncationButDividesByRawFloat() {
+        let frac = AudioResponse.compute(left: ones, right: ones, mode: 1, freqMin: 0.5, freqMax: 5,
+                                         bounds: SIMD2(0, 2), power: 1, multiply: 1)
+        let int0 = AudioResponse.compute(left: ones, right: ones, mode: 1, freqMin: 0, freqMax: 5,
+                                         bounds: SIMD2(0, 2), power: 1, multiply: 1)
+        // frac: 합산 6항 / 분모 5.5 = 1.090909 → smoothstep(0,2,·) = 0.567994
+        XCTAssertEqual(frac, 0.567994, accuracy: 1e-5)
+        // int : 합산 6항 / 분모 6.0   = 1.0      → smoothstep(0,2,·) = 0.5
+        XCTAssertEqual(int0, 0.5, accuracy: 1e-5)
+        // 합산 항 수가 같은데도 값이 갈린다는 것이 요점이다(분모만 다르다).
+        XCTAssertGreaterThan(frac, int0)
+    }
 }
