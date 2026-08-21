@@ -185,6 +185,19 @@ def main(argv):
     md = Cs(CS_ARCH_X86, CS_MODE_64)
 
     args = argv[1:]
+    # `--also <경로>`(여러 번 가능): **다른 이미지에서 경계면 이탈로 세지 않는다.** WE 는 여러
+    # 바이너리로 나뉘고 한 문서가 둘 이상을 섞어 인용하는 일이 흔하다(예: `misc-schema.json` 은
+    # wallpaperui 35 · wallpaper64 20 · scenescript64 11 · webwallpaper64 6). 그런 파일은 기준
+    # 하나로만 재면 통째로 오탐이 된다. 여기 준 이미지들은 **면죄용으로만** 쓴다 — 어느
+    # 이미지에서 경계면 그 사실과 이미지 이름을 찍고 이탈에서 뺀다.
+    also = []
+    while "--also" in args:
+        i = args.index("--also")
+        if i + 1 >= len(args):
+            print("--also 다음에 경로가 필요하다")
+            return 1
+        also.append(args[i + 1])
+        del args[i:i + 2]
     # `--binary <경로>` 로 **다른 WE 바이너리**를 재게 한다(함정 11). WE 는 여러 이미지로 나뉘고
     # 전부 imagebase 가 같아서, 한 이미지로만 재면 다른 이미지의 인용이 통째로 오탐이 된다.
     if args and args[0] == "--binary":
@@ -337,6 +350,40 @@ def main(argv):
                 hint = f"  → 원본은 {va - GHIDRA_SHIFT:#x}"
             off.append((va, kind, hint, sorted(cited[va])))
 
+    # `--also` 이미지들에서 경계인 VA 는 이탈에서 뺀다.
+    excused = {}
+    if also and off:
+        keep = []
+        pending = {va for va, _k, _h, _f in off}
+        for extra in also:
+            if not pending:
+                break
+            if not os.path.exists(extra):
+                print(f"[va-citations] --also 경로가 없다: {extra}")
+                return 1
+            saved = disasm.BIN
+            disasm.BIN = extra
+            try:
+                d2, s2 = disasm.load()
+                f2 = pdata_functions(d2, s2)
+            finally:
+                disasm.BIN = saved
+            cache2 = {}
+            for va in sorted(pending):
+                fn = containing(f2, va)
+                if not fn:
+                    continue
+                if fn not in cache2:
+                    o2 = disasm.off_of(fn[0], s2)
+                    cache2[fn] = {i.address for i in md.disasm(d2[o2:o2 + (fn[1] - fn[0])], fn[0])} if o2 is not None else set()
+                if va in cache2[fn]:
+                    excused[va] = os.path.basename(extra)
+            pending -= set(excused)
+        for va, k, h, fs in off:
+            if va not in excused:
+                keep.append((va, k, h, fs))
+        off = keep
+
     if mixed:
         print("[va-citations] **다른 바이너리를 언급하는 파일** — 아래 결과에 오탐이 섞인다:")
         for f, bs in sorted(mixed.items()):
@@ -347,7 +394,8 @@ def main(argv):
           f"디스어셈 미도달 {len(unreached)}(함수 안 점프표 등 — 판정 불가) · "
           f"범위 끝 {len(range_end)}(판정 안 함) · "
           f"정정 기록 {len(corrections)}(판정 안 함) · "
-          f"경계 OK {ok} · **경계 이탈 {len(off)}**")
+          f"경계 OK {ok} · 다른 이미지에서 경계 {len(excused)} · "
+          f"**경계 이탈 {len(off)}**")
     # 낡은-면제 검사는 **전수 스캔일 때만** 한다. 일부 파일만 지정해 돌리면 다른 파일의
     # 면제가 당연히 안 쓰이므로, 그걸 "낡았다" 고 찍으면 부분 스캔이 늘 붉어진다.
     full_scan = not argv[1:]
