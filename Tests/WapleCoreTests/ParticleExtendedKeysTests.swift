@@ -112,7 +112,7 @@ final class ParticleExtendedKeysTests: XCTestCase {
         let def = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"boxrandom","rate":1}],
          "operator":[{"name":"remapvalue","output":"multiplysize","input":"lifetimefraction",
-                      "operation":"square","transformfunction":"triangle","transformoctaves":5,
+                      "operation":"add","transformfunction":"triangle","transformoctaves":5,
                       "transforminputscale":2,"outputrangemin":0.5,"outputrangemax":3,
                       "blendinstart":0.1,"blendinend":0.3,"blendoutstart":0.7,"blendoutend":0.9,
                       "inputcontrolpoint0":2,"inputcontrolpoint1":3,
@@ -124,7 +124,7 @@ final class ParticleExtendedKeysTests: XCTestCase {
         }
         XCTAssertEqual(spec.verb, .multiplySize)
         XCTAssertEqual(spec.input, .lifetimeFraction)
-        XCTAssertEqual(spec.operation, .square)
+        XCTAssertEqual(spec.operation, .add)
         XCTAssertEqual(spec.transform, .triangle)
         XCTAssertEqual(spec.octaves, 5)
         XCTAssertEqual(spec.inputScale, 2)
@@ -135,6 +135,45 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertEqual(spec.inputCP0, 2); XCTAssertEqual(spec.inputCP1, 3)
         XCTAssertEqual(spec.outputCP0, 4); XCTAssertEqual(spec.outputCP1, 5)
         XCTAssertEqual(spec.component, 1)                            // "y"
+    }
+
+    /// [2026-08-20] 어휘가 실물 표와 어긋나 있었다.
+    ///
+    /// 위 테스트는 이름이 `fullVocabulary` 인데 정작 **WE 에 없는 값**(`operation:"square"`)을
+    /// 쓰고 있었다 — 엔진의 문자열 포인터 표 `0x140484f20` 은 remap·multiply·add·subtract 넷뿐이고,
+    /// `transformfunction` 표 `0x140484e00` 은 none·sine·square·saw·triangle·simplexnoise·fbmnoise
+    /// 일곱이다. 종전 열거는 전자에서 `add` 를 빠뜨리고 `average`/`square` 를 지어냈으며,
+    /// 후자에서는 앞 넷을 통째로 빠뜨렸다.
+    ///
+    /// 그 결과 동봉 `thunderbolt` 4건의 `transformfunction:"sine"` 이 nil 로 떨어져 변환이
+    /// 소실됐다. 이 테스트가 그 자리를 못박는다.
+    func testRemapValueEx_vocabularyMatchesEngineTables() {
+        func spec(_ op: String, _ tf: String) -> RemapSpec? {
+            let def = ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":1}],
+             "operator":[{"name":"remapvalue","output":"multiplysize","input":"lifetimefraction",
+                          "operation":"\(op)","transformfunction":"\(tf)","transforminputscale":2}],
+             "renderer":[{"name":"sprite"}],"maxcount":10}
+            """), material: nil)
+            guard case let .remapValueEx(s) = def.operators.first else { return nil }
+            return s
+        }
+        // transformfunction 7종 — none 은 열거에 없고 nil(=변환 없음)로 떨어지는 것이 실물과 같다.
+        for (raw, want) in [("sine", RemapTransform.sine), ("square", .square), ("saw", .saw),
+                            ("triangle", .triangle), ("simplexnoise", .simplexnoise),
+                            ("fbmnoise", .fbmnoise)] {
+            XCTAssertEqual(spec("remap", raw)?.transform, want, "transformfunction \(raw)")
+        }
+        XCTAssertNil(spec("remap", "none")?.transform, "none 은 nil = 변환 없음")
+
+        // operation 4종. WE 표에 없는 문자열은 표 첫 항목(remap)으로 떨어진다.
+        for (raw, want) in [("remap", RemapOperation.remap), ("multiply", .multiply),
+                            ("add", .add), ("subtract", .subtract)] {
+            XCTAssertEqual(spec(raw, "triangle")?.operation, want, "operation \(raw)")
+        }
+        XCTAssertEqual(spec("square", "triangle")?.operation, .remap,
+                       "종전 열거가 지어냈던 square 는 이제 미지 문자열이라 remap 으로 떨어져야 한다")
+        XCTAssertEqual(spec("average", "triangle")?.operation, .remap, "average 도 마찬가지")
     }
 
     func testRemapValueParse_legacyOutputsStayLegacyWithoutExtKeys() {

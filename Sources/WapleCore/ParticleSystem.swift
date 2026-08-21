@@ -450,17 +450,53 @@ public enum RemapInput: String, Equatable {
     case timeOfDay = "timeofday"
 }
 
-/// remapvalue operation(엔진 어휘). [추정] 정규화값 v∈[0,1] 의 단항 셰이핑으로 해석(제2 피연산자
-/// 부재): remap=항등(기본), subtract=1−v, square=v². multiply/average 는 단항 의미 부호화 불가 —
-/// 파스·보존 전용(항등 적용).
+/// remapvalue operation(엔진 어휘).
+///
+/// **[2026-08-20] 어휘를 실물 표로 맞췄다.** 엔진의 문자열 포인터 표 `0x140484f20` 은 정확히
+/// 넷이다(표 순서 그대로): `remap`(0x140491f6c) · `multiply`(0x140491f78) · **`add`**(0x140491f2c) ·
+/// `subtract`(0x140491f30). 종전 열거는 `add` 를 빠뜨리고 대신 **`average`·`square` 를 갖고
+/// 있었는데 그 둘은 WE 표에 없다** — Waple 이 만든 값이었다. 미지 문자열은 WE 에서 표 첫 항목
+/// (`remap`=항등)으로 떨어지므로, 그 둘을 지우면 `nil → ?? .remap` 으로 같은 결과가 된다.
+///
+/// [추정] 정규화값 v∈[0,1] 의 단항 셰이핑으로 해석한다(제2 피연산자 부재):
+/// remap=항등(기본) · subtract=1−v. `multiply`/`add` 는 단항 의미로 부호화할 수 없어 파스·보존
+/// 전용(항등 적용)이다 — 동봉 실측 사용은 `remap` 16건 · `multiply` 2건뿐이고 `add` 는 0건이다.
 public enum RemapOperation: String, Equatable {
-    case remap, subtract, multiply, average, square
+    case remap, multiply, add, subtract
 }
 
-/// remapvalue transformfunction(엔진 어휘). [추정] simplexnoise 는 코퍼스에 심플렉스 구현이 없어
-/// 단일 옥타브 값노이즈 근사. fbmnoise 는 transformoctaves(@0x48f8d8, 기본 3) 옥타브 합성.
+/// remapvalue transformfunction(엔진 어휘).
+///
+/// **[2026-08-20] 셋이 빠져 있었다.** 엔진의 문자열 포인터 표 `0x140484e00` 은 NULL 종단까지
+/// **일곱**이다: `none`(0x14047709c) · **`sine`**(0x140491fc0) · **`square`**(0x140491fc8) ·
+/// **`saw`**(0x140491f84) · `triangle`(0x140491f88) · `simplexnoise`(0x140491f98) ·
+/// `fbmnoise`(0x140491fa8). 종전 열거는 뒤 셋만 갖고 있었다.
+///
+/// **도달이 0 이 아니다** — 동봉+설치본 실측: `simplexnoise` 12건 · `fbmnoise` 6건 ·
+/// **`sine` 4건**(`assets/presets/lightning/…/thunderbolt.json` 과 그 프리뷰·설치본 사본).
+/// 그 4건은 지금까지 `RemapTransform(rawValue:)` 가 nil 을 내서 **변환 없음**으로 떨어졌고,
+/// `transforminputscale: 6` 과 겹쳐 `clamp(6t,0,1)` 이 곧바로 1.0 에 붙었다 — 번개의 깜빡임이
+/// 통째로 사라진 상태였다.
+///
+/// `none` 은 열거에 넣지 않는다. `RemapTransform(rawValue:"none")` 이 nil 을 내고 소비 쪽
+/// `case .none` 이 이미 `clamp(x,0,1)` 이라 **실물과 같은 결과**이고, 케이스를 만들면
+/// `Optional.none` 과 이름이 부딪힌다.
+///
+/// **[추정] 파형 세 종의 모양.** 실물 계산은 이 오퍼레이터 핸들러(op 0x13 → `0x140244874`)
+/// 안에 없다 — 파서가 별도로 발행하는 "값 공급자" 레코드 쪽이고 그 소비 VM 은 아직 못 뜯었다.
+/// 그래서 **이미 있던 `triangle` 이 세운 가족 규약을 일관되게 완성**하는 쪽을 택했다 —
+/// 단위 주기 `f = frac(x)`, 출력 [0,1], `f=0` 에서 0 에서 출발:
+/// ```
+///   triangle = 1 − |2f − 1|          (기존, 이 규약의 기준)
+///   sine     = 0.5 − 0.5·cos(2πf)    ← triangle 과 같은 위상(0에서 출발, f=0.5 에서 최대)
+///   saw      = f
+///   square   = f < 0.5 ? 0 : 1
+/// ```
+/// 위상이 실물과 어긋날 가능성은 남아 있다. 다만 **오늘의 상태(변환 자체가 소실)보다는
+/// 확실히 낫다** — 진동이 아예 없던 자리에 같은 주기의 진동이 생긴다. 실물 확인이 되면
+/// 이 블록을 근거로 교체할 것.
 public enum RemapTransform: String, Equatable {
-    case triangle, simplexnoise, fbmnoise
+    case sine, square, saw, triangle, simplexnoise, fbmnoise
 }
 
 /// remapvalue 확장 스펙(엔진 어휘 전종 파스). 의미 구현 가능한 것만 시뮬레이터가 소비하고

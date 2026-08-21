@@ -1462,17 +1462,27 @@ public struct ParticleSimulator {
         case .some(.triangle):
             let f = x - x.rounded(.down)
             v01 = 1 - abs(2 * f - 1)
+        // [추정] 아래 셋은 위 triangle 이 세운 가족 규약(단위 주기 frac(x), 출력 [0,1], f=0 에서 0)의
+        // 일관된 완성이다. 실물 파형 계산은 이 오퍼레이터 핸들러(op 0x13 → 0x140244874) 안에 없고
+        // 파서가 따로 발행하는 값 공급자 레코드 쪽이라 아직 못 뜯었다 — RemapTransform 주석 참조.
+        case .some(.sine):
+            let f = x - x.rounded(.down)
+            v01 = 0.5 - 0.5 * cosf(2 * .pi * f)
+        case .some(.saw):
+            v01 = x - x.rounded(.down)
+        case .some(.square):
+            v01 = (x - x.rounded(.down)) < 0.5 ? 0 : 1
         case .some(.simplexnoise):
             v01 = remapNoiseOctaves(1, x, SIMD3(p.remapPhase, 0, 0))   // [추정] 값노이즈 근사
         case .some(.fbmnoise):
             v01 = remapNoiseOctaves(spec.octaves, x, SIMD3(p.remapPhase, 0, 0))
         }
-        // 3) operation 단항 셰이핑(RemapOperation doc 주석 참조 — multiply/average 는 항등 보류).
+        // 3) operation 단항 셰이핑(RemapOperation doc 주석 참조 — multiply/add 는 단항 부호화
+        //    불가라 항등 보류. 종전의 average/square 는 WE 표에 없는 값이라 열거에서 걷어냈다).
         let v: Float
         switch spec.operation {
-        case .remap, .multiply, .average: v = v01
+        case .remap, .multiply, .add: v = v01
         case .subtract: v = 1 - v01
-        case .square: v = v01 * v01
         }
         // 4) blend 창(수명 비율). **[2026-08-20 실측으로 교체]** 종전 구현의 결함 셋:
         //  ① `blendoutstart`/`blendoutend` 기본이 0 이었다(실물 1.0/1.0). 가드 덕에 우연히

@@ -313,10 +313,10 @@ jobs:
           echo "executed=${EXECUTED} skipped=${SKIPPED}"
 
           # [2026-08-19] 트립와이어. 이제 정상 범위를 안다.
-          # [2026-08-20] 실측 갱신: executed **2452** / skipped 46 / 실패 0
-          # (run 32398914480 debug·release 양쪽, 커밋 dd6d8a0). 같은 시점의 정적 개수
+          # [2026-08-20] 실측 갱신: executed **2453** / skipped 46 / 실패 0
+          # (run 32398914480 기준 2452 → remapvalue 어휘 테스트 1건 추가로 2453). 같은 시점의 정적 개수
           # (`grep -rE '^\s*(public |private |internal )?func test' Tests/ --include=*.swift | wc -l`)도
-          # 정확히 2452 다 — 두 세는 법이 어긋나지 않는다는 것을 실측으로 확인했다.
+          # 정확히 2453 다 — 두 세는 법이 어긋나지 않는다는 것을 실측으로 확인했다.
           #
           # **[2026-08-20] 근거가 하한보다 낡아 있었다.** 이 주석은 `2369`(커밋 c109ac1)를 인용하는데
           # 강제되는 하한은 그 뒤로 2371 → 2372 → 2374 → 2382 → 2390 으로 다섯 번 더 올라갔다.
@@ -334,8 +334,8 @@ jobs:
             exit 1
           fi
           # 테스트 수는 늘기만 한다(줄면 파일이 빠졌거나 번들이 안 실렸다는 뜻).
-          if [ "${EXECUTED:-0}" -lt 2452 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 2452 미만. 테스트가 사라졌다."
+          if [ "${EXECUTED:-0}" -lt 2453 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 2453 미만. 테스트가 사라졌다."
             exit 1
           fi
 
