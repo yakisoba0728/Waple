@@ -25,6 +25,7 @@ B. **배선 확인** — 자산 리더가 `AssetJSON` 을 타는지. 관용 파�
 C. **회귀 방향** — 관용이 문자열 리터럴 안을 건드리지 않는지. 그쪽이 훨씬 나쁜 회귀다.
 """
 import json
+import os
 import pathlib
 import re
 import sys
@@ -33,14 +34,24 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 # 자산 트리만 본다. 설치본의 `ui/` 는 WE UI(Chromium) 캐시라 벽지 자산이 아니고,
 # 그 안에 루트 뒤 추가 데이터를 가진 JSONL(`FirstPartySetsPreloaded/*/sets.json`)이 있어
 # 관용 파스로도 안 읽힌다 — 읽을 이유도 없다. 범위를 명시적으로 좁힌다.
-_INSTALL = pathlib.Path("/home/user/Waple-wallpaper-source/wallpaper_engine")
-TREES = [ROOT / "Sources/WapleRender/Resources/WEAssets",
-         _INSTALL / "assets", _INSTALL / "projects"]
+#
+# **[2026-08-21] 설치본 트리는 CI 에 없다.** 이 게이트는 `spec.yml`(ubuntu 러너)에서 도는데
+# 거기엔 저장소만 있고 WE 설치본이 없다. 그래서 아래 `_INSTALL` 두 트리는 CI 에서 통째로
+# 건너뛰어진다 — 그 사실을 모르고 설치본에만 있는 파일을 고정해 두는 바람에 **이 게이트가
+# 도입 직후부터 CI 에서 계속 빨갰다**(로컬에서는 설치본이 있어 초록이라 알아채지 못했다).
+# 고정 자산을 "항상 있어야 하는 것"과 "설치본이 있을 때만 있는 것"으로 가른다.
+_INSTALL = pathlib.Path(os.environ.get("WE_ROOT", "/home/user/Waple-wallpaper-source/wallpaper_engine"))
+BUNDLED_TREE = ROOT / "Sources/WapleRender/Resources/WEAssets"
+INSTALL_TREES = [_INSTALL / "assets", _INSTALL / "projects"]
+TREES = [BUNDLED_TREE] + INSTALL_TREES
 
-MIN_LENIENT_NEEDED = 30      # 실측: 자산 트리 기준. 하한을 둬서 측정이 조용히 0건이 되는 것을 막는다.
+# 동봉 트리만으로 잰 실측치(2026-08-21: 1698개 중 31건). 설치본 `assets/` 는 동봉본과 바이트
+# 동일이라 같은 31건이고, `projects/` 가 1건(고정 자산)을 더한다. 하한은 **CI 에서 실제로 도는
+# 범위**(동봉 트리 단독) 기준이어야 한다 — 설치본을 전제로 잡으면 CI 에서 무의미해진다.
+MIN_LENIENT_NEEDED = 31
 # 트리 루트가 갈리므로 트리 상대경로로 고정한다.
-PINNED = {"defaultprojects/fantasticcar/materials/car/glass.json",
-          "presets/water/preset.json"}
+PINNED_ALWAYS = {"presets/water/preset.json"}                                   # 동봉 트리에 있다
+PINNED_IF_INSTALLED = {"defaultprojects/fantasticcar/materials/car/glass.json"}  # 설치본 projects/ 전용
 # 자산 리더는 이 진입점을 타야 한다. 파일 → 최소 호출 수.
 WIRED = {"Sources/WapleCore/SceneDocument.swift": 7,
          "Sources/WapleCore/ProjectJSONParser.swift": 1,
@@ -198,7 +209,10 @@ def main() -> int:
               f"측정이 조용히 작아졌다(트리 경로가 바뀌었나?).", file=sys.stderr)
         rc = 1
 
-    missing_pins = sorted(PINNED - need)
+    pins = set(PINNED_ALWAYS)
+    if any(t.is_dir() for t in INSTALL_TREES):
+        pins |= PINNED_IF_INSTALLED
+    missing_pins = sorted(pins - need)
     if missing_pins:
         print(f"[lenient-json] 고정 자산이 실패 목록에 없다: {missing_pins} — "
               f"이 파일들이 이 게이트의 존재 이유다", file=sys.stderr)
@@ -214,8 +228,13 @@ def main() -> int:
             rc = 1
 
     if rc == 0:
+        # 어느 트리를 실제로 봤는지 **항상 찍는다** — 트리가 조용히 빠져 측정이 작아지는 것이
+        # 이 게이트가 CI 에서 빨갰던 원인이었다. 요약만 보고 지나칠 수 있는 자리가 아니다.
+        scanned = [t.name for t in TREES if t.is_dir()]
+        skipped = [str(t) for t in TREES if not t.is_dir()]
         print(f"[lenient-json] 자산 json {seen}개 · 관용 필요 {len(need)}건 전건 복구 · "
-              f"리더 배선 {len(WIRED)}파일 OK")
+              f"리더 배선 {len(WIRED)}파일 OK · 훑은 트리 {scanned}"
+              + (f" · 건너뜀 {skipped}" if skipped else ""))
     return rc
 
 
