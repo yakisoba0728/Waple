@@ -21,6 +21,12 @@
 한 줄 요약: **주장의 메커니즘은 실재하지만, 주체를 잘못 짚었다.** 오클루전 밝기는
 파티클 시스템의 기능이 아니라 `scene.json` 의 `"sprite"` 오브젝트 하나만이 가진 기능이다.
 
+> **이름이 겹치는 세 번째 것이 있다 — 스프라이트*시트*(`.tex` TEXS) 애니메이션.**
+> "스프라이트 오클루전" 을 물으면 대개 그쪽을 뜻한다. 결론부터: **프레임 간 오클루전이라는
+> 규약은 없다**(한 드로우 = 한 프레임, 겹치는 자리는 `mix()` 크로스페이드, 시트 머티리얼은
+> 뎁스 테스트·기록 둘 다 off). 프레임 선택·블렌드·알파 임계값·TEXS 테이블 배선은
+> **[§10](#10-2026-08-21-추가-스프라이트시트-애니메이션--프레임-간-오클루전은-없다)** 에 있다.
+
 ---
 
 ## 1. 자산 쪽 근거 — 오클루전 프로브 머티리얼이 평문으로 배포된다
@@ -625,4 +631,481 @@ grep -abo "msaa" wallpaper64.exe                                  # → VA 0x140
 
 ```bash
 python3 scripts/re/xref.py g_ViewUp g_ViewRight g_Alpha
+```
+
+---
+
+## 10. [2026-08-21 추가] 스프라이트**시트** 애니메이션 — "프레임 간 오클루전" 은 없다
+
+§1–§9 는 씬 오브젝트 타입 `"sprite"`(0x270, 하드웨어 오클루전 쿼리)를 다뤘다. 이 절은
+이름이 겹치는 **다른 것** — 스프라이트시트(`.tex` TEXS) 애니메이션 — 의 규약을 잰다.
+과제 문구가 "스프라이트시트 애니메이션이 프레임 간에 서로를 가리는 규약" 을 물었기 때문이다.
+
+### 10.0 판정
+
+| 물음 | 답 | 확신 |
+| --- | --- | --- |
+| 시트 프레임이 서로를 **가리는가**(오클루전) | **아니다.** 한 드로우는 언제나 **한 프레임**만 그린다. 두 프레임이 동시에 등장하는 유일한 자리는 `mix()` **크로스페이드**다 | **확정** — 셰이더 전문(§10.2)과 콤보 게이트(§10.3) |
+| 정렬(z) 기준이 있는가 | **없다.** 시트 머티리얼은 `depthtest: disabled` + `depthwrite: disabled` 다 — 뎁스가 아예 관여하지 않는다 | **확정** — 엔진 템플릿 3종 + 실물 시트 머티리얼 전건(§10.1) |
+| 알파 테스트 임계값 | 고정기능 알파테스트는 **없다**. `blending:"alphatocoverage"`(열거 3) 일 때만 셰이더가 `discard`, 임계값 **0.5**. 그와 별개로 `CUTOUT` 콤보의 `smoothstep(0.1, 0.2)` 는 discard 가 아니라 알파 감쇠다 | **확정**(§10.5) |
+| 같은 프레임 안에서의 그리기 순서 | 레이어 `order` 오름차순. 시트 **진행**은 씬 프레임 카운터로 프레임당 1회만 게이트된다 — 한 프레임에 두 번 그려도 시트가 밀리지 않는다 | **확정**(§10.4.3) |
+| `.tex` TEXS 프레임 테이블과 어떻게 물리나 | 이미지 경로: TEXS 프레임의 지오메트리 6개가 **그대로** `g_TextureNRotation`(2×2) + `g_TextureNTranslation`(평행이동) 유니폼이 된다. 파티클 경로: TEXS 를 안 쓰고 `g_RenderVar1` 의 **균일 격자** 가정을 쓴다 | **확정**(§10.4, §10.2) |
+
+한 줄 요약: **"프레임 간 오클루전" 이라는 규약은 실재하지 않는다.** 물어야 할 것은
+(a) 프레임 선택, (b) 인접 프레임 **블렌드**, (c) 뎁스가 꺼져 있다는 사실 셋이다.
+
+### 10.1 자산부터 (x86 앞에 — 함정 7)
+
+엔진이 에디터 임포트 템플릿으로 출하하는 스프라이트시트 머티리얼은
+`assets/shaders/declarations.json` 의 세 항목이다(`animatedimageshaders`,
+`animatedimageshaderssmooth`, `animatedimageshadersn`). **셋 다 동일**:
+
+```json
+{ "value": "imagegenericspritesheet", "shader": "genericimage4",
+  "blending": "translucent", "depthtest": "disabled", "depthwrite": "disabled",
+  "cullmode": "nocull", "combos": { "SPRITESHEET": 1 } }
+```
+
+실물 시트 머티리얼도 전건 같다 — 동봉 `scenes/gifs/materials/background.json`(1건),
+설치본 `projects/defaultprojects/dino_run/materials/*.json` 9건 +
+`projects/templates/gif/materials/background.json` 1건 + `assets/` 사본 1건.
+전건이 `depthtest: disabled` · `depthwrite: disabled` · `cullmode: nocull` 이다.
+
+> **뎁스를 읽지도 쓰지도 않으므로 z 정렬이라는 개념 자체가 성립하지 않는다.**
+> 시트 레이어끼리의 앞뒤는 오직 그리기 순서(레이어 `order`)가 정한다.
+
+### 10.2 셰이더가 프레임을 고르는 두 방식
+
+**(a) 이미지 경로 — 아핀 UV 변환 하나.** `genericimage4.vert:176`(형제:
+`genericimage.vert:29` · `genericimage2.vert:101` · `genericimage3.vert:152` ·
+`clippingmaskimage4.vert:110` · `passthrough.vert:4,21`):
+
+```glsl
+#if SPRITESHEET
+    v_TexCoord.xy = g_Texture0Translation
+                  + a_TexCoord.x * g_Texture0Rotation.xy
+                  + a_TexCoord.y * g_Texture0Rotation.zw;
+#else
+    v_TexCoord.xy = a_TexCoord;
+#endif
+```
+
+**한 드로우에 프레임 하나**다. 프레임 전환은 유니폼 두 개를 바꾸는 것이 전부이고,
+프레임 사이에 블렌드도 없다. 이름이 `Rotation` 인 이유는 그것이 2×2 행렬이기 때문이고,
+회전해 패킹된 아틀라스 프레임이 바로 이 2×2 로 표현된다(§10.4.4).
+
+**(b) 파티클 경로 — 균일 격자 + 크로스페이드.** `common_particles.h` 의
+`ComputeSpriteFrame(lifetime, out uvs, out uvFrameSize, out frameBlend)`:
+
+```glsl
+float numFrames  = g_RenderVar1.z;
+float frameWidth = g_RenderVar1.x;
+float frameHeight= g_RenderVar1.y;
+float currentFrame = floor(lifetime * numFrames);
+float nextFrame    = min(numFrames - 1.0, currentFrame + 1.0);
+uvs.y = floor(currentFrame * frameWidth) * frameHeight;   // 행
+uvs.x = frac (currentFrame * frameWidth);                 // 열
+uvs.w = floor(nextFrame    * frameWidth) * frameHeight;
+uvs.z = frac (nextFrame    * frameWidth);
+frameBlend = frac(lifetime * numFrames);
+```
+
+`g_RenderVar1 = (frameWidth, frameHeight, numFrames, textureRatio)` 이고
+`frameWidth = 1/열수`, `frameHeight = 1/행수` 인 **정규화 격자**다.
+`genericparticle.vert:94` 는 위상으로 `frac(in_ParticleLifeTime)` 을 넣는다 —
+즉 파티클 한 마리가 제 수명 동안 시트를 정확히 한 바퀴 돈다.
+
+그리고 **인접 두 프레임이 한 화면에 동시에 나오는 유일한 자리**가
+`genericparticle.frag:73–77` 이다:
+
+```glsl
+#if SPRITESHEETBLEND
+    // This is wrong because it can sample colors that are invisible on one frame
+    // but changing this can negatively impact additive particles
+    vec4 color = v_Color * mix(ConvertTexture0Format(texSample2D(g_Texture0, v_TexCoord.xy)),
+                               ConvertTexture0Format(texSample2D(g_Texture0, v_TexCoord.zw)),
+                               v_TexCoordBlend);
+#else
+    vec4 color = v_Color * ConvertTexture0Format(texSample2D(g_Texture0, v_TexCoord.xy));
+#endif
+```
+
+**가리는 게 아니라 섞는다.** 원저자 주석까지 "한쪽 프레임에서 보이지 않는 색을 샘플할 수
+있어 틀렸다" 고 적어 두었다 — 오클루전이 아니라 알파 오염이 이 자리의 실제 문제다.
+지오메트리 셰이더 경로(`genericparticle.geom:83`)도 같은 `ComputeSpriteFrame` 을 쓴다.
+
+### 10.3 세 콤보를 켜는 것은 무엇인가 (바이너리)
+
+문자열: `SPRITESHEET` `0x140490180` · `SPRITESHEETBLEND` `0x140490190` ·
+`SPRITESHEETBLENDNPOT` `0x140490110`. 파티클 머티리얼 콤보 조립 함수
+`0x1401d2340`–`0x1401d3644` 안:
+
+```
+0x1401d2d89  test dword ptr [r15+8], 0x1000000   ; ★ 시트 게이트
+0x1401d2d91  je   0x1401d2ea0                    ;   아니면 세 콤보 전부 건너뜀
+0x1401d2d97  movsd xmm0, [0x140490180]           ; "SPRITESH"  (SSO — 함정 10)
+0x1401d2da4  mov   eax, [0x140490187]            ; "HEET"
+0x1401d2dc1  mov   qword [rsp+0x40], 0xb         ; 길이 11
+0x1401d2dd8  call  0x14015a440                   ; 콤보 맵 슬롯
+0x1401d2de2  mov   dword [rax], 1                ; SPRITESHEET = 1
+0x1401d2def  lea   rdx, [0x140490190]            ; "SPRITESHEETBLEND"
+0x1401d2e27  mov   ecx, [rbp-0x30]
+0x1401d2e2a  mov   [rax], ecx                    ; SPRITESHEETBLEND = ecx
+0x1401d2e48  lea   rdx, [0x140490110]            ; "SPRITESHEETBLENDNPOT"
+0x1401d2e80  movzx ecx, byte ptr [rbp+0x78]
+0x1401d2e84  mov   [rax], ecx                    ; SPRITESHEETBLENDNPOT = ecx
+```
+
+같은 세 벌이 `0x1401d301f`(이름 조립) / `0x1401d3076`(BLEND `lea`) / `0x1401d30be`(NPOT `lea`)
+에 한 번 더 있다(두 번째 렌더 경로).
+
+**`SPRITESHEET` 게이트 비트(0x1000000)를 세우는 자리는 바이너리 전체에서 1곳이다:**
+
+```
+0x1401d049c  call 0x14015c470                    ; CTexture::IsSpriteSheet()
+0x1401d04a1  test al, al
+0x1401d04a5  or   dword ptr [r13+8], 0x1000000
+```
+
+그 술어는 4명령 리프다(`.pdata` 엔트리 없음 — 앞뒤가 `cc` 패딩으로 둘러싸여 경계가 자명하다,
+`0x14015c460` 부터 `5d c3 cc…cc | 8b 41 1c c1 e8 02 24 01 c3 cc…`):
+
+```
+0x14015c470  mov   eax, dword ptr [rcx+0x1c]     ; .tex 헤더 flags
+0x14015c473  shr   eax, 2
+0x14015c476  and   al, 1                          ; = flags & 0x4  (IsGif / TEXS 존재)
+0x14015c478  ret
+```
+
+곧 **`SPRITESHEET` 콤보는 `.tex` 헤더의 `flags & 0x4` 하나로 결정된다.** 그 비트가
+TEXS 섹션 존재와 **440/440 일치**한다는 것은 형제 문서
+[`tex-format.md`](tex-format.md) §4.1 의 실측이다.
+
+**`SPRITESHEETBLEND` = `animationmode != "randomframe"`.** 두 겹으로 인코딩돼 있다.
+
+파스(파티클 def, `0x1401c5490`–`0x1401d152c` 안):
+
+```
+0x1401c5717  lea  rdx, [0x14048fd10]              ; "randomframe"
+0x1401c5727  mov  dword ptr [r13+0x30], 1         ; 일치
+0x1401c5731  mov  dword ptr [r13+0x30], 0         ; 불일치(키 부재 포함)
+...
+0x1401c57d7  cmp  dword ptr [r13+0x30], 1
+0x1401c57de  or   eax, 2                          ; 시스템 flags bit1
+0x1401c57e1  mov  dword ptr [r13+8], eax
+```
+
+VM 쪽 콤보 결정(`r13d = [r15+8]`):
+
+```
+0x1401d24d2  test r13b, 2                         ; randomframe 이면
+0x1401d24d6  jne  0x1401d24e6                     ;   → BLEND = 0
+0x1401d24d8  cmp  dword ptr [r15+0x30], 0
+0x1401d24dd  mov  dword ptr [rbp-0x30], 1
+0x1401d24e4  je   0x1401d24ed                     ; [r15+0x30] == 0 → 1 유지
+0x1401d24e6  mov  dword ptr [rbp-0x30], 0
+```
+
+즉 `randomframe`(스폰 시 한 프레임 고정)이면 크로스페이드를 **끈다** — 고정 프레임에
+다음 프레임을 섞으면 틀리기 때문이다. `sequence` 와 키 부재는 **켠다**.
+
+**`SPRITESHEETBLENDNPOT` = 텍스처가 패딩됐는가.**
+
+```
+0x1401d24f2  mov  r9d, dword ptr [rcx+0x18]       ; 포맷
+0x1401d24f6  mov  eax, dword ptr [rcx+0x20]
+0x1401d24f9  cmp  dword ptr [rcx+0x2c], eax
+0x1401d2505  setb byte ptr [rbp+0x78]             ; unpadded < alloc → NPOT
+```
+
+`common_particles.h` 의 `unpaddedWidth = g_Texture0Resolution.z / g_Texture0Resolution.x`
+와 정확히 같은 판정이다(`.z` = 이미지 폭, `.x` = alloc 폭).
+
+### 10.4 TEXS 프레임 테이블 ↔ 유니폼 — 이미지 경로 전문
+
+함수 **`0x14015f0d0`–`0x14015f326`**(`.pdata` 5조각: `…f0d0`/`…f120`/`…f15d`/`…f27c`/`…f2f5`).
+서명은 `f(this = CTexture*, edx = 텍스처 슬롯 i)`.
+
+#### 10.4.1 진입 게이트
+
+```
+0x14015f0d6  cmp  qword ptr [rcx+0xe0], 0     ; 대체 소스(비디오 등)면
+0x14015f0e9  cmp  qword ptr [rcx+0xd8], 0     ;   → 0x14015f2f5 로 위임
+0x14015f0f7  test byte ptr [rcx+0x1c], 4      ; ★ 같은 IsGif 비트
+0x14015f0fb  je   0x14015f110                 ;   아니면 [st+0x98]=0 하고 리턴
+0x14015f0fd  mov  rdx, qword ptr [rcx+0xc0]   ; 프레임 벡터 end
+0x14015f104  mov  r11, qword ptr [rcx+0xb8]   ; 프레임 벡터 begin  (stride 0x20)
+0x14015f125  mov  rbx, qword ptr [rcx+8]      ; rbx = 유니폼/렌더 상태 오브젝트("씬")
+```
+
+프레임 수는 `(end − begin) >> 5` 다(`sar rdx, 5` @`0x14015f13a`) — 인메모리 레코드가
+**32바이트**라는 뜻이고, `TexImage.swift` 가 적어 둔 `(f32 frametime, i32 imageId, 6×f32)`
+레이아웃과 맞는다.
+
+#### 10.4.2 강제 프레임(시간 무시) — `scene+0x132c`
+
+```
+0x14015f129  movsxd rcx, dword ptr [rbx+0x132c]
+0x14015f132  js   0x14015f154                 ; 음수면 시간 진행 경로로
+0x14015f13e  cmp  rcx, rdx                    ; 범위 밖이면
+0x14015f141  cmovae ecx, r9d                  ;   → 0
+```
+
+기본값은 씬 ctor 가 심는 **−1** 이다(`0x14017ceac  mov dword ptr [rdi+0x132c], 0xffffffff`).
+바이너리 전체에서 이 필드를 쓰는 곳은 5자리뿐이고, 쓰는 쪽은 이미지 레이어 렌더
+`0x140206430` 하나다 — 드로우 직전에 레이어의 오버라이드 값을 넣고(`0x1402065a6`)
+드로우 뒤 −1 로 되돌린다(`0x1402065bb`).
+
+#### 10.4.3 시간 진행 — 프레임당 1회, 한 번에 한 프레임
+
+```
+0x14015f154  mov   eax, dword ptr [rbx+0x144]  ; 씬 프레임 카운터
+0x14015f162  cmp   dword ptr [r8+0xa4], eax    ; 이번 프레임에 이미 진행했나
+0x14015f169  je    0x14015f175                 ;   → dt = 0
+0x14015f16b  movss xmm0, dword ptr [rbx+0x14c] ; dt [추정 — §10.8 참조]
+...
+0x14015f1b2  addss xmm0, [r8+0xa0]             ; acc += dt
+0x14015f1c4  movss xmm1, dword ptr [r10]       ; 현재 프레임의 frametime
+0x14015f1c9  comiss xmm0, xmm1
+0x14015f1cc  jb    0x14015f26a                 ; acc < ft → 그대로
+0x14015f1d2  inc   edi                         ; ★ 딱 한 프레임만 전진
+0x14015f1d8  subss xmm0, xmm1                  ; acc -= ft
+0x14015f1ef  cmp   rax, rcx
+0x14015f1f4  mov   dword ptr [r8+0x9c], r9d    ; 끝을 넘으면 0 으로 랩
+0x14015f208  minss xmm0, dword ptr [r10]       ; ★ 잉여를 새 프레임 길이로 자른다
+0x14015f275  mov   dword ptr [r8+0xa4], eax    ; 이번 프레임 표시
+```
+
+상태는 `[st+0x9c]` 프레임 인덱스 · `[st+0xa0]` 누적시간 · `[st+0xa4]` 마지막 진행 프레임번호다.
+읽을 것 셋:
+
+1. **프레임당 1회 게이트.** `scene+0x144`(프레임 카운터) ↔ `[st+0xa4]`. §4.3 의
+   `sprite` 오브젝트가 `scene+0x144` ↔ `this+0x260` 으로 쿼리 발행을 게이트한 것과 **같은 관용구**다.
+   한 프레임에 같은 시트를 여러 번 그려도 시트는 한 칸만 간다.
+2. **루프가 아니라 단발 전진 + 잉여 절사.** `minss` 가 남은 누적시간을 새 프레임의 길이로
+   자르므로, **시트는 화면 갱신률보다 빠르게 재생될 수 없고** 초과분은 버려진다.
+3. **`frametime == 0` 이면 렌더 프레임당 정확히 한 프레임 전진한다.** `comiss acc, 0` 이
+   `jb` 를 안 타고, `subss` 가 0 을 빼고, `minss acc, 0` 이 0 으로 되돌린다.
+   → 이것이 `Sources/WapleCore/TexImage.swift` 의 `fallbackFrameTime` 주석이
+   "**WE 가 이 자리에 쓰는 값은 RE 로 확정하지 못했다**" 라고 남긴 [미해결]의 답이다:
+   **WE 는 아무 값도 안 쓴다. 0 은 "매 렌더 프레임 한 칸" 이라는 뜻이 된다**(디스플레이 종속).
+   그 파일은 이 과제 소유가 아니라 손대지 않았다 — 넘길 패치안은 §10.7.
+
+역방향도 대칭으로 있다(`dt < 0` → `0x14015f20f` 분기: `acc += dt`, 0 미만이면 인덱스를 하나
+내리고 `addss` 로 이전 프레임 길이를 더한 뒤 `maxss 0`). 즉 **되감기 재생이 규약에 있다.**
+
+#### 10.4.4 업로드 — 지오메트리 6개가 곧 2×2 + 평행이동
+
+```
+0x14015f2a3  mov   dword ptr [rbx+rcx*8+0x1cc], eax   ; eax = [r10+0x10]
+0x14015f2aa  movss dword ptr [rbx+rcx*8+0x1d0], xmm0  ; xmm0 = [r10+0x14]
+0x14015f2b3  movss dword ptr [rbx+rcx*8+0x1d4], xmm1  ; xmm1 = [r10+0x18]
+0x14015f2bc  movss dword ptr [rbx+rcx*8+0x1d8], xmm2  ; xmm2 = [r10+0x1c]
+0x14015f2c5  mov   rcx, qword ptr [r8+8]              ; 같은 오브젝트
+0x14015f2d3  mov   dword ptr [rcx+rsi*8+0x26c], eax   ; eax = [r10+0x08]
+0x14015f2da  movss dword ptr [rcx+rsi*8+0x270], xmm0  ; xmm0 = [r10+0x0c]
+0x14015f2e8  mov   dword ptr [r8+0x98], r9d           ; r9d = [r10+4] = imageId
+```
+
+(`rcx = 2·i`, `rsi = i` 이므로 스트라이드는 각각 16바이트·8바이트다.)
+
+**유니폼 슬롯의 정체는 추측이 아니라 업로더 점프 테이블로 확정했다.** 빌트인 유니폼
+업로더 `0x1400d8300` 이 유니폼 id 로 인덱스 표 `0x1400daaac` 를 찍고(`0x1400d83c1`)
+점프 표 `0x1400da984` 로 분기한다(`0x1400d83ca`):
+
+| id 범위 | 암 | 읽는 곳 | 뜻 |
+| --- | --- | --- | --- |
+| `0x20`–`0x29` | `0x1400da8ee`(기본) | — | `g_Texture0..9`(샘플러, 업로드 없음) |
+| `0x2a`–`0x33` | **`0x1400d979d`** | `[scene + 16·id − 0xd4]` → id `0x2a` = **`scene+0x1cc`** | `g_TextureNRotation` (vec4) |
+| `0x34`–`0x3d` | **`0x1400d97b7`** | `[scene + 8·id + 0xcc]` → id `0x34` = **`scene+0x26c`** | `g_TextureNTranslation` (vec2) |
+| `0x3e`–`0x47` | `0x1400d97d5` | — | `g_TextureNResolution` |
+
+> **함정 16 실사례.** 유니폼 등록 함수(`0x140002860`–`0x140004321`)에서
+> `mov dword ptr [rbp+0x698], 0x29` 는 `lea rdx, "g_Texture0Rotation"`(`0x1400032f6`)
+> **바로 앞**에 있지만 그 `0x29` 는 `g_Texture9` 의 id 다. 이름 `lea` 주변만 읽으면 한 칸
+> 밀린다. 위 표는 점프 테이블에서 되짚어 확정한 값이다.
+
+그래서 프레임 하나의 **6개 지오메트리 float** 가 이렇게 착지한다
+(TEXS 파일 필드 순서: `x, y, width, widthY, heightX, height`):
+
+| 인메모리 오프셋 | TEXS 필드 | 유니폼 |
+| --- | --- | --- |
+| `[frame+0x08]` | `x / w` | `g_TextureNTranslation.x` |
+| `[frame+0x0c]` | `y / h` | `g_TextureNTranslation.y` |
+| `[frame+0x10]` | `width / w` | `g_TextureNRotation.x` |
+| `[frame+0x14]` | `widthY / h` | `g_TextureNRotation.y` |
+| `[frame+0x18]` | `heightX / w` | `g_TextureNRotation.z` |
+| `[frame+0x1c]` | `height / h` | `g_TextureNRotation.w` |
+| `[frame+0x04]` | `imageId` | `[st+0x98]`(어느 mip 체인을 바인드할지) |
+
+셰이더식과 합치면
+
+```
+uv = (x, y)/dims + u·(width, widthY)/dims + v·(heightX, height)/dims
+```
+
+**즉 프레임 사각형은 아핀 2×2 다.** `width` 또는 `height` 가 0 이고 크기가 `heightX`/`widthY`
+에서 오는 **회전 프레임**이 여기서 공짜로 처리된다 — `TexImage.TexFrame.rotationQuarters`
+가 도출하는 것과 같은 정보다.
+
+그리고 **분모는 이미지 픽셀이 아니라 decode(=alloc) dims** 다. TEXS 리더
+(`0x14015e1d0`–`0x14015e57b`, 나눗셈 `0x14015e498`–`0x14015e4eb`)가 **읽는 시점에 이미
+나눠서** 넣으므로 위 유니폼은 곧바로 0..1 UV 다 — 이 절은 그 확정 사실과 정합하며,
+소비 지점에서 그것을 독립적으로 확인해 준다(런타임에 추가 나눗셈이 **없다**).
+
+**파티클 경로는 이 함수를 안 탄다.** 파티클은 TEXS 프레임 테이블 대신 `g_RenderVar1`
+(균일 격자 3값)만 받는다(§10.2b) — 즉 파티클 시트는 "모든 셀이 같은 크기" 를 가정한다.
+`.tex-json` 의 `spritesheetsequences[].width/height` 반올림 때문에 저장된 셀 폭이
+격자보다 아주 조금 큰 실물이 있다는 형제 문서 [`tex-format.md`](tex-format.md)의 관측과
+맞물리는 자리다. **[미해결]** — `g_RenderVar1` 의 세 값을 굽는 코드는 특정하지 못했다
+(씬 오프셋 `+0xb8` 로 쓰는 자리를 전수 훑었으나 파티클 렌더 경로에서 못 찾았다).
+
+### 10.5 알파 테스트 임계값
+
+머티리얼 스키마에 알파테스트 키가 **없다**. 키 문자열 클러스터
+(`0x14048b560`–`0x14048b6c0`)에 있는 것은 `passes` `keepaspect` `usertextures`
+`constantshadervalues` `usertexturereference` `textures` `usershadervalues`
+`blending` `shadowcaster` `usershortcut_` `cullmode` `depthwrite` `depthtest`
+`alphawriting` 뿐이고, 같은 클러스터의 `ALPHATOCOVERAGE`(`0x14048b5a0`)·
+`ADDITIVE`(`0x14048b628`)는 키가 아니라 **셰이더 콤보 이름**이다.
+
+`ALPHATOCOVERAGE` 콤보를 세우는 자리는 셋이고 **조건이 셋 다 같다**:
+
+```
+0x140154bc1  cmp byte ptr [r15+0x1f0], 3        ; 머티리얼 로드
+0x1401564a4  cmp byte ptr [r12+0x1f0], 3        ; 머티리얼 바인드
+0x14020ad1d  cmp byte ptr [rax+0x1f0], 3        ; 레이어 경로 (0x14020ad4a 가 이름 lea)
+```
+
+`+0x1f0` 은 `blending` 열거값이고 **3 = `alphatocoverage`** 다(형제 문서
+[`material-blend.md`](material-blend.md) §3.2 의 문자열↔열거 표). 그때 셰이더 꼬리가 도는 것은
+
+```glsl
+#if ALPHATOCOVERAGE
+    gl_FragColor.a = (gl_FragColor.a - 0.5) / max(fwidth(gl_FragColor.a), 0.0001) + 0.5;
+#if GLSL
+    if (gl_FragColor.a < 0.5) discard;
+#endif
+#endif
+```
+
+이고 **임계값은 0.5** 다(`genericparticle.frag:133`, `genericimage4.frag:223`,
+`genericimage3.frag:291`, `generic3.frag:270`, `generic4.frag:185`,
+`genericropeparticle.frag:112`, `clippingmaskimage4.frag:24,42`,
+`shadowcaster.frag:1,8`, `shadowcasterfoliage4.frag:1,8`,
+`base/model_fragment_v1.h:39` — 전 17자리 동일).
+
+`CUTOUT` 은 **다른 것**이다. discard 가 아니라 알파를 부드럽게 깎는다
+(`genericparticle.frag:121–123`):
+
+```glsl
+color.a = smoothstep(g_CutoutStart, g_CutoutEnd, color.a) * g_CutoutOpacity;
+```
+
+기본값은 `g_CutoutStart = 0.1` · `g_CutoutEnd = 0.2` · `g_CutoutOpacity = 1`
+(`genericparticle.frag:13–15` 의 애노테이션).
+
+**도달**(§10.6 참조): `blending:"alphatocoverage"` 는 동봉 **0건** · 설치본 **0건**.
+`CUTOUT` 콤보를 명시하는 `.json` 은 동봉 11 · 설치본 12.
+
+### 10.6 도달 (범위 라벨 포함)
+
+| 항목 | 동봉 `Sources/WapleRender/Resources/WEAssets/` | 설치본 `wallpaper_engine/` |
+| --- | ---: | ---: |
+| `.tex` 전체 | 311 | 440 |
+| 그중 **TEXS 섹션 보유**(= `flags & 0x4` = SPRITESHEET 대상) | **52** | **61** |
+| `SPRITESHEET` 콤보를 명시하는 `.json` | 2 (실물 머티리얼 1 + `shaders/declarations.json`) | 12 (실물 머티리얼 11 + `declarations.json`) |
+| `blending: "alphatocoverage"` | **0** | **0** |
+| `CUTOUT` 콤보 명시 `.json` | 11 | 12 |
+| 파티클 def `animationmode` | `null` 106 · `randomframe` 32 · `sequence` 4 | `null` 108 · `randomframe` 32 · `sequence` 4 |
+
+> **워크샵 코퍼스는 이 컨테이너에 없다.** `/home/user` 어디에도 `431960` 트리가 없어
+> 워크샵 도달은 **재지 않았다**(0 이 아니라 **미측정**이다 — 브리프 §2-19).
+
+`animationmode` 값 분포가 그대로 `SPRITESHEETBLEND` 분포다: `randomframe` 32건은
+크로스페이드 **꺼짐**, 나머지 110–112건은 **켜짐**.
+
+### 10.7 Waple 대조 · 넘길 것
+
+| WE | Waple 현재 | 판정 |
+| --- | --- | --- |
+| 이미지 시트 = 아핀 2×2 UV, 한 드로우 한 프레임 | `SceneRendererResources.swift:401` 의 `layer.spritesheet` + `resolveTextureWithFrames` → `spriteSubrect` 서브렉트 | 동치(회전 프레임은 `rotationQuarters` 로 별도 처리) |
+| 파티클 시트 = 균일 격자 + `SPRITESHEETBLEND` 크로스페이드 | 크로스페이드 **없음**(프레임 하나만 샘플) | **갭** — 동봉 시트 파티클 다수가 `animationmode` 부재 = 실물은 블렌드 켜짐 |
+| `frametime == 0` → 렌더 프레임당 한 칸 | `TexImage.fallbackFrameTime = 0.016` 고정 | 60Hz 에서는 근사 일치(0.016 ≈ 1/62.5). **가변 주사율에서 갈린다** |
+| 시트 진행을 씬 프레임 카운터로 1회 게이트 | 시간 기반 `spriteFrameIndex(frames:time:)` — 게이트 없음(멱등이라 무해) | 동치 관측 |
+| 시트 머티리얼 `depthtest`/`depthwrite` 둘 다 off | 2D 경로가 뎁스를 안 쓴다 | 동치 |
+| `alphatocoverage` → `discard(a < 0.5)` | 3D 만 `alphaCutoff = 0.5` 근사, 2D 미처리 | 동봉 도달 0 이라 무영향([`material-blend.md`](material-blend.md) B2) |
+
+**넘길 패치안 1 — `TexImage.fallbackFrameTime`(소유 밖).** 이 절의 §10.4.3 이
+`fallbackFrameTime` doc 주석의 "WE 가 이 자리에 쓰는 값은 확정하지 못했다" 를 닫는다.
+주석의 그 문단을 아래로 바꿀 것(값 자체는 그 주석이 이미 적어 둔 이유로 유지):
+
+```
+/// **[2026-08-21 해소]** WE 는 이 자리에 **아무 값도 쓰지 않는다.** 시트 진행기
+/// (0x14015f0d0–0x14015f326)는 `frametime == 0` 이면 `comiss`(0x14015f1c9)가 통과하고
+/// `subss`(0x14015f1d8)가 0 을 빼고 `minss`(0x14015f208)가 누적을 0 으로 되돌려,
+/// **렌더 프레임당 정확히 한 프레임** 전진한다(= 디스플레이 종속). 즉 "초/프레임" 이라는
+/// 값이 애초에 없다. 헤드리스 결정성이 필요한 Waple 에서는 시간 기반 폴백이 옳고,
+/// 60Hz 기준으로 0.016 이 1/62.5 라 관측이 가깝다. 다만 `1.0 / max(1, frameCount)` 가
+/// 짝 `.tex-json`(전건 `duration: 1`) 8/8 과 맞는다는 관측은 그대로 유효하다.
+```
+
+**넘길 패치안 2 — 파티클 시트 크로스페이드(소유 밖).** `SPRITESHEETBLEND` 가
+`animationmode != "randomframe"` 로 켜지므로, `SceneRendererFrameEncoder` 의
+`particleSheetFrameIndex` 경로는 현재 프레임 + 다음 프레임(`min(n−1, cur+1)`)을 둘 다
+샘플해 `frac(lifetime · n)` 로 `mix` 해야 실물과 같다. `randomframe` 인 def 에서는 꺼야 한다
+(`def.animationMode == .randomframe`).
+
+### 10.8 이 절이 못 닫은 것
+
+- **[미해결] `g_RenderVar1`(파티클 시트 격자 3값)을 굽는 코드.** 유니폼 슬롯은
+  `scene+0xb8`(업로더 암 `0x1400d9ec0`)로 확정했지만, 파티클 렌더 경로에서 그 자리에
+  프레임 수·셀 크기를 넣는 지점을 특정하지 못했다. `+0xb8` 로의 16바이트 스토어는
+  이미지 전체에 37자리이고 그중 파티클 경로로 확정되는 것이 없었다.
+- **[미해결] `general.spritesheetrefreshsync`(씬 플래그 bit6)의 소비처.**
+  프로젝트 플래그 워드 bit11 로 접히는 것까지는 확인했지만(`0x14018339e`), 그 비트를
+  읽는 자리를 못 찾았다. 이름으로 보면 §10.4.3 의 프레임 진행을 씬 클록에 묶는 스위치일
+  가능성이 크지만 **근거 없음**이다.
+- **[미해결] 한 파티클 시스템 안에서 파티클끼리의 그리기 순서.** 뎁스 정렬이 있는지 안 봤다.
+  씬 수준의 `transparentsorting` 경로(`0x14018aac0`–`0x14018b22c`)는 형제 문서
+  (`SceneDocument.swift` 의 `transparentSorting` 주석)가 이미 [미해결]로 남긴 자리다.
+  **[관측 한 줄 보탬]** 그 함수의 FNV-1a(시드 `0xcbf29ce484222325` @`0x14018acbe`,
+  소수 `0x100000001b3`)는 **정렬 키가 아니라 오브젝트 포인터 8바이트**를 해싱한다
+  (`mov rsi, qword ptr [r14]` @`0x14018ace2` 뒤로 바이트별 `xor`/`imul` 연쇄) — 자료구조
+  조회용 해시로 읽힌다. 깊이 정렬 키인지는 여전히 미확정이다.
+- **[미해결] `scene+0x14c`(시트 진행에 쓰는 dt)의 기록자.** 이 필드를 **읽는** 자리는
+  `0x14015f16b` 하나뿐이고, disp32 스토어는 이미지 전체에 없다(더 큰 블록 이동으로
+  쓰이는 것으로 보인다). 단위가 초라는 것은 TEXS `frametime` 과의 직접 비교
+  (`comiss` @`0x14015f1c9`)로만 확정했다.
+
+### 10.9 재현
+
+```bash
+# 자산 (x86 앞에)
+python3 - <<'PY'
+import json
+j=json.load(open('wallpaper_engine/assets/shaders/declarations.json',encoding='utf-8'))
+for k in ('animatedimageshaders','animatedimageshaderssmooth','animatedimageshadersn'):
+    print(k, {x:j[k][0].get(x) for x in ('blending','depthtest','depthwrite','cullmode','combos')})
+PY
+sed -n '61,84p'   wallpaper_engine/assets/shaders/common_particles.h   # ComputeSpriteFrame
+sed -n '71,84p'   wallpaper_engine/assets/shaders/genericparticle.frag # SPRITESHEETBLEND mix
+sed -n '133,138p' wallpaper_engine/assets/shaders/genericparticle.frag # ALPHATOCOVERAGE 0.5
+
+# 바이너리
+python3 scripts/re/disasm.py 0x14015f0d0 0x256    # 시트 진행 + 유니폼 업로드
+python3 scripts/re/disasm.py 0x14015c470 0x10     # CTexture::IsSpriteSheet
+python3 scripts/re/disasm.py 0x1401d2d89 0x110    # 세 콤보 세팅
+```
+
+유니폼 슬롯 확인(추측 금지 — 점프 테이블에서 되짚는다):
+
+```python
+from wpe import pe; import struct
+idx = pe.read(0x1400daaac, 0x90)
+for i in (0x2a, 0x34, 0x3e):
+    a = idx[i]
+    rva = struct.unpack('<I', pe.read(0x1400da984 + 4*a, 4))[0]
+    print(hex(i), 'arm', hex(0x140000000 + rva))
+# 0x2a -> 0x1400d979d (Rotation)  0x34 -> 0x1400d97b7 (Translation)  0x3e -> 0x1400d97d5
 ```
