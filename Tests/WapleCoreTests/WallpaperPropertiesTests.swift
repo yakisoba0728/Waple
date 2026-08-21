@@ -222,4 +222,78 @@ final class WallpaperPropertiesTests: XCTestCase {
         XCTAssertEqual(props.first?.key, "bg")
         XCTAssertEqual(props.first?.value, .string("1 0 0"))
     }
+
+    // MARK: - schemecolor (docs/re/scheme-color.md)
+
+    /// `schemecolor` 는 WE 가 유일하게 **이름으로 특수 취급**하는 사용자 속성이지만
+    /// (`0x1401821F9` → `wallpaper+0x31B0/B4/B8` 전용 float3 슬롯), 그 슬롯의 소비처는
+    /// 이미지 전수 스캔에서 **배경 클리어 색 한 곳**뿐이고(`0x14017FC58`·`0x14018033A`),
+    /// 그마저 `wallpaper+0x124`(= 브라우저 주입 사용자 속성 `alignment`)가 0/2 가 **아닐 때만**
+    /// 쓰인다(`0x14017FC4C` `test dword [rsi+0x124], 0xFFFFFFFD`). `alignment` 는 project.json
+    /// 키가 아니고(설치본 191 project.json 중 0건) 생성자·UI 기본값이 둘 다 0(cover)이라
+    /// **Waple 에서 그 경로는 도달 불가**다. 그래서 Waple 은 이 키를 특수 처리하지 **않고**
+    /// 제네릭 사용자 속성으로만 통과시킨다 — 아래 네 테스트가 그 결정을 잠근다.
+    ///
+    /// 값은 8비트 sRGB 헥스를 그냥 255 로 나눈 **0–1 3성분 문자열**이다(UI 의
+    /// `convertHexToVec3 = e.r/255+" "+e.g/255+" "+e.b/255`). 감마 변환도 0–255 유지도 없으므로
+    /// **원문 그대로 보존**하는 것이 원본 동작이다.
+    func testSchemeColorStaysAPlainUserProperty() {
+        // 동봉 WEAssets 161건이 전건 이 형태다(값도 전건 "0 0 0").
+        let props = WallpaperProperties.parse(generalProperties: [
+            "schemecolor": ["order": 0, "text": "ui_browse_properties_scheme_color",
+                            "type": "color", "value": "0 0 0"],
+            "other": ["type": "bool", "value": true, "order": 1],
+        ])
+        // 필터링되지 않는다 — 두 속성 모두 나온다.
+        XCTAssertEqual(props.map(\.key), ["schemecolor", "other"])
+        let scheme = props[0]
+        XCTAssertEqual(scheme.type, "color")
+        XCTAssertEqual(scheme.value, .string("0 0 0"))   // 원문 보존: Vec3 로 접히지 않는다
+        XCTAssertEqual(scheme.text, "ui_browse_properties_scheme_color")
+        XCTAssertEqual(scheme.order, 0)
+    }
+
+    /// 설치본 `projects/defaultprojects/` 실측 비영값(16건 중 대표 5건)이 **바이트 그대로** 남아야
+    /// 한다. 255 곱하기·나누기나 sRGB↔선형 변환을 끼워 넣으면 여기서 깨진다.
+    func testSchemeColorNonBlackValuesSurviveVerbatim() {
+        let measured = [
+            "1 0 0",                                     // demon_core
+            "0.8 0.4 0.05",                              // shimmering_particles
+            "0.72 0.64 0.42",                            // retro
+            "0.075 0.125 0.180",                         // razer_vortex — 후행 0 도 보존
+            "0.2823529411764706 0.5019607843137255 0.09411764705882353",  // dino_run
+        ]
+        for raw in measured {
+            let props = WallpaperProperties.parse(generalProperties: [
+                "schemecolor": ["type": "color", "value": raw]
+            ])
+            XCTAssertEqual(props.first?.value, .string(raw), "schemecolor 값이 변형됐다: \(raw)")
+        }
+    }
+
+    /// `weUserPropertiesJSON` 이 `schemecolor` 를 빼먹으면 두 가지가 동시에 깨진다:
+    /// material `passes[].usershadervalues.schemecolor`(설치본 29건 · 동봉 1건
+    /// `materials/util/fade.json` → 셰이더 `material` 토큰 `"tint"`) 바인딩과, 씬 스크립트의
+    /// 사용자 속성 조회. 그래서 **제네릭 통과가 곧 계약**이다.
+    func testSchemeColorIsCarriedIntoWEUserPropertiesJSON() {
+        let props = WallpaperProperties.parse(generalProperties: [
+            "schemecolor": ["type": "color", "value": "1 0 0", "order": 0]
+        ])
+        XCTAssertEqual(WallpaperProperties.weUserPropertiesJSON(props),
+                       #"{"schemecolor":{"type":"color","value":"1 0 0"}}"#)
+    }
+
+    /// 무회귀 — `schemecolor` 가 없는 프로젝트의 파스는 한 값도 달라지지 않는다.
+    func testProjectWithoutSchemeColorIsUnaffected() {
+        let general: [String: Any] = [
+            "bg":   ["type": "color",  "value": "0.6 0.4 0.3", "order": 0],
+            "amt":  ["type": "slider", "value": 0.5,           "order": 1],
+            "flag": ["type": "bool",   "value": true,          "order": 2],
+        ]
+        let props = WallpaperProperties.parse(generalProperties: general)
+        XCTAssertEqual(props.map(\.key), ["bg", "amt", "flag"])
+        XCTAssertEqual(props.map(\.value), [.string("0.6 0.4 0.3"), .number(0.5), .bool(true)])
+        XCTAssertEqual(WallpaperProperties.weUserPropertiesJSON(props),
+                       #"{"amt":{"type":"slider","value":0.5},"bg":{"type":"color","value":"0.6 0.4 0.3"},"flag":{"type":"bool","value":true}}"#)
+    }
 }
