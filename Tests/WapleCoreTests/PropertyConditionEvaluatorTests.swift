@@ -66,4 +66,64 @@ final class PropertyConditionEvaluatorTests: XCTestCase {
             true
         )
     }
+
+    // MARK: - 문자열 메서드 조건 (실물 corsair_collection/project.json — 조건 22건 중 9건)
+
+    /// `condition` 은 AngularJS `$eval` 표현식이라 `String.prototype` 메서드가 그대로 성립한다
+    /// (`scripts.js` 의 `evalCondition(e) { return scope.$eval(e, properties) }`).
+    /// 종전에는 `effect.value.endsWith` 가 통째 식별자로 토큰화되고 남은 `('pulse')` 때문에
+    /// 파스 실패 → 조건 무시(항상 표시)였다.
+    func testEvaluatesStringMethodConditionsFromRealCorpus() {
+        let values: [String: PropertyValue] = [
+            "effect": .string("rainbowpulse"),
+            "pulseanimation": .string("static"),
+            "scene": .string("ram"),
+        ]
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate(
+            "effect.value.endsWith('pulse') === true", values: values), true)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate(
+            "effect.value.startsWith('rainbow') === false", values: values), false)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate(
+            "effect.value.endsWith('pulse') === true && pulseanimation.value === 'static'",
+            values: values), true)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate(
+            "effect.value.endsWith('pulse') === true && pulseanimation.value !== 'static'",
+            values: values), false)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate(
+            "effect.value.endsWith('spiral') === true && scene.value === 'ram'", values: values), false)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate(
+            "effect.value.includes('bowpul')", values: values), true)
+        // 문법이 인식되므로 analyzer 경고(propertyDisplayCondition)도 더는 나가지 않는다.
+        XCTAssertTrue(PropertyConditionEvaluator.canEvaluate("effect.value.endsWith('pulse') === true"))
+    }
+
+    /// 좌변이 문자열이 아니면 손대지 않는다 — JS 에서도 숫자·불리언에는 그 메서드가 없다.
+    func testStringMethodOnNonStringLeavesConditionUnevaluable() {
+        let values: [String: PropertyValue] = ["n": .number(12), "b": .bool(true)]
+        XCTAssertNil(PropertyConditionEvaluator.evaluate("n.value.startsWith('1')", values: values))
+        XCTAssertNil(PropertyConditionEvaluator.evaluate("b.value.endsWith('e')", values: values))
+    }
+
+    /// 배열 리터럴 `[a,b].includes(x)` 경로(종전 기능)와 충돌하지 않는다 — 식별자 형태만 잡는다.
+    func testArrayIncludesStillTakesTheArrayPath() {
+        let values: [String: PropertyValue] = ["n": .number(12), "s": .string("abc")]
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("[10, 11, 12].includes(n.value)", values: values), true)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate(
+            "[10, 11].includes(n.value) || s.value.startsWith('ab')", values: values), true)
+    }
+
+    /// 실물 코퍼스에 있는 나머지 형태들(맨 숫자 리터럴 · 빈 문자열 · 문자열 비교).
+    func testEvaluatesRemainingRealCorpusConditionShapes() {
+        let values: [String: PropertyValue] = [
+            "style": .string("1"), "showbottom": .number(2), "rainbowscheme": .bool(false),
+            "scene": .string("cartoon"),
+        ]
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("1", values: values), true, "맨 숫자 리터럴")
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("0", values: values), false)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("style.value=='1'", values: values), true)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("showbottom.value > 0", values: values), true)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("rainbowscheme.value", values: values), false)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate(
+            "scene.value !== 'cartoon' && scene.value !== 'ram'", values: values), false)
+    }
 }

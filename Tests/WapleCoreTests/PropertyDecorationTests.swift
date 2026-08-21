@@ -36,4 +36,17 @@ final class PropertyDecorationTests: XCTestCase {
         XCTAssertEqual(PropertyDecoration.visibleIndices(in: props), [0],
                        "조건 통과 + 비장식만 표시")
     }
+
+    /// WE 브라우저 템플릿이 아는 유일한 장식 타입 — 편집 위젯 없이 `<hr>` 하나를 그린다
+    /// (`browseruserproperties.html`: `ng-if="property.type==\'divider\'"`).
+    func testDividerTypeIsDecorationRegardlessOfKeyAndText() {
+        XCTAssertTrue(PropertyDecoration.isDecoration(
+            WallpaperProperty(key: "sep1", type: "divider", value: .none, order: 0, condition: nil)))
+        XCTAssertTrue(PropertyDecoration.isDecoration(
+            WallpaperProperty(key: "sep2", type: "DIVIDER", value: .none, order: 0, condition: nil,
+                              text: "Section")), "대소문자 무시")
+        XCTAssertFalse(PropertyDecoration.isDecoration(
+            WallpaperProperty(key: "amount", type: "slider", value: .number(1), order: 0, condition: nil,
+                              text: "Amount")), "일반 위젯은 그대로 편집 대상")
+    }
 }
