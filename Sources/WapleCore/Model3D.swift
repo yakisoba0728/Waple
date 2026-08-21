@@ -439,19 +439,21 @@ public struct Model3D: Equatable {
             // 인덱스 원소 폭이 이 워드의 bit0 에서 나온다(아래 참조).
             guard let gateWord = u32(o) else { return nil }
             o += 4
-            // 메시 헤더 프레이밍 프로브: z 뒤에 여분 u32 가 0..2개 올 수 있다(실측: 전 코퍼스 0개,
-            // Kirby_puppet mesh1 만 1개(=1)). extra=0 이 기존 경로라 최우선 — vSize/스트라이드 정합
-            // (표 나눗셈 or 인덱스 maxIndex+1 추론)이 성립하는 첫 프레이밍을 채택한다.
+            // 메시 헤더 프레이밍: gateWord 뒤 여분 u32 는 **gateWord bit1 이 결정한다**
+            // (`Model3DFormat.extraMeshHeaderWords`). 0 개 아니면 1 개, 2 개는 발생 불가다.
             //
-            // S3-mdl(2026-07-27) 디컴파일 대조(FUN_140261950:1158-1165)로 위 브루트포스가 결정론적 규칙
-            // 임이 확인됨: 바로 위에서 읽은 flag word(z) 에 대해 `if (flag & 2) { extra = readU32(); }`
-            // — 즉 flag 의 **bit1 이 서면 u32 가 정확히 1개 더** 온다(0 또는 1 만 가능, 2 는 코드상 발생
-            // 안 함 — 우리 프로브가 실측에서 0/1 만 관측하고 2 를 한 번도 못 본 것과 정확히 일치). Kirby
-            // mesh1: z=2(bit1=1)→extra=1, 그 외 z=0(bit1=0)→extra=0. 스트림 위치 정합: 헤더 stringCount
-            // (위 주석)=1 이면 그 직전 cstring 루프가 정확히 1개를 소비 — 이게 바로 이 mesh 의 material
-            // 리드(177행)이므로, 디컴파일의 이 flag 리드가 곧 177행 직후 178행의 z 리드와 같은 스트림
-            // 위치가 된다(단일메시 기준; 다중메시는 위 stringCount 주석과 동일하게 미확정). 프로브 코드는
-            // 그대로 유지(동작 동일), 근거만 브루트포스에서 디컴파일 대조로 격상.
+            // [2026-08-21] 종전 `probe: for extra in 0...2` 무차별 탐색을 걷어냈다. 종전 주석은
+            // 디컴파일 대조로 "결정론적 규칙임이 확인됨" 이라 적어 놓고도 코드는 브루트포스를
+            // 유지했는데, 원본 어셈블리를 직접 따라가면 분기 하나로 끝난다:
+            //     0x14026198c  mov [rbp+0x88], eax   → gateWord 보관
+            //     0x140261992  test al, 2            → gateWord & 2
+            //     0x140261994  je 0x1402619a6        → 안 서면 곧장 AABB 게이트(0x1402619a6 `cmp edi,0x11`)
+            //     0x14026199b  call 0x14009c560      → 서면 u32 **한 번만** 더 읽고
+            //     0x1402619a0  mov [rbp+0x8c], eax   → +0x8c 에 보관(구조체상 gateWord 바로 뒤)
+            // 루프가 아니므로 extra=2 는 어떤 입력으로도 나올 수 없다 — 탐색이 그 프레이밍을
+            // 받아들일 여지 자체가 오탐이었다. 무차별 탐색은 "정합하는 첫 프레이밍" 을 고르므로,
+            // bit1=0 인데 정렬이 우연히 맞는 손상 파일을 4·8바이트 밀어 읽고 **조용히** 성공한다.
+            // 이제는 규칙대로 읽고 안 맞으면 nil 이다(실물 회귀는 Model3DMeshFramingTests).
             //
             // 정점 포맷 플래그(실측 4종 대조로 확정): bit1(0x2)=normal 3f, bit2(0x4)=tangent 4f,
             // skinMask=본/웨이트. pos 3f 와 uv 2f 는 전 변형 공통(bit0/bit3 semantics 미상 — 무시).
@@ -471,60 +473,51 @@ public struct Model3D: Equatable {
             // AlignedByteOffset 누적)으로 마스크/기여 상수 전수 확정 → vertexLayoutTable 로 구현.
             var minx: Float = 0, miny: Float = 0, minz: Float = 0
             var maxx: Float = 0, maxy: Float = 0, maxz: Float = 0
-            var formatFlag: UInt32 = 0
-            var stride = 0
-            var vSize = 0
-            var layout: VertexLayout? = nil
-            var framed = false
-            probe: for extra in 0...2 {
-                var q = o + extra * 4
+            var q = o + Model3DFormat.extraMeshHeaderWords(gateWord: gateWord) * 4
+            if hasAABB {
                 var box: [Float] = [0, 0, 0, 0, 0, 0]
-                if hasAABB {
-                    for k in 0..<6 {
-                        guard let v = f32(q + k * 4) else { continue probe }
-                        box[k] = v
-                    }
-                    q += 24
-                }
-                // v≤14 는 메시마다 formatFlag 를 담지 않는다 — 리드 자체가 없고 헤더 오프셋 9 의 값을
-                // 쓴다(엔진 0x140261a19 `cmp edi, 0x0f` / `jl 0x140261a33`, 그 착지점이
-                // `mov [rbp+0xa8], r10d` = 헤더 flag 대입). 앞 메시 값이 눌어붙지도 않는다 —
-                // 메시 루프 진입마다 r10d 를 헤더 값으로 되돌린다(0x140262318 `mov r10d,[rsp+0x60]`).
-                let flag: UInt32
-                if hasMeshFlag {
-                    guard let f = u32(q) else { continue }
-                    flag = f
-                    q += 4
-                } else {
-                    flag = headerFlag
-                }
-                guard let vsRaw = u32(q) else { continue }
-                let vs = Int(vsRaw)
-                guard vs > 0, q + 4 + vs <= bytes.count else { continue }
-                let skin = (flag & skinMask) != 0
-                var lay = vertexLayout(for: flag)
-                // 폴백 스트라이드는 항별 누적으로 계산한다 — 리터럴+삼항 5항 `+` 체인 한 줄은
-                // 타입체커에 1.2초를 태웠다(구형 툴체인에선 식 폐기 위험). 합계는 종전과 동일.
-                var fallback = 12 + 8                                    // pos(12) + uv(8)
-                if flag & 0x2 != 0 { fallback += 12 }                     // normal
-                if flag & 0x4 != 0 { fallback += 16 }                     // tangent/color
-                if skin { fallback += 32 }                                // boneIdx+weights
-                var s = lay?.stride ?? fallback
-                if vs % s != 0 {
-                    guard let inferred = inferStride(bytes: bytes, indexBlobAt: q + 4 + vs, vSize: vs),
-                          inferred >= 20 else { continue }   // pos(12)+uv(8) 최소
-                    s = inferred
-                    lay = nil   // 추론 스트라이드는 테이블 산출이 아님 — 채널 오프셋도 꼬리고정 경로로
+                for k in 0..<6 {
+                    guard let v = f32(q + k * 4) else { return nil }
+                    box[k] = v
                 }
                 (minx, miny, minz) = (box[0], box[1], box[2])
                 (maxx, maxy, maxz) = (box[3], box[4], box[5])
-                formatFlag = flag; stride = s; vSize = vs; layout = lay
-                o = q + 4
-                framed = true
-                break
+                q += 24
             }
-            guard framed, stride > 0, vSize % stride == 0 else { return nil }
+            // v≤14 는 메시마다 formatFlag 를 담지 않는다 — 리드 자체가 없고 헤더 오프셋 9 의 값을
+            // 쓴다(엔진 0x140261a19 `cmp edi, 0x0f` / `jl 0x140261a33`, 그 착지점이
+            // `mov [rbp+0xa8], r10d` = 헤더 flag 대입). 앞 메시 값이 눌어붙지도 않는다 —
+            // 메시 루프 진입마다 r10d 를 헤더 값으로 되돌린다(0x140262318 `mov r10d,[rsp+0x60]`).
+            let formatFlag: UInt32
+            if hasMeshFlag {
+                guard let f = u32(q) else { return nil }
+                formatFlag = f
+                q += 4
+            } else {
+                formatFlag = headerFlag
+            }
+            guard let vsRaw = u32(q) else { return nil }
+            // `Int(clamping:)` — 64비트에서 UInt32→Int 는 언제나 확대라 트랩이 없지만,
+            // check_int_narrowing 의 인구조사(R4)는 맨 `Int(` 를 세므로 무해함을 라벨로 적어 둔다.
+            let vSize = Int(clamping: vsRaw)
+            guard vSize > 0, q + 4 + vSize <= bytes.count else { return nil }
             let skinned = (formatFlag & skinMask) != 0
+            var layout = vertexLayout(for: formatFlag)
+            // 폴백 스트라이드는 항별 누적으로 계산한다 — 리터럴+삼항 5항 `+` 체인 한 줄은
+            // 타입체커에 1.2초를 태웠다(구형 툴체인에선 식 폐기 위험). 합계는 종전과 동일.
+            var fallback = 12 + 8                                    // pos(12) + uv(8)
+            if formatFlag & 0x2 != 0 { fallback += 12 }               // normal
+            if formatFlag & 0x4 != 0 { fallback += 16 }               // tangent/color
+            if skinned { fallback += 32 }                             // boneIdx+weights
+            var stride = layout?.stride ?? fallback
+            if vSize % stride != 0 {
+                guard let inferred = inferStride(bytes: bytes, indexBlobAt: q + 4 + vSize, vSize: vSize),
+                      inferred >= 20 else { return nil }   // pos(12)+uv(8) 최소
+                stride = inferred
+                layout = nil   // 추론 스트라이드는 테이블 산출이 아님 — 채널 오프셋도 꼬리고정 경로로
+            }
+            o = q + 4
+            guard stride > 0, vSize % stride == 0 else { return nil }
             let hasNormal = formatFlag & 0x2 != 0
             let hasTangent = formatFlag & 0x4 != 0
             let vCount = vSize / stride
@@ -634,8 +627,19 @@ public struct Model3D: Equatable {
         // 전수 착지 검증 2026-07-28). 수용 버전 0002/0003/0004 — 미목격 버전은 계속 거부(추측 파스 금지).
         if let si = findMagic("MDLS000", in: bytes, from: o), si + 9 <= bytes.count,
            (UInt8(ascii: "2")...UInt8(ascii: "4")).contains(bytes[si + 7]) {
-            var p = si + 8 + 1  // magic + lead u8(0)
-            if let _ = u32(p), let boneCount = u32(p + 4), boneCount < 100_000 {
+            var p = si + 8 + 1  // magic + lead u8(0) — 매직은 cstring 이라 종단 NUL 이 1B 더 붙는다
+            // 커서 정렬은 엔진과 같다: 매직 cstring → `strncmp(…, "MDLS", 4)`(0x1402624af/0x1402624bc)
+            // → `atoi(매직+4)`(0x1402624d9) → u32 nextOffset(0x1402624ea, 리더 0x140261770 은 읽은
+            // 값을 섹션 끝 포인터로 클램프해 보관한다) → u32 boneCount(0x1402624f4).
+            //
+            // [2026-08-21] 상한을 100,000 → 128 로 좁혔다. 엔진은 boneCount 를 읽자마자
+            // `cmp eax, 0x80` / `jbe`(0x140262501–0x140262506) 로 재고, 초과하면 거부가 아니라
+            // `xor ecx,ecx; int 0x29`(0x140262508–0x14026250a) = __fastfail 로 **프로세스를 죽인다**.
+            // 즉 129본 이상 .mdl 은 WE 에서 아예 못 도는 파일이라 실물로 존재할 수 없다(근거 전문은
+            // `Model3DFormat.maxBoneCount`). 종전 100,000 은 매직 스캔이 블롭 한복판에 오탐 착지했을
+            // 때 폭주 카운트를 그대로 통과시켰다 — 이제 엔진과 같은 지점에서 잘린다.
+            // Waple 은 죽지 않고 본 없이(정적 메시) 진행한다.
+            if let _ = u32(p), let boneCount = u32(p + 4), boneCount <= UInt32(Model3DFormat.maxBoneCount) {
                 p += 8
                 var bones: [Bone] = []
                 bones.reserveCapacity(Int(boneCount))
