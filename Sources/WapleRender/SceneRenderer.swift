@@ -330,10 +330,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             // [미해결] 실물은 `limitrows: false` 라도 저작된 `maxrows` 를 멤버에 그대로 싣는다
             // (주입기가 게이트와 무관하게 키마다 따로 돈다). Waple 의 파스가 그 값을 접어 버려서
             // 미체크 시의 저작값은 복원할 수 없다 — `SceneDocument` 쪽 패치가 선행돼야 한다.
-            d.limitRows = text.maxRows != nil
-            d.maxRows = text.maxRows ?? 1
-            d.limitWidth = text.maxWidth != nil
-            d.maxWidth = text.maxWidth ?? 500
+            //
+            // **해소(2026-08-21, BD).** 그 선행 패치는 `6a83b9a` 가 이미 넣었다 — `SceneTextLayer` 에
+            // 저장 프로퍼티 `limitWidth`/`maxWidthValue`/`limitRows`/`maxRowsValue` 넷이 생겼고
+            // `maxWidth`/`maxRows` 는 **게이트를 접은 계산 프로퍼티**가 됐다(소비부 무회귀용).
+            // 그런데 이 조립부가 그 계산 프로퍼티를 되읽고 있었다 — `limitrows:false, maxrows:9` 면
+            // `text.maxRows` 가 nil 이라 `?? 1` 이 걸려 **저작값 9 가 여기서 소실**됐다.
+            // 실물 멤버는 9 다(주입기 `0x1401a4930` `mov [r14+rbp], eax` 가 게이트 `+0x594` 를 아예
+            // 읽지 않고 `+0x510` 에 쓴다 — 적용 루프 `0x1401731d0` 이 키마다 디스크립터를 따로
+            // 찾아 `0x140173398` `call qword [rax+8]` 하나만 부르기 때문이다). 그래서 값은 값 멤버
+            // 에서, 게이트는 게이트 멤버에서 각각 가져온다.
+            d.limitRows = text.limitRows
+            d.maxRows = text.maxRowsValue
+            d.limitWidth = text.limitWidth
+            d.maxWidth = text.maxWidthValue
             return d
         }
         return imageLayers + textLayers
@@ -522,17 +532,68 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// - 이미지 오브젝트 → `solid`(bit13) 가 꺼졌으면 `.unhittable`(히트 순회의 첫 관문
     ///   `0x14018a02d` 가 아예 통과시키지 않는다), 켜졌으면 `.object(회전 쿼드)`.
     ///   쿼드 구성은 호버와 **같은** `layerHitQuad`(정렬 앵커 포함) — 두 경로가 갈리면 안 된다.
-    /// - 텍스트 오브젝트 → `.geometryUnknown`. 실물 텍스트의 히트 상자는 **래스터된 픽셀 크기**인데
+    /// - 텍스트 오브젝트 → ~~`.geometryUnknown`. 실물 텍스트의 히트 상자는 **래스터된 픽셀 크기**인데
     ///   `SceneTextLayer` 에는 그 값이 없다(`scene-script-api.md` §9.1 (b) `size` [미해결]).
-    ///   추측한 상자로 좁히면 텍스트 바인딩 스크립트가 통째로 죽으므로 종전 배달을 유지한다.
+    ///   추측한 상자로 좁히면 텍스트 바인딩 스크립트가 통째로 죽으므로 종전 배달을 유지한다.~~
+    ///   **BD(2026-08-21) 배선함** — 아래 텍스트 분기. 규약은 `docs/re/text-layer.md` §8b/§11.2.
+    ///
+    /// **텍스트 분기 (BD, 2026-08-21 — G17)**. 새 수식을 만들지 않는다: 그리기 경로가 이미 쓰는
+    /// 세 부품(`GPUText.rasterWidth`/`rasterHeight` · `textAlignmentString` · `layerHitQuad`)을
+    /// 그대로 재사용하므로 회전·음수 스케일·9점 앵커가 이미지 경로와 자동으로 정합한다.
+    /// 실물 근거(2026-08-21 BD 재실측): 히트 순회가 타입 1(이미지)과 4(텍스트)를 같은 분기로 모아
+    /// (`0x14018a044`–`0x14018a050`) 상자 함수 `0x14019dbb0` 하나에 넘기고, 그 함수가 읽는 크기가
+    /// `mov rax, qword [rbx+0x2f0]`(`0x14019dd8a`)이다. 텍스트의 `+0x2f0` 은 vtable `0x140491950`
+    /// 슬롯 `+0x110` = `0x140258900` 이 매 레이아웃마다 "잉크박스 + 2·clamp(padding,512)" 로 덮는다.
+    /// 순수 산술은 `WapleCore/PointerHit.textHitSize` 로 뽑아 리눅스 테스트가 잠근다.
     func buildPointerTargets(doc: SceneDocument) {
+        // buildTexts(mount: `textLayers = buildTexts(...)`)가 이 호출보다 **먼저** 돈다 — 그래서
+        // 여기서 래스터 크기를 읽을 수 있다. 3D 씬은 그 대입 자체가 `if !is3D` 안이라 비어 있고,
+        // 그때는 아래 count 가드가 종전 `.geometryUnknown`(전건 배달)로 떨어뜨린다(무회귀).
+        let texts = textLayers
         pointerTargets = pointerEngineOwners.map { pair -> PointerTarget in
             let none = Vec2(x: 0, y: 0)
             guard let i = pair.descriptorIndex else {
                 return PointerTarget(engine: pair.engine, scope: .unbound, parallaxDepth: none)
             }
-            guard i >= 0, i < doc.layers.count else {
+            guard i >= 0 else {
                 return PointerTarget(engine: pair.engine, scope: .geometryUnknown, parallaxDepth: none)
+            }
+            if i >= doc.layers.count {
+                // 텍스트 디스크립터 인덱스 = doc.layers.count + uid(F743/S-34, buildTexts 와 동일 규약).
+                let u = i - doc.layers.count
+                // 래스터가 없으면(빈 텍스트 = 드로우 스킵) 상자를 만들 근거가 없다 → 종전 전건 배달 유지.
+                guard u < doc.texts.count, u < texts.count,
+                      texts[u].rasterWidth > 0, texts[u].rasterHeight > 0 else {
+                    return PointerTarget(engine: pair.engine, scope: .geometryUnknown, parallaxDepth: none)
+                }
+                let t = doc.texts[u], g = texts[u]
+                // 히트 순회의 첫 관문은 텍스트도 `solid`(bit13)다 — `0x14018a02d`
+                // `test word [r15+0x120], r8w`(r8d=0x2000, `0x14018a00b`)는 타입 가상함수 호출보다
+                // **앞**이라 타입을 가리지 않는다.
+                guard t.isSolid else {
+                    return PointerTarget(engine: pair.engine, scope: .unhittable, parallaxDepth: none)
+                }
+                let size = PointerHit.textHitSize(
+                    inkBox: SIMD2<Float>(g.rasterWidth, g.rasterHeight),
+                    padding: SIMD2<Float>(t.padding.x, t.padding.y),
+                    paddingActive: PointerHit.textPaddingActive(hasEffects: !t.effects.isEmpty,
+                                                                opaqueBackground: t.opaqueBackground,
+                                                                colorBlendMode: t.colorBlendMode))
+                let align = Self.textAlignmentString(h: t.horizontalAlign, v: t.verticalAlign)
+                let quad = Self.layerHitQuad(origin: t.origin, size: Vec2(x: size.x, y: size.y),
+                                             scale: t.scale, angleZ: t.angleZ, alignment: align)
+                // **시차 깊이는 `t.parallaxDepth` 가 아니라 (1,1) 이다.** `text-layer.md` §11.1 의
+                // 패치안은 `t.parallaxDepth` 를 넘기라고 적었는데, 그건 실물 규약(`+0x170` 을
+                // 히트에도 그대로 먹인다)이지 **지금 Waple 이 그리는 자리**가 아니다 —
+                // `encodeText` 는 정점 버퍼 2번 슬롯에 `var depth = SIMD2<Float>(1, 1)` 을
+                // 하드코딩해 넘긴다(`SceneTextLayer.parallaxDepth` 는 파스·보존 전용).
+                // 여기서 저작값을 쓰면 히트 상자만 시차만큼 밀려 **"그린 자리 ≠ 클릭되는 자리"**
+                // 가 된다. 두 코퍼스는 텍스트 `parallaxDepth` 가 전건 `"1.000 1.000"` 이라 값이
+                // 같지만(워크샵은 956/1,597 저작, range −5…25), 규약은 그리기 쪽에 맞춘다.
+                // 텍스트 시차 그리기를 배선할 때(`scene-object-model.md` §12.1.4) **여기도 같이**
+                // `t.parallaxDepth` 로 바꿔라 — 짝이다.
+                return PointerTarget(engine: pair.engine, scope: .object(quad),
+                                     parallaxDepth: Vec2(x: 1, y: 1))
             }
             let l = doc.layers[i]
             guard l.isSolid else {

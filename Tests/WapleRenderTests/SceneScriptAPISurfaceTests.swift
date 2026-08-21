@@ -160,8 +160,115 @@ final class SceneScriptAPISurfaceTests: XCTestCase {
                         thisScene.getLayerIndex('missing')];
             }
             """, scene: scene, currentLayerIndex: 0))
-        XCTAssertEqual(try XCTUnwrap(engine.evaluateVec(current: [0, 0, 0])), [2, 1, 0],
-                       "문자열/객체 모두 실 인덱스, 못 찾으면 종전과 같이 0")
+        XCTAssertEqual(try XCTUnwrap(engine.evaluateVec(current: [0, 0, 0])), [2, 1, -1],
+                       "문자열/객체 모두 실 인덱스, 못 찾으면 -1(BO: 실물 0x181635525 = Smi -1)")
+    }
+
+    /// **BO(2026-08-21)** — `getLayerIndex` 의 실패 반환은 0 이 아니라 **-1** 이다.
+    ///
+    /// 실물 콜백 `scenescript64.dll` `0x181635200`(imagebase 0x180000000). 실패 경로 셋이 한 자리로 모인다:
+    ///  · 인자 0개 — `0x18163545f  cmp dword [rdi], 1` / `jl 0x181635525`
+    ///  · args[0] 이 Object(`0x180016c40`)·Number(`0x180016c70`)·String(instance type<0x80) 중
+    ///    어느 것도 아님 — `0x1816354ab  jae 0x181635525`
+    ///  · 공통 인자 해석기 `0x1816372d0` 이 nullptr — `0x1816354c6  je 0x181635525`
+    /// 그리고 `0x181635525  mov qword [rdi+0x30], 0xfffffffffffffffe`. `[rdi+0x30]` 이 반환값 슬롯이고
+    /// 성공 경로가 `0x1816354e8  add rax, rax` 로 값을 싣는 데서 보듯 Smi 태깅은 value*2 라
+    /// `0xfffffffffffffffe` = **-1**. 0 은 "0번 레이어" 라는 유효한 답이라 실패와 구분되지 않는다.
+    func testGetLayerIndexFailureIsMinusOne() throws {
+        let scene = try XCTUnwrap(SceneScriptContext(layers: [
+            SceneScriptLayerDescriptor(name: "a"), SceneScriptLayerDescriptor(name: "b")
+        ]))
+        let engine = try XCTUnwrap(TextScriptEngine(
+            script: """
+            export function update(v) {
+                return [thisScene.getLayerIndex('nope'),       // 이름 불일치
+                        thisScene.getLayerIndex({ name: 'x' }), // 씬에 없는 객체
+                        thisScene.getLayerIndex(9),             // 범위 밖 인덱스
+                        thisScene.getLayerIndex(1)];            // 유효 인덱스는 그대로
+            }
+            """, scene: scene, currentLayerIndex: 0))
+        XCTAssertEqual(try XCTUnwrap(engine.evaluateVec(current: [0, 0, 0, 0])), [-1, -1, -1, 1],
+                       "실패 셋은 전부 -1, 유효 인덱스는 보존")
+    }
+
+    /// **BO(2026-08-21)** — `getLayer(String)` 은 이름 조회에 실패하면 **base-10 정수로 파싱해 id 조회**한다.
+    ///
+    /// 공통 인자 해석기 `scenescript64.dll` `0x1816372d0`:
+    ///  · String → 호스트 vtable `+0x8`(이름). 실패 시 `0x181637348  call 0x1817465c4`(strtoll, r8d=0xa)
+    ///    → `0x181637357  call [r8+0x10]`(id).
+    ///  · Number → `+0x18`(인덱스) · Object → 내부 필드 언랩 · 그 외 → nullptr.
+    /// 공식 스니펫(`script_project_attachment.js`)이 id 를 `'{{ID}}'` 처럼 **문자열로** 심으므로
+    /// 그 값이 `getLayer` 로 흘러들 수 있다 — 종전 심은 이름 불일치로 합성 폴백(씬에 없는 유령)을 줬다.
+    func testGetLayerStringFallsBackToNumericId() throws {
+        var a = SceneScriptLayerDescriptor(name: "a"); a.id = 7
+        var b = SceneScriptLayerDescriptor(name: "b"); b.id = 42
+        let scene = try XCTUnwrap(SceneScriptContext(layers: [a, b]))
+        let engine = try XCTUnwrap(TextScriptEngine(
+            script: """
+            export function update(v) {
+                var byId = thisScene.getLayer('42');
+                var byName = thisScene.getLayer('a');
+                return byId.name + '|' + byName.name;
+            }
+            """, scene: scene, currentLayerIndex: 0))
+        XCTAssertEqual(engine.evaluate(current: ""), "b|a",
+                       "숫자 문자열은 id 로, 그 밖은 이름으로 해석")
+    }
+
+    /// **BO(2026-08-21)** — `sortLayer` 의 두 번째 인자는 **반드시 Number** 다.
+    ///
+    /// `0x181635165  lea rcx, [rdi+0x58]`(= args[1]) · `0x181635169  call 0x180016c70`(Value::IsNumber)
+    /// · `0x18165816e  test al,al` / `je` → 실패 루트. 숫자 문자열('0')도 IsNumber 가 아니라 거부다.
+    /// 인자 2개 미만도 같은 자리로 간다(`0x18163510f  cmp dword [rdi], 2` / `jge`).
+    /// 실패 반환은 `[isolate+0x388]` = **false**(루트 표 undefined 0x368 · the_hole 0x370 ·
+    /// null 0x378 · true 0x380 · false 0x388 — `isRunningInEditor` `0x181654d17` 의
+    /// `[r8 + rdx*8 + 0x380]` 이 같은 표를 쓴다).
+    func testSortLayerRequiresNumericIndex() throws {
+        let scene = try XCTUnwrap(SceneScriptContext(layers: [
+            SceneScriptLayerDescriptor(name: "a"), SceneScriptLayerDescriptor(name: "b")
+        ]))
+        let engine = try XCTUnwrap(TextScriptEngine(
+            script: """
+            export function update(v) {
+                return [thisScene.sortLayer('b', 0) === true ? 1 : 0,
+                        thisScene.sortLayer('b', '0') === false ? 1 : 0,
+                        thisScene.sortLayer('b') === false ? 1 : 0,
+                        thisScene.sortLayer('b', 3) === true ? thisScene.getLayer('b').__wapleSortIndex : -1];
+            }
+            """, scene: scene, currentLayerIndex: 0))
+        XCTAssertEqual(try XCTUnwrap(engine.evaluateVec(current: [0, 0, 0, 0])), [1, 1, 1, 3],
+                       "숫자만 통과 · 인자 부족은 false · 성공은 위치 기록")
+    }
+
+    // MARK: ILocalStorage  (설치본 도달 — dino_run 이 set/get 을 LOCATION_GLOBAL 로 쓴다)
+
+    /// **BO(2026-08-21)** — `localStorage.set(key, undefined)` 은 **delete 와 같다**.
+    ///
+    /// 실물 `0x181658680`(LocalStorageSet):
+    ///  · `0x18165876c  mov rdx, [r15]` — args[1](인자 1개면 `[isolate+0x368]` = undefined)
+    ///  · `0x181658781  mov r10d, 0x83` / `0x181658787  cmp word [rax+rcx+7], r10w` — Oddball 타입
+    ///  · `0x18165878f  mov eax, [rdx+0x17]` / `sar eax, 1` / `cmp eax, 4` — Oddball **kind 4 = undefined**
+    ///  · `0x18165879c  call 0x181658f70` — 곧 `localStorage.delete` 콜백으로 꼬리호출
+    /// 그리고 `delete` 의 반환은 Boolean 이다(`0x1816590bc  call [rax+0xd8]` → `neg al`/`sbb rcx,rcx`
+    /// → `0x1816590cb  mov rcx, [rax + rcx*8 + 0x388]` = true(+0x380)/false(+0x388), d.ts:2371).
+    func testLocalStorageSetUndefinedErasesAndDeleteReturnsBoolean() throws {
+        let engine = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(v) {
+            localStorage.set('hi', 5);
+            var before = localStorage.get('hi');
+            localStorage.set('hi', undefined);          // = delete
+            var after = localStorage.get('hi') === undefined ? 1 : 0;
+            localStorage.set('again', 1);
+            localStorage.set('again');                  // 인자 1개도 undefined = delete
+            var after2 = localStorage.get('again') === undefined ? 1 : 0;
+            localStorage.set('d', 1);
+            var d1 = localStorage.delete('d') === true ? 1 : 0;
+            var d2 = localStorage.delete('never') === false ? 1 : 0;
+            return [before, after, after2, d1 + d2];
+        }
+        """))
+        XCTAssertEqual(try XCTUnwrap(engine.evaluateVec(current: [0, 0, 0, 0])), [5, 1, 1, 2],
+                       "undefined 대입은 삭제, delete 는 Boolean")
     }
 
     // MARK: IEffect.executeMaterialFunction  (동봉 자산 도달 1 — fluidsimulation)
@@ -484,11 +591,17 @@ final class SceneScriptAPISurfaceTests: XCTestCase {
         XCTAssertEqual(t.pointSize, 48); XCTAssertEqual(t.font, "fonts/X.ttf")
     }
 
-    /// `limit*` 미체크 시 싣는 값은 임의값이 아니라 **WE 텍스트 오브젝트 생성자의 멤버 기본값**이다 —
-    /// `maxrows` 는 `0x140256c2e` `mov dword [rdi+0x510], 1`, `maxwidth` 는 `0x140256c1a`
-    /// `mov dword [rdi+0x508], 0x43fa0000`(= 500.0f). 게이트는 별개 멤버(`+0x594` bit2/bit3,
-    /// 등록 `0x140258f1e`/`0x140258ff7`, 타입 태그 6)라 두 값으로 갈라 싣는다.
-    func testUncheckedRowAndWidthLimitsUseRealCtorDefaults() throws {
+    /// 실물은 **게이트가 꺼져 있어도 저작값을 멤버에 그대로 싣는다.** 적용 루프 `0x1401731d0` 이
+    /// JSON 멤버 이름을 해시해 디스크립터를 찾고 `0x140173398` `call qword [rax+8]` 로 **그 키의
+    /// 주입기 하나만** 부르기 때문이다 — `maxrows` 주입기 `0x1401a4930`(int, `mov [r14+rbp], eax`)은
+    /// `+0x594` 를 읽지 않고, `limitrows` 주입기 `0x14025aca0`(`or ecx,8`)은 `+0x510` 을 읽지 않는다.
+    /// 게이트를 보는 것은 **소비부뿐**이다(레이아웃 요청 조립 `0x1402574aa` `test cl,8`).
+    ///
+    /// **종전 이 테스트는 그 반대를 단언했다**(`maxRows == 1` / `maxWidth == 500`). 그건 실물 규약이
+    /// 아니라 **Waple 이 값을 접어 버리던 [미해결] 을 단언으로 굳혀 둔 것**이었고, 주석이 스스로
+    /// 그렇게 적어 두고 있었다. `6a83b9a`(파스에서 게이트/값 분리) + `docs/re/text-layer.md` §11.2 ①
+    /// (`sceneScriptLayers` 조립부가 값 멤버를 직독)으로 저작값이 이제 끝까지 간다.
+    func testUncheckedRowAndWidthLimitsStillCarryTheAuthoredValues() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
          "objects":[{"id":1,"name":"t","text":"x","font":"systemfont_arial","pointsize":32,
@@ -496,11 +609,19 @@ final class SceneScriptAPISurfaceTests: XCTestCase {
                      "limitwidth":false,"maxwidth":999}]}
         """
         let t = SceneRenderer.sceneScriptLayers(from: try parsedDoc(scene))[0]
-        XCTAssertFalse(t.limitRows);  XCTAssertEqual(t.maxRows, 1)
-        XCTAssertFalse(t.limitWidth); XCTAssertEqual(t.maxWidth, 500)
-        // [미해결] 실물은 게이트가 꺼져 있어도 저작값(9 / 999)을 멤버에 그대로 싣는다 —
-        // `SceneTextLayer` 가 게이트와 값을 `Int?`/`Float?` 하나로 접어서 복원할 수 없다.
-        // 패치안은 `docs/re/scene-script-api.md` §9.6.
+        XCTAssertFalse(t.limitRows);  XCTAssertEqual(t.maxRows, 9, "게이트가 꺼져도 값 멤버는 저작값")
+        XCTAssertFalse(t.limitWidth); XCTAssertEqual(t.maxWidth, 999)
+
+        // 키 자체가 없을 때만 생성자 기본값이다 — `maxrows` `0x140256c2e` `mov dword [rdi+0x510], 1`,
+        // `maxwidth` `0x140256c1a` `mov dword [rdi+0x508], 0x43fa0000`(= 500.0f).
+        let bare = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[{"id":2,"name":"u","text":"x","font":"systemfont_arial","pointsize":32,
+                     "origin":"0 0 0","scale":"1 1"}]}
+        """
+        let b = SceneRenderer.sceneScriptLayers(from: try parsedDoc(bare))[0]
+        XCTAssertFalse(b.limitRows);  XCTAssertEqual(b.maxRows, 1)
+        XCTAssertFalse(b.limitWidth); XCTAssertEqual(b.maxWidth, 500)
     }
 
     /// 저작이 없으면 파스 폴백 == 디스크립터 기본값 == 심 하드코딩값이어야 한다(무회귀 가드).

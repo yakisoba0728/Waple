@@ -103,6 +103,76 @@ public enum PointerHit {
         return SIMD2(uv.x * size.x, (1 - uv.y) * size.y)
     }
 
+    // ── 텍스트 오브젝트 히트 상자 (BD, 2026-08-21) ────────────────────────────
+    /// 실물 텍스트 오브젝트의 히트 상자 크기 = `size` 멤버 `+0x2f0`.
+    ///
+    /// **텍스트도 이미지와 같은 상자 함수를 탄다.** 히트 순회는 타입 가상함수 `[vtbl+0x60]` 을 부르고
+    /// (`0x14018a041`) 그 결과 **1(이미지)과 4(텍스트)를 같은 레지스터로 모아**(`0x14018a044` `cmp eax,1`
+    /// → `0x14018a04b` `cmp eax,4` → `0x14018a050` `mov rdx,r15`) 위 `sub_14019dbb0` 하나에 넘긴다
+    /// (`0x14018a242`). 텍스트 vtable 은 `0x140491950`(생성자 `0x140256af7` `lea rax,[rip+0x23ae52]` →
+    /// `0x140256b05` `mov [rdi],rax`)이고 그 슬롯 `+0x60` 이 `0x1400fde90` = `mov eax,4; ret` 이다
+    /// (셋 다 2026-08-21 재실측 — 남의 주석을 베끼지 않았다).
+    ///
+    /// 그 `+0x2f0` 을 쓰는 것은 텍스트 vtable 슬롯 `+0x110` = `0x140258900` 이다(레이아웃 직후
+    /// `0x1402575db` 이 호출). 함수 전체가 이 식이다:
+    /// ```
+    /// 0x140258927  xmm1 = [layout+0x98] − [layout+0x90]      ; 잉크박스 maxX−minX
+    /// 0x14025892f  xmm2 = [layout+0x9c] − [layout+0x94]      ; 잉크박스 maxY−minY
+    /// 0x140258949  (레이아웃 객체 없음) xmm1 = xmm2 = 2.0
+    /// 0x140258954  if ([this+0x320] > 0 || [this+0x304] & 0x10 || [this+0x594] & 2)
+    /// 0x140258986      xmm4 = min(padding.x, 512.0) ; xmm3 = min(padding.y, 512.0)   ; +0x4e8/+0x4ec
+    /// 0x14025896f  else xmm4 = xmm3 = 0
+    /// 0x1402589a9  xmm4 += xmm4 ; xmm3 += xmm3               ; 양쪽에 붙으므로 2배
+    /// 0x1402589b9  [this+0x2f0] = xmm1 + xmm4 ; [this+0x2f4] = xmm2 + xmm3
+    /// ```
+    /// Waple 의 `inkBox` 등가물은 `TextRasterizer.Raster.width`/`height`(= `GPUText.rasterWidth`/
+    /// `rasterHeight`)다. 그 값은 이미 축당 `+2 px`(래스터 캔버스 여백)을 품고 있으므로
+    /// `docs/re/text-layer.md` §11.1 의 "안전판 ② 축당 +2 px" 는 **이미 충족돼 있다** — 여기서 더
+    /// 더하지 않는다(이중 가산 방지).
+    ///
+    /// **실물과 의도적으로 다른 한 곳**: 실물은 `minss` 상한만 있어 음수 `padding` 이 상자를 **줄인다**.
+    /// 여기서는 `[0, 512]` 로 양끝을 자른다 — 좁히는 쪽으로 틀리면 그 텍스트에 붙은 스크립트가 커서
+    /// 이벤트를 통째로 못 받기 때문이다. 음수 `padding` 의 도달은 설치본 5/5 · 리포 동봉 3/3 이 전건
+    /// `0` 이고 워크샵 정본(`spec/corpus/scene-schema.json`) `padding` range 가 `[0, 300]` 이라 **0건**.
+    public static func textHitSize(inkBox: SIMD2<Float>, padding: SIMD2<Float>,
+                                   paddingActive: Bool) -> SIMD2<Float> {
+        guard paddingActive else { return inkBox }
+        let px = min(max(padding.x, 0), textPaddingClamp)
+        let py = min(max(padding.y, 0), textPaddingClamp)
+        return SIMD2(inkBox.x + 2 * px, inkBox.y + 2 * py)
+    }
+
+    /// `0x140258986` 의 `movss xmm0, [rip+0x239fa6]` (= `0x140492934` f32 512.0).
+    public static let textPaddingClamp: Float = 512
+
+    /// 위 세 게이트 중 **Waple 이 값을 갖고 있는 것들**의 논리합. 셋 다 참이면 패딩 항이 산다.
+    ///
+    /// | 실물 게이트 | 뜻 | Waple 인자 |
+    /// |---|---|---|
+    /// | `[this+0x320] > 0` | 이펙트 **패스** 수 > 0 (이펙트 빌더 `0x1401e6f50` 이 `0x1401e6fef` 에서 0 으로 깔고 패스 집계가 누적) | `hasEffects` |
+    /// | `[this+0x594] & 2` | `opaquebackground`(bit1) | `opaqueBackground` |
+    /// | `[this+0x304] & 0x10` | 오프스크린 합성 필요 — `0x1401e6fa2` `or dword [rsi+0x304],0x10` | `colorBlendMode` (아래) |
+    ///
+    /// 셋째 게이트의 조건은 세 갈래 논리합이다(`0x1401e6f74`–`0x1401e6fa0`):
+    /// `colorBlendMode`(`+0x32c`)가 **0 도 31 도 아님** · `+0x304 & 0x100` · 씬 렌더 설정
+    /// `[[this+0xc8]+0x118] & 0x1800000`. 그 `or` 는 이펙트 배열을 읽기 **전**(`0x1401e6ffa` 의
+    /// `lea rdx,"effects"` 앞)에 실행되므로 **이펙트 유무와 독립**이다 — 그래서 `hasEffects` 로 대신
+    /// 덮을 수 없고 여기서 `colorBlendMode` 를 따로 본다.
+    ///
+    /// **남는 사각(정직하게)**: `+0x304 & 0x100` = `ledsource`(BD 2026-08-21 확정 — 등록 이름
+    /// `0x1401eede6` "ledsource" · `[desc+0x34]=0x304` `0x1401eee1a` · 태그 6 `0x1401eee30`, 주입기
+    /// `0x14019c850` 의 `bts ecx,8`/`btr edx,8`, 게터 `0x14019ca60` 의 `shr edx,8; and dl,1`)와
+    /// 씬 설정 비트 둘은 Waple 이 텍스트에서 파스하지 않는다. 도달은 워크샵 텍스트 1,597 중
+    /// `ledsource` **6건**(5씬) · 설치본 5 중 0 · 리포 동봉 3 중 0.
+    ///
+    /// **`hasEffects` 는 일부러 넓다**: 실물 게이트는 이펙트 *패스 수*인데 우리는 배열 비어있음만 본다.
+    /// 패스가 0 으로 접히는 이펙트 배열에서 우리 상자가 실물보다 커진다 — 넓어지는 방향이라
+    /// "스크립트가 이벤트를 못 받는" 실패는 만들지 않는다.
+    public static func textPaddingActive(hasEffects: Bool, opaqueBackground: Bool,
+                                         colorBlendMode: Int) -> Bool {
+        hasEffects || opaqueBackground || (colorBlendMode != 0 && colorBlendMode != 31)
+    }
+
     /// 커서 훅 **배달 범위** — 실물 배달 루프 `0x14018a709`–`0x14018a723`(커서 훅 5종 전건 동형)의
     /// 첫 관문을 순수 값으로 옮긴 것. 커서 훅은 **브로드캐스트가 아니다**:
     ///
@@ -127,6 +197,14 @@ public enum PointerHit {
         /// 크기는 래스터된 픽셀 크기인데(`docs/re/scene-script-api.md` §9.1 (b) 의 `size` [미해결])
         /// 우리는 그 값을 모른다. **추측한 상자로 막기보다 종전 브로드캐스트를 유지한다** —
         /// 틀린 방향으로 좁히면 스크립트가 통째로 죽고, 넓은 채로 두면 종전과 같다.
+        ///
+        /// **해소(2026-08-21, BD)** — 위 문단의 "우리는 그 값을 모른다" 는 이제 틀렸다. 규약은
+        /// `textHitSize(inkBox:padding:paddingActive:)` 로 확정했고(`+0x2f0` 산출 `0x140258900`),
+        /// `SceneRenderer.buildPointerTargets` 의 텍스트 분기가 `GPUText.rasterWidth`/`rasterHeight`
+        /// 로 실제 쿼드를 만든다. **이 케이스는 사라지지 않는다** — 아직도 세 자리에서 쓴다:
+        /// ① 래스터가 없는 텍스트(빈 문자열 = 드로우 스킵 → 상자를 만들 근거가 없다),
+        /// ② 3D 씬(2D `buildTexts` 미실행이라 `textLayers` 가 비어 있다),
+        /// ③ 디스크립터 인덱스가 문서 범위 밖(방어).
         case geometryUnknown
     }
 
