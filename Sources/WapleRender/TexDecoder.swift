@@ -21,10 +21,17 @@ public enum TexDecoder {
             // — fast-path 512B 스캔이 놓치는 LZ4 압축 임베디드 이미지 경로. straight-alpha 규약은 draw 가 유지.
             //
             // ⚠️ **volume(tex.depth > 1) 은 여기서 2D 한 장으로 나온다.** 동봉 `materials/lut/*.tex` 28개가
-            // 그렇다: 헤더는 imgW=1024(=texW×depth) × imgH=32 인데 **실제 PNG 는 32×1024**(32×32 슬라이스를
-            // 세로로 쌓았다 — 전 28개 실측 동일). 즉 헤더 치수와 디코드 치수가 축이 바뀌어 있다.
-            // 반환 dims 는 PNG 실치수(32×1024)라 그 자체로는 정합하지만, 3D LUT 로 샘플하려면
-            // `tex.depth` 로 세로를 잘라 슬라이스를 만들어야 한다 — 그 소비처는 아직 없다.
+            // 그렇다. 재실측(2026-08-21, 28건 전수 IHDR 직독 — 예외 0건):
+            //   · 헤더      texW×texH = 32×32(슬라이스 한 장) · depth = 32 · imgW×imgH = **1024×32**
+            //   · mip 레코드 w×h = 32×32 · mip depth = 32 · isLZ4 = 0(PNG 그대로 저장)
+            //   · 실제 PNG  = **32×1024**, 8bit truecolor(colortype 2, 알파 없음)
+            // 즉 축이 "바뀐" 게 아니라 **두 레이아웃이 공존한다**: 헤더 imgW/imgH 는 슬라이스를 **가로로**
+            // 편 규약(imgW = texW × depth)이고, 저장된 PNG 는 **세로로** 쌓은 스트립(texW × (texH × depth))이다.
+            // 그래서 3D LUT 샘플링을 붙일 때 잘라야 하는 축은 **세로**이고, 슬라이스 k 는
+            // PNG 의 y ∈ [k·texH, (k+1)·texH) 다 — 헤더 치수로 가로를 자르면 전부 틀린다.
+            // 반환 dims 는 PNG 실치수(32×1024)라 그 자체로는 정합하다. 그 소비처는 아직 없다.
+            // (raw(imageFormat = -1) volume 텍스처는 동봉·설치본·워크샵 어느 코퍼스에도 표본이 0건이라
+            //  비인코딩 volume 의 슬라이스 순서는 **미확인**이다. 위 규약은 PNG 인코딩 28건 한정 확정.)
             // (2026-08-21 이전에는 이 28개가 parseMip 실패로 `.png` 폴백을 탔다. 픽셀은 같았지만
             //  컨테이너를 못 읽어 depth 자체가 없었다 — TexImage.parse 의 hasMipDepth 참조.)
             guard let mip = tex.mip, let dec = mipBytes(mip: mip, data: data) else { return nil }

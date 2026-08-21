@@ -82,7 +82,13 @@ final class TexDecoderTests: XCTestCase {
         XCTAssertEqual(sTex.payload, .embeddedImage, "표준 v4 임베디드 PNG → imageFormat 라우팅")
         let sOut = try XCTUnwrap(TexDecoder.rgba(from: sTex, data: sData), "splash 디코드 실패(흰 폴백)")
         XCTAssertGreaterThan(sOut.width, 0); XCTAssertEqual(sOut.pixels.count, sOut.width * sOut.height * 4)
-        // lut/westernf: 여분-int v4 레이아웃 → parseMip 실패 → fast-path .png. 그래도 디코드 성공(무회귀).
+        // lut/westernf: **slice3d(flags 0x40)** — 헤더 texDepth + mip 레코드 depth 를 갖는 volume PNG.
+        // 종전 주석("여분-int v4 레이아웃 → parseMip 실패 → fast-path .png")은 낡았다. TEXB0004 의
+        // imageFormat 다음 i32 는 "여분 int" 가 아니라 **조건 변형 개수**이고(리더 `0x14015c9b8` →
+        // 루프 상한 `0x14015d1c9`), 이제 컨테이너를 정상 파스한다(`.embeddedImage`, depth=32).
+        // 반환 dims 는 PNG 실치수 **32×1024** 이고 헤더 `imgW`/`imgH`(1024×32)와 축이 다르다 —
+        // 헤더는 가로 언롤, 저장 PNG 는 세로 스트립이라 **두 레이아웃이 공존**한다.
+        // 슬라이스 k = PNG 의 y ∈ [k·texH, (k+1)·texH). 전문은 `TexDecoder.rgba` 의 volume 주석.
         let lut = base + "lut/lutx32_westernf.tex"
         if FileManager.default.fileExists(atPath: lut) {
             let lData = try Data(contentsOf: URL(fileURLWithPath: lut))
