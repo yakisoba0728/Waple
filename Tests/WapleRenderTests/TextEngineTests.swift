@@ -712,6 +712,64 @@ final class TextRasterizerTests: XCTestCase {
         let c = try XCTUnwrap(firstInkX(centered, rows: (centered.height / 2)..<centered.height))
         XCTAssertGreaterThan(c, l + 4, "짧은 행 'A' 가 중앙 정렬되지 않음")
     }
+
+    // ── 컬러 폰트 글리프 보존(T13/T16 D1) ─────────────────────────────────────
+    // 종전 코드는 알파>0 픽셀의 rgb 를 무조건 255 로 밀어 컬러 이모지를 흰 실루엣으로 파괴했다.
+    // WE 실물은 FT_LOAD_COLOR(0x1401ae28b)로 읽어 FT_PIXEL_MODE_BGRA(0x1401ae2a2)를 감지하고,
+    // 아틀라스 블릿(0x1401afa2d–0x1401afb29)에서 B↔R 스왑만 해 RGB 를 그대로 보존한다.
+
+    /// 순수 로직: premultiplied → straight 변환. 흰색 글리프(v == alpha)는 정확히 255 로 수렴해야
+    /// 종전 `px[i] = 255` 와 비트동일하다(무회귀 근거).
+    func testUnpremultiplyKeepsWhiteGlyphsAt255() {
+        for a in 1...255 {
+            XCTAssertEqual(TextRasterizer.unpremultiply(UInt8(a), alpha: a), 255,
+                           "흰색 글리프 alpha=\(a) 에서 255 가 아님 — 종전 동작 회귀")
+        }
+        // premul 값이 alpha 를 넘어도(수치오차) 255 로 클램프
+        XCTAssertEqual(TextRasterizer.unpremultiply(255, alpha: 1), 255)
+        // alpha=255 는 항등(호출측이 스킵하는 경로와 동일 결과)
+        for v in stride(from: 0, through: 255, by: 15) {
+            XCTAssertEqual(TextRasterizer.unpremultiply(UInt8(v), alpha: 255), UInt8(v))
+        }
+        // 방어: alpha=0 은 입력 그대로
+        XCTAssertEqual(TextRasterizer.unpremultiply(200, alpha: 0), 200)
+        // 컬러 글리프 예시: 순수 빨강을 커버리지 0.5 로 그린 픽셀 (128,0,0,128) → (255,0,0)
+        XCTAssertEqual(TextRasterizer.unpremultiply(128, alpha: 128), 255)
+        XCTAssertEqual(TextRasterizer.unpremultiply(0, alpha: 128), 0)
+    }
+
+    /// 무회귀: 단색(비컬러) 텍스트 래스터는 여전히 잉크 픽셀 전부 rgb=255 여야 한다
+    /// (tint 가 색을 온전히 결정하는 QuadShaders f_main 규약).
+    func testPlainTextRasterStaysWhite() throws {
+        let r = try XCTUnwrap(TextRasterizer.render(text: "Hi", fontData: nil, systemFontName: nil, pointSize: 32))
+        var offending: (Int, UInt8, UInt8, UInt8, UInt8)?
+        r.rgba.withUnsafeBytes { (p: UnsafeRawBufferPointer) in
+            for i in stride(from: 0, to: p.count, by: 4) where p[i + 3] > 0 {
+                if p[i] != 255 || p[i + 1] != 255 || p[i + 2] != 255 {
+                    offending = (i / 4, p[i], p[i + 1], p[i + 2], p[i + 3]); return
+                }
+            }
+        }
+        XCTAssertNil(offending, "단색 글리프가 흰색이 아님: \(String(describing: offending))")
+    }
+
+    /// 컬러 폰트 글리프(이모지)는 자체 색을 유지해야 한다 — 흰색 강제였다면 채도가 0 이다.
+    func testColorEmojiRetainsChroma() throws {
+        let r = try XCTUnwrap(TextRasterizer.render(text: "😀", fontData: nil, systemFontName: nil, pointSize: 32))
+        var maxChroma = 0
+        var inked = 0
+        r.rgba.withUnsafeBytes { (p: UnsafeRawBufferPointer) in
+            for i in stride(from: 0, to: p.count, by: 4) where p[i + 3] > 200 {
+                inked += 1
+                let hi = max(p[i], max(p[i + 1], p[i + 2])), lo = min(p[i], min(p[i + 1], p[i + 2]))
+                maxChroma = max(maxChroma, Int(hi) - Int(lo))
+            }
+        }
+        try XCTSkipIf(inked == 0, "컬러 이모지 폰트 미설치 — 잉크 픽셀 없음")
+        XCTAssertGreaterThan(maxChroma, 16,
+                             "이모지 글리프에 채도가 없음(rgb 를 255 로 강제해 흰 실루엣이 됨) " +
+                             "— maxChroma=\(maxChroma), inked=\(inked)")
+    }
 }
 
 /// 효과 상수 스크립트: WEColor 실심 + engine.runtime + evaluateVec (실물 컬러 사이클 패턴).
