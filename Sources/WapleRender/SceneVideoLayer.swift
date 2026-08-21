@@ -52,6 +52,29 @@ struct VideoTrackOrientation: Equatable {
 ///    프레임 페이싱은 씬 draw 루프가 pull 한다(자체 CADisplayLink 없음). 플레이어 자체 타임베이스로 진행.
 ///  - 헤드리스(캡처/테스트): AVAssetImageGenerator 로 씬 시간 t 의 프레임을 결정적 디코드(스냅샷 2× 결정성).
 ///
+/// ## 씬 시각 `t` 와 비디오 PTS 의 관계 — WE 실측 (2026-08-21)
+///
+/// **WE 는 둘을 아예 잇지 않는다.** 씬 안 비디오 텍스처의 시계는 Media Engine 자신의
+/// 재생 시계이고, 씬 클록은 입력으로 들어가지 않는다. 근거(wallpaper64.exe 2.8.42,
+/// imagebase 0x140000000):
+///
+///  - 비디오 플레이어 vtable **0x1404871b8**. `+0x58` 게터(0x1400f31f0)는
+///    `IMFMediaEngine +0x80`(GetCurrentTime, double)을 그대로 float 으로 내리고,
+///    `+0x50` 세터(0x1400f3160)는 `IMFMediaEngine +0x88`(SetCurrentTime)로 그대로 넘긴다.
+///    스크립트 `IVideoTexture.getCurrentTime/setCurrentTime`(등록부 0x140214050–0x140214799,
+///    썽크 0x1401fa620 / 0x1401fa650)이 그 두 슬롯에 착지한다.
+///  - 프레임을 텍스처로 옮기는 슬롯은 `+0x78`(0x1400f3480)인데 **인자가 `this` 하나뿐**이다.
+///    시각도 프레임 번호도 받지 않는다 — 키드뮤텍스를 잡고 "지금 있는 프레임" 을 넘긴다.
+///  - 스프라이트시트 쪽(`ITextureAnimation`)에만 `join()`("씬 전역 애니 타이머에 재합류")이
+///    있고 `IVideoTexture` 에는 없다. 애초에 합류할 공용 시계가 없다는 뜻이다.
+///
+/// 그래서 **WE 의 비디오 레이어는 씬 시각에 대해 비결정적이다.** Waple 의 헤드리스 경로가
+/// `wrap(t, duration)` 으로 t 를 PTS 에 사상하는 것은 WE 를 베낀 것이 아니라 `SnapshotPipeline`
+/// 의 고정 시각 캡처를 결정적으로 만들기 위한 **의도적 이탈**이다. 라이브 경로(플레이어
+/// 타임베이스)가 WE 와 동형인 쪽이고, 그래서 라이브·헤드리스 프레임이 서로 다를 수 있다 —
+/// 그건 버그가 아니라 이 설계의 결과다. 골든을 깨지 않으려면 **헤드리스 경로에 벽시계를
+/// 절대 넣지 마라**(`CACurrentMediaTime`·`Date` 등).
+///
 /// 스코프 밖(근거 없어 미구현): 비디오 오디오 트랙(무음 — 씬 sound 레이어는 SceneAudioPlayer 별도),
 /// 비디오 이펙트 체인(단, 레이어에 효과가 있으면 기존 buildDisplayTextures 체인이 프레임 위에 자연 적용),
 /// HDR video.

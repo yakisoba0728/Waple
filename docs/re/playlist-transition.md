@@ -607,6 +607,86 @@ WE 는 단순 난수가 아니라 **소진형 셔플백**을 쓴다:
 `beginfirst` 는 별도 경로에서 커서를 0 으로 리셋한다(`0x140067ee6  mov dword ptr [r14+0x78], r13d`).
 `playintro` 는 "첫 벽지는 부팅 직후 1회만" 이라는 뜻이라, 되감길 때 인덱스 1 로 건너뛴다.
 
+### 6.6 동영상 종료 → 전진 [2026-08-21 신규 — §10 의 미해결 항목을 닫는다]
+
+§6.1 의 타이머 틱은 `videosequence` 가 켜져 있고 현재가 동영상이면 전진을 **보류**한다.
+그 보류를 실제로 받는 반대편이 이 경로다. 세 단계다.
+
+**① 벽지 창이 메시지를 던진다.**
+
+```
+0x14011b10c  mov  r8d, dword ptr [rdi+0x154]   ; wParam = 벽지 id
+0x14011b113  xor  r9d, r9d                     ; lParam = 0
+0x14011b116  mov  edx, 0x40a                   ; WM_USER + 0x0A
+0x14011b11b  call qword ptr [rip+0x30b8a7]     ; PostMessageW  (0x1404269c8)
+```
+
+`0x40a` 를 싣는 자리는 이미지 전체에 **4곳**뿐이다(`0x14011b116` · `0x140120bcd` ·
+`0x140122a37` · `0x1401245c4`). 뒤 두 곳은 `SendMessageTimeoutW`(`0x140426720`) 다.
+
+**② 메인 창 프로시저가 받는다.** 디스패치는 점프테이블이다 — `0x14002d918`
+`lea eax,[rdx-0x402]` / `cmp eax,0x13` / `ja 기본` 뒤 RVA `0x2e690` 의 20엔트리 표를
+탄다. `msg-0x402 == 8` 이 `0x14002dc43` 이다. 표를 그대로 뜨면
+`0x402→0x14002d9d9`, `0x406→0x14002deaa`, `0x407→0x14002dec2`, `0x408→0x14002dcb6`,
+`0x409→0x14002dd60`, **`0x40a→0x14002dc43`**, `0x40f→0x14002e218`, `0x411→0x14002d93b`,
+`0x412→0x14002dd6c`, `0x415→0x14002d97d`, 나머지는 전부 기본 `0x14002224a` 다.
+
+핸들러 앞머리는 **재진입 가드**다:
+
+```
+0x14002dc43  test dword ptr [rip+0x4b18f3], 0x204   ; 0x1404df540 상태 플래그
+0x14002dc4d  je   0x14002dc82                       ; 평시 → 전진 경로
+0x14002dc4f  cmp  byte ptr [rip+0x4b1f62], sil      ; 0x1404dfbb8 래치
+…
+0x14002dc68  lea  rcx, [rip+0x447389]               ; 0x140474ff8
+             "Windows reentrancy during WM_USER_VIDEO_ENDED prevented."
+0x14002dc76  call 0x140098760                       ; 로그만 남기고 0 반환
+```
+
+이 문자열의 xref 는 `0x14002dc68` **한 곳뿐**이다. 곧 이 메시지 이름은 우리가 붙인 게
+아니라 WE 자신의 것이다.
+
+**③ 전진 관문 `0x140067720`–`0x1400677b9`.** 모니터 노드 리스트(`0x1404e5330`)를 훑는다.
+필드 오프셋은 §6.1 과 같은 계 — `+0x68` delay, `+0x6c` order, `+0x70` mode, `+0x74` 플래그,
+`+0x78` 커서, `+0x7c` elapsed.
+
+```
+0x140067749  cmp  dword ptr [rax+0x154], r9d   ; 이 모니터의 벽지 id == wParam
+0x140067756  cmp  qword ptr [rbx+0x38], rax    ; items 벡터가 비어 있지 않다   → dl
+0x140067762  cmp  dword ptr [rbx+0x70], 1      ; mode == timer
+0x140067768  test byte ptr [rbx+0x74], 1       ; videosequence                → cl
+0x140067774  test byte ptr [rbx+0x74], 0x10    ; playintro
+0x14006777a  cmp  byte ptr [rbx+0xe2], 0       ; 인트로 벽지가 지금 걸려 있다  → al
+0x140067789  test dl, dl / je 다음_노드
+0x14006778d  or   cl, al
+0x14006778f  jne  0x1400677b0                  ; → 전진
+…
+0x1400677fa  call 0x140067a00                  ; 다음 벽지 결정(§6.4/§6.5)
+```
+
+즉
+
+```
+advanceOnVideoEnd = (mode == timer && videosequence) || (playintro && introShowing)
+```
+
+**여기서 새로 드러나는 것 두 가지.**
+
+1. **`videosequence` 는 `mode == timer` 밖에서는 죽은 키다.** 파서(§3.1)는 mode 와 무관하게
+   이 비트를 읽으므로 설정 파일만 봐서는 이 의존이 보이지 않는다. `daytime`/`dayofweek`/
+   `never`/`logon` 에서 `videosequence: true` 를 써 두면 아무 일도 일어나지 않는다.
+2. **`[monitor+0xe2]` 는 "지금 걸린 것이 인트로 벽지" 다.** `beginfirst` 분기가 첫 항목을
+   걸 때 `playintro` 값을 그대로 심고(`0x140067edc  mov byte ptr [rax+0xe2], r13b`, 여기서
+   `r13b` 는 `0x140067d8b`–`0x140067d93` 의 `([flags+0x74] >> 4) & 1` = `playintro`),
+   그 밖의 전진에서는 0 으로 지운다(`0x140067ff2  mov byte ptr [rax+0xe2], 0`).
+   짝인 `[monitor+0xe1]` 은 `beginfirst` 대기 래치다(`0x140067ebe` 에서 검사, `0x140067ecb`
+   에서 소거). 그래서 **인트로 동영상은 `videosequence` 가 꺼져 있어도 끝나면 넘어간다.**
+
+Waple 쪽 구현: `WapleCore.PlaylistSettings.shouldAdvanceOnVideoEnd(introShowing:)`
+(계약 잠금 3건 — `Tests/WapleCoreTests/PlaylistTransitionTests.swift`).
+아직 **호출부가 없다** — `SceneVideoLayer.endObserver` / `VideoRenderer` 의 종료 통지를
+재생목록 전진에 잇는 것은 §8.2 의 갭 #6 이 그대로 남아 있다.
+
 ---
 
 ## 7. 상태 영속
