@@ -114,7 +114,9 @@ final class CoreParseSceneFixRegressionTests: XCTestCase {
             ("materials/x.tex", d("not-a-real-tex")),
         ])
         let doc = try SceneDocument.parse(package: pkg)
-        XCTAssertNil(doc.perspectiveOverrideFov)
+        // [2026-08-21] 미저작 기본은 nil 이 아니라 WE 생성자 실측값 95.0 이다(`0x140186d67`,
+        // `scene+0x144` ← `0x42be0000`). 정사영 씬의 실효 fov 선택자(`0x140189278`)가 이 슬롯을 읽는다.
+        XCTAssertEqual(doc.perspectiveOverrideFov, 95, accuracy: 1e-6)
         XCTAssertEqual(try XCTUnwrap(doc.layers.first).perspective, false)
     }
 

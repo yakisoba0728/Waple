@@ -106,6 +106,24 @@ wallpaper64.exe (imagebase `0x140000000`) + 동봉 셰이더/머티리얼 평문
 - 디스크립터 레이아웃: `+0x30`=타입 · `+0x34`=씬 구조체 오프셋 · `+0x38/0x40/0x48/0x50`=set/parse/put/get 썽크 · `+0x58`=변경 콜백
 - 타입 enum: `0`=int · `2`=vec3 · `4`=float · `6`=bool
 
+**[2026-08-21 보강] 등록 헬퍼는 하나가 아니라 둘이다.** 앞 42키는 `0x14000f880` 을 쓰지만
+마지막 5키(`gravitydirection` `0x14019b2f3` · `gravitystrength` `0x14019b35c` ·
+`windenabled` `0x14019b3b7` · `winddirection` `0x14019b436` · `windstrength` `0x14019b498`)는
+`0x14000ddd0` 을 쓴다(길이 인자 없음). 헬퍼만 보고 테이블을 뽑으면 그 5키를 통째로 놓친다 —
+47키를 재판독할 때 실제로 42키만 나왔고, 그래서 이 줄이 있다.
+
+**[2026-08-21 보강] 변경 콜백(`+0x58`) 배치.** 47키 중 콜백이 붙는 것은 22키뿐이고 셋으로 갈린다:
+
+| 콜백 VA | 붙는 키 | 하는 일 |
+|---|---|---|
+| `0x1401863e0` | `bloomstrength` `bloomthreshold` `bloomhdrstrength` `bloomhdrthreshold` `bloomhdrfeather` `bloomhdrscatter` `bloomhdriterations` `bloomtint` (8키) | 블룸 파이프라인 dirty 비트(bit31) 셋 |
+| `0x1401863f0` | `ambientcolor` `skylightcolor` (2키) | 렌더상태 `+0x1298`/`+0x12a4` 로 푸시(§6.2) |
+| `0x140186440` | `fogdistance` `fogheight` + fog 색/거리/밀도 10키 (12키) | fog 파라미터 패킹(§6.2) |
+
+**`bloom` 과 `hdr` 에는 콜백이 없다**(`0x1401998b1` 이 `[rbx+0x58]` 에 `rdi=0` 을 기록 —
+`xor edi,edi` @`0x14019989d`). 즉 강도/임계를 런타임에 바꾸면 파이프라인이 다시 서지만
+`bloom` 플래그 자체를 토글하는 것은 dirty 를 안 세운다(게이트는 매 프레임 읽으므로 문제는 없다).
+
 ### 2.2 후처리/카메라 키 전표 (오프셋 = 씬 객체 기준)
 
 | 키 | 타입 | 오프셋 | 기본값 | 등록 VA | 기본값 기록 VA |
@@ -120,7 +138,7 @@ wallpaper64.exe (imagebase `0x140000000`) + 동봉 셰이더/머티리얼 평문
 | `customsortorder` | bool bit13 | `0xe0` | false | `0x14019adec` | 〃 |
 | `fogdistance` | bool bit14 | `0xe0` | false | `0x14019a2fc` | 〃 |
 | `fogheight` | bool bit15 | `0xe0` | false | `0x14019a3b8` | 〃 |
-| `windenabled` | bool | `0xe0` | false | `0x14019b361` | 〃 |
+| `windenabled` | bool **bit16** | `0xe0` | false | `0x14019b361` | 〃 |
 | `bloomstrength` | float | `0x3bc` | **2.0** | `0x1401999dc` | `0x1401870ac` |
 | `bloomthreshold` | float | `0x3c0` | **0.65** | `0x140199ab4` | `0x1401870b7` |
 | `bloomhdrstrength` | float | `0x3c4` | **2.0** | `0x140199b76` | `0x1401870c2` |
@@ -177,10 +195,19 @@ wallpaper64.exe (imagebase `0x140000000`) + 동봉 셰이더/머티리얼 평문
 | 13 | `customsortorder` | `0x14019c600` |
 | 14 | `fogdistance` | `0x14019bd50` |
 | 15 | `fogheight` | `0x14019bf80` |
+| 16 | `windenabled` **[2026-08-21 보강]** | `0x14019cc90` |
 | 31 | 블룸 파이프라인 dirty(변경 콜백 `0x1401863e0` 이 셋) | — |
 
 주의: **엔진 기본값 `bloom=true`** 다(비트1). 에디터가 전 씬에 `"bloom": false` 를 명시하기 때문에
 코퍼스에서는 드러나지 않지만, `bloom` 키가 없는 씬은 WE 에서 블룸이 **켜진다**.
+
+> **[2026-08-21 재확인]** 위 47키 전표를 등록 함수와 생성자에서 **독립으로 다시 뽑아** 대조했다
+> (디스어셈 → 디스크립터 `+0x30/+0x34` 추출 → 생성자 스토어를 바이트 단위로 재구성 → 오프셋별 f32/i32 복원).
+> 키 47개 · 타입 · 오프셋 · 기본값이 **전건 일치**했다. 위 표에서 이번에 고친 것은 `windenabled` 의
+> 비트 번호(공란 → bit16)와 §2.1 의 두 항목(등록 헬퍼 2종 · 변경 콜백 배치)뿐이다.
+> qword 스토어가 두 필드를 한 번에 까는 자리(`0x140186fbb` → `0x33c`=0.5 & `0x340`=0,
+> `0x14018706e` → `0x39c`=5.0 & `0x3a0`=0, `0x1401870a1` → `0x3b4`=1.0 & `0x3b8`=0,
+> `0x140187006` → `0x3e0`=1.0 & `0x3e4`=0, `0x14018702e` → `0x3f8`=0.707 & `0x3fc`=0)도 그대로 확인했다.
 
 ### 2.3 `orthogonalprojection` 파스 — `0x1401874ec`–`0x140187618`
 
@@ -440,6 +467,17 @@ scene[0x148] = fov       ; 0x140189b4c
 - **near = -2000.0, far = +2000.0 하드코딩** (`0x140183df9`/`0x140183e01`, `0x140183e38`/`0x140183e40`;
   상수 `0x14049294c`=2000.0, `0x140492a1c`=-2000.0). `nearz`/`farz` 를 **읽지 않는다**.
   카메라 상태에도 2000.0 이 직접 기록된다(`0x140189df0`, imm `0x44fa0000`).
+
+  > **[2026-08-21 보강 — "하드코딩" 의 정확한 모양]** 코드는 상수를 무조건 싣는 게 아니라
+  > `eax = scene[0xe0] & 8` 을 다시 뽑아(`0x140183dee`) `test eax,eax` 로 한 번 더 갈린다
+  > (`0x140183df7` / `0x140183e36`). set 이면 ±2000, clear 면 `scene[0x14c]`/`scene[0x150]`
+  > (`0x140183e0b` / `0x140183e4a`)를 읽는다. 그런데 이 블록 자체가 진입 분기
+  > `test byte [rdi+0xe0], 8` @`0x140183aa2` 의 **비-je 쪽**(= bit3 set)이라 그 재검사는 항상 참이다 —
+  > 즉 `nearz`/`farz` 를 읽는 두 팔은 정사영 경로에서 **도달 불가능**하다.
+  > 결론(±2000 고정, `nearz`/`farz` 무시)은 그대로지만, 디스어셈에 `[rdi+0x14c]` 로드가 보인다고
+  > "ortho 도 nearz 를 읽는다" 로 뒤집으면 안 된다.
+  > 안쪽 ±2000 두 쌍(`0x140183df9` / `0x140183e38`)을 가르는 것은 `esi = [rcx+0x128] & 0x800`
+  > (`0x140183a92`·`0x140183a9c`, 렌더러 플래그 bit11)이고 **양쪽 다 ±2000** 이다 — 레지스터 배치만 다르다.
 - 카메라 fovRad = `scene[0x148] * π/180` (`0x140183dc9`·`0x140183dd1`, 상수 `0x140492628`)
 
 **원근(bit3 = 0)** — `0x140183edf`–`0x140183f78`
@@ -521,30 +559,43 @@ volumetrics_combine   (passthrough, additive) → 화면
 (`HDRBloomPyramidPass.swift:119-122,211-212` 가 같은 식을 적용한다) — 그 정본 항목이 낡았다.
 아래는 재측정으로 남은 것만이다.
 
+> **[2026-08-21] 파스 기본값 7건 반영, 1건 고의 보류.** `SceneDocument.swift` 의 `general` 파스
+> 기본값을 §2.2 전표에 맞췄다 — **반영: W-3 · W-5 · W-7(값만) · W-10 · W-11 · W-12 · W-13**,
+> **보류: W-4**(`bloom` — 사유는 해당 행).
+> 동봉 172씬 중 **실제로 화면이 달라지는 것은 W-5 의 1씬**(`scenes/particleeditor3dscale`)뿐이고
+> 나머지는 전부 0건이다(해당 씬들이 키를 명시 저작하거나, 생략해도 그 값을 쓰는 분기가 꺼져 있다).
+> 나머지 여섯의 실효 무대는 키를 생략하는 워크샵 씬이다. 회귀 고정:
+> `Tests/WapleCoreTests/SceneGeneralDefaultsWEParityTests.swift`(기본값 전수 + 동봉 코퍼스 생략 인구조사).
+>
+> **fog 기본값(W-14)과 정사영 z 클립(W-6)은 이번 반영에서 빠졌다** — 둘 다 코드가 `Sources/WapleRender/`
+> (`Scene3DLighting.swift` · `SceneRendererFrameEncoder.swift`)에 있어 이번 레인의 담당 파일이 아니다.
+
 | # | 항목 | WE (VA/셰이더:행) | Waple (파일:행) | 등급 | 고치면 화면이 |
 |---|---|---|---|---|---|
 | **W-1** | HDR 피라미드 **추출·다운샘플 탭 반경** | `g_RenderVar0 = 2^i/W` = **±1 소스 텍셀**(`0x1401836a0`, `0x14018374a`–`0x14018375c`) → 4×4 박스 | `0.5 / src.get_width()` = ±0.5 소스 텍셀 → 2×2 박스 (`HDRBloomPyramidPass.swift:276`) | **확정** | 글로우 반경이 단계마다 2배로 넓어지고 이동 하이라이트의 계단/쉬머가 사라진다 |
 | **W-2** | HDR 업샘플 **BICUBIC** | 가장 깊은 두 단(`ebp >= N−2`)은 `hdr_upsample_cubic` (`0x140183810`–`0x140183822`) | 전 단계 bilinear 4탭 (`HDRBloomPyramidPass.swift:324-332`) | **확정** | 저해상도 단의 업스케일 블록 아티팩트가 사라져 넓은 헤일로가 매끈해진다 |
-| **W-3** | `bloomhdrstrength` 기본값 | **2.0** (`0x1401870c2`) | `?? 0` (`SceneDocument.swift:2731`), 패스 기본도 0 (`HDRBloomPass.swift:15`, `HDRBloomPyramidPass.swift:37`) | **확정** | 키를 생략한 HDR 씬에서 블룸이 나타난다(현재는 완전히 안 보임) |
-| **W-4** | `bloom` 기본값 | **true**(flags bit1, `0x140186d1f` `qword=0x26`) | `?? false` (`SceneDocument.swift:988`) | **확정** | `bloom` 키 없는 씬에 블룸이 켜진다. 코퍼스 358/358 이 명시하므로 워크샵 씬 전용 영향 |
-| **W-5** | `nearz` 기본값 | **0.1** (`0x140186d7d`) | `?? 0.01` (`SceneDocument.swift:1396`) | **확정** | 3D 원근 씬의 깊이 정밀도가 10배 올라 z-fighting 이 준다(대신 카메라 0.1 이내가 잘린다 — WE 와 동일 동작). 2D 는 무영향(§5.3) |
-| **W-6** | 정사영 씬의 z 클립 범위 | **하드코딩 ±2000**(`0x140183df9`/`0x140183e01`, 카메라 상태에도 `0x140189df0` imm `0x44fa0000`) — `nearz/farz` 무시 | `let F: Float = 10000` 대칭 클립 (`SceneRendererFrameEncoder.swift:923`, 주석은 *"WE ortho 기본 farz"* 라고 적었으나 WE 는 ortho 에서 `farz` 를 읽지 않는다) | **확정** | ortho 3D 하이브리드의 깊이 버퍼 정밀도가 5배 올라 동일 z 메시의 z-fighting 이 줄고, \|z\|>2000 오브젝트의 클립 여부가 WE 와 같아진다 |
-| **W-7** | 2D 실효 fov | 정사영이면 `perspectiveoverridefov`(기본 95°) (`0x140189278`–`0x1401892c4`) | `perspectiveOverrideFov` 를 파스만 하고(`SceneDocument.swift:905,2738`) 렌더는 **리터럴 95 하드코딩** (`SceneRendererFrameEncoder.swift:596,1281`) | **확정** | 기본값 씬은 우연히 맞지만 `90.76` 을 저작한 12씬의 `perspective:true` 레이어 원근 왜곡이 WE 와 일치한다 |
-| **W-8** | fov 클램프 | `[0.1, 179.9]` (`0x140189b1a`, `0x140189b3a`) | 클램프 없음 (`SceneDocument.swift:1394`) | **확정** | 스크립트가 fov 를 0/음수/180+ 로 몰 때 화면이 뒤집히거나 검게 되지 않는다 |
-| **W-9** | `orthogonalprojection.auto` | 첫 type==1 오브젝트의 `size` 로 투영/RT 크기 결정 (`0x14018b30c`–`0x14018b373`) | `width ?? 1920`, `height ?? 1080` (`SceneDocument.swift:982-983`) | **유력** | `auto:true` 4씬(파티클 프리뷰류)의 캔버스 비율/스케일이 맞는다 |
-| **W-10** | `cameraparallaxamount` 기본값 | **0.5** (`0x140186fa5`) | `?? 1` (`SceneDocument.swift:992`) | **확정** | 키 생략 씬의 패럴랙스 이동량이 절반으로 — 현재는 2배로 흔들린다 |
-| **W-11** | `cameraparallaxmouseinfluence` 기본값 | **0.5** (`0x140186fbb`) | `?? 1` (`SceneDocument.swift:993`) | **확정** | 마우스 추종이 절반으로 줄어 WE 와 같아진다 |
-| **W-12** | `cameraparallaxdelay` 기본값 | **0.1** (`0x140186fb0`) | `?? 0`(즉시) (`SceneDocument.swift:995`) | **확정** | 패럴랙스가 즉시 스냅하지 않고 WE 처럼 살짝 따라온다 |
-| **W-13** | `skylightcolor` 폴백 | `ambientcolor` 와 **독립**, 기본 (0,0,0) (`0x140186f76`) | `?? ambientColor` (`SceneDocument.swift:986`) | **확정** | `ambientcolor` 만 저작한 씬에서 하늘광이 검정이 되어 이중 가산이 사라진다 |
+| **W-3** | `bloomhdrstrength` 기본값 | **2.0** (`0x1401870c2`) | ~~`?? 0`~~ → **`?? 2` 반영(2026-08-21)**. 패스 기본은 아직 0 (`HDRBloomPass.swift:15`, `HDRBloomPyramidPass.swift:37` — 렌더 레인 잔여) | **확정 · 파스 해소** | 키를 생략한 HDR 씬에서 블룸이 나타난다(현재는 완전히 안 보임). **동봉 172씬 영향 0건** — 84씬이 키를 생략하지만 `hdr && bloom` 인 씬은 previewthunderbolt 1건뿐이고 그 씬은 2.0 을 명시 저작한다 |
+| **W-4** | `bloom` 기본값 | **true**(flags bit1, `0x140186d1f` `qword=0x26`) | `?? false` — **[2026-08-21] 확인했으나 의도적 미반영** | **확정 · 고의 이탈** | `bloom` 키 없는 씬에 블룸이 켜진다. **동봉 172씬 영향 0건**(전건 명시 저작)이라 실사용 이득이 없는데, `sceneWantsLDRBloom = doc.bloom && !doc.hdr` 를 타고 **키를 생략한 합성 렌더 픽스처 60여 개**의 합성 결과가 한꺼번에 바뀐다(`Tests/WapleRenderTests` 66파일 중 `bloom` 을 저작하는 것은 3파일뿐). 필요한 변경은 `SceneDocument.bloom` 선언 1줄 + 파스 `?? false` 1줄이고, **렌더 픽스처를 같이 갱신할 수 있는 레인에서 한 커밋으로** 뒤집어야 한다 |
+| **W-5** | `nearz` 기본값 | **0.1** (`0x140186d7d`) | ~~`?? 0.01`~~ → **`?? 0.1` 반영(2026-08-21)** | **확정 · 해소** | 3D 원근 씬의 깊이 정밀도가 10배 올라 z-fighting 이 준다(대신 카메라 0.1 이내가 잘린다 — WE 와 동일 동작). 2D 는 무영향(§5.3). **동봉 172씬 영향 1건** — 3D 씬 2개 중 `particleeditor3dscale` 만 키를 생략한다(`modeleditor` 는 0.1 명시) |
+| **W-6** | 정사영 씬의 z 클립 범위 | **하드코딩 ±2000**(`0x140183df9`/`0x140183e01`, 카메라 상태에도 `0x140189df0` imm `0x44fa0000`) — `nearz/farz` 무시 | `let F: Float = 10000` 대칭 클립 (`SceneRendererFrameEncoder.swift:923`, 주석은 *"WE ortho 기본 farz"* 라고 적었으나 WE 는 ortho 에서 `farz` 를 읽지 않는다 — **수정 시 상수와 함께 그 주석도 지워야 한다**; 도달 불가능한 `nearz`/`farz` 팔의 정체는 §5.3 의 2026-08-21 보강 참조) | **확정** — 렌더 레인 잔여 | ortho 3D 하이브리드의 깊이 버퍼 정밀도가 5배 올라 동일 z 메시의 z-fighting 이 줄고, \|z\|>2000 오브젝트의 클립 여부가 WE 와 같아진다 |
+| **W-7** | 2D 실효 fov | 정사영이면 `perspectiveoverridefov`(기본 95°) (`0x140189278`–`0x1401892c4`) | 파스는 **`Float? = nil` → `Float = 95` 로 반영(2026-08-21)**. 렌더는 여전히 **리터럴 95 하드코딩** (`SceneRendererFrameEncoder.swift:596,1281`) — 렌더 레인 잔여 | **확정 · 파스 절반 해소** | 기본값 씬은 우연히 맞지만 `90.76` 을 저작한 씬(**동봉 6씬** · 전 코퍼스 12씬)의 `perspective:true` 레이어 원근 왜곡이 WE 와 일치한다. 렌더가 `doc.perspectiveOverrideFov` 를 읽기만 하면 끝난다(기본값이 이제 95 라 무저작 씬은 비트동일) |
+| **W-8** | fov 클램프 | `[0.1, 179.9]` (`0x140189b1a`, `0x140189b3a`) | 클램프 없음 | **확정** — **[2026-08-21 정정] 고칠 자리가 파스가 아니다.** WE 의 클램프는 `Scene::updateCamera` 가 **매 프레임** 실효 fov(`scene+0x148`)에 거는 것이고(§5.1–5.2 와 같은 함수), 저작값 파스 지점이 아니다. 종전 표가 지목한 파스 지점(`SceneDocument.swift` 의 `let fov = float(general["fov"]) ?? 50`)에 클램프를 넣으면 **정적 값만** 막히고 스크립트/애니메이션이 프레임마다 미는 fov 는 그대로 통과한다 — 즉 반쪽 수정이다. 소비처(렌더러 카메라 갱신)에서 걸어야 한다 | 스크립트가 fov 를 0/음수/180+ 로 몰 때 화면이 뒤집히거나 검게 되지 않는다 |
+| **W-9** | `orthogonalprojection.auto` | 첫 type==1 오브젝트의 `size` 로 투영/RT 크기 결정 (`0x14018b30c`–`0x14018b373`) | `width ?? 1920`, `height ?? 1080` (`SceneDocument.swift:1099-1100`) | **유력** | `auto:true` 4씬(파티클 프리뷰류)의 캔버스 비율/스케일이 맞는다 |
+| **W-10** | `cameraparallaxamount` 기본값 | **0.5** (`0x140186fa5`) | ~~`?? 1`~~ → **`?? 0.5` 반영(2026-08-21)** | **확정 · 해소** | 키 생략 씬의 패럴랙스 이동량이 절반으로 — 종전은 2배로 흔들렸다. **동봉 172씬 영향 0건**(생략 4씬은 `cameraparallax` 도 생략 = 비활성) |
+| **W-11** | `cameraparallaxmouseinfluence` 기본값 | **0.5** (`0x140186fbb`, qword 스토어의 하위 dword) | ~~`?? 1`~~ → **`?? 0.5` 반영(2026-08-21)** | **확정 · 해소** | 마우스 추종이 절반으로 줄어 WE 와 같아진다. **동봉 172씬 영향 0건**(위와 같은 4씬) |
+| **W-12** | `cameraparallaxdelay` 기본값 | **0.1** (`0x140186fb0`) | ~~`?? 0`(즉시)~~ → **`?? 0.1` 반영(2026-08-21)** | **확정 · 해소** | 패럴랙스가 즉시 스냅하지 않고 WE 처럼 살짝 따라온다. **동봉 172씬 영향 0건**(위와 같은 4씬) |
+| **W-13** | `skylightcolor` 폴백 | `ambientcolor` 와 **독립**, 기본 (0,0,0) (`0x140186f76`; 등록도 별개 — `0x14019a26f`→`0x374` vs `0x14019a1c6`→`0x368`) | ~~`?? ambientColor`~~ → **`?? (0,0,0)` 반영(2026-08-21)** | **확정 · 해소** | `ambientcolor` 만 저작한 씬에서 하늘광이 검정이 되어 이중 가산이 사라진다. **동봉 172씬 영향 0건** — 생략 2씬(gifscene · videoplayer)은 `ambientcolor` 도 생략해 종전 폴백 결과도 (0,0,0) 이었다 |
 | **W-14** | fog `start/end` 기본값 | dist `1.0/5.0`, height `1.0/−3.0` (`0x140187063`·`0x14018706e`·`0x140187084`·`0x14018708f`) | `start ?? 0`, `end ?? 1` (`Scene3DLighting.swift:611-612`) | **확정** | fog 를 켜고 거리 키를 생략한 씬의 램프가 WE 와 같아진다(코퍼스 0건 → 워크샵 전용) |
 | **W-15** | fog 밀도 기본값 | `startDensity 0`, `endDensity 1.0` (`0x1401864c2`·`0x140187079`) | `0` / `1` (`Scene3DLighting.swift:613-614`) | **확정** | **일치** — 조치 불필요 |
-| **W-16** | fog `end==start` 방어 | 없음(0 나눗셈 허용) | `span` 을 ±1e-4 로 클램프 (`Scene3DLighting.swift:617`) | **확정**(의도적 이탈) | 없음. 안전 이탈로 유지 권장 — 문서화만 필요 |
+| **W-16** | fog `end==start` 방어 | 없음(0 나눗셈 허용) | `span` 을 ±1e-4 로 클램프 (`Scene3DLighting.swift:616`) | **확정**(의도적 이탈) | 없음. 안전 이탈로 유지 권장 — 문서화만 필요 |
 | **W-17** | 볼류메트릭 모델 | 깊이 기반 5패스 레이마치(백페이스 깊이 → 12~64샘플 → blur3 h/v → additive), `×0.1` 스케일 (`volumetricsfront.frag:78-96,190`) | 화면공간 원뿔 근사 1패스: `exp(-density*dist*0.001)` + `pow(intensity, exponent)`, 선형 콘 램프 (`VolumetricLightPass.swift:162,169,177`) | **확정**(구조 차이) | 샤프트가 지오메트리에 가려지고 그림자 결이 생긴다. 현재는 오브젝트를 통과해 비친다 |
 | **W-18** | 볼류메트릭 콘 감쇠 | `smoothstep(outer, inner, cos)` (`volumetricsfront.frag:140`) | `clamp((cos−outer)/(inner−outer), 0, 1)` 선형 (`VolumetricLightPass.swift:162`) | **확정** | 스포트 가장자리가 부드러워진다 |
 | **W-19** | 볼류메트릭 반경 감쇠 | `pow(saturate(1 − dist/radius), exponent)` (`volumetricsfront.frag:132`) | `exp(−density*dist*0.001)` (`VolumetricLightPass.swift:169`) | **확정** | 라이트 `radius` 밖에서 정확히 0 이 되어 무한 꼬리가 사라진다 |
 | **W-20** | HDR 최종 `lin()` | `saturate(lin(albedo)) * g_RenderVar0.x` (`combine_hdr.frag:43`), bloom off 는 `lin()`만 (`passthroughsrgb.frag:15`) | `saturate(base+bloom)` — `lin()` 미이식 (`HDRBloomPyramidPass.swift:346`, `HDRPostPass.swift:70`) | **미확정** | §8 참조 |
 | **W-21** | `g_RenderVar0.x` 출처 | 합성 직전 디바이스 vtable `+0x158` 질의 (`0x140180b15`–`0x140180b26`) | 없음(암묵 1.0) | **유력** | 값이 1.0 이 아니면 HDR 씬 전체 밝기 배수가 바뀐다 |
 | **W-22** | `camerapreview` | 문자열 자체가 바이너리에 없음 = 미소비 | 미파스 | **확정** | **일치**(둘 다 무시) — 조치 불필요 |
+| **W-23** | `transparentsorting`(bit12) · `customsortorder`(bit13) | 등록됨(`0x14019ad55`·`0x14019adfd`), 기본 false | **미파스**(`SceneDocument` 에 키가 없다) | **확정** — 2026-08-21 47키 전건 대조에서 나온 잔여 | 지금은 무영향(WE 쪽 소비 지점도 §8-4 로 미특정). 동봉 저작은 `transparentsorting:true` 2씬(둘 다 3D)뿐이라 소비처를 찾기 전엔 파스만 넣어도 화면이 안 바뀐다 |
+| **W-24** | `fov`/`nearz`/`farz` 파스 시점 | `general` 의 독립 키 — `camera` 블록 유무와 무관하게 씬 필드(`0x140`/`0x14c`/`0x150`)에 항상 실린다 | `parseCamera` 안에서만 읽는다 — `orthogonalprojection` 이 딕셔너리면(=2D) `camera3D == nil` 이라 세 값이 **문서에 남지 않는다** | **확정**(구조 차이) | 지금은 무영향(2D 는 세 값을 안 쓴다 — §5.3). `zoom`·`perspectiveoverridefov` 처럼 2D 에서도 살아 있어야 할 키가 늘면 그때 `applyGeneralSettings` 로 옮겨야 한다 |
 
 > **W-1 수정 시 주의.** `weDownsample4`(`HDRBloomPyramidPass.swift:274-281`)는 추출·다운샘플·업샘플
 > **세 곳이 공유**하는데, 업샘플의 ±0.5 소스 텍셀은 **이미 맞다**(§3.5 표). 헬퍼의 `0.5` 를 `1.0` 으로
@@ -563,10 +614,10 @@ volumetrics_combine   (passthrough, additive) → 화면
 | LDR 13탭 가중·스트라이드(2 quarter텍셀 → 1 eighth텍셀) | `blur_h_bloom.frag:7-19`, `*.vert:12` ↔ `LDRBloomPass.swift:134,149,228-244` |
 | LDR 블러 축 순서(X 먼저, Y 나중) | `downsample_eighth_blur_v.vert:12` / `blur_h_bloom.vert:12` ↔ `LDRBloomPass.swift:134,149` |
 | `bloomstrength 2.0` / `bloomthreshold 0.65` / `bloomtint (1,1,1)` | `0x1401870ac`·`0x1401870b7`·`0x140186ff0` ↔ `LDRBloomPass.swift:10-13` |
-| `bloomhdrthreshold 1.0` / `feather 0.1` / `scatter 1.619` / `iterations 8` | `0x1401870cd`·`0x1401870d8`·`0x1401870e3`·`0x1401870ee` ↔ `SceneDocument.swift:2732-2735` |
-| `fov 50` / `farz 10000` 기본값 | `0x140186d5c` / `0x140186d88` ↔ `SceneDocument.swift:1394,1397` |
-| `clearenabled` 기본 true | `0x140186d1f`(bit5) ↔ `SceneDocument.swift:2741` |
-| `ambientcolor` 기본 (0,0,0) | `0x140186f6f` ↔ `SceneDocument.swift:985` |
+| `bloomhdrthreshold 1.0` / `feather 0.1` / `scatter 1.619` / `iterations 8` | `0x1401870cd`·`0x1401870d8`·`0x1401870e3`·`0x1401870ee` ↔ `SceneDocument.swift:2918-2921` |
+| `fov 50` / `farz 10000` 기본값 | `0x140186d5c` / `0x140186d88` ↔ `SceneDocument.swift:1527,1538` |
+| `clearenabled` 기본 true | `0x140186d1f`(bit5) ↔ `SceneDocument.swift:2928` |
+| `ambientcolor` 기본 (0,0,0) | `0x140186f6f` ↔ `SceneDocument.swift:1102` |
 | fog 파라미터 패킹 `(s, e−s, sd, ed−sd)` | `0x140186489`–`0x140186552` ↔ `Scene3DLighting.swift:575-576,618` |
 | 톤커브 부재(ACES/Reinhard 없음) | `assets/shaders/` 전수 ↔ `HDRPostPass.swift:67-70` |
 
