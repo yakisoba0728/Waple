@@ -50,6 +50,8 @@ RENDERER = ROOT / "Sources/WapleRender/SceneRenderer.swift"
 # (두 트리에 `.pkg` 는 0개이고 렌더러는 그 188건을 정상 마운트한다). 마운트 결정을 세
 # 곳이 각자 하는 한 같은 종류의 어긋남이 또 난다.
 DEEPSCAN = ROOT / "Sources/WapleCompatCore/DeepScan.swift"
+# [2026-08-21 클러스터 BE] 캡처 파이프라인도 같은 코퍼스 열거를 쓴다 — 종전엔 게이트 시야 밖이었다.
+SNAPSHOT = ROOT / "Sources/WapleCompatCore/SnapshotPipeline.swift"
 WEASSETS = ROOT / "Sources/WapleRender/Resources/WEAssets"
 
 # 동봉 WEAssets 실측(2026-08-20): 씬 프로젝트 170개 · 전건 언팩 · `.pkg` 0개 · 전건 `scene.json`.
@@ -74,7 +76,8 @@ def candidate_items(text: str, where: str) -> list[str]:
     return [p.strip() for p in m.group("items").split(",") if p.strip()]
 
 
-def check_sources(scene_doc: str, analyzer: str, renderer: str, deepscan: str) -> list[str]:
+def check_sources(scene_doc: str, analyzer: str, renderer: str, deepscan: str,
+                  snapshot: str) -> list[str]:
     doc_items = candidate_items(scene_doc, "SceneDocument.swift")
     ana_items = candidate_items(analyzer, "WallpaperCompatibilityAnalyzer.swift")
 
@@ -113,6 +116,27 @@ def check_sources(scene_doc: str, analyzer: str, renderer: str, deepscan: str) -
     if "sceneFileName: project.fileName" not in deepscan:
         fail("DeepScan 이 `SceneDocument.parse` 에 `sceneFileName` 을 안 넘긴다 — "
              "관례 이름 폴백으로 떨어져 설치본 4건이 유실된다")
+
+    # ⑤ **코퍼스 열거 단일화(2026-08-21 클러스터 BE).** ①~④ 는 "어느 씬 문서를 여는가" 와
+    #   "pkg 냐 폴더냐" 만 본다. 그 **앞 단계** — *어느 폴더가 애초에 프로젝트인가* — 는 안 봤고,
+    #   거기에 사본이 셋 있었다(분석기 · DeepScan · SnapshotPipeline). 셋째는 첫 분기
+    #   (`backgrounds/project.json` 존재)를 통째로 빼먹은 채 주석에는 "DeepScan 과 동일 규칙"
+    #   이라고 적혀 있었다(설치본·동봉 도달 0건이라 아무도 못 봤다).
+    if "public static func projectContainerURL(for" not in analyzer:
+        fail("Analyzer 에 public `projectContainerURL(for:)` 정본이 없다")
+    if "public static func projectFolders(in" not in analyzer:
+        fail("Analyzer 에 public `projectFolders(in:)` 정본이 없다")
+    for text, label in ((deepscan, "DeepScan"), (snapshot, "SnapshotPipeline")):
+        if "WallpaperCompatibilityAnalyzer.projectContainerURL(for:" not in text:
+            fail(f"{label}: 컨테이너 선택 사본이 되살아났다 — 정본을 부르지 않는다")
+    if "WallpaperCompatibilityAnalyzer.projectFolders(in:" not in deepscan:
+        fail("DeepScan: 프로젝트 폴더 열거 사본이 되살아났다 — 정본을 부르지 않는다")
+
+    # ⑥ 조건 술어·웹 신호도 사본이 아니어야 한다(같은 라운드에서 합친 나머지 둘).
+    if "WallpaperCompatibilityAnalyzer.conditionSupport(" not in deepscan:
+        fail("DeepScan: 표시 조건 술어 사본이 되살아났다(`conditionSupport` 를 안 부른다)")
+    if "WebBridgeSignal.signals(in:" not in deepscan:
+        fail("DeepScan: 웹 브리지 탐지 문자열 사본이 되살아났다(`WebBridgeSignal` 을 안 쓴다)")
     return doc_items[1:]
 
 
@@ -160,7 +184,8 @@ def main() -> None:
     tail = check_sources(SCENE_DOC.read_text(encoding="utf-8"),
                          ANALYZER.read_text(encoding="utf-8"),
                          RENDERER.read_text(encoding="utf-8"),
-                         DEEPSCAN.read_text(encoding="utf-8"))
+                         DEEPSCAN.read_text(encoding="utf-8"),
+                         SNAPSHOT.read_text(encoding="utf-8"))
     print(f"[scene-mount-parity] ① 후보 꼬리 일치 {tail}")
 
     scenes, packed, present = survey_bundled(WEASSETS)
@@ -179,10 +204,17 @@ def main() -> None:
 _GOOD_DOC = 'let sceneCandidates: [String] = [sceneFileName, "scene.json", "gifscene.json"].compactMap { $0 }'
 _GOOD_ANA = ('let sceneCandidates: [String] = [project.fileName, "scene.json", "gifscene.json"].compactMap { $0 }\n'
              'ScenePackage.fromDirectory(folderURL)\n'
-             'ScenePackage.resolveMountSource(\n')
+             'ScenePackage.resolveMountSource(\n'
+             'public static func projectContainerURL(for root: URL) -> URL\n'
+             'public static func projectFolders(in container: URL) throws -> [URL]\n')
 _GOOD_REN = ('sceneFileName: project.fileName\nScenePackage.fromDirectory(project.folderURL)\n'
              'ScenePackage.resolveMountSource(\n')
-_GOOD_DS = 'ScenePackage.resolveMountSource(\nsceneFileName: project.fileName\n'
+_GOOD_DS = ('ScenePackage.resolveMountSource(\nsceneFileName: project.fileName\n'
+            'WallpaperCompatibilityAnalyzer.projectContainerURL(for:\n'
+            'WallpaperCompatibilityAnalyzer.projectFolders(in:\n'
+            'WallpaperCompatibilityAnalyzer.conditionSupport(\n'
+            'WebBridgeSignal.signals(in:\n')
+_GOOD_SNAP = 'WallpaperCompatibilityAnalyzer.projectContainerURL(for:\n'
 
 
 def _expect_fail(label: str, fn) -> None:
@@ -198,43 +230,43 @@ def _expect_fail(label: str, fn) -> None:
 
 def selftest() -> None:
     # 정상 조합은 통과해야 한다
-    check_sources(_GOOD_DOC, _GOOD_ANA, _GOOD_REN, _GOOD_DS)
+    check_sources(_GOOD_DOC, _GOOD_ANA, _GOOD_REN, _GOOD_DS, _GOOD_SNAP)
     print("    양성대조 OK: 정상 조합 통과")
 
     _expect_fail("스캐너 후보가 하드코딩으로 되돌아감",
                  lambda: check_sources(_GOOD_DOC,
                                        'let sceneCandidates: [String] = ["scene.json", "gifscene.json"].compactMap { $0 }\n'
-                                       'ScenePackage.fromDirectory(folderURL)\nScenePackage.resolveMountSource(\n', _GOOD_REN, _GOOD_DS))
+                                       'ScenePackage.fromDirectory(folderURL)\nScenePackage.resolveMountSource(\n', _GOOD_REN, _GOOD_DS, _GOOD_SNAP))
     _expect_fail("꼬리가 한쪽만 늘어남",
                  lambda: check_sources(_GOOD_DOC,
                                        'let sceneCandidates: [String] = [project.fileName, "scene.json"].compactMap { $0 }\n'
-                                       'ScenePackage.fromDirectory(folderURL)\nScenePackage.resolveMountSource(\n', _GOOD_REN, _GOOD_DS))
+                                       'ScenePackage.fromDirectory(folderURL)\nScenePackage.resolveMountSource(\n', _GOOD_REN, _GOOD_DS, _GOOD_SNAP))
     _expect_fail("스캐너 언팩 폴백 제거",
                  lambda: check_sources(_GOOD_DOC,
                                        'let sceneCandidates: [String] = [project.fileName, "scene.json", "gifscene.json"].compactMap { $0 }\n'
                                        'ScenePackage.resolveMountSource(\n',
-                                       _GOOD_REN, _GOOD_DS))
+                                       _GOOD_REN, _GOOD_DS, _GOOD_SNAP))
     _expect_fail("렌더러가 파일명을 안 넘김",
                  lambda: check_sources(_GOOD_DOC, _GOOD_ANA,
                                        'ScenePackage.fromDirectory(project.folderURL)\nScenePackage.resolveMountSource(\n',
-                                       _GOOD_DS))
+                                       _GOOD_DS, _GOOD_SNAP))
     _expect_fail("렌더러 언팩 경로 제거",
                  lambda: check_sources(_GOOD_DOC, _GOOD_ANA,
                                        'sceneFileName: project.fileName\nScenePackage.resolveMountSource(\n',
-                                       _GOOD_DS))
+                                       _GOOD_DS, _GOOD_SNAP))
     _expect_fail("DeepScan 이 렌더러와 다른 마운트 선택자를 쓴다",
                  lambda: check_sources(_GOOD_DOC, _GOOD_ANA, _GOOD_REN,
-                                       'sceneFileName: project.fileName\n'))
+                                       'sceneFileName: project.fileName\n', _GOOD_SNAP))
     _expect_fail("Analyzer 가 렌더러와 다른 마운트 선택자를 쓴다",
                  lambda: check_sources(_GOOD_DOC,
                                        'let sceneCandidates: [String] = [project.fileName, "scene.json", "gifscene.json"].compactMap { $0 }\n'
                                        'ScenePackage.fromDirectory(folderURL)\n',
-                                       _GOOD_REN, _GOOD_DS))
+                                       _GOOD_REN, _GOOD_DS, _GOOD_SNAP))
     _expect_fail("DeepScan 이 sceneFileName 을 안 넘김",
                  lambda: check_sources(_GOOD_DOC, _GOOD_ANA, _GOOD_REN,
-                                       'ScenePackage.resolveMountSource(\n'))
+                                       'ScenePackage.resolveMountSource(\n', _GOOD_SNAP))
     _expect_fail("후보 선언 형태 자체가 사라짐",
-                 lambda: check_sources("// nothing here", _GOOD_ANA, _GOOD_REN, _GOOD_DS))
+                 lambda: check_sources("// nothing here", _GOOD_ANA, _GOOD_REN, _GOOD_DS, _GOOD_SNAP))
 
     with tempfile.TemporaryDirectory() as td:
         empty = Path(td) / "empty"

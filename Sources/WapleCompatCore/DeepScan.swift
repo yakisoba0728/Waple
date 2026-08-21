@@ -347,9 +347,16 @@ public enum DeepScan {
         for p in parsed {
             let t = p.type.lowercased()
             if !t.isEmpty { typeCounts[t, default: 0] += 1; if !known.contains(t) { unsupported[t, default: 0] += 1 } }
-            if let c = p.condition, !c.isEmpty {
-                condTotal += 1
-                if PropertyConditionEvaluator.canEvaluate(c), PropertyConditionEvaluator.evaluate(c, values: values) != nil { condOK += 1 }
+            // **[2026-08-21 클러스터 BE] 조건 판정은 형제 스캐너와 같은 사다리 하나다.**
+            // 종전에는 여기가 `canEvaluate && evaluate != nil`, 분석기가 `canEvaluate` 로 서로
+            // 다른 술어를 각자 적어 두고 그 차이를 아무 데도 안 적었다. 이제 `.absent`(조건 없음 —
+            // 빈 문자열 포함, WE 템플릿의 `!property.condition` 규약)만 세지 않고,
+            // `.evaluated` 만 "평가 가능" 으로 센다. 두 스캐너의 판정 결과는 그대로다
+            // (설치본 조건 17건 중 빈 문자열 1건 = `dino_run/god_rays` — 종전에도 양쪽 다 통과).
+            switch WallpaperCompatibilityAnalyzer.conditionSupport(p.condition, values: values) {
+            case .absent: break
+            case .evaluated: condTotal += 1; condOK += 1
+            case .unsupported, .parsedOnly: condTotal += 1
             }
         }
         agg.sync {
@@ -821,11 +828,21 @@ public enum DeepScan {
     static func scanWeb(_ folder: URL, project: WallpaperProject, agg: DeepAgg) -> Bool {
         let present = project.fileName.flatMap { WallpaperPathSecurity.containedFileURL($0, root: folder) }
             .map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        // **[2026-08-21 클러스터 BE] 탐지 문자열은 `WebBridgeSignal` 하나가 갖는다.**
+        // 종전에는 이 두 줄에 마커가 리터럴로 박혀 있었고 형제 스캐너에는 같은 것이 **10종**
+        // 박혀 있었다 — 같은 웹 벽지를 두 스캐너에 물리면 서로 다른 얘기를 했다. 문자열을 합쳐
+        // 개수가 갈릴 자리를 없앤다. 리포트가 세는 카운터는 종전 두 개 그대로다(스키마 무변).
+        //
+        // **아직 남아 있는 차이**: 읽는 범위. 분석기는 엔트리에서 최대 64파일/2MB 를 따라가고
+        // (`webFeatureSources`) 여기는 **엔트리 파일 하나**만 읽는다. 설치본 web 2/2 는 엔트리가
+        // `index.html` 이고 신호가 전부 하위 `js/` 에 있어 여기서는 0건으로 보인다 —
+        // 즉 이 카운터들은 지금도 부분집합이다. 크롤 도입은 스캔 벽시계를 건드리므로 별건으로 뺀다.
         var randomFile = false, serviceWorker = false
         if let entry = project.fileName, let url = WallpaperPathSecurity.containedFileURL(entry, root: folder),
            let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) {
-            randomFile = text.contains("wallpaperRequestRandomFileForProperty")
-            serviceWorker = text.range(of: "serviceWorker", options: .caseInsensitive) != nil
+            let signals = WebBridgeSignal.signals(in: text)
+            randomFile = signals.contains(.randomFile)
+            serviceWorker = signals.contains(.serviceWorker)
         }
         agg.sync {
             agg.webTotal += 1
@@ -838,26 +855,35 @@ public enum DeepScan {
 
     // MARK: helpers
 
+    /// **[2026-08-21 클러스터 BE] 코퍼스 열거는 형제 스캐너와 같은 함수 하나다.**
+    /// 종전에는 같은 규칙이 세 벌 있었다(여기 · `WallpaperCompatibilityAnalyzer` ·
+    /// `SnapshotPipeline.sceneContainer`). 앞의 둘은 글자만 다르고 뜻이 같았지만, 셋이 있는 한
+    /// 한 곳만 고쳐지는 사고가 언제든 난다 — 실제로 `SnapshotPipeline` 쪽이 첫 분기를 빼먹은 채
+    /// "DeepScan 과 동일 규칙" 이라고 적혀 있었다. 이름은 남긴다(`--only`/테스트 호출부와
+    /// `check_scene_mount_parity.py` 계열 grep 이 이 이름을 본다) — 본문만 전달자로 만든다.
     static func projectContainer(_ root: URL) -> URL {
-        let bg = root.appendingPathComponent("backgrounds", isDirectory: true)
-        var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: bg.appendingPathComponent("project.json").path) { return root }
-        if FileManager.default.fileExists(atPath: bg.path, isDirectory: &isDir), isDir.boolValue { return bg.standardizedFileURL }
-        return root
+        WallpaperCompatibilityAnalyzer.projectContainerURL(for: root)
     }
 
+    /// 형제 스캐너와 달리 여기서는 던지지 않는다 — 호출부(`run`)가 **"프로젝트 0개" 가드**를
+    /// 따로 들고 있고(감사 V06), 디렉터리를 못 읽는 것도 그 가드에서 같은 메시지로 잡힌다.
+    /// 삼키는 자리를 여기 한 줄로 모아 둔다.
     static func projectFolders(_ container: URL) -> [URL] {
-        if FileManager.default.fileExists(atPath: container.appendingPathComponent("project.json").path) { return [container] }
-        let entries = (try? FileManager.default.contentsOfDirectory(at: container, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
-        return entries.filter {
-            (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
-                && FileManager.default.fileExists(atPath: $0.appendingPathComponent("project.json").path)
-        }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        (try? WallpaperCompatibilityAnalyzer.projectFolders(in: container)) ?? []
     }
 
     /// **[3차 웨이브 AB] 관용 파스 배선.** 종전 이 함수와 머티리얼·파티클 리더 4곳이 맨
     /// `JSONSerialization` 이었다 — 즉 **스캐너가 렌더러보다 엄격했다**. WE 는 jsoncpp 의
-    /// `allowComments`/`allowTrailingCommas` 를 둘 다 켜고(`0x140091fe2`·`0x1400920b3`) WE 자기
+    /// `allowComments`/`allowTrailingCommas` 를 둘 다 켜고(`0x140091fe2`·`0x1400920b3` —
+    /// **[2026-08-21 클러스터 BE 재확인]** 두 주소 모두 명령 경계이고(`scripts/re/va_citations.py`
+    /// 경계 이탈 0) 서술과도 맞는다. 각 자리는 `mov byte ptr [rbp-0x30], 5`(Json::Value 태그 5 =
+    /// boolean)이고 바로 다음이 `lea rdx, "allowComments"` @`0x140091fe6` /
+    /// `lea rdx, "allowTrailingCommas"` @`0x1400920b7`, 그 다음이
+    /// **`mov byte ptr [rbp-0x38], 1`**(@`0x140091fed`·@`0x1400920be`) 즉 **값 true** 다.
+    /// 대조군: 같은 함수의 `allowDroppedNullPlaceholders`(@`0x140092227`) ·
+    /// `allowNumericKeys`(@`0x14009226d`) · `allowSingleQuotes`(@`0x1400922b3`) 블록은 같은 자리에
+    /// `mov byte ptr [rbp-0x38], r14b` 를 쓰고 `r14d` 는 함수 머리 `xor r14d, r14d`(@`0x140091f2c`)
+    /// 로 0 이다 — **그 셋은 false, 앞의 둘만 true**. "둘 다 켠다" 는 이 대조로 확정된다) WE 자기
     /// 자산이 실제로 그 관용에 의존한다: 3,655개 자산 JSON 중 **63개가 JSONC** 이고, 그중
     /// `defaultprojects/fantasticcar/materials/car/glass.json` 은 **머티리얼**(줄 주석)이다.
     /// 엄격 파스가 실패하면 그 메시의 `textures`·`blending`·`constantshadervalues` 가 통째로
