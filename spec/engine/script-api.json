@@ -5255,7 +5255,6 @@
      "getBlendShapeWeight",
      "setBlendShapeWeight",
      "addEndedCallback",
-     "parallaxDepth",
      "getCurrentTime",
      "setCurrentTime",
      "join",
