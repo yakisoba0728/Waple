@@ -825,6 +825,91 @@ public struct SceneSound: Equatable {
     }
 }
 
+/// 씬 `sprite` 오브젝트(scene.json `objects[]` 중 `"sprite"` 키가 **문자열**인 것).
+///
+/// **파티클 렌더러의 `sprite` 와는 다른 것이다.** 파티클 쪽 `sprite`/`spritetrail` 은
+/// 파티클 JSON 의 `renderer[].name` **값**이고(동봉 코퍼스 실측 192 + 44건), 이쪽은 씬 오브젝트
+/// **타입**이다. 같은 팩토리(`0x14018ff60`)가 두 타입에 서로 다른 전용 클래스를 만든다 —
+/// 이 타입은 `0x270` 바이트(`mov ecx, 0x270` @ `0x140190304`), 파티클은 `0x960`(@ `0x1401901e9`).
+/// WE 로케일이 두 이름을 다 쓰는 것이 혼동의 출처다(`ui_editor_particle_element_renderer_sprite`).
+///
+/// **정체**: 하드웨어 오클루전 쿼리로 가림 정도를 재서 밝기를 구동하는 태양/렌즈플레어 스프라이트다.
+/// ctor `0x140256560–0x140256705` 가 저작 머티리얼과 **별도로** 프로브 머티리얼
+/// `materials/util/occlusiontest.json`(문자열 `0x140491658`, 참조 `0x1402566bf`)을 로드하고
+/// 오클루전 쿼리를 만든다(`0x1402566ea` — 바이너리 전체에서 쿼리 생성 호출지점은 여기 1곳뿐).
+/// 밝기 매핑·1프레임 지연·프로브 크기까지 전문은 `docs/re/sprite-occlusion.md`.
+///
+/// **도달(2026-08-21 실측)**:
+/// - 동봉 자산(`Sources/WapleRender/Resources/WEAssets`, JSON 1,698건) — **0건**.
+///   그래서 이 타입은 **파스만 하고 렌더 배선은 하지 않는다**. 리눅스/CI 하네스가 보는
+///   `WAPLE_WE_ASSETS` 기본 루트가 곧 이 트리라, 도달 0 은 "회귀 위험 0" 이기도 하다.
+/// - 설치본(WE 2.8.42) 전체 JSON 2,143건 — **문자열 저작 1건**
+///   (`projects/defaultprojects/ricepod/ricepod.json` `objects[7]` = name `"sun"`, id 9,
+///    `"sprite": "materials/sprites/sunsprite.json"`)과 **null 저작 2건**
+///   (`projects/defaultprojects/arsenal/scene.json` `objects[1]`/`objects[2]`).
+///   null 2건은 `light: "point"` 오브젝트가 `model`/`particle`/`sprite` 를 전부 null 로 갖는
+///   에디터 기본 서식이고, 아래 문자열 게이트에 걸려 여기로 오지 않는다(WE 팩토리도 동일).
+public struct SceneSprite: Equatable {
+    /// `objects[].id`. 베이스 씬 오브젝트 ctor `0x1401ddbb0` 이 `0x1401ddd69` 에서 부르는
+    /// `0x1401a38f0` 이 읽는다(키 리터럴 `"id"` @ `0x14048e5bc`, 참조 `0x1401a391b`).
+    /// WE 는 여기서 jsoncpp 타입 1..3(int/uint/real)만 받는다(`0x1401a3931–0x1401a393a`).
+    /// Waple 의 `intVal` 은 문자열 숫자도 관용한다 — 실물 씬이 id 를 문자열로 싣는 사례가 있어
+    /// 다른 오브젝트 타입이 이미 그렇게 하고 있고(intVal 주석), 여기만 다를 이유가 없다.
+    public let id: Int
+    /// `objects[].name` — 트리거/스크립트 주소지정용(SceneSound.name/SceneLayer.name 과 동일 규약).
+    /// 베이스 오브젝트가 이 이름을 MSVC `std::string` 으로 `this+0x1d8` 에 들고 있고(base ctor 가
+    /// 빈 문자열로 초기화 — `0x1401ddd3b–0x1401ddd56`, 용량 15 = SSO), 스크립트 프로퍼티 등록표
+    /// `0x1401e0530` 이 그 슬롯을 `name` 으로 노출한다(참조 `0x1401e11d0`).
+    /// **JSON `"name"` 키를 읽는 명령 자체는 sprite ctor 밖이고 아직 짚지 않았다** — 다른 오브젝트
+    /// 타입과 같은 공통 경로라 같은 규약으로 읽는다(실측: ricepod 의 스프라이트가 `"name":"sun"`).
+    public let name: String
+    /// **`"sprite"` 키의 값 그 자체 = 플레어 머티리얼의 전체 경로**(`"materials/…/x.json"`).
+    ///
+    /// 팩토리가 `Json::Value::find(json, "sprite")`(`0x1401902de`, 키 리터럴 `0x14048e600`) 후
+    /// `cmp byte [rax+8], 4`(`0x1401902fe`) → `jne`(`0x140190302`) 로 **jsoncpp `stringValue`(=4)**
+    /// 만 통과시키고, ctor 가 그 문자열을 그대로 머티리얼 매니저(`scene+0x1630`)에 넘긴다:
+    /// `json["sprite"]` `0x1402565b9` → 문자열 페이로드 추출 `0x1402565be–0x1402565d4`
+    /// (길이 접두 4바이트 스킵 분기 포함) → 로드 `0x1402565df` → `this+0x240` 저장 `0x1402565e4`.
+    ///
+    /// 머티리얼 **이름**이 아니라 `materials/` 접두와 `.json` 확장자까지 포함한 **경로**다 —
+    /// 같은 ctor 가 같은 로더에 넘기는 내장 프로브 경로 `"materials/util/occlusiontest.json"`
+    /// (`0x1402566bf` → `0x1402566d4`)와 서식이 같고, 유일한 실측 저작값도 같은 서식이다.
+    public let material: String
+    /// 베이스 오브젝트 공통 변환. 스크립트 프로퍼티 등록표 `0x1401e0530` 이 세 이름을 등록한다 —
+    /// `origin` `0x1401e05d2` / `scale` `0x1401e06a3` / `angles` `0x1401e0759`.
+    /// 각도 규약은 다른 3D 오브젝트와 같다(오일러 X,Y,Z).
+    public let origin: Vec3
+    public let angles: Vec3
+    public let scale: Vec3
+    /// 부모 오브젝트 id(트랜스폼·가시성 계층). 베이스 vtable `0x1404903b8` 슬롯 `+0x40` =
+    /// `0x1401de470` 이 로드 후처리로 `"parent"`(리터럴 `0x14048ed5c`, 참조 `0x1401de4b1`)를 읽어
+    /// 링크한다. sprite vtable `0x140491680` 도 이 슬롯을 그대로 상속한다 — 두 표에서 값이 다른
+    /// 슬롯은 `+0x00`(소멸자) `+0x48` `+0x50`(렌더 `0x140256780`) `+0x60` 넷뿐이고, 그중 뒤 셋은
+    /// 베이스 표가 `_purecall`(`0x1402ba6d0`)을 담고 있는 순수 가상이라 "오버라이드"가 아니라
+    /// 파생이 반드시 채워야 하는 자리다. nil = 루트.
+    public let parent: Int?
+    /// 정적 가시성. 렌더 디스패처가 그리기 직전 vtable `+0x68` = `0x140185010` 을 호출해
+    /// 게이트하고(`0x14018adc8`, `0x14018ae72`), 그 구현이 플래그 워드 `this+0x120` 의 bit0 을 보고
+    /// 부모 체인 `this+0x180` 으로 재귀한다(`0x140185014–0x140185029`).
+    /// sprite 는 `+0x68` 을 오버라이드하지 않으므로 다른 오브젝트와 규약이 같다.
+    public let visible: Bool
+    /// scene.json `objects[]` 내 인덱스 — 다른 오브젝트와 공유하는 그리기/계층 순서.
+    public var order: Int = 0
+    /// 마우스 시차 가중치. 베이스 등록표의 `parallaxDepth`(`0x1401e082f`, 리터럴 `0x1404902c8`)
+    /// — 이 키만 camelCase 다(SceneLayer/SceneParticle 의 같은 철자와 동형). 부재 시 1(균일).
+    /// 실측 저작 1/1(ricepod 의 태양이 `"1.000 1.000"`).
+    public var parallaxDepth: Vec2 = Vec2(x: 1, y: 1)
+    /// 변환/가시성 프로퍼티 스크립트(origin/angles/scale/visible → JS 소스).
+    /// SceneNode3D.propertyScripts 와 동일 규약(파스 캡처 — 소비는 렌더 배선의 몫).
+    public var propertyScripts: [String: String] = [:]
+    public init(id: Int, name: String, material: String, origin: Vec3, angles: Vec3, scale: Vec3,
+                parent: Int?, visible: Bool, order: Int = 0) {
+        self.id = id; self.name = name; self.material = material
+        self.origin = origin; self.angles = angles; self.scale = scale
+        self.parent = parent; self.visible = visible; self.order = order
+    }
+}
+
 public struct SceneDocument: Equatable {
     public let projectionWidth: Int
     public let projectionHeight: Int
@@ -853,10 +938,23 @@ public struct SceneDocument: Equatable {
     public var nodes3D: [SceneNode3D] = []
     /// 씬 sound 오브젝트. 2D/3D 무관 전역 재생(트랜스폼/공간화는 미반영). 렌더러(SceneAudioPlayer)가 재생.
     public var sounds: [SceneSound] = []
+    /// 씬 `sprite` 오브젝트(하드웨어 오클루전으로 밝기를 구동하는 태양/렌즈플레어 — SceneSprite 주석).
+    /// **파스·보존 전용이고 렌더는 미배선이다.** 동봉 자산 도달이 **0건**이라(설치본 전체에서도
+    /// 문자열 저작 1건 — ricepod 의 태양) 배선의 우선순위가 낮다는 판단이고, 그래서 여기 담아만 둔다.
+    /// 담아 두는 이유는 parseNode 주석(콘텐츠 키 목록)과 같다 — 인식만 시켜 두면 미구현이 미구현으로
+    /// 남고, 트랜스폼-온리 그룹 노드로 조용히 흡수되지 않는다. 배선 지침은 `docs/re/sprite-occlusion.md` §8.3.
+    public var sprites: [SceneSprite] = []
     /// `general.ambientcolor` — 포워드 라이팅의 앰비언트 바닥(라이트 미도달 영역이 전흑되지 않게).
     public var ambientColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
-    /// `general.skylightcolor` — 부재 시 ambientcolor 로 폴백. 2D genericimage4 포워드 경로는
+    /// `general.skylightcolor` — 3D 반구 앰비언트의 상단 색. 2D genericimage4 포워드 경로는
     /// flat ambient 만 소비하므로 이 값은 사용하지 않는다.
+    ///
+    /// **[2026-08-21 정정] `ambientcolor` 폴백은 WE 에 없다.** 두 키는 등록도 저장도 독립이고
+    /// (`skylightcolor` 등록 `0x14019a26f` → `scene+0x374`, `ambientcolor` 등록 `0x14019a1c6` → `scene+0x368`),
+    /// 생성자는 둘 다 0 으로만 깔아 둔다(`0x140186f6f`·`0x140186f76` — r15=0 스토어).
+    /// 종전의 `?? ambientColor` 는 `ambientcolor` 만 저작한 씬에서 하늘광을 이중 가산했다.
+    /// 동봉 172씬 중 `skylightcolor` 생략은 2건인데(gifscene · videoplayer) 그 둘은 `ambientcolor` 도
+    /// 생략하므로 종전 폴백 결과도 (0,0,0) 이었다 — **화면이 달라지는 동봉 씬 0건**.
     public var skylightColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
 
     /// `general.hdr` — HDR 씬 플래그. true 면 렌더러가 float(rgba16Float) 누적 버퍼 + 톤맵 패스로
@@ -864,6 +962,18 @@ public struct SceneDocument: Equatable {
     /// WE combine_srgb/hdr_upsample 경로 대응(lane-04 §1.2). 부재 시 false = 종전 LDR 경로(무회귀).
     public var hdr: Bool = false
     /// `general.bloom` — fixed two-stage LDR bloom request. Renderer activation additionally requires `!general.hdr`.
+    ///
+    /// **[2026-08-21] WE 기본값은 `true` 다 — 여기만 의도적으로 다르다.** 씬 생성자가 플래그 워드
+    /// `scene+0xe0` 을 `0x26`(= bit1|bit2|bit5)으로 초기화하고(`0x140186d1f`), `bloom` 은 그 bit1 이다
+    /// (등록 `0x140199836` — 타입 6=bool · 오프셋 `0xe0`; 게터 썽크 `0x14019b6e0` 이 `shr edx,1 / and dl,1`).
+    /// 에디터가 전 씬에 `"bloom": false` 를 명시 저작해서 코퍼스로는 안 드러난다.
+    ///
+    /// 그런데도 `false` 로 두는 이유는 **실사용 이득이 0이고 비용만 있기 때문**이다 —
+    /// 동봉 172씬이 **전건 이 키를 저작**하므로 `true` 로 바꿔도 달라지는 실물 씬은 0건인데,
+    /// `sceneWantsLDRBloom = doc.bloom && !doc.hdr`(`SceneRenderer.swift`)를 타고
+    /// **키를 생략한 합성 렌더 픽스처 60여 개**의 합성 결과가 한꺼번에 바뀐다.
+    /// 실효는 워크샵 씬 전용이므로, 렌더 픽스처를 같이 손볼 수 있는 레인에서 한 커밋으로 뒤집어야 한다
+    /// (필요한 변경은 이 줄과 파스의 `?? false` 두 곳뿐 — `docs/re/scene-postprocessing.md` §7 W-4).
     public var bloom: Bool = false
     /// WE fixed two-stage LDR bloom parameters. Strength/threshold remain authored finite values without clamps.
     public var bloomStrength: Float = 2
@@ -871,8 +981,14 @@ public struct SceneDocument: Equatable {
     public var bloomTint: Vec3 = Vec3(x: 1, y: 1, z: 1)
     /// WE HDR bloom(soft-knee QuadraticThreshold) 파라미터 — `hdr && bloom` 씬 전용(#22, PS 29931 라이브 확증).
     /// 기본값은 클린룸 확정치(threshold 1.0 · feather 0.1 · scatter 1.619 · iterations 8 — A3 §0).
-    /// strength 기본은 미복원(코퍼스 8씬 전건 저작) — 0 유지(무저작 = 무블룸).
-    public var bloomHDRStrength: Float = 0
+    ///
+    /// **[2026-08-21 정정] strength 기본은 미복원이 아니라 2.0 이다.** 씬 생성자가
+    /// `scene+0x3c4` 에 `0x40000000`(=2.0)을 기록한다(`0x1401870c2`; 등록 `0x140199b87` — 타입 4=float).
+    /// LDR 짝인 `bloomstrength`(`scene+0x3bc`, `0x1401870ac`)와 **같은 2.0** 이다.
+    /// 종전의 0 은 키를 생략한 HDR 씬에서 블룸을 전멸시켰다. 동봉 172씬 중 이 키 생략은 84건이지만
+    /// `hdr && bloom` 인 씬은 previewthunderbolt 1건뿐이고 그 씬은 2.0 을 명시 저작한다 —
+    /// **화면이 달라지는 동봉 씬 0건**(효과는 키를 생략하는 워크샵 HDR 씬 전용).
+    public var bloomHDRStrength: Float = 2
     public var bloomHDRThreshold: Float = 1
     /// knee = threshold × feather (feather 단독 아님 — 윈도우 L1 라이브 cbuffer 확증).
     public var bloomHDRFeather: Float = 0.1
@@ -901,8 +1017,16 @@ public struct SceneDocument: Equatable {
     /// 정적 value 언랩). 부재 시 1(무회귀). 파스·보존 전용 — 프레이밍 적용 소비는 렌더러 책임.
     public var zoom: Float = 1
     /// F692: `general.perspectiveoverridefov` — perspective:true 레이어(SceneLayer.perspective)의
-    /// 원근 투영 FOV(도). 실측 전건 95.0(133씬 저작). nil = 미저작. 파스·보존 전용(렌더 소비 없음).
-    public var perspectiveOverrideFov: Float? = nil
+    /// 원근 투영 FOV(도). 동봉 172씬 저작 77건(95.0 71 · 90.760002 6).
+    ///
+    /// **[2026-08-21 정정] 미저작은 nil 이 아니라 95.0 이다.** 씬 생성자가 `scene+0x144` 에
+    /// `0x42be0000`(=95.0)을 기록하고(`0x140186d67`; 등록 `0x14019aa9d` — 타입 4=float),
+    /// `Scene::updateCamera` 가 **정사영 씬일 때 실효 fov 로 이 값을 고른다**
+    /// (`0x140189278`: `eax=0x144` · `edx=0x140` · `test r9b,8`(flags bit3=정사영) · `cmove eax,edx`).
+    /// 즉 2D 씬의 실효 fov 는 `fov` 가 아니라 이 키다. 종전 `Float?`/nil 은 "미저작" 을 값이 없는 것으로
+    /// 표현해 렌더러가 리터럴 95 를 하드코딩하게 만들었고, 그래서 `90.760002` 를 저작한 동봉 6씬의
+    /// `perspective:true` 레이어 원근이 WE 와 어긋난다(렌더 소비는 별 레인 — 여기서는 값만 바로잡는다).
+    public var perspectiveOverrideFov: Float = 95
 
     /// `general.clearenabled`(json-keys.txt:667 A 0x0048d558) — false 면 렌더러가 프레임 누적(acc)
     /// 버퍼를 지우지 않는다(잔상 누적 = 엔진 동작 — SceneRenderer.clearEnabled 소비). 부재 시 true
@@ -983,16 +1107,23 @@ extension SceneDocument {
         let ph = intVal(proj["height"]) ?? 1080
         let clear = vec3(general["clearcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         let ambientColor = vec3(general["ambientcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
-        let skylightColor = vec3(general["skylightcolor"]) ?? ambientColor
+        // 부재 시 (0,0,0) — `ambientcolor` 폴백이 아니다(선언부 주석: 등록/저장/생성자 모두 독립).
+        let skylightColor = vec3(general["skylightcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         // HDR/블룸 플래그 — 종전 조용히 폐기(lane-04 §2.1). {"user":…,"value":Bool} 바인딩은 unwrap 이 처리.
+        // `hdr` 은 flags bit10(게터 `0x14019b900`)이라 생성자 `0x26` 에서 clear = false.
+        // `bloom` 은 bit1 이라 WE 기본은 **true** 인데 여기만 의도적으로 false 다 — 선언부 주석 참조.
         let hdr = (unwrap(general["hdr"]) as? Bool) ?? false
         let bloom = (unwrap(general["bloom"]) as? Bool) ?? false
         // {"user":…,"value":Bool} 바인딩 형태(실물 21씬)는 unwrap 이 value 를 꺼낸다(평문 Bool 은 그대로).
+        // 패럴랙스 3종 기본값은 씬 생성자 실측이다 — amount `scene+0x334`=0.5(`0x140186fa5`),
+        // mouseinfluence `scene+0x33c`=0.5(`0x140186fbb`, qword 스토어의 하위 dword),
+        // delay `scene+0x338`=0.1(`0x140186fb0`). 종전 1/1/0 은 이동량·마우스 추종을 2배로,
+        // 추종을 즉시 스냅으로 만들었다. 동봉 172씬 중 이 셋을 생략하는 4씬(gifs · particleeditor ·
+        // particleeditor3dscale · videoplayer)은 `cameraparallax` 도 생략해 비활성이라 **영향 0건**.
         let parallaxEnabled = (unwrap(general["cameraparallax"]) as? Bool) ?? false
-        let parallaxAmount = float(general["cameraparallaxamount"]) ?? 1
-        let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 1
-        // 부재 시 0(즉시) — 무회귀. 실물은 전부 필드 보유(기본 0.1).
-        let parallaxDelay = max(0, float(general["cameraparallaxdelay"]) ?? 0)
+        let parallaxAmount = float(general["cameraparallaxamount"]) ?? 0.5
+        let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 0.5
+        let parallaxDelay = max(0, float(general["cameraparallaxdelay"]) ?? 0.1)
         // H7: 품질 설정. **WE 키가 아니라 Waple 확장이다** — 선언부(`SceneDocument.Quality`) 주석 참조.
         // 동봉+설치본 355개 씬 전건 부재라 실질적으로 항상 .ultra 다.
         let quality = Quality(rawValue: (general["quality"] as? String)?.lowercased() ?? "ultra") ?? .ultra
@@ -1007,6 +1138,7 @@ extension SceneDocument {
         var lights3D: [SceneLight3D] = []
         var nodes3D: [SceneNode3D] = []
         var sounds: [SceneSound] = []
+        var sprites: [SceneSprite] = []
         var cameraObjects: [SceneCameraObject] = []
         let resolvedAssets: ((String) -> Data?)?
         if let sharedAssetProbe {
@@ -1087,6 +1219,13 @@ extension SceneDocument {
                     p.order = order
                     particles.append(p)
                 }
+            } else if let sprite = parseSprite(obj, order: order, initialVisible: initialVisible,
+                                               visibleScript: visibleScript) {
+                // WE 팩토리의 키 탐색 순서는 model → particle → image → **sprite** → text → light → …
+                // (`mov ecx, size` VA: `0x14019013c`/`0x1401901e9`/`0x14019029f`/`0x140190304`/
+                //  `0x14019034d`/`0x1401903ba`). 여기 위치가 그 순서다 — image/particle 뒤, text 앞.
+                // parseSprite 가 문자열 게이트를 겸하므로(값이 null/숫자면 nil) 아래 분기로 흘러간다.
+                sprites.append(sprite)
             } else if contentValue(obj["text"]) != nil {
                 texts.append(parseText(obj, order: order, visibleScript: visibleScript,
                                        visibleScriptProps: visibleScriptProps, initialVisible: initialVisible,
@@ -1141,6 +1280,7 @@ extension SceneDocument {
         out.cameraScripts = cameraScripts
         out.cameraObjects = cameraObjects
         out.sounds = sounds
+        out.sprites = sprites
         out.ambientColor = ambientColor
         out.skylightColor = skylightColor
         out.hdr = hdr
@@ -1392,8 +1532,16 @@ extension SceneDocument {
         // 전부 2D 이고 값이 **전건 정확히 50.0** 이다. 즉 WE 에디터 기본값 50 이 정본이며,
         // `SceneCameraObject.fov = 50`(코퍼스 실측)과도 같은 값이다.
         let fov = float(general["fov"]) ?? 50
+        // fov/nearz/farz 기본값은 씬 생성자 실측이다 — `scene+0x140`=50.0(`0x140186d5c`),
+        // `scene+0x14c`=0.1(`0x140186d7d`), `scene+0x150`=10000.0(`0x140186d88`).
+        //
+        // **[2026-08-21 정정] nearz 기본은 0.01 이 아니라 0.1 이다**(비트패턴 `0x3dcccccd`).
+        // 종전 0.01 은 깊이 버퍼 정밀도를 10배 낭비했다. 이 값이 실제로 쓰이는 건 **3D 원근 씬뿐**이다
+        // — 정사영 씬의 z 클립은 `Composite::buildProjection` 이 ±2000 을 직접 싣고 `nearz`/`farz` 를
+        // 읽지 않는다(`0x140183df9`·`0x140183e01`). 동봉 172씬 중 3D 는 2건이고 그중 nearz 를 생략하는
+        // particleeditor3dscale **1건**이 이 변경의 영향 씬이다(modeleditor 는 0.1 을 명시 저작).
         let camera = SceneCamera3D(eye: eye, center: center, up: up, fov: fov,
-                                   nearZ: float(general["nearz"]) ?? 0.01,
+                                   nearZ: float(general["nearz"]) ?? 0.1,
                                    farZ: float(general["farz"]) ?? 10000)
         var scripts: [String: String] = [:]
         // 카메라 프로퍼티 스크립트 캡처(per-frame 재평가용).
@@ -1435,17 +1583,60 @@ extension SceneDocument {
         return snd
     }
 
+    /// `sprite` 씬 오브젝트("sprite" 키가 **문자열**) → SceneSprite. 문자열이 아니면 nil 이고
+    /// 호출부는 다음 콘텐츠 키로 진행한다 — WE 팩토리의 타입 게이트
+    /// `cmp byte [rax+8], 4`(`0x1401902fe`) → `jne 0x140190332`(`0x140190302`) 와 같은 규약이다
+    /// (jsoncpp `stringValue` = 4). 실측에서 이 게이트가 실제로 일하는 자리는 설치본 arsenal 의
+    /// `"sprite": null` 2건이고, 거기서 오브젝트는 이 분기를 건너 `light` 로 간다(WE 도 동일).
+    ///
+    /// **빈 문자열은 거르지 않는다.** WE ctor 도 거르지 않고(`0x1402565c1` 의 null-포인터 분기는
+    /// 걸러내기가 아니라 빈 경로를 그대로 로더에 넘기는 경로다) 여기서 거르면 `"sprite": ""` 짜리
+    /// 오브젝트가 parseNode(콘텐츠 키로 인정)도 이 분기도 못 타 **통째로 사라진다**.
+    /// 그 조용한 드롭을 막는 것이 parseNode 가 애초에 `"sprite"` 를 콘텐츠로 잡아 둔 이유다.
+    /// (코퍼스 도달 0건 — 방어적 규약.)
+    private static func parseSprite(_ obj: [String: Any], order: Int,
+                                    initialVisible: Bool, visibleScript: String?) -> SceneSprite? {
+        guard let material = contentValue(obj["sprite"]) as? String else { return nil }
+        var sprite = SceneSprite(
+            id: intVal(obj["id"]) ?? 0,
+            name: (obj["name"] as? String) ?? "",
+            material: material,
+            origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+            angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
+            scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
+            parent: intVal(obj["parent"]),
+            visible: initialVisible,
+            order: order)
+        // F200 과 동형(레이어 :1311 · 파티클 :2245) — 미지정 시 1(균일 시차).
+        sprite.parallaxDepth = vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1)
+        var ps = transformScripts(obj)
+        if let vs = visibleScript { ps["visible"] = vs }
+        sprite.propertyScripts = ps
+        return sprite
+    }
+
     /// 트랜스폼-온리 그룹 노드: 콘텐츠 키 없음 + id 보유 시 SceneNode3D(비가시도 포함 — 서브트리 판정에 필요).
     /// 콘텐츠 키가 있거나 id 없으면 nil(호출부가 레이어/컨텐츠 분기로 진행).
     /// camera 의사-오브젝트와 이펙트 캐리어 quad(shape+effects)도 콘텐츠로 취급 — 종전에는 여기서
     /// 트랜스폼-노드로 흡수돼 갓레이 41오브젝트(23씬)·카메라 fov/zoom(37씬)이 통째 드롭됐다.
     private static func parseNode(_ obj: [String: Any], initialVisible: Bool, visibleScript: String?) -> SceneNode3D? {
         // G-D2-1: `sprite` 도 **콘텐츠 키**다. WE 오브젝트 팩토리가 `sprite`(문자열)에 0x270 바이트
-        // 전용 클래스를 생성하고 그 ctor 가 `materials/util/occlusiontest.json` 을 로드한다(= 하드웨어
-        // 오클루전으로 가림을 판정하는 태양/렌즈플레어 스프라이트). Waple 은 아직 이걸 그리지 못하지만,
-        // 여기서 제외하지 않으면 트랜스폼-온리 그룹 노드로 **조용히 흡수**돼 "노드는 있는데 아무것도
-        // 안 그려진다" 가 된다 — 갓레이 41오브젝트가 같은 방식으로 드롭됐던 것과 동형 사고다.
-        // 콘텐츠로 인식만 시켜 두면 미구현이 미구현으로 남고 렌더 목록 오염이 없다.
+        // 전용 클래스를 생성하고(`mov ecx, 0x270` `0x140190304` → ctor `0x14019031b`) 그 ctor 가
+        // `materials/util/occlusiontest.json` 을 로드한다(= 하드웨어 오클루전으로 가림을 판정하는
+        // 태양/렌즈플레어 스프라이트 — `0x1402566bf`). 여기서 제외하지 않으면 트랜스폼-온리 그룹
+        // 노드로 **조용히 흡수**돼 "노드는 있는데 아무것도 안 그려진다" 가 된다 — 갓레이 41오브젝트가
+        // 같은 방식으로 드롭됐던 것과 동형 사고다.
+        // **[2026-08-21 갱신]** 이제 파스 자체가 붙었다(`parseSprite` → `SceneDocument.sprites`).
+        // 렌더는 여전히 미배선이다(도달 근거는 SceneSprite 주석) — 이 목록은 그대로 두면 된다.
+        // 여기 판정은 `contentValue != nil`(존재)이고 parseSprite 는 `as? String`(타입)이라 서로 다른데,
+        // 그건 WE 도 같다 — 팩토리가 `find`(존재, `0x1401902de`)로 분기에 들어와 `cmp …, 4`(타입,
+        // `0x1401902fe`)로 다시 거른다. 두 판정이 **실제로 갈리는** 경우는 값이 문자열도 null 도 아닐
+        // 때뿐이다: contentValue 는 NSNull 만 정규화하므로 null 은 양쪽 모두에서 "없음"이고
+        // (설치본 arsenal 2건이 이 경로로 `light` 분기에 도달한다), 문자열은 양쪽 모두 "있음"이다.
+        // 남는 것은 숫자/불리언/배열 같은 값인데 코퍼스 도달 0건이고, 그때 Waple 은 오브젝트를 통째로
+        // 버린다(콘텐츠로 잡혀 노드가 못 되고, 어느 분기도 안 맞는다). WE 는 폴백 클래스 0x2c0
+        // (`0x1401907e0`)으로 평범한 트랜스폼 오브젝트를 만든다. image/model/particle 도 똑같이 어긋나
+        // 있으므로(같은 목록, 같은 규약) sprite 만 따로 맞추지 않는다 — 고칠 거면 목록째 고칠 자리다.
         guard !["image", "model", "particle", "text", "light", "camera", "sprite"].contains(where: { contentValue(obj[$0]) != nil }),
               !isEffectQuad(obj),
               let nodeID = intVal(obj["id"]) else { return nil }
@@ -2728,14 +2919,17 @@ extension SceneDocument {
         out.bloomTint = vec3(general["bloomtint"]) ?? Vec3(x: 1, y: 1, z: 1)
         // HDR 판(#22): 기본값 = 클린룸 확정치(선언부 주석 참조). float/intVal 이 {"user":…,"value":…}
         // 바인딩(실코퍼스 3470948192 등)과 문자열 숫자를 공통 언랩한다.
-        out.bloomHDRStrength = float(general["bloomhdrstrength"]) ?? 0
+        // strength 기본 2.0 은 씬 생성자 `0x1401870c2`(`scene+0x3c4` ← `0x40000000`) 실측이다 —
+        // 종전 0 은 키를 생략한 HDR 씬의 블룸을 전멸시켰다(선언부 주석: 동봉 영향 0건).
+        out.bloomHDRStrength = float(general["bloomhdrstrength"]) ?? 2
         out.bloomHDRThreshold = float(general["bloomhdrthreshold"]) ?? 1
         out.bloomHDRFeather = float(general["bloomhdrfeather"]) ?? 0.1
         out.bloomHDRIterations = intVal(general["bloomhdriterations"]) ?? 8
         out.bloomHDRScatter = float(general["bloomhdrscatter"]) ?? 1.619
         // F695/F692: 씬 전역 줌 + perspective 레이어 원근 FOV(파스·보존 — 소비는 렌더러 책임).
         out.zoom = float(general["zoom"]) ?? 1
-        out.perspectiveOverrideFov = float(general["perspectiveoverridefov"])
+        // 미저작 기본 95.0 = 씬 생성자 `0x140186d67`(`scene+0x144` ← `0x42be0000`).
+        out.perspectiveOverrideFov = float(general["perspectiveoverridefov"]) ?? 95
         // clearenabled/camerafade(json-keys.txt:667/686) — clearenabled=false 는 acc 미클리어(잔상)라
         // 렌더러가 소비(SceneRenderer.clearEnabled). camerafade 는 의미 미확정이라 파스만(소비 보류).
         out.clearEnabled = (unwrap(general["clearenabled"]) as? Bool) ?? true

@@ -42,21 +42,38 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.bloomHDRScatter, 2.0, accuracy: 1e-4)
     }
 
-    /// hdr/bloom 부재 시 기본 false(종전 LDR 경로 유지 = 무회귀).
-    func testHDRBloomDefaultFalseWhenAbsent() throws {
+    /// hdr/bloom 및 블룸 파라미터의 **키 부재 기본값** — 전부 WE 씬 생성자(`0x140186c90`–`0x1401872ba`)
+    /// 실측치다. `hdr` 은 flags bit10 이라 생성자 `0x26` 에서 clear = false(`0x140186d1f`).
+    /// `bloom`(bit1)만 WE 가 true 인데 여기서는 의도적 이탈로 false 다 —
+    /// 근거와 되돌리는 법은 `SceneDocument.bloom` 선언부 주석 / §7 W-4.
+    func testHDRBloomDefaultsWhenAbsent() throws {
         let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[]}"#
         let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
         XCTAssertFalse(doc.hdr)
-        XCTAssertFalse(doc.bloom)
+        XCTAssertFalse(doc.bloom, "WE 는 true — 렌더 픽스처 동반 수정이 가능한 레인에서 뒤집을 것")
         XCTAssertEqual(doc.bloomStrength, 2, accuracy: 1e-6)
         XCTAssertEqual(doc.bloomThreshold, 0.65, accuracy: 1e-6)
         XCTAssertEqual(doc.bloomTint, Vec3(x: 1, y: 1, z: 1))
-        XCTAssertEqual(doc.bloomHDRStrength, 0, accuracy: 1e-6)
+        // strength 2.0 = `0x1401870c2`(`scene+0x3c4` ← `0x40000000`) — LDR 짝 `bloomstrength` 와 같은 값.
+        XCTAssertEqual(doc.bloomHDRStrength, 2, accuracy: 1e-6)
         // HDR 기본값 = WE 클린룸 확정치(A3 §0: threshold 1.0 · feather 0.1 · scatter 1.619 · iterations 8).
         XCTAssertEqual(doc.bloomHDRThreshold, 1, accuracy: 1e-6)
         XCTAssertEqual(doc.bloomHDRFeather, 0.1, accuracy: 1e-6)
         XCTAssertEqual(doc.bloomHDRIterations, 8)
         XCTAssertEqual(doc.bloomHDRScatter, 1.619, accuracy: 1e-6)
+    }
+
+    /// 명시 저작 `bloom` 은 평문/바인딩 양쪽 다 그대로 읽힌다 — 동봉 172씬이 전건 이 경로를 탄다.
+    /// (기본값을 WE 쪽 true 로 뒤집더라도 이 축은 그대로여야 한다.)
+    func testExplicitBloomFlagIsParsedBothWays() throws {
+        func bloom(_ literal: String) throws -> Bool {
+            let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100},"bloom":\#(literal)},"objects":[]}"#
+            return try SceneDocument.parse(package: try pkg([("scene.json", scene)])).bloom
+        }
+        XCTAssertFalse(try bloom("false"))
+        XCTAssertTrue(try bloom("true"))
+        XCTAssertFalse(try bloom(#"{"value":false}"#))
+        XCTAssertTrue(try bloom(#"{"user":"u","value":true}"#))
     }
 
     /// D 재감사 #16: general.camerashake 전역 지터 파스(bool enable + amplitude/roughness/speed 형제 키).
@@ -737,7 +754,13 @@ final class SceneDocumentTests: XCTestCase {
         let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
         let doc = try SceneDocument.parse(package: p)
         XCTAssertFalse(doc.parallaxEnabled)
-        XCTAssertEqual(doc.parallaxAmount, 1, accuracy: 1e-6)
+        // [2026-08-21] 씬 생성자 실측 기본값 — amount `scene+0x334`=0.5(`0x140186fa5`),
+        // mouseinfluence `scene+0x33c`=0.5(`0x140186fbb`), delay `scene+0x338`=0.1(`0x140186fb0`).
+        // 종전 1/1/0 은 이동량·마우스 추종 2배 + 즉시 스냅이었다.
+        XCTAssertEqual(doc.parallaxAmount, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(doc.parallaxMouseInfluence, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(doc.parallaxDelay, 0.1, accuracy: 1e-6)
+        // 레이어별 시차 깊이는 별 키(`SceneLayer.parallaxDepth`)라 기본 (1,1) 그대로다.
         XCTAssertEqual(doc.layers.first?.parallaxDepth, Vec2(x: 1, y: 1))
     }
 
