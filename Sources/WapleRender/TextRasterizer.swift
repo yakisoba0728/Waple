@@ -9,11 +9,24 @@ import CoreGraphics
 /// (WE 실물 동작 — 근거는 render() 의 un-premultiply 블록 주석에 VA 로 인용).
 public enum TextRasterizer {
     public struct Raster { public let rgba: Data; public let width: Int; public let height: Int }
+    /// **실물과 다르다(갭).** WE 는 거부가 아니라 `clamp(pointsize, 1, 256)` 이다
+    /// (`minss 256.0` @`0x1401b054a` · `comiss 1.0` @`0x1401b055b`). 여기 8192 는 "이 값을 넘으면
+    /// 아예 안 그린다"는 방어 상한이라 256…8192 구간에서 그림이 갈린다. 실측 도달은 0 이라
+    /// (설치본 텍스트 5오브젝트 최대 64.0 · 워크샵 정본 코퍼스 1,597 오브젝트 최대 250.97)
+    /// 지금 바꿔도 관측되는 씬은 없어 이번 라운드에는 손대지 않았다 — `docs/re/text-layer.md` §11 G2.
     private static let maxPointSize: Float = 8192
     private static let maxRasterBytes = 256 << 20
 
     /// ITextLayer.pointsize 는 "300 DPI 기준 point"(lib.sceneScript.d.ts:1606). 72DPI 1:1 컨텍스트로
     /// 래스터하므로 실효 폰트크기에 300/72(≈4.17)를 곱해 WE 화면 크기에 맞춘다(미적용 시 4~5배 작음).
+    ///
+    /// **바이너리 근거(2026-08-21 실측)**: 텍스트 오브젝트는 `pointsize` 멤버 `+0x4e0` 를 스케일 없이
+    /// FontKey`+0x0c` 로 넣고(`0x140257443`→`0x140257461`), 페이스 로드가
+    /// `FT_Set_Char_Size(face, 0, (int)(pt*64), 300, 300)` 를 호출한다
+    /// (`mulss 64.0` @`0x1401ad1d4` · `r9d=0x12c`/`[rsp+0x20]=0x12c` @`0x1401ad1dc`/`0x1401ad1e5` ·
+    /// call @`0x1401ad1f2`). FreeType 규약상 char_height 는 1/64 **포인트**이고 해상도가 DPI 이므로
+    /// 실효 픽셀 = pt × 300/72. **배율은 여기서 한 번만 곱해야 한다** — 파스 기본값(32)과 이
+    /// 300/72 를 둘 다 "픽셀"로 오해해 이중 적용하면 모든 텍스트가 4.17× 커진다.
     private static let weRenderDPI: CGFloat = 300
 
     /// - fontData: pkg/base-assets 의 .otf/.ttf 바이트(전역 등록 없이 디스크립터로 생성).

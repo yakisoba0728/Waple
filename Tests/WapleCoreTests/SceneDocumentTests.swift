@@ -778,7 +778,12 @@ final class SceneDocumentTests: XCTestCase {
         """
         let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
         let doc = try SceneDocument.parse(package: p)
-        XCTAssertEqual(doc.texts.first?.pointSize, 16)
+        // 이 테스트가 잠그는 것은 "1e300 은 값이 아니라 부재로 떨어진다" 이지 기본값의 숫자가 아니다.
+        // 종전 기댓값 16 은 **옛 기본값을 못 박은 것**이었고 그 16 에는 실물 근거가 없었다 —
+        // WE 텍스트 오브젝트 생성자 `0x140256bf2` 가 `[this+0x4e0] = 0x42000000`(=32.0)을 심는다.
+        // (실물 float 주입기 `0x1401a4b00` 도 태그 1/2/3 이 아니면 멤버를 안 건드려 생성자 값을
+        //  유지하므로, "파스 실패 → 기본값" 이라는 이 테스트의 취지 자체는 실물과 같다.)
+        XCTAssertEqual(doc.texts.first?.pointSize, 32)
         let layer = try XCTUnwrap(doc.layers.first)
         XCTAssertEqual(layer.id, 0)
         XCTAssertEqual(layer.colorBlendMode, 0)
@@ -1328,18 +1333,82 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(t.backgroundColor, Vec3(x: 0, y: 0, z: 0))
     }
 
-    /// C⑨ 무회귀: 미저작 시 기본값(전부 off/검정) — 종전 동작과 동일.
+    /// C⑨ 무회귀: 미저작 시 불리언 기본값(전부 off/검정).
+    ///
+    /// **정정(E)**: `padding` 기댓값 `(0,0)` 은 옛 Waple 기본값을 못 박은 것이었고 실물 근거가
+    /// 없었다 — WE 텍스트 생성자 `0x140256bbf`/`0x140256bc9` 가 `[this+0x4e8]`/`[this+0x4ec]` 에
+    /// `0x42000000`(=32.0)을 심는다. 마찬가지로 `outlineThickness` 는 `0x140256c43` 이 4.0 이다.
+    /// `backgroundBrightness = 1` 은 `0x140256be8`(`0x3f800000`) 로 확인돼 그대로 둔다.
     func testTextOutlineAndBackgroundFieldsDefaultOff() throws {
         let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[{"id":1,"text":"hello","font":"systemfont_arial","pointsize":16,"origin":"0 0 0"}]}"#
         let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
         let t = try XCTUnwrap(doc.texts.first)
         XCTAssertFalse(t.outline)
         XCTAssertFalse(t.opaqueBackground)
-        // F4-polish①: 무저작 기본값 — anchor="none"/padding=(0,0)/backgroundBrightness=1(0 아님 — 부재 시
-        // 0 이면 향후 소비부에서 검정 박스로 오염되는 잠재 함정).
         XCTAssertEqual(t.anchor, "none")
-        XCTAssertEqual(t.padding, Vec2(x: 0, y: 0))
+        XCTAssertEqual(t.padding, Vec2(x: 32, y: 32))
+        XCTAssertEqual(t.outlineThickness, 4)
         XCTAssertEqual(t.backgroundBrightness, 1)
+    }
+
+    /// E: 텍스트 레이어 **기본값 3종**(키 부재 시)을 WE 생성자 `0x140256ae0`–`0x140256d16` 에 못 박는다.
+    ///
+    /// 근거(전부 이 라운드에 직접 재확인):
+    ///  · `pointsize` → 멤버 `+0x4e0`(디스크립터 `0x140259396` `[desc+0x34]=0x4e0`, `0x14025939d`
+    ///    `[desc+0x30]=4`=float), 생성자 `0x140256bf2` `mov dword [rdi+0x4e0], 0x42000000` = **32.0**.
+    ///  · `padding` → 멤버 `+0x4e8`(`0x14025942d` / `0x140259446` `[desc+0x30]=1`=vec2),
+    ///    생성자 `0x140256bbf`+`0x140256bc9` = **(32,32)**.
+    ///  · `outlinethickness` → 멤버 `+0x520`(`0x1402599fa` / `0x140259a09` type 4),
+    ///    생성자 `0x140256c43` `0x40800000` = **4.0**.
+    /// 세 문자열(`"pointsize"` `0x1404917e8` · `"padding"` `0x140491870` · `"outlinethickness"`
+    /// `0x1404918e8`)의 이미지 전수 disp32 xref 는 **등록자 `0x140258ca0`–`0x14025a713` 안에만** 있다
+    /// (ASCII·UTF-16LE 둘 다 스캔; UTF-16LE 는 0건). 즉 이 키들에 대해 기본값 인자를 따로 갖는
+    /// 리플렉션 바인더 경로는 **없고**, 유일한 기본값 출처가 위 생성자다.
+    ///
+    /// 도달: 이 기본값에 의존하는 오브젝트는 동봉 `WEAssets` 172씬(텍스트 3오브젝트) · 설치본
+    /// 186씬(텍스트 5오브젝트) · 워크샵 정본 코퍼스 1,597오브젝트 **전건에서 `pointsize`/`padding`
+    /// 이 명시돼 0건**이다(= 그림이 바뀌는 씬 0). `outlinethickness` 는 세 코퍼스에서 각각
+    /// 3/3 · 5/5 · 1,594/1,597 이 미저작이지만, 실물 소비가 `outline` bit1 게이트 하에만 있고
+    /// (`0x1402574df`) 그 3건은 전부 값을 명시하므로 역시 관측 가능한 변화가 없다.
+    func testTextLayerDefaultsMatchEngineConstructor() throws {
+        let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[{"id":1,"text":"hi","origin":"0 0 0"}]}"#
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        let t = try XCTUnwrap(doc.texts.first)
+        XCTAssertEqual(t.pointSize, 32, "0x140256bf2: [this+0x4e0] = 32.0")
+        XCTAssertEqual(t.padding, Vec2(x: 32, y: 32), "0x140256bbf/0x140256bc9: [this+0x4e8..0x4ec] = 32.0")
+        XCTAssertEqual(t.outlineThickness, 4, "0x140256c43: [this+0x520] = 4.0")
+        // 같은 생성자에서 확인한 이웃 기본값들(회귀 감지용 — 값이 아니라 출처가 같다는 게 핵심).
+        XCTAssertEqual(t.font, "systemfont_arial", "0x140256b71 movups [0x14048ef50]")
+        XCTAssertEqual(t.backgroundBrightness, 1, "0x140256be8: [this+0x4dc] = 1.0")
+        XCTAssertEqual(t.backgroundColor, Vec3(x: 0, y: 0, z: 0), "0x140256baf: [this+0x4d0] = 0")
+        XCTAssertEqual(t.outlineColor, Vec3(x: 0, y: 0, z: 0), "0x140256c4d: [this+0x524] = 0")
+        XCTAssertEqual(t.anchor, "none", "0x140256c99: [this+0x550] = 0 = none")
+        XCTAssertTrue(t.depthTest, "0x140256cbb: [this+0x5a0] = 0 = \"enabled\"")
+        // `mov dword [rdi+0x59c], 0x01010101` 이 네 바이트를 1 로 채운다 — 디스크립터상
+        // horizontalalign 은 `+0x59c`(0x140259f00), verticalalign 은 `+0x59e`(0x140259fb8)이고
+        // 사이/뒤 바이트는 더티체크용 섀도 사본이다. 값 1 이 두 enum 모두 "center" 인 것은 직접 확인했다:
+        // halign 테이블 0x1404e9a40 = left0/center1/right2(값 스토어 0x14025a583/0x14025a5bb/0x14025a5f7),
+        // valign 테이블 0x1404e9ac0 = center1/top2/**bottom0**(0x14025a679/0x14025a6b1/0x14025a6ed) —
+        // valign 은 테이블 순서와 값 순서가 다르니 "첫 항목=0" 으로 추정하면 틀린다.
+        XCTAssertEqual(t.horizontalAlign, "center", "0x140256d06: [this+0x59c] = 1 = center")
+        XCTAssertEqual(t.verticalAlign, "center", "0x140256d06: [this+0x59e] = 1 = center")
+    }
+
+    /// E: `padding` 이 부재가 아니라 **파스 불가 타입**일 때도 기본값 (32,32) 가 남아야 한다.
+    ///
+    /// 실물 vec2 주입기 `0x1401a3fc0` 은 태그 1/2/3(숫자, 양축 브로드캐스트 `0x1401a40a4`/
+    /// `0x1401a40aa`)과 태그 4(문자열, `strtod` + 스페이스 분리)만 멤버에 착지하고, **그 밖의 태그는
+    /// 스토어 자체를 건너뛴다** — 브리프 함정 15("저장을 건너뛰는 실패 분기는 0 이 아니라 생성자
+    /// 기본값을 유지한다")의 교과서 사례다. `uniformVec2` 가 nil 을 주는 자리와 1:1 이다.
+    ///
+    /// 값은 **배열**(WE 태그 6)을 쓴다. 불리언은 안 된다 — `JSONSerialization` 의 `true` 는
+    /// `NSNumber` 라 `lenientFloat` 의 `as? Double` 을 통과해 1.0 이 되어버린다(이 파일 `unwrap`
+    /// 주석이 짚은 CFBoolean 함정과 같은 뿌리).
+    func testTextPaddingUnparseableKeepsConstructorDefault() throws {
+        let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[{"id":1,"text":"hi","origin":"0 0 0","padding":[1,2]}]}"#
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        let t = try XCTUnwrap(doc.texts.first)
+        XCTAssertEqual(t.padding, Vec2(x: 32, y: 32))
     }
 
     /// F4-polish①: anchor/padding/backgroundbrightness 파싱 — 실측 코퍼스 스키마 그대로(3526096300/

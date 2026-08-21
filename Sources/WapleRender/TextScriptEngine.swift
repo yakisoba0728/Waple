@@ -18,11 +18,13 @@ public struct SceneScriptLayerDescriptor {
     public var parentId: Int?
     /// animationlayers 바인딩 수 — ILayer.getAnimationLayerCount() 실값(F708). 0 = 미지정.
     public var animationLayerCount: Int
-    /// ITextLayer.pointsize(lib.sceneScript.d.ts:1606) 실값. 기본값은 SceneDocument 의 텍스트 파스
-    /// 폴백과 같은 16(SceneDocument.swift:1795) — 텍스트가 아닌 레이어는 이 값을 쓰지 않는다.
+    /// ITextLayer.pointsize(lib.sceneScript.d.ts:1606) 실값. 기본값은 `SceneDocument.parseText` 의
+    /// 폴백과 같은 **32** — WE 텍스트 오브젝트 생성자 `0x140256bf2`
+    /// (`mov dword [rdi+0x4e0], 0x42000000`)가 정본이다. 텍스트가 아닌 레이어는 이 값을 안 쓴다.
+    /// (줄번호로 가리키던 종전 주석은 값도 위치도 낡아 있었다 — 심볼로 가리킨다.)
     public var pointSize: Float
-    /// ITextLayer.font(lib.sceneScript.d.ts:1611) 실값. 기본값은 SceneDocument 파스 폴백과 같은
-    /// "systemfont_arial"(SceneDocument.swift:1794).
+    /// ITextLayer.font(lib.sceneScript.d.ts:1611) 실값. 기본값은 `SceneDocument.parseText` 폴백과
+    /// 같은 "systemfont_arial".
     public var font: String
 
     public init(name: String, visible: Bool = true, alpha: Float = 1,
@@ -32,7 +34,7 @@ public struct SceneScriptLayerDescriptor {
                 size: SIMD2<Float> = SIMD2<Float>(1, 1),
                 solid: Bool = false, text: String = "",
                 id: Int = 0, parentId: Int? = nil, animationLayerCount: Int = 0,
-                pointSize: Float = 16, font: String = "systemfont_arial") {
+                pointSize: Float = 32, font: String = "systemfont_arial") {
         self.name = name
         self.visible = visible
         self.alpha = alpha

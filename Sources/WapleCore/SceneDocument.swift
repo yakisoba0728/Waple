@@ -344,7 +344,15 @@ public struct SceneTextLayer: Equatable {
     /// 저작자 저장값 대신 스크립트 기본으로 되돌아감). script 부재 시 nil(무회귀).
     public var scriptProps: String? = nil
     public let font: String              // "systemfont_arial" | "fonts/....otf" (pkg/base-assets)
-    public let pointSize: Float          // 씬 픽셀 단위 글자 크기
+    /// `pointsize` — **픽셀이 아니라 300 DPI 기준 "포인트"** 다. 실물은 이 값을 스케일 없이
+    /// FontKey`+0x0c` 에 그대로 넣고(`movss xmm0,[rbx+0x4e0]` → `movss [rbp-0x5d],xmm0`
+    /// @`0x140257443`/`0x140257461`), `clamp(1, 256)`(`minss 256.0` @`0x1401b054a` ·
+    /// `comiss 1.0` @`0x1401b055b`) 한 뒤 `FT_Set_Char_Size(face, 0, pt*64, 300, 300)`
+    /// (`0x1401ad1d4` `mulss 64.0` · `0x1401ad1dc`/`0x1401ad1e5` `0x12c`=300 · call `0x1401ad1f2`)
+    /// 로 넘긴다. 즉 **실효 래스터 픽셀 = pt × 300/72 ≈ 4.1667×**, DPI 배율은 한 번만 곱해진다
+    /// (`TextRasterizer.render` 의 `pointSize * weRenderDPI / 72` 와 이중 적용이 아니다).
+    /// 기본값 32.0 — 생성자 `0x140256bf2` `mov dword [rdi+0x4e0], 0x42000000`.
+    public let pointSize: Float
     public let color: Vec3
     public let alpha: Float
     public let horizontalAlign: String   // left|center|right (origin 앵커 기준)
@@ -429,27 +437,68 @@ public struct SceneTextLayer: Equatable {
     /// 레이어(SceneLayer.colorBlendMode)와 동일 필드이나 종전 텍스트 경로엔 아예 없었다. 텍스트도
     /// 동일 enum 을 저작하며(실측 코퍼스 9씬/24오브젝트, mode 31 최빈 — 시계/곡명 텍스트 가산 합성).
     public var colorBlendMode: Int = 0
-    /// C⑨: 아웃라인/배경 박스 — 파스·보존(실측 코퍼스: outline 1씬/3오브젝트, opaquebackground 5씬/12
-    /// 오브젝트 — 후자는 전건 visible=false(README/구분선 에디터 메모)라 실가시 사례 없음). 래스터
-    /// 소비는 outline 만 최소 구현(TextRasterizer 참조) — opaquebackground 는 파스만(실가시 0건이라
-    /// 렌더 리스크 대비 이득이 낮음, 필요 시 이 필드로 후속 구현 가능).
+    /// C⑨: 아웃라인/배경 박스 — **전부 파스·보존만이다**. (종전 이 주석은 "래스터 소비는 outline 만
+    /// 최소 구현(TextRasterizer 참조)" 이라고 적었으나 **사실이 아니었다** — `TextRasterizer.swift`
+    /// 에 `outline`/`stroke` 문자열이 0건이다. 낡은 주석을 사실로 정정한다.)
+    /// 도달: 동봉 `WEAssets` 172 씬 중 텍스트 3오브젝트 전건 미저작 · 설치본 186 씬 중 5오브젝트
+    /// 전건 미저작 · 워크샵 정본 코퍼스(`spec/corpus/scene-schema.json`) 1,597 오브젝트 중 3건
+    /// (1씬)만 `outline:true`.
     public var outline: Bool = false
     public var outlineColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
-    public var outlineThickness: Float = 0
+    /// `outlinethickness` — 디스크립터 타입 4(float) · 멤버 `+0x520`(`0x1402599fa`/`0x140259a09`).
+    /// **기본값 4.0** — 생성자 `0x140256c43` `mov dword [rdi+0x520], 0x40800000`. 종전 `0` 은 근거
+    /// 없는 값이었다(실물은 어떤 경로로도 0 을 심지 않는다 — `"outlinethickness"` 문자열
+    /// `0x1404918e8` 의 xref 는 등록자 `0x140258ca0`–`0x14025a713` 안에만 있고, float 주입기
+    /// `0x1401a4b00` 은 태그 1/2/3(숫자)이 아니면 **멤버를 안 건드려** 생성자 값을 유지한다).
+    /// 실물 소비는 `outline`(플래그 `+0x518` bit1)이 켜졌을 때만이고 그때 `max(값, 1.0)` 로 올린다
+    /// (`0x1402574df` `test cl,2` → `0x1402574e4`–`0x1402574fc`); 꺼져 있으면 0 을 쓴다.
+    /// 그래서 기본값을 4 로 바꿔도 **그림이 바뀌는 씬은 0건**이다(위 세 코퍼스 전건 `outline` 미저작
+    /// 또는 false, `outline:true` 3건은 `outlinethickness` 를 명시한다).
+    public var outlineThickness: Float = 4
     public var opaqueBackground: Bool = false
     public var backgroundColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
-    /// F4-polish①: 배경 박스 앵커(에디터 "Anchor" — 실측 코퍼스 anchor:1478/1642, 값 7종
-    /// none:1409(대다수 미지정) center:51 left:8 right:6 top:3 topright:1 bottomright:1). "none"이면
-    /// 박스가 텍스트 origin 을 그대로 따름(WE 기본). **파스·보존만** — opaqueBackground 와 동형으로
-    /// 렌더 소비(배경박스 앵커 오프셋 적용)는 최소구현 정책 밖(실가시 임팩트 낮음, 필요 시 이 필드로 후속).
+    /// F4-polish①: `anchor`(에디터 "Anchor"). 기본 `"none"` = 변환 없음 — 디스크립터 타입 5 enum ·
+    /// 멤버 `+0x550`(`0x14025a070`) · 생성자 `0x140256c99` `mov byte [rdi+0x550], 0`, 그리고 enum
+    /// 테이블 `0x1404e9b40` 의 0 번이 `"none"`(문자열 등록 `0x14025a22b`, 값 스토어 `0x14025a247`
+    /// `mov byte [0x1404e9b60], 0`)이고 1 번이 `"center"`(값 1 — `0x14025a27f`)다.
+    /// 도달(범위 라벨, `spec/corpus/scene-schema.json` 워크샵 162씬): **1,429 / 1,597**, 값 7종 —
+    /// none 1,361 · center 50 · left 8 · right 5 · top 3 · bottomright 1 · topright 1.
+    /// 설치본 186씬 5/5(none 3 · topright 2) · 리포 동봉 172씬 3/3 전건 `"none"`.
+    ///
+    /// **주의 — 종전 주석의 "배경 박스 앵커" 는 틀렸다.** 실물의 앵커 소비는 텍스트 오브젝트의
+    /// **가상 함수**(vtable `0x140491950` 의 슬롯 `0x1404919f8`, 본체 `0x1402585c0`–`0x1402588fc`)이고,
+    /// `[this+0x550]` 로 0…9 점프테이블(`0x1402588d4`)을 타서 **인자로 받은 4×4 행렬의 평행이동 행**
+    /// (`movups [rdx+0x30]` @`0x140258633`)에 basis×오프셋을 더한다 — 즉 배경 박스가 아니라
+    /// **레이어 모델 행렬 전체**가 화면 가장자리로 스냅된다. Waple 은 여전히 **파스·보존만** 한다.
     public var anchor: String = "none"
-    /// F4-polish①: 배경 박스 패딩(에디터 "Padding" — 실측 padding:1642 전건, **혼합 타입**: 단일
-    /// 스칼라(정수/실수, 1459건, 예 `32`)와 "x y" 벡터 문자열(168건, 예 `"32.00000 32.00000"`) 둘 다
-    /// 저작됨 — 스칼라는 양축 동일값으로 확장. 기본 (0,0) = 무패딩(무회귀). 파스·보존만(anchor 와 동일 정책).
-    public var padding: Vec2 = Vec2(x: 0, y: 0)
-    /// F4-polish①: 배경 박스 밝기(에디터 "Background Brightness" — 실측 backgroundbrightness:1474/1642,
-    /// 관측값 전건 1.0·170건 부재). 기본 1 = 원색 그대로(부재 시 0 이면 검정 박스로 오염되는 잠재
-    /// 함정이라 1 로 폴백). 파스·보존만(anchor/padding 과 동일 정책).
+    /// F4-polish①: `padding`(에디터 "Padding") — 디스크립터 타입 1(vec2) · 멤버 `+0x4e8`
+    /// (`0x14025942d`/`0x140259446`). **기본값 (32, 32)** — 생성자 `0x140256bbf`/`0x140256bc9`
+    /// 가 두 성분에 `0x42000000`(=32.0)을 심는다. 종전 `(0,0)` 은 근거 없는 값이었다.
+    ///
+    /// 저작 형태는 **혼합**이다(워크샵 정본 코퍼스 1,597 오브젝트 전건 저작: 스칼라 int 1,426 +
+    /// `"x y"` 문자열 171). 실물 vec2 주입기 `0x1401a3fc0` 이 그 둘을 태그로 가른다 —
+    /// 태그 1/2/3(숫자)은 `asFloat`(`0x140086220`) 한 값을 **양축 브로드캐스트**
+    /// (`0x1401a40a4`/`0x1401a40aa`), 태그 4(문자열)는 양축을 0 으로 깔고 `strtod` 로 x, **스페이스**
+    /// 뒤에만 y. 그 밖의 태그는 멤버를 안 건드려 위 생성자 값이 남는다 — `uniformVec2` 가 nil 을
+    /// 주는 자리에서 `(32,32)` 로 폴백하는 것이 그 규약과 1:1 이다.
+    ///
+    /// 실물 소비(Waple 미구현): 글리프 쿼드 오프셋 `0x140257d70`–`0x14025804d` 이
+    /// `[this+0x320] > 0 || ([this+0x304] & 0x10) || ([this+0x594] & 2 = opaquebackground)`
+    /// 셋 중 하나가 참일 때만 유효하게 하고(`0x140257e0d`–`0x140257e1f`), 각 축을 **512 로 클램프**
+    /// (`minss 512.0` @`0x140257e43`–`0x140257e62`). 게이트가 다 거짓이면 0 이다.
+    /// 그래서 기본값 교체로 **그림이 바뀌는 씬은 0건**이다(도달: 동봉 3/3 · 설치본 5/5 · 워크샵
+    /// 1597/1597 전건 `padding` 명시 — 기본값에 의존하는 오브젝트가 하나도 없다).
+    public var padding: Vec2 = Vec2(x: 32, y: 32)
+    /// F4-polish①: `backgroundbrightness`(에디터 "Background Brightness") — 디스크립터 타입 4(float) ·
+    /// 멤버 `+0x4dc`(`0x140258d72`/`0x140258d80`). **기본 1.0** 은 이번에 생성자에서 확인했다 —
+    /// `0x140256be8` `mov dword [rdi+0x4dc], 0x3f800000`. (부재 시 0 이면 소비부에서 검정 박스가 되는
+    /// 잠재 함정이라 종전에 1 로 폴백해 둔 것이 실물과도 맞았다.)
+    /// 도달(범위 라벨): 워크샵 정본 코퍼스 `spec/corpus/scene-schema.json` 1,424 / 1,597(전건 값 1.0) ·
+    /// 설치본 186씬 2 / 5 · 리포 동봉 172씬 0 / 3. 실물 소비는 배경 쿼드 색에 곱해지는 **배수**다 —
+    /// `0x1402582b4` 가 `xmm3 = [rbx+0x4dc]`(brightness)를 잡고, `rg` 는 `0x1402582d9`
+    /// `mulps xmm0, xmm3`(`xmm0 = movsd [rbx+0x4d0]` = bgcolor.rg), `b` 는 `0x1402582cd`
+    /// `mulss xmm2, [rbx+0x4d8]`(= bgcolor.b) 로 곱해 오브젝트 색 슬롯 `+0x124`/`+0x12c` 에 쓴다
+    /// (`0x1402582dc`/`0x1402582e4`). Waple 은 배경 쿼드 자체가 없어 파스·보존만.
     public var backgroundBrightness: Float = 1
 }
 
@@ -2176,7 +2225,10 @@ extension SceneDocument {
             parent: intVal(obj["parent"]),
             text: plain, script: script, scriptProps: scriptProps,
             font: (obj["font"] as? String) ?? "systemfont_arial",
-            pointSize: float(obj["pointsize"]) ?? 16,
+            // 기본 32.0 — WE 텍스트 오브젝트 생성자 `0x140256bf2`(`mov dword [rdi+0x4e0], 0x42000000`).
+            // 종전 16 은 근거 없는 값이었다(선언부 주석의 VA 체인 참조). 300 DPI 배율은 래스터가
+            // 한 번만 곱하므로 이 32 는 **포인트** 값 그대로다(이중 적용 아님).
+            pointSize: float(obj["pointsize"]) ?? 32,
             color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
             alpha: float(obj["alpha"]) ?? 1,
             horizontalAlign: (obj["horizontalalign"] as? String) ?? "center",
@@ -2236,12 +2288,14 @@ extension SceneDocument {
         // C⑨: 아웃라인/배경 박스 파스·보존(실측 스키마: outlinecolor/backgroundcolor 는 "r g b" 벡터).
         t.outline = weBool(obj["outline"])
         t.outlineColor = vec3(obj["outlinecolor"]) ?? Vec3(x: 0, y: 0, z: 0)
-        t.outlineThickness = float(obj["outlinethickness"]) ?? 0
+        // 기본 4.0 — WE 생성자 `0x140256c43`(선언부 주석). 소비는 outline 켜질 때만 max(값,1.0).
+        t.outlineThickness = float(obj["outlinethickness"]) ?? 4
         t.opaqueBackground = weBool(obj["opaquebackground"])
         t.backgroundColor = vec3(obj["backgroundcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         // F4-polish①: anchor/padding/backgroundbrightness — 파스·보존만(SceneTextLayer 필드 주석 참조).
         t.anchor = (obj["anchor"] as? String) ?? "none"
-        t.padding = uniformVec2(obj["padding"]) ?? Vec2(x: 0, y: 0)
+        // 기본 (32,32) — WE 생성자 `0x140256bbf`/`0x140256bc9`(선언부 주석의 주입기 규약 참조).
+        t.padding = uniformVec2(obj["padding"]) ?? Vec2(x: 32, y: 32)
         t.backgroundBrightness = float(obj["backgroundbrightness"]) ?? 1
         return t
     }
@@ -3241,7 +3295,20 @@ extension SceneDocument {
         let f = floats(v); return f.count >= 2 ? Vec2(x: f[0], y: f[1]) : nil
     }
     /// F4-polish①: 스칼라(단일 숫자, `float()` 경유) 또는 "x y" 벡터 문자열(`vec2()` 경유) 둘 다 저작되는
-    /// 필드(실측: text.padding — 정수/실수 스칼라 1459건 + "x y" 168건). 스칼라는 양축 동일값으로 확장.
+    /// 필드. 스칼라는 양축 동일값으로 확장.
+    ///
+    /// **범위 라벨을 붙인 실측**(`spec/corpus/scene-schema.json`, 워크샵 162씬 스캔의 정본):
+    /// `text.padding` 은 텍스트 오브젝트 **1,597건 전수 저작**이고 형태는 **정수 스칼라 1,426 +
+    /// `"x y"` 문자열 171**. `text.spacing` 은 13씬 171건이고 전건 `"0.00000 0.00000"` 문자열이다
+    /// (같은 저작 도구가 두 키를 함께 내보내서 171 이 겹친다). 설치본 186씬·리포 동봉 172씬에서는
+    /// `padding` 이 각각 5/5·3/3 전건 **정수 스칼라 `0`** 이고 `spacing` 은 0건이다.
+    /// (종전 이 주석의 "1459 + 168" 은 1,642 총계를 쓰던 옛 스캔 값이라 위 정본과 어긋났다.)
+    ///
+    /// **실물 대응**(vec2 주입기 `0x1401a3fc0`): 태그 1/2/3 = `asFloat` 양축 브로드캐스트
+    /// (`0x1401a40a4`/`0x1401a40aa`) · 태그 4 = 양축 0 으로 깔고 `strtod` 로 x, **스페이스 뒤에만** y
+    /// (`0x1401a4025`–`0x1401a408b`) · 그 외 태그 = 멤버 미변경(호출부 기본값 유지).
+    /// **[미해결]** 1-토큰 문자열(`"3"`)은 실물이 `(3, 0)` 인데 여기선 `(3, 3)` 이 된다 —
+    /// 세 코퍼스 전부 도달 0 이라 맞추지 않았다(`SceneTextLayer.spacing` 주석과 같은 판단).
     private static func uniformVec2(_ v: Any?) -> Vec2? {
         if let v2 = vec2(v) { return v2 }
         if let s = float(v) { return Vec2(x: s, y: s) }

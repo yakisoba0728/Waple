@@ -26,14 +26,14 @@
 
 | # | 항목 | WE 실물 | Waple 현재 | 근거 |
 |---|---|---|---|---|
-| 1 | `pointsize` 기본값 | **32.0** (생성자 `0x140256bf2`) | `?? 16` — `SceneDocument.swift:2179` | §4.3 |
-| 2 | `pointsize` 상한 | **256 pt** 로 클램프(`0x1401b054a`) · 하한 1 pt(`0x1401b055b`) | `maxPointSize = 8192` — `TextRasterizer.swift:12` | §3.4 |
-| 3 | 300 DPI 환산 | `FT_Set_Char_Size(face, 0, pt*64, 300, 300)` — `0x1401ad1f2` | `weRenderDPI = 300` — `TextRasterizer.swift:17` — **일치**(이번에 바이너리 근거 확보) | §3.4 |
+| 1 | `pointsize` 기본값 | **32.0** (생성자 `0x140256bf2`) | ~~`?? 16`~~ → **`?? 32`** (2026-08-21 반영, `parseText`) | §4.3 · §4.5 |
+| 2 | `pointsize` 상한 | **256 pt** 로 클램프(`0x1401b054a`) · 하한 1 pt(`0x1401b055b`) | `maxPointSize = 8192`(`TextRasterizer`) — **거부**이지 클램프가 아니다. 도달 0 이라 미반영(§10.1c·§11 G2, 근거는 그 상수 주석에 기록) | §3.4 |
+| 3 | 300 DPI 환산 | `FT_Set_Char_Size(face, 0, (int)(pt*64), 300, 300)` — `0x1401ad1d4`/`0x1401ad1dc`/`0x1401ad1e5`/`0x1401ad1f2` | `weRenderDPI = 300`(`TextRasterizer`) — **일치**, 배율은 양쪽 다 **한 번만** 적용(이중 적용 아님) | §3.4 · §4.5⑤ |
 | 4 | `spacing` 소비 | vec2 = **(자간 px, 행간 추가 px)** — `0x1401b1194` · `0x1401b0c04` | 파스만(`:2227`), 래스터에 **미적용** | §7.3 |
-| 5 | `padding` 기본값 | **(32, 32)** (생성자 `0x140256bbf`) · 각 축 **512 클램프**(`0x1402581d1`) | `?? Vec2(0,0)` — `:2244`, 클램프 없음 | §4.3 · §8 |
-| 6 | `outlinethickness` 기본값 | **4.0** (`0x140256c43`), 켜지면 **max(값, 1.0)** (`0x1402574ec`) | `?? 0` — `:2239` | §4.3 · §6.2 |
+| 5 | `padding` 기본값 | **(32, 32)** (생성자 `0x140256bbf`/`0x140256bc9`) · 각 축 **512 클램프**(`0x140257e43`) | ~~`?? Vec2(0,0)`~~ → **`?? Vec2(32,32)`** (반영). 클램프는 소비처가 없어 미반영 | §4.3 · §4.5 · §8 |
+| 6 | `outlinethickness` 기본값 | **4.0** (`0x140256c43`), 켜지면 **max(값, 1.0)** (`0x1402574e4`–`0x1402574fc`) | ~~`?? 0`~~ → **`?? 4`** (반영) | §4.3 · §4.5 · §6.2 |
 | 7 | `msdf` · `blur` · `blursize` · `dropshadow` · `dropshadowsize` · `dropshadowopacity` · `dropshadowcolor` · `dropshadowoffset` | **8키 모두 등록·소비**(`+0x518` bit0/2/3, `+0x530`/`0x534`/`0x538`/`0x544`/`0x53c`) | **파스 자체가 없다** | §4.2 · §6 |
-| 8 | outline 렌더 | MSDF 셰이더 `OUTLINE_ENABLED` 콤보로 실제 그린다 | **파스·보존만.** `SceneDocument.swift:434` 주석이 "래스터 소비는 outline 만 최소 구현(TextRasterizer 참조)" 라 적었으나 `TextRasterizer.swift` 에 outline 코드가 **없다** — 주석이 낡았다 | §6.4 · §11 |
+| 8 | outline 렌더 | MSDF 셰이더 `OUTLINE_ENABLED` 콤보로 실제 그린다 | **파스·보존만.** 종전 `SceneTextLayer.outline` 선언부 주석이 "래스터 소비는 outline 만 최소 구현(TextRasterizer 참조)" 라 적었으나 `TextRasterizer.swift` 에 `outline`/`stroke` 문자열이 **0건**이었다 — **2026-08-21 주석 정정 완료**(렌더는 여전히 미구현) | §6.4 · §11 G7 |
 | 9 | `opaquebackground` 배경 박스 | `materials/fonts/fontbackground{,_depth}.json`(`flat` 셰이더)로 **별도 쿼드**를 그린다 — `0x140258326` | 파스만 | §8 |
 | 10 | 워드랩 알고리즘 | **글리프(HarfBuzz 클러스터) 단위 그리디** — 폭 초과 시 그 자리에서 개행(`0x1401b1240`–`0x1401b1272`) | `CTTypesetterSuggestLineBreak`(UAX#14 **단어** 경계) — `TextRasterizer.swift:49` | §7.2 |
 | 11 | 수직 정렬 기준 | 폰트 **ascender/descender 메트릭**(`0x1402576b9`–`0x1402577c4`) | 래스터 박스(ascent+descent+leading 의 ceil) — `TextRasterizer.swift:104` | §7.5 |
@@ -48,6 +48,10 @@
 **동봉 코퍼스**: 설치본 `wallpaper_engine/` 전체의 씬 문서 `scene.json` 184 + `gifscene.json` 2
 = **186개**(`docs/re/scene-object-model.md` §1 과 동일 정의). 그중 텍스트 오브젝트를 가진 것은
 **4씬 · 5오브젝트**(§10.1).
+
+**리포 동봉 코퍼스**: 저장소 사본 `Sources/WapleRender/Resources/WEAssets/` 는 설치본의 **부분집합**
+이라 씬 문서가 **172개**이고 텍스트는 **3씬 · 3오브젝트**(전건 preview)다 — §10.1b. 두 수치를
+섞어 쓰지 마라. 이 문서에서 라벨 없는 "동봉" 은 **설치본 186** 을 뜻한다(§10.1).
 
 **워크샵 코퍼스**: 이 머신에는 워크샵 트리가 없다(`scripts/spec/measure_corpus.py` 의 `WE_WORKSHOP`
 기본값은 Windows 경로다). 대신 리포에 정본화되어 있는 `spec/corpus/scene-schema.json`
@@ -258,8 +262,8 @@ HarfBuzz 를 정적 링크했다(`hb_shape_plan_create2` 등 심볼 문자열이
 | 2 | `font` | `0x14025a1a5` | 5 str | `+0x490` | **`"systemfont_arial"`** | 4 | 5 | 1597 | `:2178` — 기본값 일치 |
 | 3 | `backgroundcolor` | `0x140259295` | 2 vec3 | `+0x4d0` | `(0,0,0)` | 4 | 5 | 1426 | `:2241` |
 | 4 | `backgroundbrightness` | `0x140258d66` | 4 float | `+0x4dc` | **`1.0`** | 1 | 2 | 1424 | `:2245` |
-| 5 | `pointsize` | `0x14025935f` | 4 float | `+0x4e0` | **`32.0`** | 4 | 5 | 1597 | `:2179` (**16**) |
-| 6 | `padding` | `0x14025941d` | 1 vec2 | `+0x4e8` | **`(32,32)`** | 4 | 5 | 1597 | `:2244` (**(0,0)**) |
+| 5 | `pointsize` | `0x14025935f` | 4 float | `+0x4e0` | **`32.0`** | 4 | 5 | 1597 | `parseText` — **32**(반영) |
+| 6 | `padding` | `0x14025941d` | 1 vec2 | `+0x4e8` | **`(32,32)`** | 4 | 5 | 1597 | `parseText` — **(32,32)**(반영) |
 | 7 | `spacing` | `0x1402594f0` | 1 vec2 | `+0x4f8` | `(0,0)` | 0 | 0 | 171 | `:2227` 파스만 |
 | 8 | `maxwidth` | `0x1402595ab` | 4 float | `+0x508` | **`500.0`** | 1 | 2 | 1594 | `:2200` |
 | 9 | `maxrows` | `0x140259669` | 0 int | `+0x510` | **`1`** | 1 | 2 | 1594 | `:2201` |
@@ -267,7 +271,7 @@ HarfBuzz 를 정적 링크했다(`hb_shape_plan_create2` 등 심볼 문자열이
 | 11 | `outline` | `0x1402597df` | 6 bool | `+0x518` **bit1** | `false` | 0 | 0 | 3 | `:2237` |
 | 12 | `blur` | `0x140259886` | 6 bool | `+0x518` **bit2** | `false` | 0 | 0 | 0 | **없음** |
 | 13 | `dropshadow` | `0x14025993c` | 6 bool | `+0x518` **bit3** | `false` | 0 | 0 | 0 | **없음** |
-| 14 | `outlinethickness` | `0x1402599e4` | 4 float | `+0x520` | **`4.0`** | 0 | 0 | 3 | `:2239` (**0**) |
+| 14 | `outlinethickness` | `0x1402599e4` | 4 float | `+0x520` | **`4.0`** | 0 | 0 | 3 | `parseText` — **4**(반영) |
 | 15 | `outlinecolor` | `0x140259a74` | 2 vec3 | `+0x524` | `(0,0,0)` | 0 | 0 | 3 | `:2238` |
 | 16 | `blursize` | `0x140259b0e` | 4 float | `+0x530` | **`6.0`** | 0 | 0 | 0 | **없음** |
 | 17 | `dropshadowsize` | `0x140259ba2` | 4 float | `+0x534` | **`6.0`** | 0 | 0 | 0 | **없음** |
@@ -319,6 +323,62 @@ HarfBuzz 를 정적 링크했다(`hb_shape_plan_create2` 등 심볼 문자열이
 0x140256cf2  mov dword ptr [rdi + 0x594], 1             ; [미해결] bit0
 0x140256d06  mov dword ptr [rdi + 0x59c], 0x01010101    ; halign=1 valign=1 (+섀도 2바이트)
 ```
+
+### 4.5 기본값의 **유일한 출처**가 생성자라는 것 — 독립 재확인 (2026-08-21, 레인 E)
+
+§4.3 의 세 값(`pointsize` 32.0 · `padding` (32,32) · `outlinethickness` 4.0)을 남의 표를 베끼지 않고
+바이너리에서 다시 떴다. 절차와 결과는 이렇다.
+
+**① 문자열 xref 전수** — `"pointsize"` `0x1404917e8` · `"padding"` `0x140491870` ·
+`"outlinethickness"` `0x1404918e8`. ASCII 와 **UTF-16LE 를 둘 다** 훑었고 UTF-16LE 는 셋 다 **0건**.
+`.text` 전 구간에서 disp32 를 0…4바이트 꼬리까지 열어 스캔한 결과, 세 키의 코드 참조는
+**전부 디스크립터 등록자 `0x140258ca0`–`0x14025a713` 안에만** 있다(`padding` 은 바깥 히트가 2건
+나왔는데 하나는 `"nopadding"` 의 부분 문자열 `0x140490bea`, 다른 하나 `0x1403dba83` 은 `jmp` 의
+rel32 가 우연히 겹친 오탐이다 — 둘 다 이 키의 참조가 아니다). 즉 **`H_FLOAT 0x1401D7D30` /
+`H_INT 0x1401D7BE0` 류 리플렉션 바인더의 "기본값 인자" 경로는 텍스트 레이어에 없다.**
+
+**② 디스크립터에는 기본값 칸이 없다** — 등록 블록이 쓰는 것은 `+0x30`(타입) · `+0x34`(멤버 오프셋) ·
+`+0x38/+0x40/+0x48/+0x50/+0x58`(람다) · `+0x68`(키 문자열)뿐이다. 직접 읽은 값:
+
+| 키 | 문자열 대입 | 길이 인자 | `[desc+0x34]` | `[desc+0x30]` |
+|---|---|---:|---|---|
+| `pointsize` | `0x140259352` | `mov r8d, 9` | `0x4e0` (`0x140259396`) | `4`=float (`0x14025939d`) |
+| `padding` | `0x140259410` | `mov r8d, 7` | `0x4e8` (`0x14025942d`) | `1`=vec2 (`0x140259446`) |
+| `outlinethickness` | `0x1402599d7` | `mov r8d, 0x10` | `0x520` (`0x1402599fa`) | `4`=float (`0x140259a09`) |
+
+> **함정 16 실사례**: `dropshadow` 블록 한가운데(`0x140259957`)에 *다음* 항목인
+> `"outlinethickness"` 의 `lea` 가 끼어 있다. 순진하게 "가장 가까운 `lea`" 로 짝지으면 한 칸 밀린다.
+> 위 표는 `mov r8d, len` 의 **길이**로 짝을 검증했다(9/7/16 = 각 키의 실제 길이).
+
+**③ 값을 심는 곳은 생성자 하나뿐이고, 그 생성자가 씬 텍스트 오브젝트의 것이 맞다** —
+`0x140256ae0`–`0x140256d16` 의 유일한 호출자는 `0x140190364` 이고, 그 자리는 오브젝트 팩토리
+`0x14018ff60`–`0x1401909b1` 의 `find(obj,"text")` 분기다(`0x140190343` find → `0x14019034d`
+`mov ecx, 0x5d0` = 오브젝트 크기 → `0x140190364` call). 생성자가 쓰는 값:
+`0x140256bf2` `[rdi+0x4e0] = 0x42000000`(32.0) · `0x140256bbf`/`0x140256bc9`
+`[rdi+0x4e8]`/`[rdi+0x4ec] = 0x42000000` · `0x140256c43` `[rdi+0x520] = 0x40800000`(4.0).
+
+**④-a bool 도 같은 구조다(교차 검증)** — `opaquebackground` 의 bool 세터 `0x14019b4e0` 은
+`cmp byte [v+8], 5` 로 태그를 확인하고 그때만 `asBool`(`0x140086300`) 결과로 `[this+0x594]` 의
+**bit1**(마스크 `0x2` — `or ecx,2` / `and r8d,~2` @`0x14019b516`–`0x14019b51a`)을 세우거나 지운다.
+태그가 5 가 아니면 스토어 블록을 통째로 건너뛴다. 이것이 §8(a) 의 패딩 게이트
+`[this+0x594] & 2` 가 `opaquebackground` 라는 것의 **직접 근거**다(종전엔 배경 쿼드 경로에서
+같은 마스크를 쓴다는 정황 근거뿐이었다).
+
+**④ 주입기의 실패 분기가 생성자 값을 남긴다(함정 15)** — float 주입기 `0x1401a4b00` 은
+Json 태그 1/2/3 일 때만 `asFloat`(`0x140086220`) → `movss [member]`; 태그 7(오브젝트)이면
+`find("value")` 로 한 번 더 들어가고, **그 밖의 태그(문자열 포함)는 스토어 자체를 건너뛴다**.
+vec2 주입기 `0x1401a3fc0` 도 같은 구조다(태그 1/2/3 브로드캐스트 · 태그 4 `"x y"` 파스 ·
+그 외 무시). 그래서 "키가 없다" 와 "키가 있지만 타입이 다르다" 가 **둘 다 생성자 기본값**으로
+수렴한다 — Waple 의 `float(...) ?? 32` / `uniformVec2(...) ?? Vec2(32,32)` 폴백과 1:1 이다.
+
+**⑤ DPI 이중 적용이 아니다** — `pointsize` 는 `+0x4e0` 에서 **스케일 없이** FontKey`+0x0c` 로
+들어가고(`0x140257443` `movss xmm0,[rbx+0x4e0]` → `0x140257461` `movss [rbp-0x5d],xmm0`),
+`clamp(1,256)` 뒤 `FT_Set_Char_Size(face, 0, (int)(pt*64), 300, 300)` 로 간다(§3.4).
+FreeType 규약상 그 인자는 1/64 **포인트**이므로 실효 픽셀 = pt × 300/72 이고, 배율은 **한 번만**
+곱해진다. Waple 의 `TextRasterizer.render` 도 `pointSize * weRenderDPI / 72` 를 한 번만 곱하므로
+16 → 32 는 배율 문제가 아니라 **순수한 기본값 오류**였다.
+
+---
 
 ### 4.4 enum 값표
 
@@ -739,8 +799,10 @@ if (layout.minX < 0) padX −= layout.minX
 ```
 0x1402580eb  test byte ptr [rcx + 0x594], 2     ; opaquebackground 아니면 배경 안 그림
 0x1402581b7  movss xmm0, 512.0                  ; 같은 512 클램프
+0x1402582b4  movss  xmm3, [rbx + 0x4dc]         ; backgroundbrightness (else xmm13 @0x1402582be)
 0x1402582c2  movsd  xmm0, [rbx + 0x4d0]         ; backgroundcolor.rg
-0x1402582cd  mulss  xmm2, [rbx + 0x4d8]         ; * backgroundbrightness
+0x1402582cd  mulss  xmm2(=brightness), [rbx + 0x4d8]  ; b  * backgroundbrightness
+0x1402582d9  mulps  xmm0, xmm3(broadcast)       ; rg * backgroundbrightness
 0x1402582dc  movsd  [rax + 0x124], xmm0         ; 오브젝트 색상 슬롯 = bgcolor * bgbrightness
 0x140258326  lea rdx, "materials/fonts/fontbackground.json"
 0x14025831f  lea r8,  "materials/fonts/fontbackground_depth.json"
@@ -791,9 +853,12 @@ if (layout.minX < 0) padX −= layout.minX
 
 ## 10. 도달 실측
 
-### 10.1 동봉 코퍼스 (186 씬 전수, 2026-08-21 측정)
+### 10.1 설치본 코퍼스 (`wallpaper_engine/` 186 씬 전수, 2026-08-21 측정)
 
-텍스트 오브젝트가 있는 씬 **4개**, 오브젝트 **5개**. preview 판정은
+텍스트 오브젝트가 있는 씬 **4개**, 오브젝트 **5개**. 오브젝트 판정은 Waple 의 팩토리 순서와
+같게 했다(`image`/`particle`/`sprite` 가 **문자열**이 아니고 `text` 가 non-null) — `image: null`
+을 든 preset 시계들이 여기서 빠지면 3오브젝트로 과소 집계된다(실제로 한 번 그렇게 셌다).
+preview 판정은
 `docs/re/scene-object-model.md` §1 규약(경로 세그먼트에 `preview`)을 그대로 쓴다.
 
 | 씬 | preview? | 텍스트 오브젝트 |
@@ -816,6 +881,37 @@ if (layout.minX < 0) padX −= layout.minX
 `spacing` · `msdf` · `outline` · `blur` · `dropshadow` · `outlinethickness` · `outlinecolor` ·
 `blursize` · `dropshadowsize` · `dropshadowopacity` · `dropshadowcolor` · `dropshadowoffset`.
 즉 §4.2 의 29키 중 **17키가 동봉에 도달하고 12키는 도달 0** 이다.
+
+### 10.1b 리포 동봉 코퍼스 (`Sources/WapleRender/Resources/WEAssets/`, 172 씬 전수, 2026-08-21 측정)
+
+설치본과 **다른 범위**다(172 vs 186) — 라벨을 반드시 구분해서 읽어라. 텍스트 오브젝트는
+**3씬 · 3오브젝트**이고 **전건 preview**(non-preview 0)다.
+
+| 씬 | 텍스트 오브젝트 | `pointsize` | `padding` |
+|---|---:|---|---|
+| `presets/clock/previewclock/scene.json` | 1 | 24.0 | 0 |
+| `presets/clock/preview3dclock/scene.json` | 1 | 24.0 | 0 |
+| `presets/countdown/previewcountdown/scene.json` | 1 | 24.0 | 0 |
+
+### 10.1c 기본값 3종의 **도달** — 세 범위 전부 0 (2026-08-21 측정)
+
+"기본값에 의존하는(= 그 키를 생략한) 텍스트 오브젝트 수" 다. 이게 0 이면 기본값을 바꿔도
+**관측 가능한 변화가 없다**.
+
+| 키 | 리포 동봉 172씬 (텍스트 3) | 설치본 186씬 (텍스트 5) | 워크샵 정본 코퍼스 (텍스트 1,597) |
+|---|---:|---:|---:|
+| `pointsize` 생략 | **0** / 3 | **0** / 5 | **0** / 1,597 |
+| `padding` 생략 | **0** / 3 | **0** / 5 | **0** / 1,597 |
+| `outlinethickness` 생략 | 3 / 3 | 5 / 5 | 1,594 / 1,597 |
+
+`outlinethickness` 만 생략 도달이 있으나, 실물 소비가 `outline`(플래그 `+0x518` bit1) 게이트
+하에만 있고(`0x1402574df` `test cl,2`) 세 범위 전부 `outline` 이 **미저작 또는 false** 다
+(워크샵의 `outline:true` 3건은 `outlinethickness` 를 명시한다). 따라서 이 기본값 교체도
+**그림이 바뀌는 씬은 0건**이다 — 규약 정합만의 변경이다.
+
+워크샵 수치의 출처는 §10.2 와 같은 `spec/corpus/scene-schema.json` 이고 이번에 다시 읽었다
+(`text.pointsize.n = 1597`, `text.padding.n = 1597`, `text.outlinethickness.n = 3`,
+`scene.corpus.population.scenes = 162`).
 
 ### 10.2 워크샵 코퍼스 (`spec/corpus/scene-schema.json`, 162씬 · 텍스트 1,597 오브젝트 / 123씬)
 
@@ -858,22 +954,24 @@ if (layout.minX < 0) padX −= layout.minX
 
 | # | 갭 | 파일:줄 | 실물 | 착지 지점 제안 |
 |---:|---|---|---|---|
-| G1 | `pointsize` 기본 16 | `Sources/WapleCore/SceneDocument.swift:2179` (`parseText`) | **32.0** | `?? 32` 로 바꾼다. 동봉·워크샵 전건이 키를 갖고 있어(§10) **그림이 바뀌는 씬은 0건** — 규약 정합만의 변경이다 |
+| ~~G1~~ **닫힘** | `pointsize` 기본 16 | `SceneDocument.swift` `parseText` | **32.0** | **2026-08-21 반영** — `?? 32`. 세 범위 전건이 키를 갖고 있어(§10.1c) 그림이 바뀌는 씬 0건. 테스트 `SceneDocumentTests.testTextLayerDefaultsMatchEngineConstructor` 가 VA 와 함께 잠갔다 |
 | G2 | `pointSize` 상한 8192 | `Sources/WapleRender/TextRasterizer.swift:12` | **256 pt 클램프**(`0x1401b054a`), 하한 1 pt | `maxPointSize` 를 상한 클램프(reject 아님)로 바꾸고 256 으로. 워크샵 최대가 250.97 이라 도달 직전이다 |
 | G3 | `spacing` 미소비 | `SceneDocument.swift:2227` 는 파스, `TextRasterizer.render` 에 인자 없음 | 자간=어드밴스에 px 가산 · 행간=줄높이에 px 가산 | `render(...)` 에 `spacing: Vec2` 추가 → 자간은 `kCTKernAttributeName`(글리프별 가산이라 근사) 또는 CTRun 재배치, 행간은 `lineH + spacing.y`. 도달은 워크샵 171건이지만 **전건 (0,0)** 이라 회귀 위험 0 |
-| G4 | `padding` 기본·클램프 | `SceneDocument.swift:2244` | 기본 **(32,32)**, 축당 **512 클램프**, `opaquebackground` 등 게이트 하에서만 유효 | 기본값과 클램프를 맞춘다. 소비는 G6 과 함께 |
-| G5 | `outlinethickness` 기본·하한 | `SceneDocument.swift:2239` | 기본 **4.0**, outline 켜지면 `max(값,1.0)` | `?? 4` + 소비 시 `max(1.0)` |
+| ~~G4~~ **부분 닫힘** | `padding` 기본·클램프 | `SceneDocument.swift` `parseText` | 기본 **(32,32)**, 축당 **512 클램프**, `opaquebackground` 등 게이트 하에서만 유효 | **기본값만 반영**(`?? Vec2(32,32)`). 512 클램프는 **소비처가 없어 미반영** — 소비를 구현할 때 같이 넣어라(안 그러면 저장만 하는 값에 상한이 생겨 왕복이 깨진다) |
+| ~~G5~~ **부분 닫힘** | `outlinethickness` 기본·하한 | `SceneDocument.swift` `parseText` | 기본 **4.0**, outline 켜지면 `max(값,1.0)` | **기본값만 반영**(`?? 4`). `max(1.0)` 은 소비 시점 규칙이라 래스터 구현과 함께 |
 | G6 | 이펙트 8키 미파스 | `parseText` 전역 | `msdf`(`+0x518` bit0) · `blur`(bit2) · `dropshadow`(bit3) · `blursize` `+0x530`(기본 6) · `dropshadowsize` `+0x534`(기본 6) · `dropshadowopacity` `+0x538`(기본 1) · `dropshadowcolor` `+0x544` · `dropshadowoffset` `+0x53c`(기본 (4,4)) | `SceneTextLayer` 에 필드 8개 추가 + `parseText` 에 파스 8줄. 동봉·워크샵 도달 0 이라 **파스만으로는 그림이 안 바뀐다** — 갭을 문서화된 상태로 닫는 값싼 수 |
-| G7 | outline 렌더 미구현인데 주석은 구현했다고 말함 | `SceneDocument.swift:434` 주석 | 셰이더 `OUTLINE_ENABLED` 콤보 실재 | **주석을 먼저 고쳐라**(사실과 다르다). 구현한다면 `TextRasterizer` 에서 CoreText 스트로크(`kCTStrokeWidthAttributeName` 음수 = fill+stroke)로 근사하거나, 제대로 하려면 MSDF 파이프라인이 필요하다 |
+| ~~G7~~ **주석 닫힘** | outline 렌더 미구현인데 주석은 구현했다고 말함 | `SceneDocument.swift` `SceneTextLayer.outline` 선언부 | 셰이더 `OUTLINE_ENABLED` 콤보 실재 | **2026-08-21 주석 정정 완료**(렌더는 여전히 미구현). 구현한다면 `TextRasterizer` 에서 CoreText 스트로크(`kCTStrokeWidthAttributeName` 음수 = fill+stroke)로 근사하거나, 제대로 하려면 MSDF 파이프라인이 필요하다 |
 | G8 | 배경 박스 미구현 | 파스만(`:2240`, `:2241`, `:2245`) | `fontbackground.json`(`flat`) 쿼드, 색 = `backgroundcolor × backgroundbrightness`, 크기 = 잉크박스+패딩 | 텍스트 쿼드 앞에 단색 쿼드 하나. **동봉 5건은 전건 `false`**, 워크샵도 1,426건 중 `true` 4건뿐이라 우선순위 낮음 |
 | G9 | 워드랩 알고리즘 차이 | `TextRasterizer.swift:49` | 클러스터 단위 그리디(공백 앞에서만 회피) | UAX#14 단어 랩은 **더 예쁘지만 실물과 다르다.** 긴 단어가 있을 때 줄 수가 달라진다 → `maxrows` 잘림·말줄임 결과가 갈린다. 실물 재현이 목표면 `CTTypesetterSuggestClusterBreak` 로 바꾼다 |
 | G10 | 수직 정렬 기준 | `TextRasterizer.swift:104`(`lineH`) + `SceneRendererResources.swift:2374` 부근 | ascender/descender 메트릭 기반(§7.5) | `leading` 을 줄높이에서 빼고 ascender 기준으로 베이스라인을 잡으면 실물에 붙는다 |
 | G11 | 양쪽 정렬 방식 | `TextRasterizer.swift:85` `CTLineCreateJustifiedLine` | **공백 어드밴스만** 늘린다 | CoreText 는 글자 사이도 늘릴 수 있다. 공백 없는 행(CJK)에서 실물은 **아무 것도 안 하는데** Waple 은 늘린다 |
 | G12 | 폴백 체인 | 없음(CoreText 캐스케이드) | 8단 고정 순서, 인덱스 4(다섯 번째)가 **동봉 `fonts/TwemojiMozilla.ttf`** | 최소한 이모지만이라도 동봉 Twemoji 를 우선 등록하면 WE 와 같은 그림이 된다. `WEAssets/fonts/TwemojiMozilla.ttf` 가 이미 리포에 있다(바이트 동일 확인) |
-| G13 | `anchor` 의미 | `SceneDocument.swift:445` 주석 "배경 박스 앵커" | **레이어 모델 행렬 전체**에 화면 가장자리 오프셋 | 주석 정정 + 필요 시 `SceneRendererFrameEncoder` 의 텍스트 트랜스폼에 화면 사각형 기반 오프셋 |
+| ~~G13~~ **주석 닫힘** | `anchor` 의미 | `SceneDocument.swift` `SceneTextLayer.anchor` 선언부 | **레이어 모델 행렬 전체**에 화면 가장자리 오프셋(가상함수 `0x1402585c0`, vtable `0x140491950` 슬롯 `0x1404919f8`, 평행이동 행 `[rdx+0x30]` 갱신 `0x140258633`) | 주석 정정 + 필요 시 `SceneRendererFrameEncoder` 의 텍스트 트랜스폼에 화면 사각형 기반 오프셋 |
 | G14 | `systemfont_segoe`/`sansserif` | `TextRasterizer.swift:228` 이 둘 다 시스템 UI 폰트로 보냄 | `segoeui.ttf` / `micross.ttf`(Microsoft Sans Serif) | macOS 에 둘 다 없으니 현 동작이 합리적이다. **갭이 아니라 의도적 대체**로 주석에 못박기만 하면 된다 |
+| G15 | **텍스트 레이어의 `pointsize`/`font` 가 씬 스크립트에 배선되지 않는다** | `Sources/WapleRender/SceneRenderer.swift` `sceneScriptLayers(from:)` 의 `textLayers` 블록 | `ITextLayer.pointsize`/`font`(d.ts:1606·1611)는 디스크립터 실값 | `SceneScriptLayerDescriptor(...)` 에 `pointSize: text.pointSize, font: text.font` 를 넘긴다. 지금은 두 인자를 **아예 안 넘겨서** Swift 기본값(`TextScriptEngine.swift:35` 의 `pointSize: Float = 16`, `font: "systemfont_arial"`)이 그대로 들어가고, 그래서 모든 텍스트 레이어에서 `thisLayer.pointsize` 가 저작값과 무관하게 16 을 돌려준다. 기본 파스값이 32 로 바뀐 지금은 그 16 이 어느 쪽 규약도 아니다. `SceneScriptAPISurfaceTests` 는 디스크립터를 **직접** 만들어 검증하므로 이 배선 누락을 못 잡는다 |
 
-**우선순위 제안**: G1 · G5 · G4(기본값 3종, 각 1줄) → G7 · G13(주석 정정, 사실 오류) →
+**우선순위 제안**: ~~G1 · G5 · G4~~(기본값 3종 — 2026-08-21 반영) → ~~G7 · G13~~(주석 정정 완료) →
+**G15**(1줄, 실제 스크립트 값이 틀리는 버그) →
 G6(파스 8키) → G3(spacing 소비) → G9/G10/G11(레이아웃 정합) → G8/G12(렌더 확장).
 
 ---
@@ -900,6 +998,13 @@ G6(파스 8키) → G3(spacing 소비) → G9/G10/G11(레이아웃 정합) → G
 ### 확정 못 한 것 (`[미해결]`)
 
 * `+0x594` **bit0** 의 의미 — 생성자가 1 로 켜지만 등록된 5개 bool 중 어느 것도 아니다.
+  (이번에 `opaquebackground` = **bit1** 은 세터 마스크로 확정했다 — §4.5④-a. bit0 은 여전히 미상.)
+* **[E 레인 추가]** WE 오브젝트 팩토리의 `text` 분기는 `find(obj,"text") != null` 만 본다
+  (`0x140190343`–`0x14019034b`) — `image`/`light` 분기와 달리 **값의 태그를 확인하지 않는다**.
+  즉 `"text": null` 인 오브젝트도 실물은 텍스트로 만들고, Waple 은 `contentValue(...) != nil`
+  이라 만들지 않는다. **도달은 0 이다**(설치본 294 오브젝트 · 리포 동봉 203 오브젝트 전수에서
+  `"text": null` 0건)이므로 이번에 맞추지 않았다. 맞출 때는 빈 텍스트 레이어가 생기는 쪽이
+  실물이라는 점만 기억해라.
 * `FontKey+0x18`(해상도 스케일 플래그)를 1 로 넣는 호출자 — 씬 텍스트 레이어는 항상 0 이다.
   UI/에디터 텍스트 경로로 **보이나** 확인 못 했다.
 * `scene+0x118 & 0x400` 과 `& 0x2000` 의 의미 — 전자는 텍스트/배경의 depth 머티리얼 선택을
