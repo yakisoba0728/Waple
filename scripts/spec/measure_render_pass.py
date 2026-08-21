@@ -384,6 +384,33 @@ def main():
 
         specfmt.entry("engine.renderPass.symbolRefs", sym_fn, "확정", [ev_bin, ev_script]),
 
+        # 이 문서의 여러 엔트리가 담는 주소가 **명령 주소가 아니라는 것**을 정본 안에 못박는다.
+        # 2026-08-21 에 `scripts/re/va_citations.py` 전수 대조가 이 파일에서만 113건을 "명령 경계
+        # 아님" 으로 뽑았는데, 전부 아래 세 스캐너의 산출물이었다 — 값은 정확하고 **이름이** 뜻을
+        # 숨기고 있었다.
+        specfmt.entry("engine.renderPass.addressSemantics",
+                      {"경고": "이 문서의 주소 상당수는 **명령 주소가 아니다.** 바이트 스캐너가 찾은 "
+                               "필드 위치다. 그대로 디스어셈블하면 명령 경계가 어긋난다.",
+                       "symbolRefs.refs[].at": "[VA-스캐너위치] `rip_refs` 산출 — `lea reg,[rip+d]` 류의 "
+                                               "**disp32 필드 위치**다. `lea` 라면 명령 주소는 대개 `at − 3` "
+                                               "이지만 프리픽스 길이가 달라질 수 있어 추측하지 않는다.",
+                       "fieldUseOrder[].at · sitesInFrameFn[] · ccsimpleAfterBloom 의 *UseAt":
+                           "[VA-스캐너위치] `disp32_sites` 산출 — 구조체 필드 오프셋(예 0x3158)이 u32 로 "
+                           "박힌 **변위 필드 위치**다. `mov rcx,[rsi+0x3158]` 이면 명령 주소는 `at − 3`.",
+                       "d3d11Slots.*.sites[].at": "[VA-스캐너위치] `indirect_sites` 산출 — `FF /2`(call)·"
+                                                  "`FF /4`(tail jmp)의 **opcode 바이트 위치**다. "
+                                                  "**REX 프리픽스가 붙으면 명령 시작이 한 바이트 앞**이다"
+                                                  "(r8–r15 를 쓰는 간접 호출 `41 ff 92 …`). 실측으로 세 자리가 "
+                                                  "그렇다: 0x14009b945 · 0x14009b96a · 0x1400d33fd.",
+                       "왜 이대로 두나": "이 스캐너들은 표준 라이브러리만 쓴다 — 디스어셈블러 의존을 "
+                                         "만들지 않는 것이 `scripts/re` 의 규약이다. 값 자체는 정확하다"
+                                         "(disp32 위치는 disp32 위치다). 정확한 **명령** 주소가 필요하면 "
+                                         "`scripts/re/va_citations.py` 가 찍어 준다 — 그쪽은 capstone 을 쓴다.",
+                       "다음 재생성 때 할 일": "`indirect_sites` 가 `FF` 앞 바이트를 보고 REX(0x40..0x4f)면 "
+                                               "`i-1` 을 기록하도록 고칠 것. 지금 고치면 정본(재생성 불가 — "
+                                               "Windows SDK 필요)과 생성기가 갈리므로 **고칠 자리만 적어 둔다**."},
+                      "확정", [ev_bin, ev_script]),
+
         specfmt.entry("engine.renderPass.frameObjectFields",
                       {hex(k): v for k, v in sorted(FIELDS.items())},
                       "확정", [ev_dec, ev_bin]),
