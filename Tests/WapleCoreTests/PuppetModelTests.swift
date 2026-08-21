@@ -267,6 +267,11 @@ final class PuppetModelTests: XCTestCase {
         let pm = try XCTUnwrap(PuppetModel.parse(d))
         XCTAssertEqual(pm.bones.count, 2)
         XCTAssertEqual(pm.animations.count, 1)
+        guard pm.animations.count == 1 else {
+            // 회귀하면 아래 인덱싱이 `Index out of range` 로 **러너를 죽여** 나머지 테스트를
+            // 통째로 가린다(2026-08-21 돌연변이 검증에서 실제로 당했다). 단언으로 끝낸다.
+            return XCTFail("애니 1개가 파스돼야 한다 — 실제 \(pm.animations.count)개")
+        }
         XCTAssertEqual(pm.animations[0].name, "knight|idle_bone")
         XCTAssertEqual(pm.animations[0].mode, "loop")
         XCTAssertEqual(pm.animations[0].fps, 24)

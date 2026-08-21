@@ -167,16 +167,35 @@ def parse_mdla(data, magic_off, bone_count):
                                          0x140263c74 shr rdx,5 = /36 · 0x140263c83 inc ecx =
                                          frameCount+1 · 0x140263c85 cmp → 0x140263c8c int 0x29)
 
-    **Waple 은 앞의 하나만 본다**(`Model3D.swift:759` `tsRaw % 36 == 0`) — 뒤의
-    `frameCount + 1` 관계는 어디에서도 검사하지 않는다. 그것이 이 측정의 이유다.
+    **Waple 은 앞의 하나만 본다**(`Sources/WapleCore/Model3D.swift` 의 `parseAnimations` 가
+    `tsRaw % 36 == 0` 만 건다) — 뒤의 `frameCount + 1` 관계는 어디에서도 검사하지 않는다.
+    그것이 이 측정의 이유다.
 
-    레이아웃은 `Sources/WapleCore/Model3D.swift` 의 `parseAnimations` 를 그대로 옮겼다
-    (그쪽이 워크샵 33 애니모델 전수로 검증된 모델이다):
+    레이아웃은 **엔진 프레이밍**이다(`docs/re/skeleton-animation.md` §6 ·
+    `Sources/WapleCore/Model3D.swift` 머리 주석. wallpaper64.exe 2.8.42 의 MDL 디코더를
+    `.pdata` 조각 시작에서 선형으로 뜬 것):
 
-        "MDLA000N" | u8 0 | u32 nextOff | u32 animCount | u32 baseId | u32 0
-        클립: cstring 이름 | cstring 모드 | f32 fps | u32 frameCount | u32 0 | u32 boneCount | u32 0
-              본별: u32 trackBytes | trackBytes | u32 blob2Bytes | blob2Bytes
-              가변 트레일러(32~39B) → 다음 클립 헤더를 ≤256B 앞에서 **리싱크**로 찾는다
+        "MDLA000N" | u8 0 | u32 nextOff(0x1402639a8) | u32 animCount(0x1402639b2)
+        클립: u64 id(0x1402639de → readU64 0x1402616b0)
+              | cstring 이름(0x1402639f8) | cstring 모드(0x140263a11)
+              | f32 fps(0x140263a1b) | u32 frameCount(0x140263a2d) | u32 flags(0x140263a3d)
+              | u32 boneCount(0x140263a4d)
+              본별: u32 trackFlags(0x140263aa7) | u32 trackBytes(0x140263acb) | trackBytes
+              가변 꼬리(버전 게이트 블록 + 이벤트 블록) → 다음 클립 헤더를 ≤256B 앞에서
+              **리싱크**로 찾는다
+
+    **[2026-08-21 정정]** 종전에는 헤더를 `… | u32 baseId | u32 0`, 클립을
+    `… | u32 boneCount | u32 0`, 본을 `u32 trackBytes | trackBytes | u32 blob2Bytes | blob2Bytes`
+    로 적고 있었다. 실은 ① `baseId | u32 0` 이 **클립 0 의 u64 id** 이고 ② 클립 헤더 끝의
+    `u32 0` 이 **본 0 의 trackFlags** 이고 ③ 본마다 읽던 "blob2Bytes" 가 **다음 본의 trackFlags**
+    였다. 실물에서 그 값들이 0 이라 위치가 우연히 맞았을 뿐이고, `trackFlags != 0` 인 본이
+    하나라도 있으면 그 클립부터 전부 어긋난다.
+
+    꼬리는 게이트가 전부 0 이고 이벤트가 없을 때 **MDLA0006 에서 35바이트**다
+    (v>=3 `u32 count` 4 + v>=3 `u8 gate` 1 + v>=4 `u8 gate` 1 + v>=5 `f32 x6` 24 +
+    v>=6 `u8 gate` 1 + 이벤트 `u32 count` 4). 그래도 리싱크를 쓰는 이유는 꼬리 앞쪽 두 트랙
+    배열의 **개수가 파일이 아니라 스켈레톤 객체**에서 오기 때문이다(0x140263ce7 · 0x140263e7b) —
+    파일만 보고는 못 센다.
     """
     def try_header(p):
         got = _cstring(data, p)
@@ -187,15 +206,17 @@ def parse_mdla(data, magic_off, bone_count):
         if not got or (got[0] and got[0] not in ANIM_MODES):
             return None
         mode, p3 = got
-        if p3 + 20 > len(data):
+        if p3 + 16 > len(data):
             return None
         fps = struct.unpack_from("<f", data, p3)[0]
         if not (0 < fps <= 240):
             return None
+        # p3: f32 fps | u32 frameCount | u32 flags | u32 boneCount — 넷이고 그 다음이 곧 본 0 의
+        # trackFlags 다(종전 코드는 여기에 u32 하나를 더 세어 `p3 + 20` 을 돌려줬다).
         frames, bc = struct.unpack_from("<I", data, p3 + 4)[0], struct.unpack_from("<I", data, p3 + 12)[0]
         if bc != bone_count:
             return None
-        return dict(name=name, mode=mode, fps=fps, frames=frames, bones=bc, off=p3 + 20)
+        return dict(name=name, mode=mode, fps=fps, frames=frames, bones=bc, off=p3 + 16)
 
     clips, bad = [], []
     p = magic_off + 9
@@ -209,14 +230,17 @@ def parse_mdla(data, magic_off, bone_count):
         p = h["off"]
         tracks, ok = [], True
         for bi in range(h["bones"]):
-            if p + 4 > len(data):
+            # 본 레코드 = u32 trackFlags | u32 trackBytes | trackBytes. trackFlags 는 크기가
+            # 아니라 플래그다(비트0 은 클립 flags 에 0x80000000 을 세우는 데만 쓰인다 —
+            # 0x140263c97 test r15b,1 → 0x140263c9d or [rbp+0xc0], 0x80000000).
+            if p + 8 > len(data):
                 ok = False
                 break
-            ts = struct.unpack_from("<I", data, p)[0]
-            if p + 4 + ts > len(data):
+            _flags, ts = struct.unpack_from("<II", data, p)
+            if p + 8 + ts > len(data):
                 ok = False
                 break
-            p += 4
+            p += 8
             if ts % 36:
                 bad.append({"clip": h["name"], "bone": bi, "trackBytes": ts,
                             "why": "36 의 배수가 아니다(나머지 %d)" % (ts % 36)})
@@ -224,14 +248,6 @@ def parse_mdla(data, magic_off, bone_count):
                 bad.append({"clip": h["name"], "bone": bi, "trackBytes": ts,
                             "why": "키 %d개인데 frameCount+1 = %d" % (ts // 36, h["frames"] + 1)})
             p += ts
-            if p + 4 > len(data):
-                ok = False
-                break
-            blob2 = struct.unpack_from("<I", data, p)[0]
-            if p + 4 + blob2 > len(data):
-                ok = False
-                break
-            p += 4 + blob2
             tracks.append(ts)
         if not ok or len(tracks) != h["bones"]:
             bad.append({"clip": h["name"], "bone": len(tracks), "trackBytes": None,
@@ -241,7 +257,7 @@ def parse_mdla(data, magic_off, bone_count):
                       "frames": h["frames"], "bones": h["bones"],
                       "keysPerTrack": (tracks[0] // 36) if tracks else 0})
         nxt = None
-        for d in range(257):               # 가변 트레일러 리싱크(Model3D.swift:779 와 동일 폭)
+        for d in range(257):               # 가변 꼬리 리싱크(Model3D.swift parseAnimations 와 동일 폭)
             if try_header(p + d) is not None:
                 nxt = p + d
                 break
@@ -527,6 +543,28 @@ def main():
                              "0x140263c85 cmp rdx,rcx → 0x140263c8c int 0x29 · "
                              "0x140263c8e test r8,r8 → 0x140263c95 int 0x29",
              "키 레이아웃": "36B = pos 3f | 오일러각 3f(라디안) | 스케일 3f",
+             "레코드 프레이밍": "클립 = `u64 id`(0x1402639de → readU64 0x1402616b0) | cstring 이름"
+                                "(0x1402639f8) | cstring 모드(0x140263a11) | f32 fps(0x140263a1b) | "
+                                "u32 frameCount(0x140263a2d) | u32 flags(0x140263a3d) | "
+                                "u32 boneCount(0x140263a4d) | 본별(`u32 trackFlags` 0x140263aa7 | "
+                                "`u32 trackBytes` 0x140263acb | 트랙 0x140263afe) | 꼬리. "
+                                "**trackFlags 는 크기가 아니라 플래그다** — 비트0 은 클립 flags 에 "
+                                "0x80000000 을 세우는 데만 쓰이고(0x140263c97 → 0x140263c9d) 키 해석을 "
+                                "바꾸지 않는다. [2026-08-21 정정] 종전 이 파일과 Model3D.swift 는 헤더를 "
+                                "`… | u32 baseId | u32 0`, 클립을 `… | u32 boneCount | u32 0`, 본을 "
+                                "`u32 트랙크기 | 트랙 | u32 블롭2크기 | 블롭2` 로 적고 있었다. 실물에서 "
+                                "그 값들이 0 이라 위치가 우연히 맞았을 뿐이다",
+             "꼬리 최소 바이트": "MDLA0006 에서 게이트가 전부 0 이고 이벤트가 없으면 클립 꼬리는 "
+                                 "**35바이트**다: v>=3 `u32 count`(0x14026468d) 4 + v>=3 `u8 gate`"
+                                 "(0x140264838) 1 + v>=4 `u8 gate`(0x140264a1e) 1 + v>=5 `f32 x6`"
+                                 "(0x140264d23…) 24 + v>=6 `u8 gate`(0x140264e27) 1 + 이벤트 "
+                                 "`u32 count`(0x14026536d) 4. 그 뒤가 곧 다음 클립의 `u64 id` 다"
+                                 "(클립 루프 뒤끝 0x14026556b). 그래도 파서가 리싱크를 쓰는 이유는 "
+                                 "꼬리 앞쪽 두 트랙 배열(v>=2 0x140263ce7 · 항상 0x140263e7b)의 "
+                                 "**개수가 파일이 아니라 스켈레톤 객체**에서 오기 때문이다 — 파일만 "
+                                 "보고는 못 센다. 그 둘 중 뒤엣것이 쓰는 스켈레톤 필드 +0x28 은 "
+                                 "**MDLS 꼬리 T3 의 레코드 수**다(0x14026285f 가 u32 로 읽고 "
+                                 "0x14026286e 가 스켈레톤 +0x28 에 저장한다)",
              "Waple 격차": "Sources/WapleCore/Model3D.swift 의 parseAnimations 는 `tsRaw % 36 == 0` "
                            "만 본다 — `frameCount + 1` 관계는 어디서도 검사하지 않는다. "
                            "그래서 프레임 수와 키 수가 어긋난 파일을 조용히 받아들인다",
@@ -544,8 +582,18 @@ def main():
                                "MDLS/MDLA 0건 — 2026-08-21 실측). 그때 위 도수는 전부 비고 위반도 0이다. "
                                "**0/0 은 불변식을 증명하지 않는다** — 그래서 status 를 표본 유무로 가른다. "
                                "합성 픽스처 양성 대조는 scripts/spec/tests/test_mdla_framing.py",
-             "파스 모델 출처": "Sources/WapleCore/Model3D.swift parseAnimations — 워크샵 33 애니모델 "
-                               "전수 파스로 검증된 모델을 그대로 옮겼다(가변 트레일러는 ≤256B 리싱크)"},
+             "파스 모델 출처": "wallpaper64.exe 2.8.42 의 MDL 디코더(.pdata 조각 6개 병합 "
+                               "0x140261880–0x140265a43)를 조각 시작에서 선형으로 뜬 것. "
+                               "Sources/WapleCore/Model3D.swift parseAnimations 와 같은 모델이고 "
+                               "가변 꼬리는 ≤256B 리싱크로 넘긴다",
+             "코퍼스 미부착 표기": "이 항목이 정본에 처음 들어간 2026-08-21 시점의 컨테이너에는 "
+                                   "워크샵 코퍼스가 없었다(measure_mdl_deep.py 는 WE_WORKSHOP 없이는 "
+                                   "SystemExit 한다). 그래서 정본의 도수 다섯(실측·본 수 분포·프레임 수 "
+                                   "분포·파일당 클립 수 분포·모드 분포)은 **미측정**이고 0/빈 값이다 — "
+                                   "0 은 '없다' 가 아니라 '안 쟀다' 다. 같은 파일의 "
+                                   "format.mdl.parseCoverage 는 451파일 환경에서 생성된 값이라 이 항목과 "
+                                   "**표본이 다르다**(정본 안의 두 항목이 같은 코퍼스를 말하지 않는다). "
+                                   "코퍼스가 붙은 환경에서 한 번 돌리면 채워진다"},
             "확정" if (mdla_clips and not mdla_bad) else "보고",
             [specfmt.ev("binary", "wallpaper64.exe 0x140263c61–0x140263c95",
                         "MDLA 트랙 프레이밍 __fastfail 두 개"),

@@ -15,17 +15,56 @@ import simd
 ///   • 스켈레톤 매직: "MDLS0004" (2D "MDLS0001"), 본별 말미가 u8 0 이 아니라 cstring props(대개 빈 문자열, 일부 IK JSON)
 ///   • 애니: "MDLA0006" (+일부 모델은 선행 "MDAT0001" 어태치먼트) — 리버스 완료(2026-07-04, 아래 참조), 2D 는 "MDLA0001".
 ///
-/// MDLA0006 애니 섹션(2026-07-04 헥스 리버스, 코퍼스: 3737268876/3706286085/3662790108 의 .mdl 33개 애니 전수):
-///   "MDLA0006" | u8 0 | u32 nextOff(=EOF-1) | u32 animCount | u32 baseId | u32 0 |
-///   애니×N: cstring 이름(예 "Link Adult_arm|idle_bone", UTF-8) | cstring 모드(loop/single/mirror/clamp) |
-///           f32 fps | u32 길이(프레임) | u32 0 | u32 본수(=스켈레톤 본수) | u32 0 |
-///           본별: u32 트랙크기 | 키×36B(pos 3f, 오일러각 3f 라디안, 스케일 3f) | u32 블롭2크기 | 블롭2 |
-///           트레일러(가변 32~39B): u16 0 | AABB 6f | u32 0 | u16 id(=baseId+1+i, 마지막 애니는 생략) | ...
-///   2D MDLA0001 과의 diff: ① 헤더 4번째 u32 는 animCount(2D 는 nextOff 직후 animCount|id|0 — 여기선 순서 동일하나
-///     link_adult 는 animCount=8 인데 실제 4개 → count 불신, 리싱크로 종료 판정) ② 애니 트레일러(AABB+id)가 신설(2D 없음)
-///     ③ 키 포맷/본 트랙 구조는 동일(36B 키). 트레일러 가변 → 다음 애니 헤더를 ≤256B 앞에서 리싱크로 스킵.
-///   확정(교차검증): 174 .mdl 중 33 애니모델 전수 파스 성공(0 실패); 본수==스켈레톤 본수(전수); 키0 로컬≈바인드 로컬은
-///     캐릭터별로 다름(바인드=T포즈, idle=이완포즈) — skin=world(t)×bindWorld⁻¹ 로 처리(2D 의 t=0 항등 가정 불성립이나 정상).
+/// MDLA0003/0004/0005/0006 애니 섹션 — **엔진 프레이밍**(2026-08-21 정정. 근거는 wallpaper64.exe
+/// 2.8.42 의 MDL 디코더를 `.pdata` 조각 시작에서 선형으로 뜬 것이고, 서술은
+/// `docs/re/skeleton-animation.md` §6):
+///   "MDLA000N" | u8 0 | u32 nextOff(스킵 한계, 0x1402639a8) | u32 animCount(0x1402639b2) |
+///   클립×N:
+///     u64 id                       ; 0x1402639de → readU64 0x1402616b0, 클립 오브젝트 +0x00
+///     cstring 이름                 ; 0x1402639f8 → 클립 +0x08 (std::string)
+///     cstring 모드                 ; 0x140263a11 → 클립 +0x28 (loop/single/mirror/clamp/빈문자열)
+///     f32 fps                      ; 0x140263a1b → +0xb8
+///     u32 frameCount               ; 0x140263a2d → +0xbc
+///     u32 flags                    ; 0x140263a3d → +0xc0
+///     u32 boneCount(=스켈레톤 본수) ; 0x140263a4d
+///     본×boneCount: u32 trackFlags(0x140263aa7) | u32 trackBytes(0x140263acb) |
+///                   키×36B(pos 3f, 오일러각 3f 라디안, 스케일 3f — 0x140263afe 가 커서를 민다)
+///     꼬리(버전 게이트 블록들 — 전부 클립마다 돈다. 최소 바이트는 게이트가 전부 0 일 때):
+///       v≥2   2차 채널 트랙 배열. 개수는 파일이 아니라 **스켈레톤 쪽 배열 길이**를 128 로 나눈 값
+///             (0x140263ce7 `sar rdi, 7`). 원소마다 u32 flags | u32 size | size바이트    … 최소 0B
+///       항상  스칼라 f32 트랙 배열. 개수도 스켈레톤 필드 `[r15+0x28]`(0x140263e7b) —
+///             그 필드는 **MDLS 꼬리 T3 의 레코드 수**다(0x14026285f 가 u32 로 읽고 0x14026286e 가
+///             스켈레톤 +0x28 에 저장한다 = Waple 의 `SkeletonTail.constraints.count`).
+///             원소마다 u32 | u32 size | size바이트                                      … 최소 0B
+///       v≥3   ① **u32 count**(0x14026468d) + count×(u32 | u32 size | size바이트)
+///             ② u8 gate(0x140264838), ≠0 이면 본 수만큼 같은 레코드                    … 최소 5B
+///       v≥4   u8 gate(0x140264a1e), ≠0 이면 32B 레코드 배열                            … 최소 1B
+///       v≥5   f32 6개 — 게이트 없이 무조건 24바이트(0x140264d23 부터 여섯 번)          … 24B
+///       v≥6   u8 gate(0x140264e27), ≠0 이면 본 수만큼 8B 원소                          … 최소 1B
+///       flags&1 이면 0xC0바이트 레코드 하나(0x140264fc9 → 0x140264fdb)                  … 최소 0B
+///       항상  **u32 이벤트수**(0x14026536d) + 수×(f32 초 0x1402653bd | cstring JSON 0x1402653e0)
+///                                                                                       … 최소 4B
+///     → 그 다음이 곧 다음 클립의 `u64 id` 다(클립 루프 뒤끝 0x14026556b `jl 0x1402639d0`).
+///   즉 **MDLA0006 의 최소 꼬리는 4+1+1+24+1+4 = 35바이트**다.
+///   2D MDLA0001 과의 diff: **레코드 구조는 같다**(PuppetModel.swift 참조). 버전이 1 이라
+///     v≥2..v≥6 게이트 블록이 전부 꺼져 있어 꼬리가 이벤트 블록뿐이다.
+///     link_adult 는 animCount=8 인데 실제 4개 → count 불신, 리싱크로 종료 판정.
+///   확정(교차검증, **2026-08-20 이전 프레이밍으로 잰 값**): 174 .mdl 중 33 애니모델 전수 파스 성공
+///     (0 실패); 본수==스켈레톤 본수(전수); 키0 로컬≈바인드 로컬은 캐릭터별로 다름(바인드=T포즈,
+///     idle=이완포즈) — skin=world(t)×bindWorld⁻¹ 로 처리(2D 의 t=0 항등 가정 불성립이나 정상).
+///     아래 툼스톤의 프레이밍 정정 뒤로는 **워크샵 코퍼스가 이 컨테이너에 없어 재측정하지 못했다** —
+///     실물에서 trackFlags·게이트가 전부 0 이면 트랙 바이트는 종전과 동일한 자리에서 읽히므로
+///     이 수치가 뒤집힐 이유는 없지만, 재측정 전까지는 **미검증**이다.
+///
+/// > **[툼스톤] 2026-08-21 이전에 이 주석이 적던 것**(전부 틀렸다):
+/// >   `"MDLA0006" | u8 0 | u32 nextOff | u32 animCount | u32 baseId | u32 0` 로 헤더에 네 필드가
+/// >   있고, 클립은 이름부터 시작하며 `… | u32 본수 | u32 0`, 본마다
+/// >   `u32 트랙크기 | 트랙 | u32 블롭2크기 | 블롭2`, 뒤에 "트레일러(가변 32~39B):
+/// >   u16 0 | AABB 6f | u32 0 | u16 id(=baseId+1+i, 마지막 애니는 생략)".
+/// >   실제로는 ① `baseId|u32 0` 이 **클립 0 의 u64 id** 였고 ② 클립 헤더의 마지막 `u32 0` 이
+/// >   **본 0 의 trackFlags** 였고 ③ 본마다 읽던 "블롭2크기" 가 **다음 본의 trackFlags** 였다.
+/// >   실물에서 그 값들이 0 이라 위치가 우연히 맞았을 뿐이다. "트레일러 u16 0 | AABB 6f" 는
+/// >   자리가 맞았다 — 그 `u16 0` 은 v3·v4 게이트 두 바이트이고 `AABB 6f` 는 v≥5 의 f32 6개다.
 ///
 /// 버전 프레이밍(엔진 게이트 — Model3DFormat 참조): AABB v≥17 / per-mesh formatFlag v≥15 /
 /// 메시 트레일러 v≥21 / gateWord v≥4. **v0004·v0014 는 셋 다 없다** — 메시 헤더가
@@ -227,10 +266,19 @@ public struct Model3D: Equatable {
         /// JSON cstring {"frame":N,"name":"…"})`. 재생이 frame 을 지나면 animationEvent 발화
         /// (3351179520/3396722575 错帧 동기, 젤다 talon snore·link Look Left/Right).
         public var events: [AnimationMarker] = []
-        /// C③: 클립 고유 id(scene.json animationlayers[].animation 이 참조하는 정수) — 트레일러 u16
-        /// 필드(트레일러 시작 +31, 없으면 nil)에서 추출, 마지막 클립은 트레일러에 id가 없어 헤더의
-        /// baseId 를 대신 쓴다(실측 3파일·17클립 전수 교차검증: 3384019940 头/3517818807 rwm/3486806915 头).
-        /// nil = 추출 실패(트레일러 부족 등) — 이름 휴리스틱 폴백 유지.
+        /// C③: 클립 고유 id(scene.json animationlayers[].animation 이 참조하는 정수) —
+        /// **클립 레코드 선두의 u64**다(0x1402639de → readU64 0x1402616b0 → 클립 오브젝트 +0x00).
+        /// nil = 그 자리를 못 읽었다(잘린 파일 · 리싱크가 클립 경계에 안 닿음 · u64 가 Int 범위 밖)
+        /// — 이름 휴리스틱 폴백 유지.
+        ///
+        /// > **[툼스톤] 종전 구현**: "트레일러 시작 +31 의 u16, 마지막 클립은 헤더 baseId"
+        /// > (근거로 "실측 3파일·17클립 전수 교차검증: 3384019940 头/3517818807 rwm/3486806915 头"
+        /// > 이 붙어 있었다). 그 관측 자체는 진짜였고, **왜** 맞았는지가 이제 설명된다: 종전 커서는
+        /// > 마지막 트랙 끝 +4 였고 v3~v6 게이트가 전부 0 인 파일에서 꼬리는 35바이트이므로
+        /// > `+31` 은 정확히 **다음 클립의 u64 id 하위 16비트**였다. 즉 관측된
+        /// > `id = baseId + 1 + i` 는 "클립 id 가 baseId 부터 1씩 증가한다" 는 뜻이고, 종전 구현은
+        /// > 클립 i 에 **클립 i+1 의 id** 를 붙이고 있었다(마지막 클립에는 클립 0 의 id 를 붙였다).
+        /// > 게이트가 하나라도 0 이 아니거나 이벤트 마커가 하나라도 있으면 그 자리는 id 가 아니다.
         public var id: Int? = nil
     }
 
@@ -844,9 +892,11 @@ public struct Model3D: Equatable {
 
     private static let animModes: Set<String> = ["loop", "single", "mirror", "clamp"]
 
-    /// MDLA0006 애니 파스(리싱크 기반). 헤더 animCount 는 link_adult 반례로 불신 —
-    /// 각 애니 뒤 가변 트레일러(32~39B AABB+id)를 다음 유효 헤더 리싱크(≤256B)로 스킵하고,
-    /// 헤더 검증(모드∈집합, fps∈(0,240], 본수==skeleton)으로 종료를 판정한다.
+    /// MDLA0003..0006 애니 파스(리싱크 기반). 헤더 animCount 는 link_adult 반례로 불신 —
+    /// 각 클립 뒤 가변 꼬리(버전 게이트 블록 + 이벤트 블록, 최소 35B)를 다음 유효 헤더
+    /// 리싱크(≤256B)로 스킵하고, 헤더 검증(모드∈집합, fps∈(0,240], 본수==skeleton)으로 종료를
+    /// 판정한다. 꼬리 길이를 계산하지 않고 리싱크하는 이유는 두 트랙 배열의 **개수가 파일이 아니라
+    /// 스켈레톤 객체**에서 오기 때문이다(파일만 보고는 못 센다 — 파일 머리 주석의 꼬리 표 참조).
     private static func parseAnimations(bytes: [UInt8], at magicOff: Int, boneCount: Int) -> [Model3D.Animation] {
         guard boneCount > 0 else { return [] }
         func u32(_ o: Int) -> UInt32? { readU32LE(bytes, at: o) }
@@ -859,23 +909,36 @@ public struct Model3D: Equatable {
             guard let (name, p2) = cstring(p), !name.isEmpty, name.utf8.count <= 96 else { return nil }
             guard let (mode, p3) = cstring(p2), animModes.contains(mode) || mode.isEmpty else { return nil }
             guard let fps = f32(p3), fps > 0, fps <= 240 else { return nil }
+            // p3: f32 fps | u32 frameCount | u32 flags | u32 boneCount — 넷이고, 그 다음이 곧
+            // 본 0 의 trackFlags 다(0x140263a1b/0x140263a2d/0x140263a3d/0x140263a4d).
             guard let length = u32(p3 + 4), let bc = u32(p3 + 12), Int(bc) == boneCount else { return nil }
-            return (name, mode, fps, Int(length), Int(bc), p3 + 20)
+            return (name, mode, fps, Int(length), Int(bc), p3 + 16)
         }
-        // 헤더: magic(8)|u8 0|u32 nextOff|u32 animCount|u32 baseId|u32 0
+        // 섹션 헤더: magic(8) | u8 0 | u32 nextOff | u32 animCount. 그 다음은 곧 **클립 0 의 u64 id** 다
+        // — 종전 주석의 `u32 baseId | u32 0` 이 그 u64 의 두 절반이었다.
         var o = magicOff + 9
         guard u32(o) != nil else { return [] }
-        let baseId = u32(o + 8)   // C③: 마지막 클립의 id(트레일러에 미기재) — 실측 3파일 전수 일치.
-        o += 16
+        // 헤더 리싱크는 클립 레코드의 **이름 cstring** 에 착지하므로, 그 클립의 u64 id 는 8바이트 앞이다.
+        var idAt: Int? = o + 8
+        o += 16                   // u32 nextOff | u32 animCount | u64 id
         var anims: [Model3D.Animation] = []
         while let h = tryHeader(o) {
+            // C③: 이 클립의 id = 레코드 선두 u64. Int 범위를 넘으면 nil(이름 휴리스틱 폴백 유지).
+            let clipId: Int? = idAt.flatMap { p in
+                guard let lo = u32(p), let hi = u32(p + 4) else { return nil }
+                return Int(exactly: UInt64(hi) << 32 | UInt64(lo))
+            }
             o = h.off
             var tracks: [[Key]] = []
             tracks.reserveCapacity(h.bc)
             var ok = true
             for _ in 0..<h.bc {
-                guard let tsRaw = u32(o), tsRaw % 36 == 0, o + 4 + Int(tsRaw) <= bytes.count else { ok = false; break }
-                o += 4
+                // 본 레코드 = u32 trackFlags(0x140263aa7) | u32 trackBytes(0x140263acb) | 트랙.
+                // trackFlags 는 **크기가 아니라 플래그**다 — 비트0 은 엔진에서 클립 flags 에
+                // 0x80000000 을 세우는 데만 쓰이고(0x140263c9d) 키 해석을 바꾸지 않으므로 버린다.
+                guard u32(o) != nil, let tsRaw = u32(o + 4), tsRaw % 36 == 0,
+                      o + 8 + Int(tsRaw) <= bytes.count else { ok = false; break }
+                o += 8
                 let ts = Int(tsRaw)
                 var keys: [Key] = []
                 keys.reserveCapacity(ts / 36)
@@ -889,21 +952,21 @@ public struct Model3D: Equatable {
                 }
                 if !ok { break }
                 o += ts
-                guard let blob2 = u32(o), o + 4 + Int(blob2) <= bytes.count else { ok = false; break }
-                o += 4 + Int(blob2)
                 tracks.append(keys)
             }
             guard ok, tracks.count == h.bc else { break }
-            // 리싱크: 가변 트레일러를 건너뛰고 다음 유효 헤더로(≤256B). 없으면 종료.
+            // 리싱크: 가변 꼬리를 건너뛰고 다음 유효 헤더로(≤256B). 없으면 종료.
             var next: Int? = nil
             var d = 0
             while d <= 256 {
                 if tryHeader(o + d) != nil { next = o + d; break }
                 d += 1
             }
-            // 이벤트 마커는 이 레코드 트레일러(트랙 끝 o ~ 다음 헤더) 안의 JSON cstring —
-            // 트레일러 정밀 레이아웃(AABB+id 32~39B 가변) 대신 패턴 스캔(레이아웃 변화에 강건,
-            // 선행 f32 초 값은 JSON frame 과 중복이라 무시). 마지막 레코드는 섹션 끝까지 최대 512B.
+            // 이벤트 마커는 이 클립 꼬리(트랙 끝 o ~ 다음 헤더) 안의 JSON cstring — 엔진 쪽 정식
+            // 레이아웃은 `u32 이벤트수(0x14026536d) | 수×(f32 초 0x1402653bd | cstring 0x1402653e0)`
+            // 이지만 그 블록 **앞**의 두 트랙 배열 개수가 파일에 없어(스켈레톤 객체에서 온다) 시작
+            // 오프셋을 계산할 수 없다 → 패턴 스캔으로 집는다(선행 f32 초 값은 JSON frame 과 중복이라
+            // 무시). 마지막 클립은 섹션 끝까지 최대 512B.
             let events = Self.trailerEvents(bytes: bytes, from: o, to: next ?? min(o + 512, bytes.count))
             if h.mode.isEmpty {
                 // 디렉토리 레코드: 렌더 클립 목록엔 미포함(포즈/클립 선택 무회귀) — 이벤트만
@@ -919,18 +982,13 @@ public struct Model3D: Equatable {
             } else {
                 var anim = Animation(name: h.name, mode: h.mode, fps: h.fps, lengthFrames: h.length, tracks: tracks)
                 anim.events = events
-                // C③: 클립 id — next(다음 헤더) 가 있으면 이 클립 트레일러의 고정오프셋(트레일러 시작+31)
-                // u16 필드(실측 3파일·17클립 전수 일치), 트레일러가 짧아 못 읽으면 nil(이름 휴리스틱
-                // 폴백). next 가 없으면(섹션의 마지막 실클립) 트레일러에 id가 없어 헤더 baseId 를 대신
-                // 쓴다(실측 3파일 전수 일치 — 3384019940 头 clip3/3517818807 rwm clip12/3486806915 头 clip2).
-                if let n = next {
-                    if let u = readU16LE(bytes, at: o + 31), o + 33 <= n { anim.id = Int(u) }
-                } else if let base = baseId {
-                    anim.id = Int(base)
-                }
+                anim.id = clipId
                 anims.append(anim)
             }
             guard let n = next else { break }
+            // 다음 클립의 u64 id 는 그 헤더 8바이트 앞이다. 리싱크가 8바이트도 안 남기고 헤더를
+            // 찾았다면 그 자리는 클립 경계가 아니므로 id 를 짓지 않는다(그릇된 값 대신 nil).
+            idAt = (n - 8 >= o) ? n - 8 : nil
             o = n
         }
         return anims
