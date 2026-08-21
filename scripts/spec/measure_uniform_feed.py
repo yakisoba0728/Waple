@@ -100,42 +100,116 @@ def const_buffers(p):
 
 # ── 2. 유니폼 ID 레지스트리 (정적 이니셜라이저 FUN_140002860) ──────────────
 
-REG_LO, REG_HI = 0x140002860, 0x1400042F0
+# [2026-08-21 정정] `REG_HI` 가 0x1400042F0 이었는데 함수는 **0x140004321** 까지다
+# (`.pdata` 기준). 49바이트가 잘려 마지막 엔트리 몇 개의 ID 스토어가 스캔 밖이었다.
+REG_LO, REG_HI = 0x140002860, 0x140004321
 ENTRY0, STRIDE, IDOFF = 0x10, 0x28, 0x20
 
 
 def registry_ids(p):
-    """엔트리별 ID 스토어를 전수 수집한다.
+    """엔트리별 ID 를 전수 수집한다. **140개 전건이 나와야 하고 ID 집합이 정확히 0..139 여야 한다.**
 
     엔트리 i 는 [RBP+0x10+i*0x28], ID 필드는 그 +0x20 = [RBP+0x30+i*0x28].
-    세 가지 인코딩이 섞여 나온다:
-      C7 45 <disp8>  <imm32>   MOV dword [RBP+d8],imm
-      C7 85 <disp32> <imm32>   MOV dword [RBP+d32],imm
-      89 5D <disp8> / 89 9D <disp32>   MOV dword [RBP+d],EBX  (EBX=0 → ID 0)
+
+    [2026-08-21 정정] 종전 스캐너는 **80개만** 건졌다(0..79). 세 가지를 놓쳤다.
+
+    ① **변위가 부호 있는 값이다.** 함수 꼬리의 마지막 엔트리들은 `MOV [RBP-4],0x8b` 처럼
+       음수 변위를 쓰는데 `<I`(부호 없음)로 읽어 0xFC 같은 엉뚱한 슬롯이 됐다.
+
+    ② **엔트리 80부터는 ID 를 엔트리 안에 안 쓴다.** MSVC 가 코드젠을 바꿔서, ID 를 **별도
+       스크래치 슬롯**에 쓰고 그 **주소를 R8 로 넘겨** 생성자(FUN_14016f7a0)를 부른다:
+
+           lea  r8,  [rbp+0x1610]      ; ID 슬롯
+           mov  dword [rbp+0x1610], 0x50
+           lea  rdx, [rip+…]           ; 이름
+           lea  rcx, [rbp+0xc90]       ; 엔트리(= 0x10 + 80*0x28)
+           call 0x14016f7a0
+
+       그래서 "엔트리 슬롯에 쓰인 imm" 만 보면 80 이후가 통째로 사라진다.
+
+    ③ **엔트리 84부터는 그 스크래치가 RSP 상대로 또 바뀐다**(`lea r8,[rsp+0x20]` +
+       `mov dword [rsp+0x20],0x54`). RBP 슬롯만 추적하면 84 이후가 또 사라진다.
+
+    그래서 인라인 스토어와 **R8 페어링**을 둘 다 본다. 페어링은 `call` 시점에 가장 최근의
+    `lea rcx,[rbp+E]`(엔트리)와 `lea r8,[…]`(ID 슬롯)을 짝지어, 그 슬롯에 마지막으로 쓰인
+    imm 을 엔트리 E 의 ID 로 삼는다. RBP 슬롯과 RSP 슬롯은 **키스페이스를 분리**한다
+    (같은 숫자 변위가 서로 다른 자리를 뜻하므로 섞으면 조용히 틀린다).
+
+    검증은 스스로 한다 — **ID 집합이 정확히 0..139 인 전단사**여야 통과다. 페어링이 하나라도
+    어긋나면 중복이나 구멍이 생겨 즉시 실패한다(추측이 조용히 정본이 되는 것을 막는 자물쇠).
     """
     lo, hi = va2off(REG_LO, p.secs), va2off(REG_HI, p.secs)
     d = p.data
-    ids = {}
+    s8 = lambda o: struct.unpack_from("<b", d, o)[0]
+    s32 = lambda o: struct.unpack_from("<i", d, o)[0]
+    u32 = lambda o: struct.unpack_from("<I", d, o)[0]
+    ids, slot = {}, {}          # slot[("rbp"|"rsp", 부호있는 변위)] = imm
+    pend_r8 = pend_rcx = None
 
-    def put(off, imm):
-        if off < ENTRY0 + IDOFF or (off - ENTRY0 - IDOFF) % STRIDE:
-            return
-        idx = (off - ENTRY0 - IDOFF) // STRIDE
-        if idx < 140 and imm < 140 and idx not in ids:
+    def entry_index(disp):
+        """엔트리 배열 기준 변위 → 인덱스(아니면 None)."""
+        if disp < ENTRY0 or (disp - ENTRY0) % STRIDE:
+            return None
+        idx = (disp - ENTRY0) // STRIDE
+        return idx if idx < 140 else None
+
+    def put_inline(disp, imm):
+        idx = entry_index(disp - IDOFF)
+        if idx is not None and 0 <= imm < 140 and idx not in ids:
             ids[idx] = imm
 
     i = lo
-    while i < hi - 10:
+    while i < hi - 11:
         b0, b1 = d[i], d[i + 1]
-        if b0 == 0xC7 and b1 == 0x85:
-            put(struct.unpack_from("<I", d, i + 2)[0], struct.unpack_from("<I", d, i + 6)[0])
-        elif b0 == 0xC7 and b1 == 0x45:
-            put(d[i + 2], struct.unpack_from("<I", d, i + 3)[0])
-        elif b0 == 0x89 and b1 == 0x9D:
-            put(struct.unpack_from("<I", d, i + 2)[0], 0)
-        elif b0 == 0x89 and b1 == 0x5D:
-            put(d[i + 2], 0)
+        if b0 == 0xC7 and b1 == 0x85:                       # MOV [RBP+d32], imm32
+            off, imm = s32(i + 2), u32(i + 6)
+            slot[("rbp", off)] = imm; put_inline(off, imm); i += 10; continue
+        if b0 == 0xC7 and b1 == 0x45:                       # MOV [RBP+d8], imm32
+            off, imm = s8(i + 2), u32(i + 3)
+            slot[("rbp", off)] = imm; put_inline(off, imm); i += 7; continue
+        if b0 == 0x89 and b1 == 0x9D:                       # MOV [RBP+d32], EBX (=0)
+            off = s32(i + 2); slot[("rbp", off)] = 0; put_inline(off, 0); i += 6; continue
+        if b0 == 0x89 and b1 == 0x5D:                       # MOV [RBP+d8], EBX (=0)
+            off = s8(i + 2); slot[("rbp", off)] = 0; put_inline(off, 0); i += 3; continue
+        if b0 == 0xC7 and b1 == 0x44 and d[i + 2] == 0x24:  # MOV [RSP+d8], imm32
+            slot[("rsp", s8(i + 3))] = u32(i + 4); i += 8; continue
+        if b0 == 0xC7 and b1 == 0x84 and d[i + 2] == 0x24:  # MOV [RSP+d32], imm32
+            slot[("rsp", s32(i + 3))] = u32(i + 7); i += 11; continue
+        if b0 == 0x4C and b1 == 0x8D:                       # LEA R8, …
+            if d[i + 2] == 0x85:
+                pend_r8 = ("rbp", s32(i + 3)); i += 7; continue
+            if d[i + 2] == 0x45:
+                pend_r8 = ("rbp", s8(i + 3)); i += 4; continue
+            if d[i + 2] == 0x44 and d[i + 3] == 0x24:
+                pend_r8 = ("rsp", s8(i + 4)); i += 5; continue
+            if d[i + 2] == 0x84 and d[i + 3] == 0x24:
+                pend_r8 = ("rsp", s32(i + 4)); i += 8; continue
+        if b0 == 0x48 and b1 == 0x8D:                       # LEA RCX, [RBP+d]
+            if d[i + 2] == 0x8D:
+                pend_rcx = s32(i + 3); i += 7; continue
+            if d[i + 2] == 0x4D:
+                pend_rcx = s8(i + 3); i += 4; continue
+        if b0 == 0xE8:                                      # CALL rel32 — 여기서 짝을 확정
+            if pend_rcx is not None and pend_r8 is not None:
+                idx, val = entry_index(pend_rcx), slot.get(pend_r8)
+                if idx is not None and val is not None and 0 <= val < 140 and idx not in ids:
+                    ids[idx] = val
+            pend_r8 = pend_rcx = None
+            i += 5; continue
         i += 1
+
+    # 자물쇠 — 전단사가 아니면 멈춘다.
+    missing = [k for k in range(140) if k not in ids]
+    if missing:
+        raise SystemExit(f"[measure_uniform_feed] 레지스트리 ID 를 {len(ids)}/140 만 건졌다. "
+                         f"누락 인덱스 {missing[:16]}{'…' if len(missing) > 16 else ''}\n"
+                         f"  0x140002860 의 코드젠이 바뀌었거나 스캔 범위가 짧다 — "
+                         f"조용히 반쪽 정본을 쓰지 않으려고 멈춘다.")
+    got = sorted(ids.values())
+    if got != list(range(140)):
+        dup = sorted({v for v in got if got.count(v) > 1})
+        raise SystemExit(f"[measure_uniform_feed] ID 집합이 0..139 전단사가 아니다(중복 {dup}). "
+                         f"R8 페어링이 어긋났다는 뜻이다 — 멈춘다.")
     return ids
 
 
@@ -396,11 +470,13 @@ def main():
     bufs = const_buffers(p)
     assert bufs == ["g_bufStatic", "g_bufDynamic", "g_bufAnimation", "g_bufLights"], bufs
 
-    # 배열 앞쪽 80개는 ID 를 엔트리 안에 직접 쓴다(인라인 SSO 경로).
-    # 뒤쪽 60개는 FUN_14016f7a0(entry, name, &id) 로 스크래치 변수를 넘겨서 안 잡힌다.
-    # 총 140 개라는 사실은 함수 꼬리 바이트로 따로 못박는다.
+    # 배열 앞쪽 80개는 ID 를 엔트리 안에 직접 쓰고(인라인 SSO 경로), 뒤쪽 60개는
+    # FUN_14016f7a0(entry, name, &id) 로 **스크래치 주소**를 넘긴다.
+    # [2026-08-21] 종전엔 뒤쪽 60개를 못 잡아 `range(80)` 을 기대했고, 그래서 정본의
+    # `idsByArrayIndex` 가 80항뿐이었다. 이제 R8 페어링으로 전건 잡는다(registry_ids doc 참조).
+    # 총 140 이라는 사실은 함수 꼬리 바이트로도 따로 못박는다.
     ids = registry_ids(p)
-    assert sorted(ids) == list(range(80)), f"엔트리 정렬 ID 스캔이 {sorted(ids)[:5]}..{len(ids)}개"
+    assert sorted(ids) == list(range(140)), f"엔트리 정렬 ID 스캔이 {sorted(ids)[:5]}..{len(ids)}개"
     for idx, name, uid, _lva, _sva in REG_HEAD:
         assert ids[idx] == uid, f"{name}: 배열 {idx} 의 ID 가 {ids[idx]} (기대 {uid})"
     p.at(REG_TAIL_VA, REG_TAIL_BYTES, "레지스트리 배열 = 140 엔트리 x 40B, 마지막 ID 0x8b")
