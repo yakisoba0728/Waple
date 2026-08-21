@@ -1288,7 +1288,19 @@ def main():
                    "missing": [h for h in HOOK_ORDER
                                if h not in waple_hook_list and h not in ("init", "update",
                                                                         "applyUserProperties")],
-                   "note": "init/update/applyUserProperties 는 eventHookNames 밖에서 따로 처리한다"},
+                   "note": "init/update/applyUserProperties 는 eventHookNames 밖에서 따로 처리한다",
+                   # [2026-08-21] `missing` 은 **이름 존재**만 센다. 이름이 있어도 부를 자리가 없으면
+                   # 커버리지가 아니다 — 그 구분을 `IScene.presentButStub`/`IEngine.proxyFallback` 과
+                   # 같은 규약으로 남긴다. 이 셋은 `eventHookNames` 에 들어와 `missing` 에서 빠졌지만
+                   # **발화하는 코드가 없다**(TextScriptEngine.swift:577 이 그렇게 적어 두었고,
+                   # `callHook("resizeScreen")` 류가 Sources 전체에 0건인 것으로 재확인했다).
+                   "presentButNeverFired": {
+                       "names": ["resizeScreen", "destroy", "applyGeneralSettings"],
+                       "why": "훅 수집(eventHookNames)에는 들어와 있지만 발화원이 렌더러 소유라 "
+                              "아직 배선되지 않았다 — 창 리사이즈·마운트 해제·앱 설정 변경 중 "
+                              "어느 것도 callHook 하지 않는다. 이름이 있으니 `missing` 에서는 "
+                              "빠지지만 **동작은 없다.**",
+                       "evidence": "Sources/WapleRender/TextScriptEngine.swift:577-582"}},
          "vectors": missing_vec,
          "Mat3": "Waple 에 전무. WE 는 Mat3 를 IEffectLayer.transformAttachmentToTexture 반환형과 "
                  "Mat4.normalMatrix() 반환형으로 쓴다",
@@ -1304,6 +1316,11 @@ def main():
                                   "registerAsset/openUserShortcut/screenResolution 호출이 예외로 "
                                   "죽지는 않지만 값은 전부 무의미하다",
          "ILayer.missing": layer_missing,
+         # [2026-08-21] 위 `missing` 과 같은 이유의 구분(hooks.presentButNeverFired 참조).
+         "ILayer.presentButStub": "transformAttachmentToTexture 는 이름만 있고 "
+                                  "`__noopProxy()` 를 돌려준다(TextScriptEngine.swift:2190 · :2259). "
+                                  "그래서 `missing` 에서는 빠지지만 반환값으로 Mat3 산술을 하면 "
+                                  "전부 무의미하다 — 위 `Mat3` 항목과 함께 읽어라.",
          "ILayer.extraNonWE": "Waple shim 은 WE 에 없는 이름을 다수 만든다"
                               "(getName/setName/getOrigin/setOrigin/setAngles/setScale/setVisible/"
                               "setAlpha/setText/getTexture/addChild/playAnimation/…). "
