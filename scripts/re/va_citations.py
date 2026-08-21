@@ -75,6 +75,23 @@ DEFAULT_TARGETS = ("Sources", "Tests", "docs/re", "docs/dev", "scripts/spec", "s
 # JSON 정본처럼 마커를 넣을 수 없는 자리만 아래 `CORRECTION_LINES` 전문 일치를 쓴다.
 CORRECTION_MARKER = "[VA-정정]"
 
+# 두 번째 마커. **정정이 아니라 "이 주소는 애초에 명령 주소가 아니다"** 라고 밝히는 자리에 쓴다
+# (바이트 스캐너가 산출한 disp32·변위 필드 위치). 정정 기록과 뜻이 다르므로 마커를 갈라 둔다.
+SCANNER_MARKER = "[VA-스캐너위치]"
+
+# **바이트 스캐너가 산출한 "필드 위치"** — 명령 주소가 아니다. 정본 JSON 은 줄에 마커를 넣을 수
+# 없으므로 (파일, 키) 로 좁혀 면제한다. 그 뜻은 정본 자신이 `engine.renderPass.addressSemantics`
+# 에 적고 있다. 키 이름만으로 면제하면 다른 정본의 진짜 명령 주소까지 덮으므로 **파일까지** 묶는다.
+SCANNER_ADDRESS_FIELDS = {
+    "spec/engine/render-pass.json": {"at", "combineLastUseAt", "ccsimpleFirstUseAt", "fadeFirstUseAt"},
+}
+
+# 같은 이유로, 이 파일들의 **맨몸 배열 원소**(`"0x…",`)도 스캐너 산출 위치다
+# (예: `sitesInFrameFn` 의 목록). 파일을 명시하므로 다른 정본에는 안 번진다.
+SCANNER_ADDRESS_BARE = {"spec/engine/render-pass.json"}
+BARE_LINE = re.compile(r'^"0x[0-9a-fA-F]+",?$')
+KV_LINE = re.compile(r'^"([A-Za-z0-9_]+)":\s*"0x[0-9a-fA-F]+",?$')
+
 CORRECTION_LINES = {
     # `decompilation-provenance.json` 의 두 목록은 **일부러** 비경계 주소를 담는다 —
     # `needsMinus0xD0List` 는 주입본 주소이고 `indeterminateList` 는 어느 쪽도 아닌 것들이다.
@@ -97,12 +114,6 @@ CORRECTION_LINES = {
         "particle-operator-vm.md 정정 문단",
     "> **`Sources/WapleCore/SceneDocument.swift` 의 주석에도 `0x140259458`/`0x1402594e6` 이 그대로":
         "scene-object-model.md — 소유 밖 파일에 남은 같은 인용을 지목하는 줄",
-    "> | `0x1401ecece` | `0x1401ececb` | `mov qword ptr [rax + 0xaf0], 0x3f800000` | 범위 **시작** — 명령 내부(+3)였다 |":
-        "particle-world-basis.md 정정 표",
-    "> | `0x1401ecf1c` | `0x1401ecf20` | `mov dword ptr [rax + 0xb2c], 0x3f800000` | 범위 **끝** — 마지막 명령 내부(+6)였다 |":
-        "particle-world-basis.md 정정 표",
-    "> 종전 `0x1401872cb` → `0x1401872ca` · 종전 `0x140227539` → `0x140227535` · 종전 `0x1401ee98c` → `0x1401ee98a`":
-        "camera-motion.md 부록 C 정정 기록",
     "> **[툼스톤] 종전 이 문서가 적던 값**(전부 disp32 필드 자리 — 명령 시작이 아니다): `0x140110cbe` `0x140111c76` `0x140112686` `0x1401c2d84` `0x1401c70a6` `0x1401d1773` `0x1401d2292` `0x14021c625` `0x1402268c1` `0x140237fb7` `0x140238a33` `0x14026f1b7` `0x1401a9d28` `0x140216102` · 그리고 명령 한복판(+1)이던 `0x1402cd760`.":
         "skeleton-animation.md 부록 A 툼스톤 줄",
 }
@@ -198,7 +209,14 @@ def main(argv):
             mixed[str(f)] = others
         for line in txt.splitlines():
             stripped = line.strip()
-            record = CORRECTION_MARKER in stripped or stripped in CORRECTION_LINES
+            record = (CORRECTION_MARKER in stripped or SCANNER_MARKER in stripped
+                      or stripped in CORRECTION_LINES)
+            if not record:
+                kv = KV_LINE.match(stripped)
+                if kv and kv.group(1) in SCANNER_ADDRESS_FIELDS.get(str(f), ()):
+                    record = True
+                elif str(f) in SCANNER_ADDRESS_BARE and BARE_LINE.match(stripped):
+                    record = True
             for m in VA_RE.finditer(line):
                 va = int(m.group(0), 16)
                 if record:

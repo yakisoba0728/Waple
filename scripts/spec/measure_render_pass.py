@@ -400,7 +400,7 @@ def main():
                                  "블룸 합성 머티리얼(0x3150 combine / 0x3158 combine_srgb)의 마지막 "
                                  "지점이 ccsimple(0x3188) 최초 지점보다 앞서고, ccsimple 이 fade(0x3180) "
                                  "보다 앞선다. 두 분기(블룸 on/off)가 모두 ccsimple 앞에서 합류한다.",
-                       "why": "ccsimple 바인드 직전(0x140180bdf)에 _rt_FullFrameBuffer(0x3098) 객체의 "
+                       "why": "[VA-스캐너위치] ccsimple 바인드 직전(0x140180bdf)에 _rt_FullFrameBuffer(0x3098) 객체의 "
                               "vtable+8 = '현재 프레임버퍼를 이 RT 로 캡처'가 호출된다. ccsimple.json 의 "
                               "입력이 _rt_FullFrameBuffer 이므로, ccsimple 이 읽는 것은 블룸 합성이 "
                               "끝난 화면이다. 순서가 반대라면 이 캡처가 불필요하다."},
@@ -539,13 +539,13 @@ def main():
                                  "런타임 머티리얼인데도 없는 것이 있다(씬 JSON 이나 문자열 조립으로 로드되는 듯). "
                                  "이 항목은 '있다'만 근거로 쓴다.",
                        "ccsimpleIsLive": "ccsimple 이 에디터 전용이 아니라는 결정적 근거는 이 목록이 아니라 "
-                                         "라이브 프레임 함수 FUN_14017fa70 안의 사용 지점(0x140180bd5/bec/c02)이다."},
+                                         "라이브 프레임 함수 FUN_14017fa70 안의 사용 지점(0x140180bd5/bec/c02)이다. [VA-스캐너위치]"},
                       "확정", [ev_asset, ev_bin, ev_script]),
 
         specfmt.entry("engine.renderPass.fullFrameBufferIsSnapshot",
                       {"fact": "_rt_FullFrameBuffer 는 렌더 타깃으로 **바인드되지 않는다**. "
                                "프레임 함수에서 이 필드(0x3098)가 쓰이는 세 곳(0x140180a82 / 0x140180b9f / "
-                               "0x140180bdf)은 전부 vtable+0x08 = '현재 프레임버퍼를 이 RT 로 캡처'다.",
+                               "0x140180bdf)은 전부 vtable+0x08 = '현재 프레임버퍼를 이 RT 로 캡처'다. [VA-스캐너위치]",
                        "consequence": "WE 의 후처리는 '스냅샷 → 현재 타깃으로 되그리기'의 반복이다. "
                                       "각 전면 패스 직전에 현재 화면을 _rt_FullFrameBuffer 로 복사하고, "
                                       "머티리얼이 그것을 g_Texture0 으로 읽어 같은 타깃(백버퍼)에 그린다.",
@@ -576,7 +576,7 @@ def main():
                        "editorPath": "FUN_14009b7fd 이 materials/util/backbufferpassthrough.json"
                                      "(0x140485b40, 셰이더 passthroughlinear)을 로드해 그린다. 입력 SRV 는 "
                                      "_rt_editor_backbuffer_resolve(0x140485b70)로 만들어진다. "
-                                     "샘플 수 >= 2 면 ResolveSubresource(0x14009b945) 후 CopyResource, "
+                                     "[VA-스캐너위치] 샘플 수 >= 2 면 ResolveSubresource(0x14009b945) 후 CopyResource, "
                                      "아니면 CopyResource 만. 이름이 말하듯 에디터/미리보기 경로다.",
                        "note": "따라서 '씬 → … → 백버퍼'의 마지막 링크는 별도 패스가 아니라 "
                                "'후처리가 처음부터 백버퍼에 그린다'이다."},
@@ -585,7 +585,7 @@ def main():
         specfmt.entry("engine.renderPass.msaaResolve",
                       {"where": "FUN_140183550(sceneObj, 0) 끝 — 씬 렌더 직후, 모든 후처리 앞",
                        "how": "RT vtable+0x10 (=0x1400d33b0) → ID3D11DeviceContext::ResolveSubresource "
-                              "(vtable off 0x1c8, 호출 지점 0x1400d33fd) "
+                              "(vtable off 0x1c8, 호출 지점 0x1400d33fd) [VA-스캐너위치] "
                               "dst = RT 스택 상단, 비어 있으면 스왑체인 백버퍼. src = this. "
                               "라이브 씬 프레임에서는 이 시점에 스택이 비어 있으므로 **백버퍼**다 — "
                               "_rt_FullFrameBuffer 로 가지 않는다(그건 별도의 vtable+0x08 캡처).",
@@ -642,7 +642,7 @@ def main():
                                  "디스어셈블러가 아니라 바이트 패턴이라 오탐이 있다.",
                        "GenerateMips 0x140328618": "오탐 — 해당 함수는 텍스트 파서다. "
                                                    "진짜 호출은 0x1400d344e 하나뿐이다.",
-                       "ResolveSubresource 0x14009b945": "백버퍼/프레젠트 경로(0x14009b7fd, "
+                       "ResolveSubresource 0x14009b945": "[VA-스캐너위치] 백버퍼/프레젠트 경로(0x14009b7fd, "
                                                           "materials/util/backbufferpassthrough.json 참조 함수). "
                                                           "씬 후처리 순서와 별개.",
                        "warning": "GenerateMips 는 call 이 아니라 **테일 jmp** 로 인코딩돼 있어 "
