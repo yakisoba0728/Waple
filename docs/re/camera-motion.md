@@ -33,6 +33,12 @@ wallpaper64.exe(imagebase `0x140000000`)에서 **씬 카메라가 매 프레임 
 | 14 | **`camerashake:true` 동봉 코퍼스 도달 0건**, 설치본 전체에서도 1건(`ricepod`, 3D) | 확정 |
 | 15 | Waple 의 `parallaxDelay` 의미론(= 지수 시상수 초)은 **틀렸다**. 기본 0.1 근처에서만 우연히 맞는다 | 확정 |
 | 16 | Waple 주석의 "camerashake 코퍼스 활성 13/168씬" 은 **반증됐다**(실측 0/168) | 확정 |
+| 17 | 레이어 `perspective` = 오브젝트 flags `+0x120` **bit7**. 소비는 `0x1401ed265` 게이트 → `0x140184f00` | 확정 |
+| 18 | 레이어 `perspective` 는 **정사영(2D) 씬 전용**이다(`renderState+0x118` bit10 = "이 씬은 2D") | 확정 |
+| 19 | 레이어 원근 카메라는 `d = H/(2·tan(fov/2))` 거리에 놓이고 **화면 배율은 `s(z) = d/(d − z)`**. `fov` 는 `general.perspectiveoverridefov` | 확정 |
+| 20 | `perspective:true` 실제 씬 도달은 **동봉·설치본 통틀어 1건**(`preview3dclock`)이고 그 `origin.z = 0` 이라 정사영과 픽셀 동일 | 확정 |
+| 21 | shake·parallax **어디에도 난수원이 없다**. `g_Time`·포인터·`dt` 의 결정적 함수라 캡처 결정성(`captureRandomSeed`)에 영향이 없다 | 확정 |
+| 22 | 시차 스무딩은 **1차 저역통과의 지수형이 아니다** — α 가 `dt` 에 선형이라 **프레임률 독립이 아니다**(60Hz vs 120Hz 실측 차 2.8e-5 @delay 0.3, 1초) | 확정 |
 
 ---
 
@@ -189,6 +195,12 @@ target += delta                                        ; 0x140199747–0x1401997
   `r³ ≤ 0.001` 이면 리매핑을 통째로 건너뛴다 — `r ≤ 0.1` 이 그 경계다.
 - **2D 진폭 단위는 픽셀.** 2D 스케일이 `a·H/100` 이라 `orthogonalprojection.height` 에 비례한다.
   기본 `a=0.5`, `H=256` → 피크 1.28 정사영 단위. 3D 스케일은 `a·0.1` 월드 단위다.
+- **감쇠(decay)가 없다.** 진폭은 시간에 무관한 상수 `scale` 이다 — 지수 감쇠 포락선도, 임펄스
+  트리거도, 스프링도 없다. `camerashake` 가 켜져 있는 한 **영구히 같은 크기로** 떤다.
+  (`0x1401995e5` 에서 읽은 `amplitude` 가 `0x1401996fa`–`0x14019971e` 까지 시간 항 없이 그대로 곱해진다.)
+- **난수원이 없다.** `sinf`/`cosf`/`powf`/`sqrtf` 호출뿐이고 `g_Time` 말고 다른 입력이 없다.
+  결정적 시드도 필요 없다 — 같은 `g_Time` 이면 항상 같은 값이다. 즉 이 수식을 Waple 에 이식해도
+  `SnapshotPipeline.captureRandomSeed` 의 캡처 결정성이 새로 깨지지 않는다.
 - **shake 는 시차 초점에도 새어 들어간다.** §3 의 초점 계산이 `scene[0xf0]`(= shake 가 이미 더해진 eye)
   을 읽으므로, 2D 에서 shake 와 parallax 를 동시에 켜면 `g_ParallaxPosition` 도 함께 떤다
   (`0x140189c18` / `0x140189c24`).
@@ -456,9 +468,11 @@ scene[0x148] = scene[eax]
   (`0x140183df9`/`0x140183e01`, 상수 `0x14049294c`=2000.0 · `0x140492a1c`=−2000.0),
   `nearz`/`farz` 를 읽는 팔은 도달 불가. `fovRad` 는 `[camera+0x120]` 에 그대로 실린다(`0x140183dd9`).
 
-> **[미해결]** 원근 경로가 행렬 빌드 직후 `[camera+0x120] = 2·atanf(1/(m11·2000))` 을 계산한다
-> (`0x140183f53`–`0x140183f71`, `xmm6`=2000.0 @`0x140183f09`). 정사영 경로가 같은 슬롯에
-> `fovRad` 를 넣는 것과 어긋나며 소비처를 못 찾았다. 카메라 모션과 직접 관련이 없어 미해결로 남긴다.
+> **[부분 해소 — §5.7.3]** 이 슬롯(`renderer+0x120` = `renderState+0x110`)의 **정사영 쪽 값**은
+> 소비처를 찾았다: 레이어 `perspective` 원근 카메라의 화각이다(`0x140184f17`). 즉 2D 씬의
+> 레이어 원근은 `general.perspectiveoverridefov` 를 쓴다.
+> **원근 쪽 값**(`2·atanf((1/m11)/2000)`, `0x140183f53`–`0x140183f71`, `xmm6`=2000.0 @`0x140183f09`)은
+> 여전히 소비처 미상이다 — **[미해결]**. 레이어 원근 게이트가 2D 전용이라 그 경로로는 도달하지 않는다.
 
 ### 5.4 `orthogonalprojection.auto` 는 매 프레임 돈다 (신규)
 
@@ -491,6 +505,125 @@ if (scene[0xe0] & 8) {                       /* 정사영 */
 ```
 **`zoom` 은 2D 전용**이고 두 채널이 곱해진다. 3D 씬에서는 무시된다.
 (`lib.sceneScript.d.ts:1957-1962` 의 `ICamera.fov`="For 3D scenes only" / `zoom`="For 2D scenes only" 와 일치.)
+
+### 5.7 레이어 `perspective` 플래그 — z 가 화면 크기에 먹는 법 (신규 · 이번 레인 확정)
+
+이 문서의 종전 판은 오브젝트 `perspective` 키를 다루지 않았다. **소비처를 찾았다.**
+
+#### 5.7.1 키 → 비트 (직접 재측정)
+
+오브젝트 프로퍼티 디스크립터 등록에서 `"perspective"`(문자열 `0x140490890`, 길이 11 → SSO 라
+`lea` 가 아니라 `movsd`+`mov` 로 온다)는 두 클래스에 붙는다: `0x1401ee9a4`(이미지 계열) ·
+`0x140227539`(다른 레이어 클래스). 등록 직후 `[desc+0x34] = 0x120`(오프셋) · `[desc+0x30] = 6`(타입),
+핸들러 4종 `0x14019c620`/`0x14019c6f0`/`0x14019c7f0`/`0x14019c830` 이 실린다(`0x1401ee9bd`–`0x1401eea1a`).
+
+> **디스크립터 표 함정 재확인.** 이름 등록 `call 0x14000f880` **뒤**에 오는 `+0x30`/`+0x34` 스토어가
+> *방금 등록한* 항목의 것이다. 다음 항목의 SSO 문자열 세팅이 그 사이에 끼어들어 있어서, 순진하게
+> 읽으면 한 칸 밀린다. 여기서는 `visible`(같은 `+0x120`, 타입 6)의 스토어와 대조해 정렬을 확인했다.
+
+비트는 핸들러 안에 박혀 있다 — `0x14019c653`–`0x14019c659`:
+```
+btr edx, 7        ; false
+bts ecx, 7        ; true
+cmove ecx, edx    ; asBool(0x140086300) 결과로 선택
+mov [r14+r15], ecx ; r14 = [desc+4] = 0x120
+```
+→ **`perspective` = 오브젝트 flags(`+0x120`) bit7.** (`visible` 은 같은 dword bit0 — `0x1401e1ac6`
+`and 0xfffffffe` / `or 1`.)
+
+#### 5.7.2 소비 게이트 — `0x1401ed259` – `0x1401ed27a`
+
+```
+0x1401ed259  test dword ptr [rs+0x118], 0x400   ; renderState 플래그 bit10 = **정사영 씬**
+0x1401ed263  je  skip
+0x1401ed265  test byte  ptr [obj+0x120], 0x80   ; 레이어 perspective
+0x1401ed26c  je  skip
+0x1401ed26e  lea r8,  [rbp+0x50]                ; ← renderState[0x11a0] 에서 복사한 **투영행렬**
+0x1401ed272  mov rcx, rdi                       ; renderState
+0x1401ed275  lea rdx, [rsp+0x30]                ; ← renderState[0x1160] 에서 복사한 **뷰행렬**
+0x1401ed27a  call 0x140184f00
+```
+
+**renderState+0x118 bit10 = "이 씬은 정사영(2D)"** 이다(이번에 확정):
+`0x14018768a` 가 `scene[0xe0]` bit3(=`orthogonalprojection`)이 설 때만 이 비트를 세우고
+(`0x14018767c`–`0x140187688`), 씬 초기화 `0x1401872cb` 가 지운다. 같은 비트를 보는 다른 소비처가
+독립 확증한다 — `0x1402582ff` 는 2D 가 아닐 때 `materials/fonts/fontbackground_depth.json` 을 고르고,
+`0x14018e175` 는 2D 면 z 성분을 0 으로 죽인다.
+
+> 즉 **레이어 `perspective` 는 정사영(2D) 씬 전용**이다. 3D 씬에서 켜도 아무 일도 없다.
+> 시차 레이어 오프셋(§3.2)과 같은 모양의 게이트다.
+
+같은 함수(`0x1401ed0d0` – `0x1401edb1b`)에 **두 번째** 호출부가 있다(`0x1401ed5b9`–`0x1401ed5dc`):
+부모(`r14`)가 `perspective` 인데 자식(`rsi`)은 아닐 때 자식에도 같은 변환을 적용한다 —
+**부모의 원근이 자식에 상속되고, 자식이 이미 켰으면 두 번 걸지 않는다.** 텍스트 레이어 쪽
+(`0x14025746a` · `0x140258587` · `0x14025d886` · `0x14025d9fa`)도 같은 bit10 을 본다.
+
+#### 5.7.3 카메라 구성 — `0x140184f00` – `0x140184ff7`
+
+인자 `(rcx = renderState, rdx = view 4×4, r8 = proj 4×4)`. **proj 는 입력이자 출력**이다 —
+정사영 행렬의 `m[1][1]` 을 읽어 거리를 역산한 뒤 그 자리에 원근 행렬을 덮어쓴다.
+
+```
+fov = rs[0x110]                                   ; 0x140184f17  실효 fov(라디안)
+t   = tanf(fov * 0.5)                             ; 0x140184f28 → 0x14041b0d0
+inv = 1.0 / proj[0x14]                            ; 0x140184f43  proj[0x14] = m11 = 2/H
+d   = 1.0 / (t / inv)   = 1/(tan(fov/2)·m11) = H/(2·tan(fov/2))     ; 0x140184f48 · 0x140184f54
+
+view[0x30] -= (float)rs[0x84] * rs[0xf8]          ; 0x140184f4c–0x140184f7e   (= W·0.5)
+view[0x34] -= (float)rs[0x88] * rs[0xfc]          ; 0x140184f83–0x140184fa2   (= H·0.5)
+view[0x38]  = -d                                  ; 0x140184f77(부호반전 @0x140492ff0) · 0x140184fb3
+
+far  = max(15000.0, d + 1000.0)                   ; 0x140184f6f · 0x140184fa7 · 0x140184faf
+near = 5.0                                        ; 0x140184fd2 · 0x140184fda
+asp  = rs[0x74] / rs[0x78]                        ; 0x140184fb8 · 0x140184fc4  (렌더타깃 W/H, f32)
+device->vtbl[0x10](proj, fov, asp, near, far)     ; 0x140184fbd · 0x140184fe0  (§5.3 과 같은 빌더)
+```
+
+행렬 오프셋 `0x30/0x34/0x38` 은 요소 12/13/14 다 — **열주도든 행주도든 여기가 병진**이라
+이 지점은 규약 판정에 쓸 수 없다(함정 §14). 규약 논거는 다른 곳에서 가져와야 한다.
+
+**CRT 동정(재측정).** `0x14041b0d0` 은 `tanf` 다 — 소각 근사가 `x + x³·(1/3)`,
+상수 `0x140471e98` = `0.3333333333333333`(`0x14041b12c` `vfmadd132sd`). `sinf`(`x − x³/6`)·
+`cosf`(`1 − x²/2`)와 구분된다.
+
+**`rs[0xf8]`/`rs[0xfc]` 의 정체(이번에 확정).** `Composite::buildProjection` 의 정사영 팔이 쓴다:
+```
+0x140183d96  rs[0xf8] = 0.5 − (오른쪽크롭 − 왼쪽크롭)/(2·W)
+0x140183dc1  rs[0xfc] = 0.5 − (위쪽크롭  − 아래크롭)/(2·H)
+```
+크롭/맞춤 오프셋이 없으면 정확히 **0.5** 다. 원근 팔은 같은 슬롯을 **0 으로 밀어 둔다**
+(`0x140183ef1  mov qword ptr [rcx+0x108], 0`) — 어차피 게이트가 2D 전용이라 도달하지 않는다.
+(renderer+0x108/0x10c = renderState+0xf8/0xfc. renderState = renderer + 0x10.)
+
+**`rs[0x110]` 의 정체(§5.3 미해결 해소).** 정사영 팔이 `rs[0x110] = scene[0x148]·(π/180)`
+(`0x140183dc9`–`0x140183dd9`, 상수 `0x140492628`)를 넣는다. 2D 씬의 `scene[0x148]` 은
+`perspectiveoverridefov`(§5.1)이므로 **레이어 원근의 화각은 `general.perspectiveoverridefov`** 다.
+`fov` 가 아니다. (원근 팔이 같은 슬롯에 `2·atanf((1/m11)/2000)` 를 넣는 것은 여전히
+소비처 미상 — **[미해결]**. 게이트가 2D 전용이라 이 경로와는 무관하다.)
+
+#### 5.7.4 그래서 z 가 화면 크기에 어떻게 먹는가 (수식)
+
+카메라는 캔버스 중앙 `(W·cx, H·cy)` 위 거리 `d` 에 놓여 −z 를 본다(뷰 병진이 `(−W·cx, −H·cy, −d)`).
+정사영 픽셀 공간의 점 `(x, y, z)` 는 원근분할 뒤
+
+```
+d       = H / (2·tan(fov/2))              fov = perspectiveoverridefov (도)
+s(z)    = d / (d − z)
+screen  = center + (xy − center) · s(z)   center = (W·cx, H·cy),  크롭 없으면 (W/2, H/2)
+```
+
+- `z = 0` → `s = 1` → **정사영과 픽셀 동일**. `perspective` 를 켜도 그림이 안 바뀐다.
+- `z > 0`(카메라 쪽) → 확대, `z < 0` → 축소. `z ≥ d` 는 카메라 평면 뒤라 클립된다.
+
+**코퍼스 검산.** 저작 기본 `fov 95° · H 256`:
+`tan(47.5°) = 1.0913` → `d = 256/2.18262 = 117.29`. `z = +10` 이면 `s = 1.0932`(9.3% 확대).
+동봉 6씬이 저작한 `perspectiveoverridefov = 90.760002` 에서는 `d = 126.31`.
+`H = 1080`(설치본 초광폭 4씬) → `d = 494.82`.
+이 값들은 `Tests/WapleCoreTests/SceneGeometryCameraMathTests.swift` 가 자물쇠로 걸고 있다.
+
+**코퍼스 실피해는 0 이다.** `perspective:true` 저작이 동봉·설치본 통틀어
+`presets/clock/preview3dclock/scene.json` 1씬 + `presets/clock/preset.json` 템플릿 1건뿐이고,
+그 레이어의 `origin.z` 가 `0.000` 이라 `s(0) = 1` — 정사영 출력과 픽셀 동일이다(§6.6).
 
 ---
 
@@ -573,6 +706,52 @@ delta(t) = 0.001 · ( cos(25t), sin(33.325t), sin(25t) )
 15바이트 이하 SSO 리터럴 가능성도 배제했다(`parallax` 바이트열의 코드 내 임베드 0건).
 → **에디터 전용 키. 168씬 전건 저작이지만 플레이어는 읽지 않는다.**
 
+### 6.6 레이어 `perspective` 도달 (신규)
+
+`general` 이 아니라 **오브젝트** 키다. JSON 전량(파일명 무관)에서 세었다.
+
+| 코퍼스 | `"perspective"` 저작 | `true` | `false` |
+|---|---:|---:|---:|
+| 동봉 `Sources/WapleRender/Resources/WEAssets/**` | 18건 | **2** | 16 |
+| 설치본 `wallpaper_engine/**` | 40건 | **2** | 38 |
+
+`true` 2건의 정체(양쪽 코퍼스 동일 파일):
+
+| 파일 | 종류 | `origin` | `angles` |
+|---|---|---|---|
+| `presets/clock/preview3dclock/scene.json` | 씬 오브젝트 | `… … 0.000` | `0.000 0.000 …` |
+| `presets/clock/preset.json` | 프리셋 템플릿(씬 아님) | — | — |
+
+즉 **실제 씬 도달은 1건**이고 그 `origin.z = 0` 이라 `s(0) = 1` — 정사영 출력과 픽셀 동일이다.
+`Sources/WapleCore/SceneDocument.swift:242-243` 의 "`perspective:true` 19씬 전부 x/y angles 0"
+주장은 **이 두 코퍼스로는 재현되지 않는다**(19씬이 아니라 1씬). 워크샵 코퍼스 수치일 수 있으나
+그 자산은 이 컨테이너에 없다(`corpus_scan/` 에 인덱스 tsv 만 있고 씬 JSON 은 없다) — **범위 라벨
+없는 수치라 그대로 두면 오해를 부른다**. §7 P-7 참조.
+
+### 6.7 이번 레인에서 재측정한 `general` 키 전수
+
+`general` 블록을 가진 JSON 전량(동봉 333 · 설치본 370 — 씬이 아닌 프리셋/이펙트 JSON 포함)에서
+`camera*`/`fov`/`*projection`/`zoom`/`nearz`/`farz` 를 다시 세어 §6.1 과 **전건 일치**함을 확인했다.
+바이너리 문자열 스캔(ASCII·UTF-16LE)도 다시 떠서, 플레이어가 아는 카메라 관련 키가 아래 15개로
+**닫혀 있음**을 확인했다 — 이 목록 밖의 `camera*` 키는 없다.
+
+```
+camerafade(0x14048e8c8)  cameraparallax(0x140488ae0)  cameraparallaxamount(0x14048e968)
+cameraparallaxdelay(0x14048e950)  cameraparallaxmouseinfluence(0x140489100)
+camerashake(0x14048e918)  camerashakeamplitude(0x14048e998)  camerashakeroughness(0x14048e980)
+camerashakespeed(0x14048e900)  farz(0x14048e8d4)  nearz(0x14048e8dc)
+orthogonalprojection(0x1404890c0)  perspectiveoverridefov(0x14048e8e8)
+perspective(0x140490890, 오브젝트 키)  parallaxDepth(0x1404902c8, 오브젝트 키)
+```
+`camerapreview` 는 **여전히 0건**이다(같은 스캔에서 위 15개는 전부 잡힌다).
+유니폼 이름 `g_ParallaxPosition`(`0x14048dad0`)과 UI 문자열 `ui_browse_properties_mouse_parallax`
+(`0x140488bc8`)가 추가로 잡히는데, 앞은 셰이더 유니폼이고 뒤는 에디터 라벨이라 저작 키가 아니다.
+
+**시차 입력원 결론(질문 1 에 대한 답).** 입력은 **마우스 하나뿐**이다.
+`g_PointerPosition`(renderState+0x8c, 0..1 정규화)이 유일한 외부 입력이고,
+**창 위치도 시간도 초점 식에 들어가지 않는다**(§3.1 의 두 항은 캔버스 중앙과 포인터뿐).
+`dt` 는 스무딩 계수에만 들어간다. 세 입력이 합쳐지는 구조가 아니다.
+
 ---
 
 ## 7. Waple 갭
@@ -605,8 +784,14 @@ delta(t) = 0.001 · ( cos(25t), sin(33.325t), sin(25t) )
 | **P-4** | `orthogonalprojection.auto` 주기 | **매 프레임** (`0x140189d8f`) | 로드 시 1회(`width ?? 1920` 폴백) | 확정 · 미해소 | 오브젝트 `size` 애니메이션이 있을 때만 갈린다. 동봉 auto 2씬은 정적 |
 | **P-5** | 2D eye 재중심화 | `(W/2, H/2, 2000)` (`0x140189da9`–`0x140189df0`) | 해당 개념 없음 | 확정 · 미해소 | 2D 에서 `g_EyePosition` 을 쓰는 셰이더가 생기면 필요 |
 | **P-6** | `zoom` 게이트 | 정사영일 때만, `general.zoom × 카메라레이어zoom` | `zoom` 파스·보존만(`SceneDocument.swift:1287` 부근) | 확정 · 미해소 | 코퍼스 전건 1.0 이라 회귀 위험 없음 |
+| **P-7** | 레이어 `perspective` | 2D 전용. view 를 `(W·cx, H·cy, d)` 로 옮기고 proj 를 `PerspectiveFov(pofov, aspect, 5, max(15000,d+1000))` 로 교체. `s(z) = d/(d−z)` | `SceneRendererFrameEncoder.quadVertices` 의 "M4 근사" — `perspectiveFov` 를 리터럴 95 로 받고, 상단 코너 x 만 `1/(1+tan(fov/2)·0.1)` 로 줄이는 **임의 근사**(:622-631). z 를 아예 안 본다 | **확정 · 미해소** | `SceneCameraMath.layerPerspectiveScale(z:orthoHeight:fovDegrees:)` 로 코너를 초점 기준 스케일. 저작 fov 는 리터럴이 아니라 `doc.perspectiveOverrideFov` |
+| **P-8** | `perspective:true` 도달 주장 | 동봉·설치본 실제 씬 **1건**(`preview3dclock`, `origin.z=0`) | `SceneDocument.swift:242-243` "19씬 전부 x/y angles 0" — 범위 라벨 없음, 이 두 코퍼스로 재현 불가 | **미해결(반증 아님)** | 주장에 코퍼스 범위 라벨을 붙이거나 실측으로 교체. 워크샵 코퍼스가 근거라면 그렇게 적어야 한다 |
+| **X-1** | 순수 산술의 자리 | — | shake·parallax 산술이 전부 `WapleRender`(리눅스 실행 검증 불가)에 있었다 | 해소 | **`Sources/WapleCore/SceneCameraMath`** 신설 — shake/초점/α/레이어오프셋/유니폼/레이어원근을 실측 그대로 담고 `SceneGeometryCameraMathTests`(26개)가 닫힌 식으로 잠근다. `ParallaxController.smoothed` 는 α 를 여기로 위임 |
 
 ### 7.1 우선순위
+
+0. **[2026-08-21 갱신] W-3 은 해소됐다** — `ParallaxController.smoothed` 가 `α = min(1, 10·(1−delay/3)·dt)`
+   로 교체됐고, 산술 본체는 `WapleCore.SceneCameraMath.parallaxAlpha` 로 내려가 리눅스에서 실행 검증된다.
 
 1. **W-3(`delay` 매핑)** — 한 줄 수정, 동봉 회귀 위험 거의 없음, 즉시 해소 가능.
 2. **C-7(주석 반증)** — 코드 변경 없음. 잘못된 실측 주장이 후속 판단을 오염시키고 있다.
@@ -647,6 +832,18 @@ for uid in (0,3,4,5,104,105,107,108):
     print(uid, hex(0x140000000+off))
 PY
 
+# 5b) 레이어 perspective — 키→비트, 게이트, 카메라 구성 (§5.7)
+python3 $S/vdis2.py 0x1401ee98c 0x1401eea50   # 디스크립터: 이름 등록 뒤의 +0x34/+0x30 이 그 항목의 것
+python3 $S/vdis2.py 0x14019c620 0x14019c680   # 핸들러 안의 btr/bts 7 → bit7 확정
+python3 $S/vdis2.py 0x1401ed259 0x1401ed280   # 게이트: rs[0x118]&0x400(2D) && obj[0x120]&0x80
+python3 $S/vdis2.py 0x140184f00 0x140184ff8   # d = 1/(tan(fov/2)·m11), near 5 / far max(15000,d+1000)
+python3 $S/vdis2.py 0x14018767c 0x140187695   # rs[0x118] bit10 ← scene[0xe0] bit3 (정사영)
+python3 $S/vdis2.py 0x140183d57 0x140183de1   # rs[0xf8]/rs[0xfc] = 0.5 − 크롭차/(2·크기), rs[0x110] = fovRad
+
+# 5c) 레이어 perspective 도달 (오브젝트 키라 general 스캔으로는 안 잡힌다)
+grep -rho '"perspective"[[:space:]]*:[[:space:]]*[a-z]*' --include=*.json \
+     /home/user/Waple/Sources/WapleRender/Resources/WEAssets | sort | uniq -c
+
 # 6) 코퍼스 도달 (파일명을 scene.json 으로 좁히지 말 것 — ricepod.json/fantasticcar.json 누락)
 python3 - <<'PY'
 import json,glob,os,collections
@@ -682,3 +879,8 @@ PY
 | `camerapreview` 가 런타임 키 | 문자열이 바이너리에 없다(ASCII·UTF-16LE·SSO 임베드 전부 0건) |
 | 정사영 씬이 `nearz`/`farz` 를 쓴다 | ±2000 고정. `[rdi+0x14c]` 로드가 보이는 팔은 진입 분기 때문에 도달 불가 |
 | `orthogonalprojection.auto` 가 로드 1회 | `Scene::updateCamera` 꼬리(`0x140189d8f`)에서 매 프레임 호출 |
+| 레이어 `perspective` 가 3D 씬에서도 동작 | 게이트가 `renderState+0x118` bit10(=정사영) 를 먼저 본다(`0x1401ed259`). 3D 는 `je` 로 빠진다 |
+| 레이어 `perspective` 의 화각이 `general.fov` | 2D 씬의 `scene[0x148]` 은 `perspectiveoverridefov` 다(`0x140189278` `cmove`). 그 값이 `rs[0x110]` 을 거쳐 `0x140184f17` 로 들어간다 |
+| 레이어 `perspective` 가 z 와 무관한 사다리꼴 왜곡 | 순수 `PerspectiveFov` 교체다. z=0 평면은 정사영과 픽셀 동일이고 왜곡은 전적으로 `s(z)=d/(d−z)` 에서 나온다 |
+| shake/parallax 에 난수원이 있다 | `sinf`/`cosf`/`tanf`/`powf`/`sqrtf` 뿐. 노이즈 테이블 참조도 RNG 호출도 없다(§2.4) |
+| 시차 스무딩이 프레임률 독립 | α 가 `dt` 에 **선형**이다(`0x140189c43` `mulss xmm4, xmm6`). 지수 보정이 없다 |
