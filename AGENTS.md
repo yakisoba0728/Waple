@@ -48,11 +48,48 @@ WapleCore ←── WapleLibrary ──┐
 
 ```bash
 swift build --build-tests      # ~20초 (유휴 상태 Apple Silicon)
-swift test                     # 2,390개(2026-08-20 정적 실측 — 코퍼스 유무와 무관)
+swift test                     # 3,038개(2026-08-21 실측 — 코퍼스 유무와 무관)
 swift run Waple                # 메뉴바 앱으로 실행
 ```
 
-테스트 수 **2,390** 는 고정 기준값이다. 리팩토링으로 이 숫자가 변하면 무언가 잘못됐다.
+**[2026-08-21] "고정 기준값" 이라는 말이 틀렸다.** 종전 이 자리는 "테스트 수 **2,390** 는
+고정 기준값이다. 리팩토링으로 이 숫자가 변하면 무언가 잘못됐다" 였는데, 두 가지가 다 잘못이었다.
+① 그 2,390 은 2026-08-20 값이고 실제로는 그 뒤로 계속 올랐다 — 이 문장을 고치는 지금이 **3,038** 이다
+(같은 세션에 13커밋이 +161). ② 애초에 이 숫자는 고정값일 수 없다. 오라클을 늘리는 것이 이 리포의
+일이라 **늘어나는 게 정상**이고, 잘못된 것은 **줄어드는 것**이다. 그러니 눈으로 지키는 기준값이
+아니라 **아래로만 막는 트립와이어**로 다뤄야 한다.
+
+- **정본은 `.github/workflows/ci.yml` 의 `Skip / execution census` 스텝 하나뿐이다.** 현재 하한과
+  그 근거(실측 런 id·커밋·파일별 증분)는 거기서 읽어라. 값을 올릴 때도 거기만 고친다.
+- 위 `3,038` 은 그 시점 스냅샷일 뿐 게이트가 아니다. 정확한 현재값은 직접 세라:
+  `grep -rE '^\s*func test' Tests/ --include=*.swift | wc -l`
+- **정적 개수와 CI 의 `Executed N tests` 는 지금까지 한 번도 어긋난 적이 없다.** 최신 실측
+  (run `32473541358` · 커밋 `2642488`)에서 두 잡 모두 `Executed 3038` 이고 정적 개수도 정확히
+  3,038 이다. `b8efa2d`(둘 다 2,300) · `badbe68`(2,825) · `131feaa`(2,877) 때도 같았다.
+  그래서 커밋 전에 정적 개수로 하한 통과 여부를 미리 계산할 수 있다.
+- **`Executed` 는 스킵을 포함한다.** 그래서 이 값은 코퍼스 유무와 무관하다. 같은 런에서
+  skipped 가 47(release)/46(debug)로 갈렸는데도 `Executed` 는 둘 다 3,038 이었다 — 그 ±1 은
+  `WebHardPauseTests.testIntervalResumesAtRemainingPhaseThenUsesOriginalPeriod` 의 시간 의존
+  `XCTSkipIf`(느린 러너에서 위상 전제가 깨지면 가짜 그린 대신 스킵)이고 정상이다.
+
+> **[2026-08-21] 2,877 → 3,038 — 이 증가는 정당하다.** 13커밋이 오라클을 161개 늘렸고
+> **삭제·통합은 0건**이다(`131feaa` ↔ `2642488` 파일별 델타에 음수가 없다):
+> remapvalue 직교 3축 재설계 17(`6feb99a` — RemapOperationAxes 14 · RemapOutputChannel 3) ·
+> 마운트 대상을 `project.json` 의 file 로 18(`3bc0fab` — ScenePackageWEParity) ·
+> bool 게이트 실패 분기가 "생성자 기본값 유지" 25(`ff2d30b` — SceneDocumentFidelity) ·
+> `#require` 가 MSL 로 새지 않음 17(`1e4660a` — ShaderPreprocessorRequire 16 · GLSL회귀 1) ·
+> fit 종횡비 보존 11(`990aa2a` — EffectFboFit) · lightconfig 예산 10(`4eb61f1` — SceneLightConfigBudget) ·
+> schemecolor 도달 0 4(`7a0e962` — WallpaperProperties) ·
+> inputrange·cone 12(`8bd2f42` — ParticleInputRangeCone) ·
+> 텍스트 레이어 기본값 3종 2(`8de9dba` — SceneDocument) ·
+> keepaspect 는 `g_TextureNResolution.zw` 3(`1b0d20a` — EffectFboFit 2 · EffectManifest 1) ·
+> varying mat3 누출 + CRLF 헤더 20(`e8ae206` — ShaderPreprocessorConformance 13 · GLSL회귀 7) ·
+> TEXB0004 조건 변형 13(`0c3e18c` — TexHostileInput 12 · TexBundledCorpus 1) ·
+> step 키프레임·불리언 9(`2642488` — PropertyAnimationOptions 4 · PropertyConditionEvaluator 4 ·
+> PropertyAnimation 1).
+> 회귀가 아니라 오라클이 늘어난 것이다. 하한은 `ci.yml` 에서 `2877` → `3038` 로 함께 래칫했다
+> (관례: 하한 = 직전 실측치, 여유는 미리 주지 않는다 — `94b0a34` 도 자기 커밋의 정적 개수와
+> 똑같은 값을 박았다).
 
 ### 리눅스에서의 커밋 전 검증
 
@@ -108,7 +145,7 @@ localStorage 상한 1 · 재임포트 평점 유지 1 · 골든 판정 분기 1(
 각자 갱신하지 말고 합류 후 한 번 재측정할 것.
 
 [2026-08-19] 이 숫자는 이제 **CI 가 지킨다**. `.github/workflows/ci.yml` 의
-`Skip / execution census` 가 실행 하한 2,300 과 스킵 상한 100 을 건다. 손으로 세어 적는
+`Skip / execution census` 가 실행 하한(값은 그 스텝에서 읽어라)과 스킵 상한 100 을 건다. 손으로 세어 적는
 단계는 끝났고, 값을 바꾸려면 워크플로도 함께 고쳐야 한다. **단 이건 하한이라 아래로만 막는다** —
 위 [2026-08-20] 주석처럼 개수가 늘면 CI 는 통과하므로, 늘린 사람이 이 하한을 같이 올려야
 트립와이어가 새 기준값을 지킨다.
@@ -142,8 +179,15 @@ export WAPLE_BASE_ASSETS=/path/to/assets       # 미설정 시 ~/Downloads/wallp
 | 코퍼스 없음 | 2,300 | 40 | ~110초 | 2026-08-17 macOS 실측 (`WAPLE_REAL_PKGS=/nonexistent/path swift test`, 순차 — 번들별 25+1044+51+802+348) |
 | CI (코퍼스 없음) | 2,300 | 46 | ~195초 | **전부 실측**(2026-08-19 CI run `32258859021`, macos-26). 종전 행은 실행수가 정적 추론이었고 "다음 CI 로 재확인할 것" 이라 적혀 있었다 — 그 재확인이 run `32222689131`(2,285/47)이었고, 이 행은 F530-sweep 이후 재측정이다. debug·release 두 레인이 실행·스킵·실패까지 동일했다 |
 
+**[2026-08-21] 위 표의 `실행` 열은 2026-08-19 시점의 스냅샷(2,300)이다** — 그 뒤로 계속 올라
+같은 날 기준 3,038 이다(run `32473541358`). 이 표가 말하는 것은 **값이 아니라 불변식**이다:
+다섯 구성이 서로 다른 스킵 수를 내면서도 `실행` 은 **전부 같다.** 값을 갱신하려면 다섯 구성을
+같은 커밋에서 다시 재야 하는데(전량 코퍼스 ~30분 포함) 그건 안 했다. 그러니 **이 열의 숫자를
+현재값으로 인용하지 마라** — 현재값은 `ci.yml` 의 census 스텝과 위 `grep` 이 정본이다.
+`스킵`·`시간` 열은 각 행에 적힌 그 시점의 실측 그대로다.
+
 모든 구성 **실패 0**. `실행` 은 XCTest 의 `Executed N tests` 이고 **스킵을 포함한다** —
-그래서 스킵이 40/46/9 로 갈려도 다섯 구성이 전부 똑같이 2,300 을 낸다. 위 `~110초`는 증분 빌드까지
+그래서 스킵이 40/46/9 로 갈려도 다섯 구성이 전부 똑같은 수(그때는 2,300)를 낸다. 위 `~110초`는 증분 빌드까지
 포함한 명령 전체 벽시계이고 번들 실행 시간 합은 ~97초, CI 의 `~162초`는 로그의
 `in 154.420 seconds`(빌드 별도, 2026-08-19 run `32238272072`) 다.
 
@@ -232,7 +276,8 @@ debug 병렬(275초)보다 빠르다.
 번들별(2026-08-16, 코퍼스 있음/축소 38): WapleRenderTests 995(스킵 7) · WapleCoreTests 786(스킵 2) · WapleAppTests 292 · WapleLibraryTests 51 · WapleSnapshotTests 25.
 번들별(2026-08-01, 코퍼스 있음/전량): WapleRenderTests 992(스킵 2) · WapleCoreTests 786 · WapleAppTests 289 · WapleLibraryTests 51 · WapleSnapshotTests 25.
 번들별(2026-08-16, 코퍼스 없음): WapleRenderTests 995(스킵 26) · WapleCoreTests 786(스킵 14) · WapleAppTests 292 · WapleLibraryTests 51 · WapleSnapshotTests 25.
-(CI 는 번들을 `WaplePackageTests.xctest` 하나로 합쳐 2,300 한 줄로 낸다.)
+(CI 는 번들을 `WaplePackageTests.xctest` 하나로 합쳐 **한 줄**로 낸다 — 그래서 census 가
+`Executed N tests` 의 **마지막** 줄만 본다. 위 번들별 합계는 2026-08-16 스냅샷이라 현재값이 아니다.)
 
 코퍼스가 사주는 38개(2026-08-16 실측 — 무코퍼스 스킵 40 중 옵트인 2건을 뺀 38 이 코퍼스로 풀린다.
 축소 38개로도 31건이 풀렸고 나머지 7건은 그 서브셋에 없는 패키지를 요구한 것이다. 종전 표기 39개는

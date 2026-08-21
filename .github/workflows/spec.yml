@@ -325,3 +325,52 @@ jobs:
             exit 1
           fi
           echo "동봉 에셋 $(git ls-files -- Sources/WapleRender/Resources/WEAssets | wc -l | tr -d ' ')개 전부 attr/-text"
+
+      # ── [2026-08-21] 프로브. **게이트가 아니다 — 절대 실패하지 않는다.** ──────────
+      #
+      # 왜 있는가: `scripts/dev/linux-render-typecheck.sh`(`fd5532b`)가 `Sources/WapleRender/**`
+      # 를 리눅스에서 **타입체크**한다. `swiftc -parse` 는 타입체크를 하지 않아 그 공백에서
+      # macOS CI 가 두 번 깨졌는데(`b98db0a`·`bb5f902`), 이 도구는 두 번째 부류를 잡는다
+      # (양성 대조 실측: `SceneRendererResources.swift` 의 `1214:51 texW`·`1214:69 texH` 를
+      # macOS 빌드 로그와 행·열까지 똑같이 지목). 즉 이 레인의 게이트로 승격할 값어치가 있다.
+      # **다만 아직 근거가 없다.**
+      #
+      # 확정(1차 자료 실측, 2026-08-21):
+      #   · `actions/runner-images` README — `ubuntu-latest` = **Ubuntu 24.04**.
+      #   · `images/ubuntu/Ubuntu2404-Readme.md`(이미지 `20260816.277.1`) — **Swift 6.3.3** 동봉.
+      #   · `images/ubuntu/scripts/build/install-swift.sh` — `/usr/share/swift` 에 풀고
+      #     `/usr/local/bin/{swift,swiftc}` 로 심링크, `SWIFT_PATH=/usr/share/swift/usr/bin`.
+      #
+      # 미해결(그래서 아직 게이트가 아니다):
+      #   · 이 도구를 검증한 로컬 툴체인은 **6.0.3** 이다. 6.3.3 이 **손으로 적은** 심 15종에
+      #     새 진단을 내는지 여기서는 잴 수 없다.
+      #   · 도구가 `-swift-version` 을 넘기지 않으므로 러너의 **기본 언어 모드가 5** 라는 전제가
+      #     깨지면 그대로 무너진다. 아래 스니펫이 그것을 잰다.
+      #   · `install-swift.sh` 는 이미지 빌드 시점의 `apple/swift` **releases/latest** 를 따라간다 —
+      #     즉 러너의 Swift 는 이미지 갱신마다 **움직인다**. `ubuntu-latest` 라벨 자체도 26.04 로
+      #     이동 중(README 의 공개 프리뷰 공지). 게이트를 넣는다면 `ubuntu-24.04` 로 고정할 것.
+      #
+      # 그래서 먼저 **재기만 한다.** `set +e` 로 돌고 마지막 명령이 `:` 라 어떤 경우에도 rc=0 이다.
+      # 로컬 음성 대조(2026-08-21): swift 가 PATH 에 **없을 때**도 rc=0(전건 `command not found`),
+      # **있을 때**도 rc=0. 초록을 깨뜨릴 수 없다.
+      # 이 프로브를 읽은 다음에 무엇을 할지(판단 규칙 + 붙일 YAML)는 `docs/dev/linux-typecheck.md`
+      # 의 "CI" 절에 그대로 적어 뒀다. **읽기 전에 게이트를 넣지 마라.**
+      - name: Probe swift on runner
+        run: |
+          set +e
+          echo "image=${ImageVersion:-unknown}  arch=$(uname -m)  cores=$(nproc)  mem=$(free -m | awk '/^Mem:/{print $2}')MB"
+          echo "os=$( (. /etc/os-release && echo "$PRETTY_NAME") 2>/dev/null || echo unknown )"
+          echo "SWIFT_PATH=${SWIFT_PATH:-<unset>}"
+          echo "swift  -> $(command -v swift  || echo '<none>')"
+          echo "swiftc -> $(command -v swiftc || echo '<none>')"
+          swift --version; echo "rc(swift --version)=$?"
+          command -v flock >/dev/null && echo "flock: yes" || echo "flock: no"
+
+          # 기본 언어 모드 판정. 이 두 줄은 **모드 6 에서만** 오류가 된다.
+          # 로컬 6.0.3 실측: 기본 rc=0 · `-swift-version 5` rc=0 · `-swift-version 6` rc=1
+          #   (`main actor-isolated var 'probeGlobal' can not be mutated from a nonisolated context`).
+          # 즉 rc=0 이면 러너 기본 모드도 5 이고, 도구의 전제가 선다.
+          printf 'var probeGlobal = 0\nfunc probeBump() { probeGlobal += 1 }\n' > "$RUNNER_TEMP/probe.swift"
+          swiftc -typecheck "$RUNNER_TEMP/probe.swift" 2>&1 | head -5
+          echo "rc(기본 언어 모드 typecheck)=${PIPESTATUS[0]}   # 0 이면 모드 5(로컬과 동일)"
+          :
