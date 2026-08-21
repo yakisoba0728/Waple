@@ -399,3 +399,68 @@ alpha = 1.0
 3. `usershadervalues` 바인딩의 런타임 갱신 여부(§6).
 4. 구분자에 탭/개행이 섞인 `schemecolor` 값의 동작 차이. WE 는 `cmp byte [rbx],0x20` 하나만 보므로
    탭을 성분 내부로 삼킨다. 실측 도달 0건이라 맞추지 않았고, Waple 도 맞추지 않았다.
+
+---
+
+## 9. `GetDominantColor` — 편집기가 `schemecolor` 를 **만드는** 자리
+
+> **[2026-08-21, 클러스터 AE]** §1–§8 은 `schemecolor` 를 **읽는** 쪽을 다룬다. 여기서는
+> 그 값이 애초에 어디서 나오는지, 그리고 그것이 우리 `ArtworkColors` 와 어떻게 다른지를 적는다.
+> 이 절은 `Sources/WapleRender/ArtworkColors.swift` 머리말이 참조하는 자리다.
+
+### 9.1 함수 동정
+
+편집기(`ui/dist/scripts/scripts.js`)가 `getDominantColorFromFile` 로 부르고 그 결과를
+`project.schemecolor` 에 넣는다. 네이티브 쪽 진입점은 `bin/resourceutil64.dll`
+(imagebase `0x180000000`)의 `GetDominantColor` / `GetDominantColorFromImage` 두 export 이고,
+**둘 다 `0x18000a6d0` 하나로 폴딩**된다. 본체는 `sub_180009e30` 이다.
+
+`wallpaper64.exe` 가 아니라 `resourceutil64.dll` 이라는 점이 중요하다 — 공통 브리프 함정 #13
+("바이너리 하나 ≠ WE") 그대로다. `wallpaper64.exe` 만 훑으면 이 함수는 존재하지 않는 것처럼 보인다.
+
+### 9.2 산식 (실측)
+
+1. RGBA8 전 픽셀을 HSV 로 바꾼다 (`0x180009f85`–`0x18000a035`). 픽셀 dword 는 byte0 = R.
+2. **hue 를 1° 단위 360빈**으로 나눈다 (`cvttss2si` 후 359 상한, 음수는 0).
+   `delta < 1e-5` 이거나 `max <= 0` 인 **무채색 픽셀은 빈 0 에 `sat = 0` 으로** 들어간다.
+3. 빈마다 넷을 누적한다:
+   - `weight += (int)(sat * val * 100)` (`0x18000a093`)
+   - `count += 1`
+   - `satSum += sat`
+   - `valSum += val`
+4. `weight` 최대 빈 하나를 고르고 `H = bin/360` · `S = satSum/count` · `V = valSum/count` 로
+   **HSV→RGB 역변환**해 `0xFF000000 | B<<16 | G<<8 | R` 로 싼다
+   (`0x18000a508`–`0x18000a6a2`).
+
+핵심은 **`sat·val` 가중 빈도**다. 칙칙하거나 어두운 픽셀은 스스로 눌리므로, 면적이 넓어도
+배경 회색이 대표색이 되지 않는다.
+
+### 9.3 Waple `ArtworkColors` 와의 차이 — 전부 확정
+
+| 축 | WE `GetDominantColor` | Waple `ArtworkColors` |
+| --- | --- | --- |
+| 양자화 | hue **360빈**(채도·명도는 빈 안에서 평균) | RGB 4bit×3 = **4096빈** |
+| 가중치 | `sat·val` 가중 빈도 | **순수 빈도**(가장 넓은 면적이 이긴다) |
+| 알파 | **안 본다** | `a < 128` 픽셀을 버린다 |
+| 산출 개수 | **한 색** | 다섯(primary/secondary/tertiary/text/highContrast) |
+| 표본 | 전 픽셀 | 64×64 이하로 리샘플 후 |
+
+곧 **두 결과는 일반적으로 일치하지 않는다.** 이것은 버그가 아니라 서로 다른 문제를 푸는
+두 함수다 — WE 의 이 함수는 *편집기가 프로젝트에 한 번 굽는* 값이고, 우리 쪽은 *재생 중
+앨범아트에서 매번 뽑는* 값이다.
+
+### 9.4 [미해결] — 다섯 색을 만드는 자리는 못 찾았다
+
+썸네일 이벤트가 싣는 다섯 색은 `wallpaper64.exe` `0x14011be40`–`0x14011c90c` 에서
+**이미 계산된 uint32** 로 읽힌다:
+
+| 필드 | 오프셋 | 읽는 자리 |
+| --- | --- | --- |
+| primaryColor | `[obj+0x150]` | `0x14011c50d` |
+| secondaryColor | `+0x154` | `0x14011c576` |
+| tertiaryColor | `+0x158` | `0x14011c5c9` |
+| textColor | `+0x15c` | `0x14011c61c` |
+| highContrastColor | `+0x160` | `0x14011c66f` |
+
+**그 다섯을 쓰는 자리는 특정하지 못했다.** `GetDominantColor` 를 그대로 이식해도 색이
+하나뿐이라 이 다섯을 채울 수 없다. 이 갭을 닫으려면 쓰기 자리를 먼저 찾아야 한다.

@@ -3,12 +3,31 @@ import WapleCore
 
 /// float(rgba16Float) HDR 누적 버퍼를 표시 포맷(bgra8)으로 확정하는 최종 포스트 패스. 최종 blit 대체.
 ///
-/// 압축 커브 = saturate 클램프. WE 2.8 의 최종 처리는 saturate 뿐(무-ACES 5중확증)이라
-/// HDRBloomPass 합성부(saturate(base+bloom))와 동일 규약 — >1 은 1.0 으로 클램프(밝은 영역 순백은
-/// WE-충실 결과이며 결함 아님), [0,1] 저역은 항등. 종전 ACES filmic 은 저역까지 곡선변형해 이탈했다(제거).
-/// EOTF(sRGB) 인코드는 미이식 — sRGB-뷰 스왑체인의 하드웨어 인코드와 상쇄되는 쌍이라 비-sRGB(bgra8)
-/// 타깃엔 이중감마가 된다(근거: SceneRendererFinalizer #22 · HDRBloomPass 합성 셰이더 주석).
-/// exposure 유니폼 = 밝기 튜닝 노브(ponytail: 미니멀 모델이 못 보는 캘리브레이션 여지, 기본 1.0 = 항등).
+/// 압축 커브 = saturate 클램프. **WE 에 톤매핑 연산자는 없다** — 동봉 셰이더 137파일 전수에
+/// `ACES`/`Reinhard`/`Uncharted`/`filmic`/`Hable`/`tonemap`/`whitepoint`/`exposure`/`luminance`/
+/// `histogram` 이 **0건**이고(유일한 `aces` 1건은 `HLSL/dx11playlisttransition.vert:87` 의 오타
+/// 주석 `"Move pieaces up and down"`), 바이너리 문자열에도 `gamma`/`tonemap`/`exposure` 가
+/// ASCII·UTF-16LE 양쪽 0건이다. 곧 어깨도 발끝도 화이트포인트도 존재하지 않는다.
+/// 최종 식은 LDR `scene+bloom`(`combine.frag:13-15`) 또는 HDR `saturate(lin(scene+bloom))`
+/// (`combine_hdr.frag:43`) — `saturate` 는 곡선이 아니라 **클램프**다. >1 은 1.0(순백은 WE-충실
+/// 결과이며 결함 아님), [0,1] 저역은 항등. 종전 ACES filmic 은 저역까지 곡선변형해 이탈했다(제거).
+///
+/// **EOTF(sRGB) 디코드 `lin()` 미이식 — 근거 정정(W-20).** 종전 주석은 *"WE 는 sRGB-뷰 스왑체인이라
+/// 하드웨어 인코드와 상쇄되는 쌍"* 을 근거로 들었는데 **그 전제는 실측으로 반증됐다**:
+/// 포맷 enum→DXGI 사상 28 arm 에 `_SRGB` 값이 0건이고(`Format::toDXGI` `0x1400d2a20`),
+/// `DXGI_SWAP_CHAIN_DESC` 를 채우는 유일한 자리가 `R8G8B8A8_UNORM`(28) 이다(`0x140008146`).
+/// 상쇄해 줄 하드웨어 인코드는 애초에 없다. 그래도 결론은 그대로인데, 근거가 둘로 갈린다:
+///  1. WE 의 `lin()` 은 **`hdr:true` 경로에만 있다**(`combine_hdr.frag` · `passthroughsrgb.frag`,
+///     머티리얼 로드 게이트 `0x14017fb45`–`0x14017fb9f`). 358 씬 중 354 씬은 `combine.frag`
+///     (감마 변환 없음)이거나 최종 패스 자체가 없다 — LDR 에서 디코드 없음이 **정확**하다.
+///  2. `hdr:true` 4 씬에 대해서는 골든 실측(EOTF 이식 p50 0.047 vs WE 골든 0.18, 클램프 p50 ≈0.19)이
+///     디코드 미적용 쪽을 지지한다. 정적 측정과 골든이 갈리는 지점은 `docs/re/tonemapping.md`
+///     §2.6 [미해결 C] 로 남아 있다.
+/// 전문: `docs/re/tonemapping.md` §1.1·§1.2·§2.4·§3·§9 W-20.
+///
+/// exposure 유니폼 = **WE 에 대응물이 없는 Waple 확장 노브**다(W-27). WE 의 밝기 축은 정적
+/// 두 개뿐이고(`g_RenderVar0.x` 디스플레이 질의값 · 앱 설정 `wec_brs`), 씬 내용에 반응하는
+/// 자동노출·휘도적응은 없다. 기본 1.0 = 항등이라 무해하지만 정본으로 오인하면 안 된다.
 final class HDRPostPass {
     private let pipeline: MTLRenderPipelineState
     /// 노출 배율(씬 밝기 튜닝). 클램프 입력에 곱한다(기본 1.0 = 항등).
@@ -64,8 +83,8 @@ final class HDRPostPass {
                               constant float &exposure [[buffer(0)]]) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);    // WE combine.frag 는 linear 샘플러 가정
         float4 c = hdrTex.sample(s, in.uv);
-        // WE 최종 = saturate 클램프(무-ACES 5중확증, HDRBloomPass 합성부와 동일 규약).
-        // >1 → 1.0(순백), [0,1] 저역은 항등(ACES 는 저역도 곡선변형). exposure = 밝기 노브.
+        // WE 최종 = saturate 클램프(셰이더 137파일 전수에 톤커브 식별자 0건 — 상단 주석).
+        // >1 → 1.0(순백), [0,1] 저역은 항등(ACES 는 저역도 곡선변형). exposure = Waple 확장 노브.
         // F675: 최종 알파 1.0 강제 — c.a 통과는 캡처 PNG 투명 픽셀(디스플레이는 알파 무시라 묵시 무차).
         return float4(saturate(c.rgb * exposure), 1.0);
     }
