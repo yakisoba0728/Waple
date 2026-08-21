@@ -466,6 +466,404 @@
    ]
   },
   {
+   "id": "material.keyPathHistogram",
+   "value": {
+    "모집단": "동봉 에셋에서 경로에 `materials` 디렉터리 세그먼트가 있는 *.json 전수 = `**/materials/**/*.json`. 위 material.populations 의 번들 331(effects/ + materials/)보다 크다 — presets/ 와 scenes/ 아래 머티리얼까지 센다. spec/engine/render-state.json 의 assets 분모와 같은 집합이다",
+    "파일 수": 639,
+    "트리별 파일 수": {
+     "effects": 236,
+     "materials": 95,
+     "presets": 249,
+     "scenes": 59
+    },
+    "파싱": {
+     "strict": 639
+    },
+    "머티리얼 형태가 아닌 파일": [],
+    "고유 키 경로": 50,
+    "도수의 뜻": "그 키 경로가 등장하는 **파일 수**다(출현 횟수가 아니다). passes 길이가 전 모집단 1이라 지금은 둘이 같지만, 멀티패스가 생기면 갈린다",
+    "키 경로 → 도달 파일 수": {
+     "passes": {
+      "전체": 639,
+      "effects": 236,
+      "materials": 95,
+      "presets": 249,
+      "scenes": 59
+     },
+     "passes[].shader": {
+      "전체": 639,
+      "effects": 236,
+      "materials": 95,
+      "presets": 249,
+      "scenes": 59
+     },
+     "passes[].depthwrite": {
+      "전체": 623,
+      "effects": 236,
+      "materials": 79,
+      "presets": 249,
+      "scenes": 59
+     },
+     "passes[].depthtest": {
+      "전체": 621,
+      "effects": 236,
+      "materials": 78,
+      "presets": 248,
+      "scenes": 59
+     },
+     "passes[].cullmode": {
+      "전체": 608,
+      "effects": 232,
+      "materials": 69,
+      "presets": 248,
+      "scenes": 59
+     },
+     "passes[].blending": {
+      "전체": 602,
+      "effects": 236,
+      "materials": 60,
+      "presets": 249,
+      "scenes": 57
+     },
+     "passes[].textures": {
+      "전체": 401,
+      "effects": 54,
+      "materials": 47,
+      "presets": 245,
+      "scenes": 55
+     },
+     "passes[].combos": {
+      "전체": 151,
+      "effects": 20,
+      "materials": 28,
+      "presets": 101,
+      "scenes": 2
+     },
+     "passes[].constantshadervalues": {
+      "전체": 107,
+      "effects": 6,
+      "materials": 1,
+      "presets": 99,
+      "scenes": 1
+     },
+     "passes[].alphawriting": {
+      "전체": 60,
+      "effects": 5,
+      "presets": 43,
+      "scenes": 12
+     },
+     "passes[].combos.REFRACT": {
+      "전체": 43,
+      "presets": 43
+     },
+     "passes[].constantshadervalues.ui_editor_properties_overbright": {
+      "전체": 33,
+      "effects": 1,
+      "presets": 32
+     },
+     "passes[].constantshadervalues.ui_editor_properties_refract_amount": {
+      "전체": 29,
+      "presets": 29
+     },
+     "passes[].combos.VERTICAL": {
+      "전체": 16,
+      "effects": 14,
+      "materials": 2
+     },
+     "passes[].combos.CUTOUT": {
+      "전체": 11,
+      "presets": 11
+     },
+     "passes[].constantshadervalues.ui_editor_properties_cutout_end": {
+      "전체": 9,
+      "presets": 9
+     },
+     "passes[].constantshadervalues.ui_editor_properties_cutout_opacity": {
+      "전체": 9,
+      "presets": 9
+     },
+     "passes[].constantshadervalues.ui_editor_properties_cutout_start": {
+      "전체": 9,
+      "presets": 9
+     },
+     "passes[].combos.version": {
+      "전체": 6,
+      "materials": 6
+     },
+     "passes[].combos.COLORFONT": {
+      "전체": 4,
+      "materials": 4
+     },
+     "passes[].combos.MSDF": {
+      "전체": 4,
+      "materials": 4
+     },
+     "passes[].constantshadervalues.dissipation": {
+      "전체": 4,
+      "effects": 4
+     },
+     "passes[].combos.DYE": {
+      "전체": 2,
+      "effects": 2
+     },
+     "passes[].combos.LIGHTING": {
+      "전체": 2,
+      "materials": 1,
+      "scenes": 1
+     },
+     "passes[].combos.UPSAMPLE": {
+      "전체": 2,
+      "materials": 2
+     },
+     "passes[].combos.VERSION": {
+      "전체": 2,
+      "effects": 1,
+      "materials": 1
+     },
+     "passes[].combos.vertexcolor": {
+      "전체": 2,
+      "materials": 2
+     },
+     "passes[].constantshadervalues.roughness": {
+      "전체": 2,
+      "materials": 1,
+      "scenes": 1
+     },
+     "passes[].combos.BICUBIC": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].combos.BLOOM": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].combos.BLUR": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].combos.CLEARALPHA": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].combos.COMBINEDBG": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].combos.DISPLAYHDR": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].combos.ENABLEMASK": {
+      "전체": 1,
+      "effects": 1
+     },
+     "passes[].combos.FOG": {
+      "전체": 1,
+      "effects": 1
+     },
+     "passes[].combos.FULLSCREEN": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].combos.LINEAR": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].combos.PINCH": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].combos.REFLECTION": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].combos.SPIN": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].combos.spritesheet": {
+      "전체": 1,
+      "scenes": 1
+     },
+     "passes[].constantshadervalues.metallic": {
+      "전체": 1,
+      "scenes": 1
+     },
+     "passes[].constantshadervalues.reflectivity": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].culling": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].usershadervalues": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].usershadervalues.schemecolor": {
+      "전체": 1,
+      "materials": 1
+     },
+     "passes[].usertextures": {
+      "전체": 1,
+      "scenes": 1
+     },
+     "passes[].usertextures[].keepaspect": {
+      "전체": 1,
+      "scenes": 1
+     },
+     "passes[].usertextures[].name": {
+      "전체": 1,
+      "scenes": 1
+     }
+    },
+    "번들 331 밖에서만 도달하는 키": {
+     "passes[].combos.REFRACT": {
+      "전체": 43,
+      "presets": 43
+     },
+     "passes[].constantshadervalues.ui_editor_properties_refract_amount": {
+      "전체": 29,
+      "presets": 29
+     },
+     "passes[].combos.CUTOUT": {
+      "전체": 11,
+      "presets": 11
+     },
+     "passes[].constantshadervalues.ui_editor_properties_cutout_end": {
+      "전체": 9,
+      "presets": 9
+     },
+     "passes[].constantshadervalues.ui_editor_properties_cutout_opacity": {
+      "전체": 9,
+      "presets": 9
+     },
+     "passes[].constantshadervalues.ui_editor_properties_cutout_start": {
+      "전체": 9,
+      "presets": 9
+     },
+     "passes[].combos.spritesheet": {
+      "전체": 1,
+      "scenes": 1
+     },
+     "passes[].constantshadervalues.metallic": {
+      "전체": 1,
+      "scenes": 1
+     },
+     "passes[].usertextures": {
+      "전체": 1,
+      "scenes": 1
+     },
+     "passes[].usertextures[].keepaspect": {
+      "전체": 1,
+      "scenes": 1
+     },
+     "passes[].usertextures[].name": {
+      "전체": 1,
+      "scenes": 1
+     }
+    },
+    "정본이 안 싣던 키": "`passes[].usertextures[].keepaspect` 1건 — scenes/videoplayer/materials/background.json 의 `usertextures:[{\"name\":\"videotex\",\"keepaspect\":true}]`. material.userTextures 의 항목키 표(코퍼스 name+type 50건)에 없는 세 번째 항목 키다. 이 문서의 다른 항목은 이 키를 한 번도 세지 않았다 — 모집단 경계(scenes/ 제외) 때문이지 결함은 아니다. 의미·미소비 판정은 spec/assets/misc-schema.json 의 zcompat.videoTexture 계열이 담는다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/**/materials/**/*.json",
+     "note": "네 트리(effects/ materials/ presets/ scenes/) 전수 639건 — 위 asset 근거보다 분모가 크다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.sceneInlineMaterials",
+   "value": {
+    "질문": "동봉 씬이 머티리얼을 **인라인 객체로** 싣는가 — 그렇다면 머티리얼 스키마의 모집단이 파일만으로는 닫히지 않는다",
+    "씬 파일": 172,
+    "오브젝트": 203,
+    "objects[].material 의 형태": {
+     "없음": 203
+    },
+    "passes[0].shader 를 가진 인라인 딕트": {},
+    "판정": "동봉 씬에 인라인 머티리얼은 **0건**이다. objects[].material 은 전건 부재이고, 머티리얼은 image/model/particle 파일을 거쳐 경로로만 참조된다. 따라서 이 문서의 머티리얼 모집단은 `**/materials/**/*.json` 파일 집합으로 닫힌다",
+    "범위 밖": "objects[].effects[].passes[] (씬이 이펙트 패스의 combos/constantshadervalues/textures 를 덮어쓰는 층)는 머티리얼이 아니다 — spec/corpus/scene-schema.json 의 scene.effects.schema 소관이다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/**/materials/**/*.json",
+     "note": "네 트리(effects/ materials/ presets/ scenes/) 전수 639건 — 위 asset 근거보다 분모가 크다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.blendingCensus",
+   "value": {
+    "머티리얼 패스 blending 값 전수": {
+     "normal": 205,
+     "translucent": 200,
+     "additive": 197
+    },
+    "트리별": {
+     "effects": {
+      "normal": 188,
+      "translucent": 47,
+      "additive": 1
+     },
+     "materials": {
+      "translucent": 46,
+      "normal": 8,
+      "additive": 6
+     },
+     "presets": {
+      "additive": 150,
+      "translucent": 95,
+      "normal": 4
+     },
+     "scenes": {
+      "additive": 40,
+      "translucent": 12,
+      "normal": 5
+     }
+    },
+    "blending 키가 없는 패스": {
+     "materials": 35,
+     "scenes": 2
+    },
+    "effect.json 파일": 128,
+    "effect.json 패스의 blending": {
+     "(blending 키 없음)": 220
+    },
+    "shaders/declarations.json": {
+     "translucent": 7
+    },
+    "alphatocoverage": "동봉 자산 **0건**. 워크샵 코퍼스에만 40건 있다(spec/engine/render-state.json renderState.authoring.valueDistribution). 동봉만으로는 이 모드의 회귀를 볼 수 없다",
+    "기본값": "blending 키가 없으면 열거값 0 = normal 이다 — 블렌드 상태 객체의 생성자가 오브젝트+0x26 을 0 으로 두기 때문이다(wallpaper64.exe @0x140098ed3). 문자열↔D3D11 상태 완전표는 spec/engine/render-state.json renderState.blend.stringToState",
+    "effect 패스는 렌더 상태를 안 갖는다": "effect.json 패스 220건 전부 blending 키가 없다. 이펙트의 블렌드 상태는 그 패스가 참조하는 material 이 정한다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/**/materials/**/*.json",
+     "note": "네 트리(effects/ materials/ presets/ scenes/) 전수 639건 — 위 asset 근거보다 분모가 크다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
    "id": "material.cullingTypo",
    "value": {
     "관측": "materials/util/flatpointalphavertexcolor.json 이 cullmode 대신 \"culling\":\"nocull\" 을 쓴다",
@@ -2720,9 +3118,9 @@
      "material": true,
      "command": true,
      "source": true,
-     "compose": false,
+     "compose": true,
      "conditions": true,
-     "functions": false,
+     "functions": true,
      "dependencies": true,
      "replacementkey": true,
      "editable": false,
@@ -2735,10 +3133,8 @@
      "clear": true
     },
     "미등장": [
-     "compose",
      "culling",
      "editable",
-     "functions",
      "performance"
     ]
    },
@@ -2909,17 +3305,14 @@
   {
    "id": "waple.gap.composeAndConditions",
    "value": {
-    "미소비 렌더 키": [
-     "compose",
-     "functions"
-    ],
+    "미소비 렌더 키": [],
     "정본 도수": {
      "pass.compose": 11,
      "conditions(fbo/bind/pass 합)": 4,
      "functions": 1
     },
     "해소": "conditions 는 `4785c0d` 로 닫혔다. EffectManifest.Condition/Conditions/evaluate/parseConditions 가 규약을 그대로 구현한다 — 맨몸 값은 정확히 등호, 명명 연산자는 ge/gt/le/lt 4종뿐이고 미지·부재 op 는 등호 폴백, 누산은 전부 AND, 비배열·빈 배열은 true(fail-open). 좌변은 이펙트 **인스턴스** 레벨 combos(SceneEffect.instanceCombos)다. 소비 3지점 — fbo 는 아예 만들지 않고, pass 는 통째로 건너뛰며(인덱스는 증가), bind 는 그 슬롯만 언바인드된다",
-    "note": "compose·functions 는 의미가 미확정이라 아직 구현할 수 없다. '읽지 않는다'는 사실만 확정이다",
+    "note": "[2026-08-21 재측정] 목록이 비었다 — compose·functions 도 이제 **파스는 한다**(EffectManifest.Pass.compose · EffectManifest.functions). 다만 파스한 값을 렌더러가 읽는 자리는 아직 없다(저장까지만). 이 항목이 보는 것은 waple.keyLiteralCoverage 와 같은 판정 — '따옴표 리터럴이 있는가' 이지 '렌더에 반영되는가' 가 아니다. 종전 값 ['compose','functions'] 은 파스가 붙기 전 상태였다",
     "갭 아님": "editable / performance 도 Sources 에 없지만 이건 에디터 메타데이터라 렌더에 영향이 없다 — 미소비가 정상이다(replacementkey 는 `fafcd21` 로 소비된다)"
    },
    "status": "확정",

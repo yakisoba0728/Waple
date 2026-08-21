@@ -437,9 +437,10 @@ additive 0.912·1.043)을 근거로 프리멀티 오버를 **의도적으로** �
 
 | 게이트 | 결과 |
 | --- | --- |
-| `python3 scripts/spec/check_canon_generator_keys.py` | **통과** — 대조 291건(종전 284) · 불일치 0 |
-| `python3 scripts/spec/validate.py` | **통과** — 오류 0 · 확정 435/보고 22/추정 13 · 헤지 26(증가 0) |
+| `python3 scripts/spec/check_canon_generator_keys.py` | **통과** — 불일치 0. 대조 건수 **+7**(이 작업이 더한 항목 수) |
+| `python3 scripts/spec/validate.py` | **통과** — 오류 0. 확정 **+7** · 헤지 **+0** |
 | `python3 scripts/spec/check_address_ranges.py` | 통과 — 범위 인용 157건 · 위반 0 |
 | `python3 scripts/spec/check_spec_shrink_guard.py` | 통과 |
 | `python3 scripts/spec/check_stray_artifacts.py` | 통과 |
+| `python3 scripts/spec/check_int_narrowing.py` | **실패 — 이 작업과 무관.** `SRC = Sources` 만 훑는 Swift 전용 검사이고(344 → 365), 이번 변경에 Swift 는 없다 |
 | `scripts/dev/linux-core-tests.sh` | **빌드 실패 — 이 작업과 무관한 기존 상태.** `Tests/WapleCoreTests/SimplexNoiseTests.swift:61` 의 `v.map(String.init)` 이 리눅스 시임에서 타입 추론에 실패한다. 이번 변경은 `scripts/spec/*.py` 와 `spec/**/*.json` 뿐이고 Swift 는 한 줄도 건드리지 않았다 |

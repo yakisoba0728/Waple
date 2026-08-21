@@ -445,6 +445,181 @@ def util_catalog():
     return catalog, dict(sorted(ext.items())), len(files)
 
 
+# ------------------------------------------------- 동봉 전수 키 경로 히스토그램
+#
+# 위의 `collect_bundled` 는 **effects/ 와 materials/ 두 트리만** 센다(모집단 경계는
+# material.populations 에 적혀 있다). 그 경계가 옳지만, "동봉 자산에 실재하는 키가
+# 전부 정본에 있는가" 라는 질문에는 답하지 못한다 — presets/ 와 scenes/ 아래에도
+# 머티리얼 JSON 이 살기 때문이다. 아래 셋은 **네 트리를 전부** 세는 별도 측정이다.
+# 도수를 비교할 때 분모가 다르다는 것을 먼저 확인하라(639 vs 331).
+
+MATERIAL_TREES = ("effects", "materials", "presets", "scenes")
+
+
+def all_tree_material_paths(root):
+    """경로에 `materials` 디렉터리 세그먼트가 있는 모든 *.json 상대경로.
+
+    `**/materials/**/*.json` 과 같은 뜻이다. 최상위 트리는 안 가린다 —
+    presets/<name>/materials/... 과 scenes/<name>/materials/... 도 잡는다."""
+    for dirpath, _, files in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
+        if "materials" not in rel_dir.split("/"):
+            continue
+        for f in sorted(files):
+            if f.endswith(".json"):
+                full = os.path.join(dirpath, f)
+                yield full, os.path.relpath(full, root).replace(os.sep, "/")
+
+
+def _key_paths(obj, prefix, out):
+    """딕트/리스트를 훑어 키 경로를 모은다. 배열은 인덱스를 지우고 `[]` 로 접는다."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            p = "%s.%s" % (prefix, k) if prefix else k
+            out.add(p)
+            _key_paths(v, p, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            _key_paths(v, prefix + "[]", out)
+
+
+def key_path_histogram():
+    """동봉 `**/materials/**/*.json` 전수의 키 경로 → 도달 파일 수(트리별 분해).
+
+    도수는 **파일 수**다(출현 횟수가 아니다). passes 길이가 전 모집단 1이라 둘이
+    같지만, 멀티패스가 생기면 갈리므로 어느 쪽인지 명시해 둔다."""
+    root = ASSETS if os.path.isdir(ASSETS) else os.path.join(WE, "assets")
+    per_tree = collections.defaultdict(collections.Counter)
+    total = collections.Counter()
+    tree_files = collections.Counter()
+    modes = collections.Counter()
+    not_material = []
+    for full, rel in sorted(all_tree_material_paths(root), key=lambda x: x[1]):
+        with open(full, "rb") as fh:
+            raw = fh.read()
+        try:
+            obj, mode = load_json(raw)
+        except ValueError:
+            modes["parseError"] += 1
+            continue
+        modes[mode] += 1
+        tree = rel.split("/")[0]
+        tree_files[tree] += 1
+        if not (isinstance(obj, dict) and isinstance(obj.get("passes"), list) and obj["passes"]
+                and isinstance(obj["passes"][0], dict) and "shader" in obj["passes"][0]):
+            not_material.append(rel)
+        seen = set()
+        _key_paths(obj, "", seen)
+        for s in seen:
+            per_tree[tree][s] += 1
+            total[s] += 1
+    return {
+        "files": sum(tree_files.values()),
+        "byTree": {t: tree_files[t] for t in MATERIAL_TREES},
+        "parseModes": freq(modes),
+        "notMaterialShaped": not_material,
+        "paths": {k: {"전체": v, **{t: per_tree[t][k] for t in MATERIAL_TREES if per_tree[t][k]}}
+                  for k, v in sorted(total.items(), key=lambda kv: (-kv[1], kv[0]))},
+    }
+
+
+def scene_inline_materials():
+    """동봉 씬(scene.json / gifscene.json)이 머티리얼을 **인라인으로** 싣는가.
+
+    부재도 측정이다 — "씬 안 인라인 머티리얼" 이 0건이라는 사실이 곧
+    "머티리얼 스키마의 모집단은 파일뿐" 이라는 계약이다."""
+    root = ASSETS if os.path.isdir(ASSETS) else os.path.join(WE, "assets")
+    scenes, objs = 0, 0
+    mat_kind = collections.Counter()
+    inline_sites = collections.Counter()
+    for dirpath, _, files in os.walk(root):
+        for f in sorted(files):
+            if f not in ("scene.json", "gifscene.json"):
+                continue
+            with open(os.path.join(dirpath, f), "rb") as fh:
+                raw = fh.read()
+            try:
+                obj, _ = load_json(raw)
+            except ValueError:
+                continue
+            scenes += 1
+            stack = [(obj, "")]
+            while stack:
+                cur, path = stack.pop()
+                if isinstance(cur, dict):
+                    ps = cur.get("passes")
+                    if isinstance(ps, list) and ps and isinstance(ps[0], dict) and "shader" in ps[0]:
+                        inline_sites[path or "(최상위)"] += 1
+                    for k, v in cur.items():
+                        if isinstance(v, (dict, list)):
+                            stack.append((v, path + "." + k if path else k))
+                elif isinstance(cur, list):
+                    for v in cur:
+                        if isinstance(v, (dict, list)):
+                            stack.append((v, path + "[]"))
+            for ob in obj.get("objects") or []:
+                if not isinstance(ob, dict):
+                    continue
+                objs += 1
+                m = ob.get("material")
+                mat_kind["문자열(경로 참조)" if isinstance(m, str)
+                         else "딕트(인라인)" if isinstance(m, dict) else "없음"] += 1
+    return {"scenes": scenes, "objects": objs, "materialKind": freq(mat_kind),
+            "inlineSites": freq(inline_sites)}
+
+
+def blending_census():
+    """동봉 자산에 실재하는 `blending` 값 전수 — 머티리얼 패스 · effect 패스 · 에디터 선언."""
+    root = ASSETS if os.path.isdir(ASSETS) else os.path.join(WE, "assets")
+    mat = collections.Counter()
+    mat_tree = collections.defaultdict(collections.Counter)
+    no_key = collections.Counter()
+    for full, rel in sorted(all_tree_material_paths(root), key=lambda x: x[1]):
+        with open(full, "rb") as fh:
+            raw = fh.read()
+        try:
+            obj, _ = load_json(raw)
+        except ValueError:
+            continue
+        tree = rel.split("/")[0]
+        for p in (obj.get("passes") or []) if isinstance(obj, dict) else []:
+            if not isinstance(p, dict):
+                continue
+            if "blending" in p:
+                mat[key(p["blending"])] += 1
+                mat_tree[tree][key(p["blending"])] += 1
+            else:
+                no_key[tree] += 1
+    eff = collections.Counter()
+    eff_files = 0
+    for dirpath, _, files in os.walk(root):
+        for f in sorted(files):
+            if not is_effect(f):
+                continue
+            with open(os.path.join(dirpath, f), "rb") as fh:
+                raw = fh.read()
+            try:
+                obj, _ = load_json(raw)
+            except ValueError:
+                continue
+            eff_files += 1
+            for p in (obj.get("passes") or []) if isinstance(obj, dict) else []:
+                if isinstance(p, dict):
+                    eff[key(p["blending"]) if "blending" in p else "(blending 키 없음)"] += 1
+    decl = collections.Counter()
+    decl_path = os.path.join(root, "shaders", "declarations.json")
+    if os.path.exists(decl_path):
+        with open(decl_path, "rb") as fh:
+            obj, _ = load_json(fh.read())
+        for lst in obj.values() if isinstance(obj, dict) else []:
+            for row in lst if isinstance(lst, list) else []:
+                if isinstance(row, dict) and "blending" in row:
+                    decl[key(row["blending"])] += 1
+    return {"material": freq(mat), "materialByTree": {t: freq(mat_tree[t]) for t in MATERIAL_TREES},
+            "materialNoKey": freq(no_key), "effectFiles": eff_files, "effectPasses": freq(eff),
+            "declarations": freq(decl)}
+
+
 # ---------------------------------------------------------------- Waple 대조
 
 # 스키마 키 -> Swift 소스에서 그 키가 리터럴로 등장하는지. 등장하지 않으면 확실한 미소비다.
@@ -487,9 +662,15 @@ def main():
 
     catalog, util_ext, util_files = util_catalog()
     coverage = swift_key_coverage()
+    hist = key_path_histogram()
+    inline = scene_inline_materials()
+    bcensus = blending_census()
 
     asset_ev = specfmt.ev("asset", "%s/{materials,effects}/**/*.json" % ASSETS.replace(os.sep, "/"),
                           "WE 2.8.42 동봉 에셋 전수")
+    asset_all_ev = specfmt.ev("asset", "%s/**/materials/**/*.json" % ASSETS.replace(os.sep, "/"),
+                              "네 트리(effects/ materials/ presets/ scenes/) 전수 %d건 — "
+                              "위 asset 근거보다 분모가 크다" % hist["files"])
     corpus_ev = specfmt.ev("corpus", "워크샵 scene.pkg %d개 안의 JSON 엔트리 전수" % audit["pkg"])
     script_ev = specfmt.ev("script", "scripts/spec/measure_material_schema.py")
 
@@ -579,6 +760,66 @@ def main():
             "코퍼스": freq(m_cor["domain"][k])}
         for k in STATE_KEYS
     }, "확정", [asset_ev, corpus_ev, script_ev]))
+
+    # ---- 동봉 전수 키 경로 히스토그램(네 트리) -----------------------------
+    add(specfmt.entry("material.keyPathHistogram", {
+        "모집단": "동봉 에셋에서 경로에 `materials` 디렉터리 세그먼트가 있는 *.json 전수 = "
+                "`**/materials/**/*.json`. 위 material.populations 의 번들 331(effects/ + "
+                "materials/)보다 크다 — presets/ 와 scenes/ 아래 머티리얼까지 센다. "
+                "spec/engine/render-state.json 의 assets 분모와 같은 집합이다",
+        "파일 수": hist["files"],
+        "트리별 파일 수": hist["byTree"],
+        "파싱": hist["parseModes"],
+        "머티리얼 형태가 아닌 파일": hist["notMaterialShaped"],
+        "고유 키 경로": len(hist["paths"]),
+        "도수의 뜻": "그 키 경로가 등장하는 **파일 수**다(출현 횟수가 아니다). passes 길이가 "
+                  "전 모집단 1이라 지금은 둘이 같지만, 멀티패스가 생기면 갈린다",
+        "키 경로 → 도달 파일 수": hist["paths"],
+        "번들 331 밖에서만 도달하는 키": {
+            k: v for k, v in hist["paths"].items()
+            if not v.get("effects") and not v.get("materials")},
+        "정본이 안 싣던 키": "`passes[].usertextures[].keepaspect` 1건 — "
+                       "scenes/videoplayer/materials/background.json 의 "
+                       '`usertextures:[{"name":"videotex","keepaspect":true}]`. '
+                       "material.userTextures 의 항목키 표(코퍼스 name+type 50건)에 없는 세 번째 "
+                       "항목 키다. 이 문서의 다른 항목은 이 키를 한 번도 세지 않았다 — "
+                       "모집단 경계(scenes/ 제외) 때문이지 결함은 아니다. 의미·미소비 판정은 "
+                       "spec/assets/misc-schema.json 의 zcompat.videoTexture 계열이 담는다",
+    }, "확정", [asset_all_ev, script_ev]))
+
+    add(specfmt.entry("material.sceneInlineMaterials", {
+        "질문": "동봉 씬이 머티리얼을 **인라인 객체로** 싣는가 — 그렇다면 머티리얼 스키마의 "
+              "모집단이 파일만으로는 닫히지 않는다",
+        "씬 파일": inline["scenes"],
+        "오브젝트": inline["objects"],
+        "objects[].material 의 형태": inline["materialKind"],
+        "passes[0].shader 를 가진 인라인 딕트": inline["inlineSites"],
+        "판정": "동봉 씬에 인라인 머티리얼은 **0건**이다. objects[].material 은 전건 부재이고, "
+              "머티리얼은 image/model/particle 파일을 거쳐 경로로만 참조된다. 따라서 이 문서의 "
+              "머티리얼 모집단은 `**/materials/**/*.json` 파일 집합으로 닫힌다",
+        "범위 밖": "objects[].effects[].passes[] (씬이 이펙트 패스의 combos/constantshadervalues/"
+                "textures 를 덮어쓰는 층)는 머티리얼이 아니다 — "
+                "spec/corpus/scene-schema.json 의 scene.effects.schema 소관이다",
+    }, "확정", [asset_all_ev, script_ev]))
+
+    add(specfmt.entry("material.blendingCensus", {
+        "머티리얼 패스 blending 값 전수": bcensus["material"],
+        "트리별": bcensus["materialByTree"],
+        "blending 키가 없는 패스": bcensus["materialNoKey"],
+        "effect.json 파일": bcensus["effectFiles"],
+        "effect.json 패스의 blending": bcensus["effectPasses"],
+        "shaders/declarations.json": bcensus["declarations"],
+        "alphatocoverage": "동봉 자산 **0건**. 워크샵 코퍼스에만 40건 있다"
+                           "(spec/engine/render-state.json renderState.authoring.valueDistribution). "
+                           "동봉만으로는 이 모드의 회귀를 볼 수 없다",
+        "기본값": "blending 키가 없으면 열거값 0 = normal 이다 — 블렌드 상태 객체의 생성자가 "
+                "오브젝트+0x26 을 0 으로 두기 때문이다(wallpaper64.exe @0x140098ed3). "
+                "문자열↔D3D11 상태 완전표는 spec/engine/render-state.json "
+                "renderState.blend.stringToState",
+        "effect 패스는 렌더 상태를 안 갖는다": "effect.json 패스 %d건 전부 blending 키가 없다. "
+                                   "이펙트의 블렌드 상태는 그 패스가 참조하는 material 이 정한다"
+                                   % sum(bcensus["effectPasses"].values()),
+    }, "확정", [asset_all_ev, script_ev]))
 
     add(specfmt.entry("material.cullingTypo", {
         "관측": 'materials/util/flatpointalphavertexcolor.json 이 cullmode 대신 "culling":"nocull" 을 쓴다',
@@ -929,7 +1170,12 @@ def main():
             "functions": e_top["top"]["functions"] + e_cor["top"]["functions"],
         },
         "해소": "conditions 는 `4785c0d` 로 닫혔다. EffectManifest.Condition/Conditions/evaluate/parseConditions 가 규약을 그대로 구현한다 — 맨몸 값은 정확히 등호, 명명 연산자는 ge/gt/le/lt 4종뿐이고 미지·부재 op 는 등호 폴백, 누산은 전부 AND, 비배열·빈 배열은 true(fail-open). 좌변은 이펙트 **인스턴스** 레벨 combos(SceneEffect.instanceCombos)다. 소비 3지점 — fbo 는 아예 만들지 않고, pass 는 통째로 건너뛰며(인덱스는 증가), bind 는 그 슬롯만 언바인드된다",
-        "note": "compose·functions 는 의미가 미확정이라 아직 구현할 수 없다. '읽지 않는다'는 사실만 확정이다",
+        "note": "[2026-08-21 재측정] 목록이 비었다 — compose·functions 도 이제 **파스는 한다**"
+                "(EffectManifest.Pass.compose · EffectManifest.functions). 다만 파스한 값을 "
+                "렌더러가 읽는 자리는 아직 없다(저장까지만). 이 항목이 보는 것은 "
+                "waple.keyLiteralCoverage 와 같은 판정 — '따옴표 리터럴이 있는가' 이지 "
+                "'렌더에 반영되는가' 가 아니다. 종전 값 ['compose','functions'] 은 파스가 "
+                "붙기 전 상태였다",
         "갭 아님": "editable / performance / replacementkey 도 Sources 에 없지만 이건 에디터 메타데이터라 "
                 "렌더에 영향이 없다 — 미소비가 정상이다",
     }, "확정", [asset_ev, corpus_ev, specfmt.ev("file", "Sources/**/*.swift"), script_ev]))
