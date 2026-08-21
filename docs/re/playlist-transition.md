@@ -392,6 +392,18 @@ UI 의 목록 **순서**는 id 순이 아니다(0, 18, 1, 2, … — Fade 다음
 풀이 비어 있지 않으면 원소 개수 `n = (end-begin)/4` 로 같은 계산을 해서 풀의 인덱스를
 고른다(`0x1400691fb`–`0x140069249`).
 
+**[2026-08-21 추가] 풀 경로는 `0..26` 클램프를 거치지 않는다.** 풀에서 뽑은 뒤
+`0x14006924c  jmp 0x140069261` 이 클램프 블록(`0x14006924e`–`0x14006925c`)을 **건너뛴다**.
+파스 쪽도 원소를 `atoi` 한 값을 그대로 집합에 넣을 뿐이라(`0x140075934` → `0x140075946`)
+어디서도 범위를 좁히지 않는다. 즉 손으로 고친 `transitionpool: ["99"]` 는 `FADEEFFECT=99`
+로 컴파일된다(셰이더의 27개 분기 어디에도 안 걸린다). 클램프가 걸리는 것은 `transition`
+이 리터럴 정수일 때의 **비-`-3` 경로뿐**이다. UI 는 그런 값을 만들지 않으므로 실사용에서는
+드러나지 않는다.
+
+`rand()/32767.0` 이 **닫힌 구간 [0,1]** 이라는 점도 여기서 의미가 있다 — `rand()` 가
+32767 을 내면 `1.0 × 27 = 27` 이 되어 유효 id 를 넘는다. 빈 풀 경로의 상한 26 은
+장식이 아니라 정확히 이 한 경우를 위해 있다.
+
 ### 4.4 효과 능력 플래그 — 하드코딩이 아니라 **셰이더 리플렉션**
 
 `0x14005c390–0x14005cac9` 가 컴파일 결과를 리플렉션해 3비트를 세운다. 그 값이
@@ -470,6 +482,24 @@ progress = clamp( (elapsed_seconds - 0.1) / (transitiontime_ms * 0.001), 0.0, 1.
 슬라이더 범위는 0–3000 ms, 스텝 50 (`configureTransitionSlider`, offset 362545 / 19행).
 `transitiontime` 이 0 이면 위 나눗셈이 `inf` 를 만들고 clamp 가 즉시 1.0 으로 잘라 낸다 —
 전환이 1프레임 만에 끝난다(크래시는 없다).
+
+**[2026-08-21 추가] 클램프가 `comiss` 두 번이라 NaN 이 1.0 으로 간다.**
+
+```
+0x14005a3b6  comiss xmm14, xmm6      ; 1.0 vs p
+0x14005a3ba  jbe 0x14005a3cd         ; 1.0 <= p  또는 unordered(NaN) → p = 1.0
+0x14005a3bc  comiss xmm15, xmm6      ; 0.0 vs p
+0x14005a3c0  jbe 0x14005a3c7         ; 0.0 <= p → 유지
+0x14005a3c2  xorps xmm6, xmm6        ; 그 외 → p = 0.0
+```
+
+`jbe` 는 `CF|ZF` 라 unordered(NaN 이 세우는 `ZF=PF=CF=1`)를 함께 먹는다. 그래서
+`transitiontime == 0` 이고 `elapsed` 가 **정확히** 0.1 인 순간의 `0/0 = NaN` 도 1.0 이다.
+`elapsed < 0.1` 이면 `-inf` 라 0.0 이고, 그 위는 `+inf` 라 1.0 이다 — 세 갈래 전부 유한하다.
+
+레지스터 셋업도 확인했다: `xmm14 = 1.0f`(`0x140058a4c`, `0x140492704`),
+`xmm15 = 0.0f`(`0x140058a6e  xorps`), `xmm9 = 0.1f`(`0x140059b76`, `0x140492654`),
+`xmm8 = 0.001f`(`0x14005a2e3`, `0x140492608`).
 
 ---
 
@@ -611,7 +641,7 @@ ba 02 83 6a                       u32 = 1786970810  → 유닉스 시각 (2026-0
 전진할 때 `0x1400684ea  mov dword ptr [r14+0x7c], r13d` 로 0 이 된다.
 
 `bin/playliststate.bin`(`0x1404780a0`, 기록 `0x14006eef0–0x140070688`) 은 같은 형식으로
-같은 디렉터리에 쓰인다. **이 설치본에는 파일이 없어 레코드 내용을 실물 대조하지 못했다**(§9).
+같은 디렉터리에 쓰인다. **이 설치본에는 파일이 없어 레코드 내용을 실물 대조하지 못했다**(§10).
 
 ---
 
@@ -632,6 +662,8 @@ ba 02 83 6a                       u32 = 1786970810  → 유닉스 시각 (2026-0
 | `Sources/Waple/Surfaces/Settings/SettingsViewModel.swift:70–112` | 설정창 바인딩 |
 | `Sources/WapleRender/Resources/WEAssets/shaders/HLSL/dx11playlisttransition.*` | **전환 셰이더 3개가 이미 동봉돼 있다**(HLSL 원문) |
 | `spec/engine/shaders.json:82–179` | 세 셰이더의 해시·함수·콤보·`gRefs` 정본 |
+| `Sources/WapleCore/PlaylistTransition.swift` | **[2026-08-21 신규]** 순수 코어 — 전환 27+3종·선형 타이밍·셔플백·풀 추첨·모드/순서 열거. `import Foundation` 만 쓰므로 리눅스에서 실제로 돈다 |
+| `Tests/WapleCoreTests/PlaylistTransitionTests.swift` | 위의 계약 잠금 54건(왕복·경계·불변식) |
 
 ### 8.2 없는 것
 
@@ -641,7 +673,7 @@ ba 02 83 6a                       u32 = 1786970810  → 유닉스 시각 (2026-0
 | 2 | `transition` / `transitionpool` / `transitiontime` 스키마 | 없음 | `Sources/WapleLibrary/PlaylistStore.swift` `Model` |
 | 3 | 모드 5종(`logon`/`daytime`/`dayofweek`/`never`) | `enabled: Bool` 하나 = timer 전용 | `Sources/Waple/AppLogic.swift` `PlaylistScheduling` 에 모드 디스패치 추가 |
 | 4 | 항목별 `daytimeend` / `preset` | `ids: [String]` 평문 배열 | `PlaylistStore.Model.ids` → 구조체 배열로 승격 |
-| 5 | **셔플백**(소진 전 무반복) | `shuffleNext` 는 "직전 1개만 회피"(`AppLogic.swift:171–177`) — 3곡짜리 목록에서 A,B,A,B 가 가능 | `AppLogic.swift:171–177` 교체. §6.4 알고리즘 |
+| 5 | **셔플백**(소진 전 무반복) | `shuffleNext` 는 "직전 1개만 회피"(`AppLogic.swift:171–177`) — 3곡짜리 목록에서 A,B,A,B 가 가능 | **구현됨**: `WapleCore.ShuffleBag`. `AppLogic.swift:171–177` 을 그 위임으로 바꾸면 된다 — 대조는 §8.4 |
 | 6 | `videosequence`(동영상 끝나면 전환) | 없음 | `Sources/WapleRender` 의 `VideoRenderer` 종료 콜백 → `advancePlaylist()` |
 | 7 | `updateonpause` **옵션** | `shouldAdvanceNow(isPaused:)`(`AppLogic.swift:188`) 이 정지 중엔 항상 false — WE 의 `updateonpause=false` 에 **고정** | `AppLogic.swift:188` 을 설정값으로 |
 | 8 | `beginfirst` / `playintro` | 없음 | `PlaylistScheduling` |
@@ -664,9 +696,123 @@ ba 02 83 6a                       u32 = 1786970810  → 유닉스 시각 (2026-0
 - **`transitiontime` 기본값을 무엇으로 할지**는 §5.3 처럼 WE 자신도 세 값을 쓴다.
   UI 를 따라 1500 ms 가 실사용에 맞다.
 
+### 8.4 셔플 규약이 정확히 어디서 갈리는가
+
+| 축 | Waple `PlaylistScheduling.shuffleNext` (`AppLogic.swift:171–177`) | WE 셔플백 (`0x140068010`–`0x1400681a0`) | 관측되는 차이 |
+| --- | --- | --- | --- |
+| 상태 | **없다**(무상태). 매번 전체 목록에서 새로 뽑는다 | 백(`+0x50..+0x58`)이 호출 사이에 살아남는다 | Waple 은 재시작·설정변경에 영향이 없고, WE 는 백이 남아 이어 돈다 |
+| 후보 집합 | `ids.filter { $0 != current }` — **매 추첨마다** 직전 1개만 제외 | 백에 남은 것 전부. 뽑은 항목은 백에서 삭제 | 3곡에서 Waple 은 `a,b,a,b,a,b` 로 `c` 를 영원히 건너뛸 수 있다 |
+| 한 바퀴 보장 | 없음 | **있다** — 백이 빌 때까지 무반복 | n 곡을 n 번 뽑으면 WE 는 반드시 전원, Waple 은 기대값만 |
+| 리필 경계 | 개념 자체가 없다 | 백이 비면 전체로 리필하고 **현재 항목을 뺀다**(`0x1400680a0`–`0x140068114`) | 첫 백만 n 개, 이후 백은 **n-1** 개다 |
+| `playintro` | 없음 | 리필 시 첫 항목을 제외(`0x14006803b  add r9, 0x48`) | 인트로 벽지가 부팅 후 1회만 나온다 |
+| 1곡 퇴화 | `candidates = ids` → 자기 자신 반환 | 백 크기 1 이면 현재 제거 가드가 안 걸린다(`0x14006805b  cmp rax,1`) → 자기 자신 | **같다** |
+| 2곡 | 직전 제외 → 항상 교대 | 백 소진 + 리필 시 현재 제거 → 항상 교대 | **같다** |
+| 난수 | `Int.random(in:)`(주입 가능) | `rand()/32767 × n` 절단 + 클램프 | WE 는 [0,1] 닫힌 구간이라 상한 클램프가 실제로 쓰인다 |
+| 결정성 | 주입한 `random` 클로저에 달림 | 프로세스 전역 `rand()` 시드 | `ShuffleBag` 은 `SplitMix64` 시드로 완전 재현 가능하게 했다 |
+
+교체 시 무엇이 달라지는가:
+
+- **좋아지는 것** — 3곡 이상에서 특정 배경이 장기간 안 나오는 현상이 사라진다. 사용자
+  체감으로는 "셔플이 제대로 도는" 쪽이다. `n` 곡을 `n` 번 넘기면 전원이 한 번씩 나온다.
+- **바뀌는 것** — `shuffleNext` 는 순수 함수(무상태)인데 `ShuffleBag` 은 **상태를 갖는다**.
+  `AppDelegate` 가 백을 소유하고 재생목록이 바뀔 때 폐기해야 한다. 지금 `advance` 는
+  `next:` 클로저를 받으므로 그 클로저 안에서 백을 굴리면 호출 구조는 그대로다.
+- **잃는 것** — 없다. 1곡/2곡 퇴화 동작이 기존과 **동일**해서(`위 표`) 회귀 위험이 좁다.
+- **주의** — `advance(from:count:next:apply:)` 는 `apply` 실패 시 다음 후보로 넘어간다.
+  백에서 뽑은 항목이 `apply` 에 실패하면 그 항목은 **이미 백에서 빠진 상태**다. 실패한
+  항목을 백에 되돌릴지(재시도) 그냥 소진시킬지는 정책 선택이고, WE 도 이 상황을 다루는
+  코드를 찾지 못했다. 되돌리지 않는 쪽이 무한루프가 없어 안전하다.
+
 ---
 
-## 9. 아직 안 본 것
+## 9. 전환 27종의 Metal 이식 난이도
+
+셰이더 자체는 이 작업 범위 밖이다(§8.3). 대신 **무엇이 얼마나 걸릴지**를 분류해 둔다.
+분류는 `dx11playlisttransition.{vert,geom,frag}` 를 분기별로 재파싱해 뽑았다 —
+`ddx`/`ddy` · 반복문 · `g_Texture0MipMapped` · `g_Texture1Noise`/`g_Texture2Clouds` ·
+`g_Hash`/`g_Hash2` · `fbm` 옥타브 수 · `blur13` 호출 수.
+
+### 9.1 등급 정의
+
+| 등급 | 뜻 | 파이프라인 작업 |
+| --- | --- | --- |
+| **하** | 프래그먼트 산수뿐. HLSL → MSL 문법 치환으로 끝 | 없음 |
+| **중** | 밉맵 체인이나 외부 텍스처, 또는 긴 절차 노이즈 | 리소스 준비 1건 |
+| **상** | 지오메트리 셰이더 또는 정점 메시 — **드로우 구조 자체가 바뀐다** | 신규 정점 파이프라인 |
+
+`ddx`/`ddy` 는 MSL `dfdx`/`dfdy` 로 1:1 대응되므로 등급을 올리지 않는다.
+`g_Hash`/`g_Hash2` 는 전환 시작 시 한 번만 뽑아 상수버퍼에 넣는 값이라(§2.3) 셰이더 쪽
+작업이 없다. `g_Random` 은 **27종 중 아무도 안 읽는다** — 레이아웃 자리만 유지하면 된다.
+
+### 9.2 표
+
+| id | 이름 | frag 줄수 | GS 필요 | 정점 메시 | 추가 리소스 | 파생/노이즈 | 등급 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | Fade | 3 | | | | | 하 |
+| 1 | Mosaic | 5 | | | | | 하 |
+| 2 | Diffuse | 5 | | | | | 하 |
+| 3 | Horizontal slide | 5 | | | | | 하 |
+| 4 | Vertical slide | 5 | | | | | 하 |
+| 5 | Horizontal fade | 4 | | | | | 하 |
+| 6 | Vertical fade | 4 | | | | | 하 |
+| 7 | Clouds | 7 | | | | `fbm` 6옥타브 | 하 |
+| 8 | Burnt paper | 41 | | | | `fbm` 6옥타브, `ddx`/`ddy` | 중 |
+| 9 | Circular | 7 | | | | | 하 |
+| 10 | Zipper | 19 | | | | | 하 |
+| 11 | Door | 16 | | | | | 하 |
+| 12 | Lines | 5 | | | | | 하 |
+| 13 | Zoom | 16 | | | | `blur13` ×2 (7탭 바이리니어) | 하 |
+| 14 | Drip | 15 | | | | `fbm` 2옥타브 | 하 |
+| 15 | Pixelate | 10 | | | | | 하 |
+| 16 | **Bricks** | 2 | **예** | | | | **상** |
+| 17 | Paint | 60 | | | | `fbm` 8+3옥타브 | 중 |
+| 18 | Fade to black | 3 | | | | | 하 |
+| 19 | Twister | 15 | | | | | 하 |
+| 20 | Black hole | 43 | | | | | 중 |
+| 21 | CRT | 41 | | | 밉맵 뷰 | | 중 |
+| 22 | Radial wipe | 9 | | | | | 하 |
+| 23 | **Glass shatter** | 18 | | **예** | | | **상** |
+| 24 | Bullets | 99 | | | | `fbm` 4+3옥타브, `ddx`/`ddy` | 중 |
+| 25 | Ice | 40 | | | 밉맵 뷰 | `fbm` 8×2옥타브, `ddx`/`ddy` | 중 |
+| 26 | Boilover | 64 | | | noise.png + clouds_256.png, wrap 샘플러 | 25회 루프, `fbm` 2+3옥타브 | 중 |
+
+합계: **하 17 · 중 8 · 상 2**.
+
+### 9.3 상 등급 둘의 실체
+
+**16 Bricks — Metal 에 지오메트리 셰이더가 없다.**
+`maxvertexcount(4 * BRICKS_PER_SET * SET_COUNT)` = `4 × 7 × 4` = **112 정점 = 28 쿼드**
+(geom 102–103). 배치는 `SET_COUNT = 4` 개 세트를 세로로 쌓고, 세트마다 1행 3장 + 2행 4장 =
+7장이다(geom 112–139). 2행은 `-1.0 - brickWidthHalf` 로 반 칸 어긋난다 — 벽돌 쌓기다.
+**규칙적인 고정 격자라 GS 가 본질적이지 않다.** 28쿼드를 인스턴스 드로우(`instance_id` →
+set/brick 인덱스)로 바꾸거나 정점버퍼에 한 번 구워 두면 그대로 재현된다.
+frag 쪽 분기는 **2줄**뿐이라(405–407) 프래그먼트 작업은 사실상 없다.
+
+**23 Glass shatter — 정점 메시가 필요하다.**
+GS 가 아니라 **VS** 가 문제다. `VS_INPUT` 이 이 효과에서만 `a_Center : TEXCOORD1` 과
+`a_Normal : NORMAL` 로 늘어나고(vert 5–8), `VS_OUTPUT` 도 `v_TexCoordBase : TEXCOORD1` ·
+`v_WorldPos : TEXCOORD2` · `v_WorldNormal : TEXCOORD3` 세 개가 붙는다(vert 15–18).
+본문(vert 70–122)은 파편별 축 난수 → `rotation3d` 4×4 행렬 → `g_ViewProjection` 투영이라
+**진짜 3D 변환**이다. 필요한 것은 셰이더 번역이 아니라 **파편 격자 생성기**다 —
+WE 는 `TEXCOORD` 인덱스 1 의 존재를 리플렉션으로 감지해(0x14005c786) `sub_14005f3c0` 으로
+그 메시를 만든다(§4.4). 그 생성 알고리즘은 아직 안 봤다(§10).
+
+### 9.4 순서 제안
+
+1. **하 17종을 먼저** — 오버레이 파이프라인(캡처 → 레이어드 창 → 진행도 상수버퍼)만
+   서면 17종이 한 번에 붙는다. 그중 0 Fade 하나만 돌아도 전환 기능은 "있는" 상태가 된다.
+2. **밉맵 2종(21, 25)** — `MTLBlitCommandEncoder.generateMipmaps` 한 줄이다.
+3. **26 Boilover** — 텍스처 2장은 이미 동봉돼 있다
+   (`Sources/WapleRender/Resources/WEAssets/materials/util/`). wrap 샘플러만 추가.
+4. **16 Bricks** — 인스턴스 드로우로.
+5. **23 Glass shatter** — 파편 격자 생성기부터. 가장 나중.
+
+**능력 플래그를 하드코딩하지 마라.** WE 는 효과 id ↔ 리소스 표를 갖고 있지 않고,
+컴파일된 셰이더를 리플렉션해서 밉맵·정점메시·외부텍스처 세 비트를 세운다(§4.4).
+Metal 도 `MTLRenderPipelineReflection` 으로 같은 것을 할 수 있다 — 그러면 위 표가
+코드에 들어갈 필요가 없고, 표가 낡을 일도 없다.
+
+## 10. 아직 안 본 것
 
 - `bin/playliststate.bin`(`0x14006eef0–0x140070688`)의 정확한 레코드 구조 — 이 설치본에
   파일이 없어 실물 대조를 못 했다. `playliststatetime.bin` 과 같은 직렬화기를 쓴다.
