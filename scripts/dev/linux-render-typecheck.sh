@@ -13,7 +13,8 @@
 # 어떻게
 # ------
 # `scripts/dev/linux-shim/` 의 대역 모듈(Metal·MetalKit·AppKit·CoreGraphics·QuartzCore·CoreText·
-# ImageIO·AVFoundation·CoreVideo·Accelerate·JavaScriptCore·CryptoKit·Compression·ScreenCaptureKit)을
+# ImageIO·AVFoundation·CoreVideo·Accelerate·JavaScriptCore·CryptoKit·Compression·ScreenCaptureKit·
+# WebKit·UniformTypeIdentifiers)을
 # `swiftc -emit-module` 로 만들고, 같은 검색 경로에서 커버 대상 소스를 `-typecheck` 한다.
 # `Sources/` 는 **한 글자도 건드리지 않는다**(심볼릭 링크도 아니고 경로를 그대로 넘긴다).
 #
@@ -22,7 +23,8 @@
 #  · **심이 실제 프레임워크와 다르면 거짓 통과/거짓 실패가 난다.** 심은 애플 헤더에서 기계적으로
 #    생성한 것이 아니라 손으로 적은 것이고, 확신 없는 자리는 각 심 파일에 `확신 없음` 으로 표시돼 있다.
 #    **최종 판정자는 여전히 macOS CI 다.**
-#  · 커버 못 하는 파일이 있다(아래 `EXCLUDED` + `docs/dev/linux-typecheck.md`).
+#  · [2026-08-21] 커버는 **55/55**(제외 0). 새 프레임워크를 쓰는 파일이 생기면 심을 쓰기 전까지
+#    아래 `EXCLUDED` 에 넣는다(`docs/dev/linux-typecheck.md`).
 #  · MSL(셰이더) 문자열의 내용은 검사하지 않는다 — `b98db0a` 류(리터럴 안 MSL 문법)는 못 잡는다.
 #    이건 `scripts/spec/` 게이트와 `WapleCore` 쪽 셰이더 테스트의 영역이다.
 #  · `@MainActor` 격리·Sendable 진단은 실제 SDK 어노테이션(`@preconcurrency` 강등 포함)에
@@ -37,14 +39,21 @@
 # 환경변수:
 #   WAPLE_SWIFT_BIN               swift 툴체인 bin (기본 /opt/swift/usr/bin)
 #   WAPLE_LINUX_TYPECHECK_DIR     작업 디렉터리 (기본 $TMPDIR/waple-linux-render-typecheck)
-#   WAPLE_SWIFT_LOCK              공유 락 파일 (기본 작업 디렉터리의 상위 + /swift.lock)
+#   WAPLE_SWIFT_LOCK              공유 락 파일 (기본 $TMPDIR/waple-swift.lock — 고정 경로).
+#                                 다른 swift 작업과 같은 락을 쓰려면 **반드시 명시**해라.
 #   WAPLE_SWIFT_LOCK_WAIT         락 대기 초 (기본 3600)
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SWIFTC_DIR="${WAPLE_SWIFT_BIN:-/opt/swift/usr/bin}"
 WORK="${WAPLE_LINUX_TYPECHECK_DIR:-${TMPDIR:-/tmp}/waple-linux-render-typecheck}"
-LOCK="${WAPLE_SWIFT_LOCK:-$(dirname "$WORK")/swift.lock}"
+# 락 기본값은 **작업 디렉터리와 무관한 고정 경로**다. 종전엔 `$(dirname "$WORK")/swift.lock` 로
+# 유도했는데, 그러면 WORK 를 다르게 잡은 두 실행이 **서로 다른 락**을 잡아 상호배제가 아예 안 된다
+# (실측 2026-08-21: `/tmp/swift.lock` 과 `<스크래치패드>/swift.lock` 이 동시에 잡혀 있었다 —
+# 이 컨테이너에서 동시 swift 빌드 2개는 OOM 으로 컨테이너를 통째로 재시작시킨다).
+# 다른 swift 작업(`linux-core-tests.sh` 를 flock 으로 감싸는 관례)과 묶으려면
+# **`WAPLE_SWIFT_LOCK` 을 그 락 파일로 명시**해라 — 유도에 기대지 마라.
+LOCK="${WAPLE_SWIFT_LOCK:-${TMPDIR:-/tmp}/waple-swift.lock}"
 
 # ── 커버 대상 ────────────────────────────────────────────────────────────────
 # 여기 있는 파일은 리눅스에서 **타입체크된다**.
@@ -57,6 +66,7 @@ COVERED=(
     DesktopWindow.swift
     DesktopWindowController.swift
     EffectShaders.swift
+    FFmpegConverter.swift
     HDRBloomPass.swift
     HDRBloomPyramidPass.swift
     HDRPostPass.swift
@@ -74,6 +84,7 @@ COVERED=(
     ParallaxController.swift
     ParticleShaders.swift
     QuadShaders.swift
+    RendererFactory.swift
     Scene3DLighting.swift
     Scene3DMath.swift
     SceneAudioPlayer.swift
@@ -91,24 +102,25 @@ COVERED=(
     TextScriptEngine.swift
     UserPropertyStore.swift
     VideoFallbackHTML.swift
+    VideoRenderer.swift
     VideoSettings.swift
     VideoTextureExtractor.swift
     VolumetricLightPass.swift
     WallpaperBridgeJS.swift
     WallpaperRenderer.swift
+    WallpaperSchemeHandler.swift
     WallpaperWindowLevel.swift
     WebHardPauseJS.swift
+    WebInputProxyView.swift
+    WebRenderer.swift
 )
 
 # ── 제외 ────────────────────────────────────────────────────────────────────
 # `파일:사유`. 사유는 `docs/dev/linux-typecheck.md` 와 동일해야 한다.
+# **[2026-08-21] 지금은 0건이다** — WebKit·UniformTypeIdentifiers 심이 들어오면서 마지막 4파일
+# (WebRenderer/WebInputProxyView/WallpaperSchemeHandler/RendererFactory)까지 커버로 옮겼다.
+# 배열은 남겨 둔다: 새 프레임워크를 쓰는 파일이 생기면 심을 쓰기 전까지 여기에 넣는다.
 EXCLUDED=(
-    "WebRenderer.swift:WebKit(WKWebView/WKNavigationDelegate/WKScriptMessageHandler) 심 미작성"
-    "WebInputProxyView.swift:WebKit + NSTrackingArea/NSColor 등 AppKit 심층 심 미작성"
-    "WallpaperSchemeHandler.swift:WebKit(WKURLSchemeHandler) + UniformTypeIdentifiers 심 미작성"
-    "RendererFactory.swift:WebRenderer 를 직접 참조 — 위 셋이 들어와야 같이 들어온다"
-    "VideoRenderer.swift:AVPlayerLayer + NSKeyValueObservation(KVO) — 리눅스 Foundation 에 KVO 자체가 없다"
-    "FFmpegConverter.swift:VideoRenderer.unsupportedExtensions 를 참조 — VideoRenderer 와 한 묶음"
 )
 
 # ── 인자 ────────────────────────────────────────────────────────────────────
@@ -130,7 +142,9 @@ done
 
 if [ "$LIST_ONLY" = 1 ]; then
     echo "== 커버(${#COVERED[@]}) =="; printf '  %s\n' "${COVERED[@]}"
-    echo "== 제외(${#EXCLUDED[@]}) =="; printf '  %s\n' "${EXCLUDED[@]}"
+    echo "== 제외(${#EXCLUDED[@]}) =="
+    # 빈 배열에 `printf` 를 그대로 걸면 빈 줄 하나가 찍힌다(제외가 0건인 현 상태).
+    [ "${#EXCLUDED[@]}" -gt 0 ] && printf '  %s\n' "${EXCLUDED[@]}"
     exit 0
 fi
 
@@ -143,6 +157,8 @@ fi
 # 다른 락을 쓰려면 `WAPLE_SWIFT_LOCK` 로 지정해라.
 if [ "${WAPLE_TYPECHECK_LOCKED:-0}" != "1" ]; then
     mkdir -p "$(dirname "$LOCK")"
+    # 어느 락을 잡는지 매번 찍는다 — 락이 갈리면 조용히 OOM 이 나므로 보이게 둔다.
+    echo "== 락: $LOCK (WAPLE_SWIFT_LOCK 으로 바꾼다)" >&2
     export WAPLE_TYPECHECK_LOCKED=1
     exec flock -w "${WAPLE_SWIFT_LOCK_WAIT:-3600}" "$LOCK" "$0" "${ORIG_ARGS[@]}"
 fi
@@ -205,6 +221,8 @@ build_module Accelerate      "$SHIM/accelerate.swift"         || exit 1
 build_module JavaScriptCore  "$SHIM/javascriptcore.swift"     || exit 1
 build_module CryptoKit       "$SHIM/cryptokit.swift"          || exit 1
 build_module Compression     "$SHIM/compression.swift"        || exit 1
+build_module WebKit          "$SHIM/webkit.swift"             || exit 1
+build_module UniformTypeIdentifiers "$SHIM/uniformtypeidentifiers.swift" || exit 1
 build_module simd            "$SHIM/simd.swift" "$SHIM/simd-extra.swift" || exit 1
 
 # ── WapleCore 모듈 ──────────────────────────────────────────────────────────
@@ -212,8 +230,12 @@ build_module simd            "$SHIM/simd.swift" "$SHIM/simd-extra.swift" || exit
 # `CFGetTypeID`/`CFBooleanGetTypeID` 는 `UserPropertyStore.swift`(WapleRender)가 **WapleCore 를 통해**
 # 본다(애플에선 Foundation 이 CoreFoundation 을 재수출한다). 그래서 읽기 전용 코어 심을
 # 그 두 심볼만 public 으로 바꿔 넣는다 — 사본이 아니라 파생이라 원본과 어긋날 수 없다.
+# **심볼릭 링크가 아니라 복사다.** 링크로 넘기면 다른 작업이 코어를 저장하는 순간 swiftc 가
+# `input file ... was modified during the build` 로 죽는다(실측: 이 세션에서 8명이 동시에 도는 동안
+# 3회 재시도가 전부 소진돼 도구가 통째로 못 돌았다). 매 실행 새로 뜨는 **스냅샷**이라 스테일 위험은
+# 실행 시작 시점까지로 한정된다.
 rm -f "$WORK/core"/*.swift
-for f in "$REPO"/Sources/WapleCore/*.swift; do ln -sf "$f" "$WORK/core/"; done
+cp "$REPO"/Sources/WapleCore/*.swift "$WORK/core/" || exit 2
 sed -E 's/^(func (CFGetTypeID|CFBooleanGetTypeID))/public \1/' \
     "$SHIM/corefoundation.swift" > "$WORK/core/zz-linux-corefoundation.swift" || exit 2
 
@@ -255,8 +277,17 @@ done
 
 echo "== 타입체크: ${#SOURCES[@]} 파일 (제외 ${#EXCLUDED[@]}) =="
 t0=$SECONDS
-"$SWIFTC" -typecheck -I "$MODS" "${SOURCES[@]}"
-rc=$?
+# WapleCore 와 같은 이유의 재시도 — 다른 작업이 같은 트리에서 `Sources/WapleRender/**` 를 저장하면
+# swiftc 가 `input file ... was modified during the build` 로 죽는다(실측: 이 세션에서 실제로 났다).
+# 이건 코드 결함이 아니다. **그 메시지가 있을 때만** 다시 돈다 — 진짜 오류는 재시도해도 그대로 난다.
+for attempt in 1 2 3; do
+    "$SWIFTC" -typecheck -I "$MODS" "${SOURCES[@]}" 2>&1 | tee "$WORK/typecheck.log"
+    rc=${PIPESTATUS[0]}
+    [ $rc -eq 0 ] && break
+    grep -q "was modified during the build" "$WORK/typecheck.log" || break
+    [ $attempt -lt 3 ] || break
+    echo "   (WapleRender 소스가 빌드 중 바뀌었다 — 재시도 $attempt/3)" >&2
+done
 if [ $rc -eq 0 ]; then
     echo "== OK — 커버 ${#COVERED[@]} 파일 타입체크 통과 (rc=0, 타입체크 $((SECONDS - t0))초)"
 else

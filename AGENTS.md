@@ -97,7 +97,7 @@ macOS 가 없어도 두 가지를 돌릴 수 있다.
 
 ```bash
 scripts/dev/linux-core-tests.sh --filter <TestClass>   # WapleCore 테스트(simd/CF 대역 모듈)
-scripts/dev/linux-render-typecheck.sh                  # WapleRender 타입체크(55파일 중 49)
+scripts/dev/linux-render-typecheck.sh                  # WapleRender 타입체크(55파일 전부)
 ```
 
 **`swiftc -parse` 의 rc=0 을 검증 근거로 쓰지 마라 — `-parse` 는 타입체크를 하지 않는다.**

@@ -145,6 +145,9 @@ public extension AVAsyncProperty where Root == AVAsset, Value == CMTime {
 public extension AVAsyncProperty where Root == AVAsset, Value == Bool {
     static var isPlayable: AVAsyncProperty<AVAsset, Bool> { .init("isPlayable") }
 }
+public extension AVAsyncProperty where Root == AVAsset, Value == [AVAssetTrack] {
+    static var tracks: AVAsyncProperty<AVAsset, [AVAssetTrack]> { .init("tracks") }
+}
 public extension AVAsyncProperty where Root == AVAssetTrack, Value == CGAffineTransform {
     static var preferredTransform: AVAsyncProperty<AVAssetTrack, CGAffineTransform> { .init("preferredTransform") }
 }
@@ -160,6 +163,19 @@ public extension AVAsyncProperty where Root == AVAssetTrack, Value == CGSize {
 open class AVAsset {
     public init() {}
     open func load<T>(_ property: AVAsyncProperty<AVAsset, T>) async throws -> T { fatalError("linux shim") }
+    /// 실제: `public func load<T1, T2>(_ p1: AVAsyncProperty<Self, T1>, _ p2: AVAsyncProperty<Self, T2>)
+    ///        async throws -> (T1, T2)` — `AVAsynchronousKeyValueLoading` 확장의 가변 인자 오버로드 묶음
+    ///        (실제로는 인자 1~n 개짜리 오버로드가 나열돼 있다). 여기는 쓰는 개수만 둔다.
+    /// 확신 없음: 실제 선언 위치(프로토콜 확장 vs 클래스)와 `Self` 제네릭 배치는 헤더를 못 봤다.
+    open func load<T1, T2>(_ p1: AVAsyncProperty<AVAsset, T1>,
+                           _ p2: AVAsyncProperty<AVAsset, T2>) async throws -> (T1, T2) {
+        fatalError("linux shim")
+    }
+    open func load<T1, T2, T3>(_ p1: AVAsyncProperty<AVAsset, T1>,
+                               _ p2: AVAsyncProperty<AVAsset, T2>,
+                               _ p3: AVAsyncProperty<AVAsset, T3>) async throws -> (T1, T2, T3) {
+        fatalError("linux shim")
+    }
     open func loadTracks(withMediaType mediaType: AVMediaType) async throws -> [AVAssetTrack] { [] }
 }
 
@@ -173,6 +189,8 @@ open class AVURLAsset: AVAsset {
 /// 실제: `open class AVAssetTrack: NSObject { open var mediaType: AVMediaType { get }
 ///        open func load<T>(_ property: AVAsyncProperty<AVAssetTrack, T>) async throws -> T }`
 open class AVAssetTrack {
+    /// 실제: `open var mediaType: AVMediaType { get }`
+    public var mediaType: AVMediaType { .video }
     public init() {}
     open func load<T>(_ property: AVAsyncProperty<AVAssetTrack, T>) async throws -> T { fatalError("linux shim") }
 }
@@ -207,6 +225,8 @@ open class AVPlayerItem {
     public var status: Status { .unknown }
     public var error: Error? { nil }
     public var asset: AVAsset { AVAsset() }
+    /// 실제: `open var audioTimePitchAlgorithm: AVAudioTimePitchAlgorithm` (macOS 10.9+)
+    public var audioTimePitchAlgorithm: AVAudioTimePitchAlgorithm = .spectral
     public init(url URL: Foundation.URL) {}
     public init(asset: AVAsset) {}
     open func add(_ output: AVPlayerItemVideoOutput) {}
@@ -236,6 +256,17 @@ public class NSKeyValueObservation {
     public func invalidate() {}
 }
 
+/// 실제: `public struct AVAudioTimePitchAlgorithm: RawRepresentable, Hashable { public let rawValue: String }`
+/// 원시값은 실제 상수 문자열(`AVAudioTimePitchAlgorithmSpectral` 등)을 적었다.
+public struct AVAudioTimePitchAlgorithm: RawRepresentable, Hashable {
+    public let rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+    public static let lowQualityZeroLatency = AVAudioTimePitchAlgorithm(rawValue: "AVAudioTimePitchAlgorithmLowQualityZeroLatency")
+    public static let timeDomain = AVAudioTimePitchAlgorithm(rawValue: "AVAudioTimePitchAlgorithmTimeDomain")
+    public static let spectral = AVAudioTimePitchAlgorithm(rawValue: "AVAudioTimePitchAlgorithmSpectral")
+    public static let varispeed = AVAudioTimePitchAlgorithm(rawValue: "AVAudioTimePitchAlgorithmVarispeed")
+}
+
 /// 실제: `open class AVPlayerItemOutput: NSObject { open func itemTime(forHostTime: CFTimeInterval) -> CMTime }`
 /// `AVPlayerItemVideoOutput` 이 그 서브클래스다.
 open class AVPlayerItemVideoOutput {
@@ -261,6 +292,8 @@ open class AVPlayer {
     public var isMuted: Bool = false
     public var volume: Float = 1
     public var actionAtItemEnd: ActionAtItemEnd = .advance
+    /// 실제: `open var defaultRate: Float` (macOS 13.0+ — `play()` 가 채택하는 기본 배속)
+    public var defaultRate: Float = 1
     public init() {}
     public init(url URL: Foundation.URL) {}
     public init(playerItem item: AVPlayerItem?) {}

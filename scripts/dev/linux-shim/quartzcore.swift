@@ -14,10 +14,28 @@ open class CALayer: NSObject {
     public var isOpaque: Bool = false
     public var masksToBounds: Bool = false
     public var sublayers: [CALayer]?
+    /// 실제: `open var autoresizingMask: CAAutoresizingMask`
+    public var autoresizingMask: CAAutoresizingMask = []
     public override init() { super.init() }
     open func addSublayer(_ layer: CALayer) {}
     open func removeFromSuperlayer() {}
     open func setNeedsDisplay() {}
+}
+
+/// 실제: `public struct CAAutoresizingMask: OptionSet { public let rawValue: UInt32
+///        static let layerMinXMargin/layerWidthSizable/layerMaxXMargin/
+///                  layerMinYMargin/layerHeightSizable/layerMaxYMargin }`
+/// 원시값은 헤더의 비트 순서(1,2,4,8,16,32)를 그대로 적었다.
+public struct CAAutoresizingMask: OptionSet {
+    public let rawValue: UInt32
+    public init(rawValue: UInt32) { self.rawValue = rawValue }
+    public static let layerNotSizable = CAAutoresizingMask([])
+    public static let layerMinXMargin = CAAutoresizingMask(rawValue: 1)
+    public static let layerWidthSizable = CAAutoresizingMask(rawValue: 2)
+    public static let layerMaxXMargin = CAAutoresizingMask(rawValue: 4)
+    public static let layerMinYMargin = CAAutoresizingMask(rawValue: 8)
+    public static let layerHeightSizable = CAAutoresizingMask(rawValue: 16)
+    public static let layerMaxYMargin = CAAutoresizingMask(rawValue: 32)
 }
 
 /// 실제: `open class CAMetalLayer: CALayer { open var device: MTLDevice?
