@@ -582,10 +582,23 @@ public enum RemapOutput: Equatable {
     case speed(min: Float, max: Float)
 }
 
-/// remapvalue 출력 동사(wallpaper64.exe 스트링 @0x491fd0–0x4920b0). set*=덮어쓰기, add*=가산
-/// ([추정] rotation/angularvelocity 는 프레임 독립을 위해 dt 곱 가산율), multiply*=곱.
-/// opacity/color/size 는 표시 파생(display 단계) 적용, velocity/speed/rotation/angularvelocity 는
-/// 스텝 적분 단계 적용. 레거시 문자열 매핑: "velocity"→setVelocity, "speed"→multiplySpeed.
+/// **레거시 융합 동사 — `remapvalue` 의 실물 어휘가 아니다(파생 뷰).**
+///
+/// [정정 2026-08-21] 종전 주석은 출처를 "wallpaper64.exe 스트링 @0x491fd0–0x4920b0" 이라 적었다.
+/// 그 구간(VA `0x140491fd0`–`0x1404920bb`)은 포인터 표 `0x140484d90`–`0x140484e00` 의 14항이 가리키는
+/// 문자열들이고, 그 표의 인덱서 `0x1402611f0` 을 부르는 곳은 **딱 둘 — 전부 이벤트 상속 원소**다
+/// (`0x1401cb0d0` = `inheritinitialvaluefromevent`, `0x1401cf1c5` = `inheritvaluefromevent`).
+/// `remapvalue` 게이트(`0x1401ce660`)·`remapinitialvalue` 게이트(`0x1401ca6cd`) 는 그 표를 **한 번도
+/// 부르지 않는다**. 게다가 13종 중 `multiplyspeed` 는 바이너리 전수 검색 **0건**이라 Waple 이 지어낸
+/// 값이다(`setspeed` 도 0건).
+///
+/// 실물 `remapvalue` 는 융합 동사가 없다. `output`(채널) · `operation`(산술) · `outputcomponent`(축)를
+/// **각각 다른 필드**에 저장한다(`[op+0x08]` / `[op+0x00]` / `[op+0x10]` — §4). 그래서 이 열거는
+/// 이제 `RemapSpec` 의 **읽기 전용 파생 뷰**이고, 시뮬레이터의 산술은 이것이 아니라
+/// `outputChannel × operation × outputComponent` 세 축이 고른다.
+///
+/// 남겨 두는 이유는 둘뿐이다: (a) 직접 조립한 def·기존 테스트가 이 철자를 쓴다,
+/// (b) 자산이 `output` 자리에 이 융합 철자를 적어 놓았을 때 (채널, 산술) 쌍으로 되풀어야 한다.
 public enum RemapVerb: String, Equatable {
     case setVelocity = "setvelocity"
     case addVelocity = "addvelocity"
@@ -602,9 +615,14 @@ public enum RemapVerb: String, Equatable {
     case addAngularVelocity = "addangularvelocity"
 }
 
-/// remapvalue 입력 소스(wallpaper64.exe 스트링 @0x491e78–0x491f60). [추정] 시계열 류(layertime/
-/// runtime/timeofday)는 헤드리스 결정성 우선으로 시뮬 누적시간 근사. directiontocontrolpoint 는
-/// component 키로 성분 선택(기본 x).
+/// remapvalue 입력 소스. **실물은 `input` 과 `output` 이 같은 20항 채널 표(`0x140484e80`)를 쓴다**
+/// (매퍼 `0x140260f50`, 저장 `[op+0x04]`@`0x1401ce71e` / `[op+0x08]`@`0x1401ce759`). 이 열거는 그중
+/// Waple 이 **입력으로 의미를 매긴 11종**만 담은 부분집합이다 — 전체 20종은 `RemapChannel` 에 있다.
+/// (둘을 한 열거로 합치는 것은 별건이다. 입력 쪽은 "무엇을 읽나", 출력 쪽은 "어디에 쓰나" 라
+/// 미구현 항목의 집합이 다르다. **[미해결]** — 통합하려면 입력 20종 전부의 소스를 확정해야 한다.)
+///
+/// [추정] 시계열 류(layertime/runtime/timeofday)는 헤드리스 결정성 우선으로 시뮬 누적시간 근사.
+/// directiontocontrolpoint 는 `inputcomponent` 로 성분 축약(§ `RemapComponent`).
 public enum RemapInput: String, Equatable {
     case lifetimeFraction = "lifetimefraction"
     case particleSystemTime = "particlesystemtime"
@@ -619,19 +637,129 @@ public enum RemapInput: String, Equatable {
     case timeOfDay = "timeofday"
 }
 
-/// remapvalue operation(엔진 어휘).
+/// remapvalue `operation` — **적용 산술**이다. 값 곡선이 아니다.
 ///
-/// **[2026-08-20] 어휘를 실물 표로 맞췄다.** 엔진의 문자열 포인터 표 `0x140484f20` 은 정확히
-/// 넷이다(표 순서 그대로): `remap`(0x140491f6c) · `multiply`(0x140491f78) · **`add`**(0x140491f2c) ·
-/// `subtract`(0x140491f30). 종전 열거는 `add` 를 빠뜨리고 대신 **`average`·`square` 를 갖고
-/// 있었는데 그 둘은 WE 표에 없다** — Waple 이 만든 값이었다. 미지 문자열은 WE 에서 표 첫 항목
-/// (`remap`=항등)으로 떨어지므로, 그 둘을 지우면 `nil → ?? .remap` 으로 같은 결과가 된다.
+/// 어휘: 문자열 포인터 표 `0x140484f20` 4슬롯(표 순서 = 인덱스) — `remap`(`0x140491f6c`) ·
+/// `multiply`(`0x140491f78`) · `add`(`0x140491f2c`) · `subtract`(`0x140491f30`).
+/// 매퍼 `0x140260fb0` 은 루프가 아니라 **언롤 4연쇄**다(`0x140260fc0`/`0x140260fd2`/`0x140260fea`/
+/// `0x140261002` 가 네 슬롯을 rip-상대로 직접 읽는다). 못 찾으면 `mov eax,5`(`0x140261018`).
 ///
-/// [추정] 정규화값 v∈[0,1] 의 단항 셰이핑으로 해석한다(제2 피연산자 부재):
-/// remap=항등(기본) · subtract=1−v. `multiply`/`add` 는 단항 의미로 부호화할 수 없어 파스·보존
-/// 전용(항등 적용)이다 — 동봉 실측 사용은 `remap` 16건 · `multiply` 2건뿐이고 `add` 는 0건이다.
+/// **[반증 2026-08-21] 종전의 "단항 셰이핑(`subtract` → `v = 1 − v01`)" 해석은 틀렸다.**
+/// VM opid 19 핸들러(`0x140244874`–`0x140246ec0`) 안에서 `operation`(= `[r14+0x10]`)을 읽는 곳은
+/// 정확히 **32곳**이고 **최소 주소가 `0x1402459a7`** 이다 — `output` 점프테이블(`jmp rcx`
+/// @`0x1402459a5`)보다 **뒤**다. 즉 값 산출 구간 `0x140244874`–`0x1402459a5` 는 `operation` 을
+/// 한 번도 읽지 않는다(이 저장소에서 구간 전체를 덤프해 세었다). 산술은 전부 **목적지 배열**
+/// 상대다 — `output:"size"` 케이스(`0x140245a1d`)를 그대로 옮기면:
+/// ```
+///   0 remap    movaps xmm0,[rsp+0x70]   ; movups [dst] ← v          (0x140245a7c)  = 덮어쓰기
+///   1 multiply mulps  xmm3,[dst]        ; movups [dst] ← v·dst      (0x140245a68)
+///   2 add      addps  xmm3,[dst]        ; movups [dst] ← v+dst      (0x140245a54)
+///   3 subtract movups xmm0,[dst]; subps xmm0,xmm3 ; [dst] ← dst−v   (0x140245a3d)
+///   그 밖(4·5)  jne 0x140246e57 → 그 4-파티클 그룹 통째 무동작
+/// ```
+/// 로케일이 같은 말을 한다 — `ui_editor_particle_remap_value_operation_remap = 'Assign'`(ko '지정').
+/// `remap` 은 "리맵(곡선)" 이 아니라 **덮어쓰기**다.
+///
+/// **부재 기본값은 `remap` 이 아니라 `multiply` 다.** 주입기 `0x1401bfbba` 가
+/// `mov r8,[0x140484f28]`(= `"multiply"`) 로 심는다(형제 `remapinitialvalue` 주입기 `0x1401bc4ba` 동일).
+/// 동봉 `remapvalue` 12건 중 **5건(unique 4)이 `operation` 부재**다.
+///
+/// 미지 문자열은 매퍼가 `5` 를 돌려 **무동작**이 되지만(위 `jne`), Waple 은 열거에 그 자리가 없어
+/// `nil → 기본 multiply` 로 떨어진다. **[미해결]** — "미지 문자열 = 오퍼레이터 무동작" 을 재현하려면
+/// 센티넬 케이스를 하나 더 둬야 한다. 동봉 도달 0건이라 지금은 두지 않았다.
 public enum RemapOperation: String, Equatable {
     case remap, multiply, add, subtract
+}
+
+/// `remapvalue` / `remapinitialvalue` 의 `input`·`output` 이 **공유**하는 채널 20종.
+///
+/// 어휘: 문자열 포인터 표 `0x140484e80`–`0x140484f18`(20 슬롯, **표 순서가 곧 인덱스**).
+/// 매퍼 `0x140260f50` 은 `stricmp` 선형 탐색 루프이고(`cmp ebx,0x14` @`0x140260f82`), 못 찾으면
+/// `mov eax,0x15`(=21) 센티넬(`0x140260f87`). 이 저장소에서 20슬롯을 덤프해 아래 순서를 확인했다.
+///
+/// **출력으로 쓸 때 실제로 무언가 하는 것은 18종뿐이다.** VM 핸들러가
+/// `mov eax,[r14+0x18]` / `dec eax` / `cmp eax,0x11` / `ja`(`0x14024598a`–`0x140245993`) 로 자르고
+/// 18항 점프테이블 `0x14024bcb4` 로 흩는다:
+///   · `lifetimefraction`(0) · `layerorigin`(19) → `ja` 로 탈락 = **무동작**
+///   · `runtime`(9) · `timeofday`(10) · `particlesystemtime`(11) · `layertime`(12) → 테이블 네 칸이
+///     전부 공통 꼬리 `0x140246e52` = **무동작**(표를 덤프해 확인)
+///   · 나머지 14종이 목적지 배열에 쓴다. 그중 **6종만** `outputcomponent` 스위치를 갖는다
+///     (`[r14+0x20]` 읽기 6곳: color `0x140245fce` · position `0x140246252` · velocity `0x1402464e6`
+///      · controlpoint `0x1402467c6` · deltatocontrolpoint `0x140246aaf` · directiontocontrolpoint
+///      `0x140246c7d`). 스칼라 채널(size·opacity·maxlifetime·speed·rotation·angularspeed)은 없다.
+///
+/// Waple 의 소비 범위는 `ParticleSimulator` 의 적용 표에 적었다 — 9종 구현, 5종 무동작(실물과 같음),
+/// CP 계열 5종 **[미해결] 미구현**.
+public enum RemapChannel: String, Equatable, CaseIterable {
+    case lifetimeFraction = "lifetimefraction"                        // 0  출력 무동작
+    case maxLifetime = "maxlifetime"                                  // 1  [rsi+0x260]
+    case size                                                         // 2  [rsi+0x270]
+    case opacity                                                      // 3  [rsi+0x310]
+    case speed                                                        // 4  [rsi+0x2c8/0x2d0/0x2d8]
+    case rotation                                                     // 5  [rsi+0x290]      = rot.z
+    case angularSpeed = "angularspeed"                                // 6  [rsi+0x2a8]      = angvel.z
+    case distanceToControlPoint = "distancetocontrolpoint"            // 7
+    case positionBetweenTwoControlPoints = "positionbetweentwocontrolpoints"  // 8
+    case runtime                                                      // 9  출력 무동작
+    case timeOfDay = "timeofday"                                      // 10 출력 무동작
+    case particleSystemTime = "particlesystemtime"                    // 11 출력 무동작
+    case layerTime = "layertime"                                      // 12 출력 무동작
+    case color                                                        // 13 [rsi+0x2f8/0x300/0x308]
+    case position                                                     // 14 [rsi+0x2b0/0x2b8/0x2c0]
+    case velocity                                                     // 15 [rsi+0x2c8/0x2d0/0x2d8]
+    case controlPoint = "controlpoint"                                // 16 [rsi+0x400]
+    case deltaToControlPoint = "deltatocontrolpoint"                  // 17
+    case directionToControlPoint = "directiontocontrolpoint"          // 18
+    case layerOrigin = "layerorigin"                                  // 19 출력 무동작
+
+    /// 실물 표(`0x140484e80`) 의 슬롯 번호. 선언 순서가 표 순서라 그대로 쓴다.
+    public var weIndex: Int { Self.allCases.firstIndex(of: self) ?? -1 }
+
+    /// `outputcomponent`(`[r14+0x20]`) 스위치를 갖는 벡터 채널인가 — 실물 6종.
+    public var hasOutputComponentSwitch: Bool {
+        switch self {
+        case .color, .position, .velocity, .controlPoint,
+             .deltaToControlPoint, .directionToControlPoint: return true
+        default: return false
+        }
+    }
+
+    /// 출력으로 왔을 때 실물이 **아무 일도 하지 않는** 채널인가 — 6종이다.
+    /// `lifetimefraction`(0)·`layerorigin`(19)은 `dec`+`cmp eax,0x11`+`ja`(0x140245993)로 탈락하고,
+    /// `runtime`(9)·`timeofday`(10)·`particlesystemtime`(11)·`layertime`(12)은 점프테이블
+    /// `0x14024bcb4` 의 네 칸이 전부 공통 꼬리 `0x140246e52` 를 가리킨다(표를 덤프해 확인).
+    public var isNoOpOutput: Bool {
+        switch self {
+        case .lifetimeFraction, .runtime, .timeOfDay, .particleSystemTime, .layerTime, .layerOrigin:
+            return true
+        default: return false
+        }
+    }
+}
+
+/// `inputcomponent` / `outputcomponent` 의 축 8종.
+///
+/// 어휘: 문자열 포인터 표 `0x140484e40`–`0x140484e78`(8 슬롯), 매퍼 `0x140261030` 은 언롤 8연쇄이고
+/// 못 찾으면 `9`. 파스 저장은 `inputcomponent`→`[op+0x0c]`(`0x1401ce794`) ·
+/// `outputcomponent`→`[op+0x10]`(`0x1401ce7cf`), 둘 다 부재 기본 `"all"`
+/// (주입기 `0x1401bfc0b`·`0x1401bfc21` 이 `[0x140484e40]` 를 심는다).
+///
+/// **입력 쪽(`[r14+0x1c]`, 축약)** — `0x140244ffe`–`0x140245091`. `dec`+`cmp eax,6`+`ja` 로
+/// 1..7 만 받고 7항 점프테이블 `0x14024bc80` 으로 흩는다(이 저장소에서 표를 덤프했다):
+/// ```
+///   0 all      (ja 로 탈락) 세 성분을 그대로 둔다 — 이후 파이프라인이 3성분 독립으로 흐른다
+///   1 x / 2 y / 3 z         고른 성분을 세 자리에 브로드캐스트 (0x140245022 / …29 / …34)
+///   4 sum      x+y+z                                        (0x140245059)
+///   5 average  (x+y+z)·⅓   상수 0x140492db0 = 0.33333334    (0x140245043)
+///   6 max      maxps 연쇄                                    (0x140245068)
+///   7 min      minps 연쇄                                    (0x140245077)
+/// ```
+/// **출력 쪽(`[r14+0x20]`, 축 선택)** — 벡터 채널 6종만. `all`=세 배열 전부, `x`/`y`/`z`=한 배열.
+/// 값의 레인도 같이 고른다(`x`→x레인 `xmm3`, `y`→y레인 `[rbp-0x80]`, `z`→z레인 `[rbp-0x70]` —
+/// color 케이스 `0x1402460ed`/`0x140246071`/`0x140245ff5` 에서 확인). `sum`/`average`/`max`/`min`
+/// 은 출력에 오면 `jne 0x140246e52` 로 **무동작**이다(`0x140245fef`).
+public enum RemapComponent: String, Equatable, CaseIterable {
+    case all, x, y, z, sum, average, max, min
 }
 
 /// remapvalue transformfunction(엔진 어휘).
@@ -732,10 +860,27 @@ public struct BlendWindow: Equatable {
 }
 
 public struct RemapSpec: Equatable {
-    public let verb: RemapVerb
+    /// **레거시 융합 동사(읽기 뷰).** 시뮬레이터는 이것을 쓰지 않는다 — 아래 세 축이 정본이다.
+    /// 자산이 `output` 자리에 융합 철자(`"multiplysize"` 등)를 적었으면 그 철자를 그대로 담고,
+    /// 아니면 (채널, 산술) 쌍에서 되푼다. 대응하는 융합 이름이 없는 조합(예: `position`+`add`)은
+    /// `nil` 이다 — 실물엔 융합 이름 자체가 없으므로 이게 정직한 표현이다(`RemapVerb` 주석 참조).
+    public let verb: RemapVerb?
+    /// **축 ① — `output` 채널.** 파스 저장 `[op+0x08]`(`0x1401ce759`), VM `[r14+0x18]`(`0x14024598a`).
+    /// 부재 기본은 `.size` 다(주입기 `0x1401bfbf5` → `[0x140484e90]` = `"size"`).
+    public let outputChannel: RemapChannel
+    /// **축 ② — `operation` 산술.** 파스 저장 `[op+0x00]`(`0x1401ce6e4`), VM `[r14+0x10]`(`0x1402459a7` 이후).
+    /// 부재 기본은 `.multiply` 다(주입기 `0x1401bfbba` → `[0x140484f28]` = `"multiply"`).
+    public let operation: RemapOperation
+    /// **축 ③ — `outputcomponent`.** 파스 저장 `[op+0x10]`(`0x1401ce7cf`), VM `[r14+0x20]`.
+    /// 벡터 채널 6종에서만 읽힌다. 부재 기본 `.all`(주입기 `0x1401bfc21`). 동봉 도달 **0건**.
+    public let outputComponent: RemapComponent
+    /// `inputcomponent` — 입력 벡터의 축약. 파스 저장 `[op+0x0c]`(`0x1401ce794`), VM `[r14+0x1c]`
+    /// (`0x140244ffe`). 부재 기본 `.all`(주입기 `0x1401bfc0b`). 동봉 도달 **0건**.
+    public let inputComponent: RemapComponent
     /// nil = input 키 부재 → 레거시 동형 노이즈 입력((remapPhase+age)·K·inputScale).
+    /// (실물 부재 기본은 `"lifetimefraction"` — 주입기 `0x1401bfbdf` → `[0x140484e80]`.
+    /// Waple 은 종전 노이즈 경로와의 비트동일을 지키려고 nil 을 그대로 둔다. **[미해결]**)
     public let input: RemapInput?
-    public let operation: RemapOperation      // 부재 remap
     public let transform: RemapTransform?     // nil = 변환 없음(입력을 0..1 클램프해 직접 매핑 [추정])
     public let octaves: Int                   // transformoctaves (기본 3)
     public let inputScale: Float              // transforminputscale (기본 1)
@@ -788,12 +933,51 @@ public struct RemapSpec: Equatable {
     public let inputCP1: Int                  // inputcontrolpoint1 (기본 1)
     public let outputCP0: Int                 // outputcontrolpoint0/1 — 파스·보존 전용(소비처 보류)
     public let outputCP1: Int
-    public let component: Int                 // component: 0=x/1=y/2=z (기본 0)
+    /// **레거시 별칭(읽기 뷰) — 실물 키가 아니다.** `wallpaper64.exe` 에 `component` 라는 독립 키
+    /// 문자열이 **없다**(ASCII·UTF-16LE 전수 0건; 있는 것은 `inputcomponent`@`0x14048f760` 과
+    /// `outputcomponent`@`0x14048f810` 뿐이고 둘 다 `lea rdx` 로 실제 적재된다). 동봉 도달도 0건이다.
+    /// 0=x / 1=y / 2=z 라는 종전 표현을 `inputComponent` 에서 되푼 것뿐이다.
+    public var component: Int {
+        switch inputComponent {
+        case .y: return 1
+        case .z: return 2
+        default: return 0
+        }
+    }
     /// 네 키에서 유도한 페이드 창. 게이트 판정까지 포함한다.
     public var blendWindow: BlendWindow {
         BlendWindow(inStart: blendInStart, inEnd: blendInEnd,
                     outStart: blendOutStart, outEnd: blendOutEnd)
     }
+    /// 정본 이니셜라이저 — 실물의 세 축을 그대로 받는다.
+    public init(outputChannel: RemapChannel, operation: RemapOperation,
+                outputComponent: RemapComponent = .all, inputComponent: RemapComponent = .all,
+                verb: RemapVerb? = nil,
+                input: RemapInput?, transform: RemapTransform?, octaves: Int, inputScale: Float,
+                outMin: Vec3, outMax: Vec3,
+                blendInStart: Float, blendInEnd: Float, blendOutStart: Float, blendOutEnd: Float,
+                inputCP0: Int, inputCP1: Int, outputCP0: Int, outputCP1: Int,
+                inMin: Vec3 = Vec3(x: 0, y: 0, z: 0), inMax: Vec3 = Vec3(x: 1, y: 1, z: 1)) {
+        self.outputChannel = outputChannel; self.operation = operation
+        self.outputComponent = outputComponent; self.inputComponent = inputComponent
+        self.verb = verb ?? RemapSpec.fusedVerb(outputChannel, operation)
+        self.input = input
+        self.transform = transform; self.octaves = octaves; self.inputScale = inputScale
+        self.outMin = outMin; self.outMax = outMax
+        self.inMin = inMin; self.inMax = inMax
+        self.blendInStart = blendInStart; self.blendInEnd = blendInEnd
+        self.blendOutStart = blendOutStart; self.blendOutEnd = blendOutEnd
+        self.inputCP0 = inputCP0; self.inputCP1 = inputCP1
+        self.outputCP0 = outputCP0; self.outputCP1 = outputCP1
+    }
+
+    /// **레거시 호환 이니셜라이저.** 융합 동사 하나로 (채널, 산술) 두 축을 세운다.
+    ///
+    /// `operation:` 인자는 **축으로 쓰이지 않는다** — 융합 동사가 이미 산술을 담고 있어서
+    /// (`.addVelocity` = velocity + add) 둘이 어긋나면 동사가 이긴다. 직접 조립한 def 와
+    /// 기존 테스트가 `RemapSpec(verb: .addVelocity, …, operation: .remap, …)` 처럼 산술 자리를
+    /// 무의미하게 채워 두고 있었고, 그때 기대되는 동작은 언제나 **동사 쪽**이었다.
+    /// `component:` 는 `inputComponent` 로 간다(0=x/1=y/2=z, 그 밖은 `.all`).
     public init(verb: RemapVerb, input: RemapInput?, operation: RemapOperation,
                 transform: RemapTransform?, octaves: Int, inputScale: Float,
                 outMin: Vec3, outMax: Vec3,
@@ -801,14 +985,65 @@ public struct RemapSpec: Equatable {
                 inputCP0: Int, inputCP1: Int, outputCP0: Int, outputCP1: Int, component: Int,
                 // 뒤에 붙인 이유는 순서 호환뿐이다 — 의미상으로는 outMin/outMax 의 짝이다.
                 inMin: Vec3 = Vec3(x: 0, y: 0, z: 0), inMax: Vec3 = Vec3(x: 1, y: 1, z: 1)) {
-        self.verb = verb; self.input = input; self.operation = operation
-        self.transform = transform; self.octaves = octaves; self.inputScale = inputScale
-        self.outMin = outMin; self.outMax = outMax
-        self.inMin = inMin; self.inMax = inMax
-        self.blendInStart = blendInStart; self.blendInEnd = blendInEnd
-        self.blendOutStart = blendOutStart; self.blendOutEnd = blendOutEnd
-        self.inputCP0 = inputCP0; self.inputCP1 = inputCP1
-        self.outputCP0 = outputCP0; self.outputCP1 = outputCP1; self.component = component
+        let axes = RemapSpec.axes(of: verb)
+        self.init(outputChannel: axes.channel, operation: axes.operation,
+                  outputComponent: .all,
+                  inputComponent: RemapSpec.legacyComponent(component),
+                  verb: verb, input: input, transform: transform, octaves: octaves,
+                  inputScale: inputScale, outMin: outMin, outMax: outMax,
+                  blendInStart: blendInStart, blendInEnd: blendInEnd,
+                  blendOutStart: blendOutStart, blendOutEnd: blendOutEnd,
+                  inputCP0: inputCP0, inputCP1: inputCP1,
+                  outputCP0: outputCP0, outputCP1: outputCP1, inMin: inMin, inMax: inMax)
+    }
+
+    /// 융합 동사 → (채널, 산술). 실물엔 이 방향의 표가 없다 — Waple 어휘의 되풀이다.
+    public static func axes(of verb: RemapVerb) -> (channel: RemapChannel, operation: RemapOperation) {
+        switch verb {
+        case .setVelocity:         return (.velocity, .remap)
+        case .addVelocity:         return (.velocity, .add)
+        case .multiplySpeed:       return (.speed, .multiply)
+        case .setOpacity:          return (.opacity, .remap)
+        case .multiplyOpacity:     return (.opacity, .multiply)
+        case .setColor:            return (.color, .remap)
+        case .multiplyColor:       return (.color, .multiply)
+        case .setSize:             return (.size, .remap)
+        case .multiplySize:        return (.size, .multiply)
+        case .setRotation:         return (.rotation, .remap)
+        case .addRotation:         return (.rotation, .add)
+        case .setAngularVelocity:  return (.angularSpeed, .remap)
+        case .addAngularVelocity:  return (.angularSpeed, .add)
+        }
+    }
+
+    /// (채널, 산술) → 융합 동사. 대응 이름이 없는 조합은 nil 이다(실물엔 융합 이름이 없다).
+    public static func fusedVerb(_ channel: RemapChannel, _ operation: RemapOperation) -> RemapVerb? {
+        switch (channel, operation) {
+        case (.velocity, .remap):        return .setVelocity
+        case (.velocity, .add):          return .addVelocity
+        case (.speed, .multiply):        return .multiplySpeed
+        case (.opacity, .remap):         return .setOpacity
+        case (.opacity, .multiply):      return .multiplyOpacity
+        case (.color, .remap):           return .setColor
+        case (.color, .multiply):        return .multiplyColor
+        case (.size, .remap):            return .setSize
+        case (.size, .multiply):         return .multiplySize
+        case (.rotation, .remap):        return .setRotation
+        case (.rotation, .add):          return .addRotation
+        case (.angularSpeed, .remap):    return .setAngularVelocity
+        case (.angularSpeed, .add):      return .addAngularVelocity
+        default:                         return nil
+        }
+    }
+
+    /// 레거시 `component:`(0=x/1=y/2=z) → 축. 그 밖은 실물 기본 `.all`.
+    static func legacyComponent(_ i: Int) -> RemapComponent {
+        switch i {
+        case 0: return .x
+        case 1: return .y
+        case 2: return .z
+        default: return .all
+        }
     }
 }
 
@@ -1321,49 +1556,44 @@ public struct ParticleSystemDef: Equatable {
         self.children = children
     }
 
-    /// remapvalue 출력 문자열 → 동사.
+    /// `remapvalue` 의 `output` 문자열 → **실물 축 둘**(채널, 산술).
     ///
-    /// **[2026-08-21] `RemapVerb` 는 실물 어휘가 아니다.** 실물은 `output` 과 `input` 이 **같은
-    /// 20항 채널 테이블**(0x140484e80)을 쓰고, 매퍼(0x140260f50)가 `stricmp` 선형 탐색으로
-    /// 인덱스를 낸다(`cmp ebx, 0x14` = 20항, 못 찾으면 **0x15 = 21** 을 돌려주는 센티넬).
-    /// 저장은 `[op+0x04]` = input(0x1401ce71e) · `[op+0x08]` = output(0x1401ce759) 이다.
-    /// 채널 20종은 순서대로:
-    ///   lifetimefraction · maxlifetime · size · opacity · speed · rotation · angularspeed ·
-    ///   distancetocontrolpoint · positionbetweentwocontrolpoints · runtime · timeofday ·
-    ///   particlesystemtime · layertime · **color**(13) · position · velocity · controlpoint ·
-    ///   deltatocontrolpoint · directiontocontrolpoint · layerorigin
-    /// (그 **바로 뒤**(0x140484f20)가 이미 이식한 `operation` 4종 표다 — 두 표가 한 배열에 붙어 있다.)
+    /// **[2026-08-21] 종전 구현은 두 축을 하나로 뭉개고 있었다.** `remapVerb(_:operation:)` 이
+    /// (채널 × operation) → 13종 융합 동사를 골랐는데, 실물은 `output` 과 `operation` 을
+    /// **각각 다른 필드에** 저장하고(`[op+0x08]`@`0x1401ce759` / `[op+0x00]`@`0x1401ce6e4`)
+    /// VM 이 **output 을 먼저** 18-way 로 흩은 뒤(`jmp rcx`@`0x1402459a5`) 그 안에서 산술 4갈래를
+    /// 고른다(`mov ecx,[r14+0x10]` 최초 등장 `0x1402459a7`). 융합 동사 문자열은 파스 어디에도
+    /// 생기지 않는다. 자세한 반증은 `docs/re/remap-operation.md`.
     ///
-    /// Waple 의 `RemapVerb` 는 그 **채널과 operation 을 융합한 표현**이다. 종전 구현은 채널 이름을
-    /// 그대로 `RemapVerb(rawValue:)` 에 먹여서, 실물이 쓰는 채널명이 오면 **nil → 오퍼레이터 통째
-    /// 드롭**이었다. 동봉 실측으로 3건이 그렇게 사라지고 있었다 —
-    /// `output:"color"`(1건, `operation:"remap"`)와 `output:"opacity"`(2건, operation 부재).
+    /// 여기서 고친 것 넷:
+    ///   ① `operation` 부재 기본이 `remap`(=덮어쓰기)이었다 → **`multiply`**(주입기 `0x1401bfbba`).
+    ///      동봉 도달 5건(unique 4). 그중 그림이 바뀌는 것은 `thunderbolt.json` 계열의
+    ///      `output:"opacity"` **2건**뿐이다(`output:"speed"` 3건은 확장 키가 없어 레거시
+    ///      `.remapValue(.speed)` 경로를 타고, 그쪽은 이미 곱하기였다).
+    ///   ② `output` 부재가 드롭이었다 → 주입기 `0x1401bfbf5` 가 **`"size"`** 를 심으므로 드롭이 아니다.
+    ///   ③ `color`/`opacity`/`size` 가 `multiply` 만 곱이고 나머지 전부 set 이었다 → 4산술 전부.
+    ///   ④ `rotation`/`angularspeed` 가 `add`/`subtract` 만 가산이었다 → 4산술 전부.
     ///
-    /// 그래서 (채널, operation) 쌍으로 동사를 고른다. `operation` 부재 기본은 `remap`(= set)이다.
+    /// 미지 문자열은 여기서 `nil` 을 내 오퍼레이터가 드롭된다. 실물은 매퍼 센티넬 `0x15` 가
+    /// `dec`+`cmp 0x11`+`ja`(`0x140245993`)에 걸려 **무동작**이 되므로 관측은 같다.
     ///
-    /// > **미확정 — 시뮬 쪽 감사가 필요하다.** 직전 커밋 `461ec82` 은 `operation` 을 "값 곡선을
-    /// > 바꾸는 것"(subtract → `v = 1 − v01`)으로 이식했는데, 이 표의 배치(채널 표 바로 뒤)와
-    /// > 여기 쓰임을 보면 `operation` 이 **적용 방식(동사) 자체**일 가능성이 크다. 두 해석이
-    /// > 양립하지 않으므로 시뮬 소비단을 따로 재야 한다. 이 함수는 **파스에서 드롭되던 것을
-    /// > 살리는 데까지만** 손대고 시뮬 의미는 건드리지 않는다.
-    private static func remapVerb(_ output: String?, operation: RemapOperation?) -> RemapVerb? {
-        guard let raw = output?.lowercased() else { return nil }
-        // 이미 Waple 융합 어휘로 적힌 경우(직접 조립한 def·기존 테스트)는 그대로 받는다.
-        if let direct = RemapVerb(rawValue: raw) { return direct }
-        let op = operation ?? .remap
-        switch raw {
-        case "color":        return op == .multiply ? .multiplyColor : .setColor
-        case "opacity":      return op == .multiply ? .multiplyOpacity : .setOpacity
-        case "size":         return op == .multiply ? .multiplySize : .setSize
-        case "rotation":     return op == .add || op == .subtract ? .addRotation : .setRotation
-        case "angularspeed": return op == .add || op == .subtract ? .addAngularVelocity : .setAngularVelocity
-        case "velocity":     return op == .add || op == .subtract ? .addVelocity : .setVelocity
-        // speed 는 Waple 에 배수 동사만 있다 — 실물 채널로 오면 그쪽으로 보낸다.
-        case "speed":        return .multiplySpeed
-        // 나머지 채널(위치·컨트롤포인트 계열 등)은 Waple 에 대응 동사가 없다. 지어내지 않고
-        // 종전대로 nil 을 돌려 드롭한다 — 동봉 도달 0이다.
-        default:             return nil
+    /// - Returns: (채널, 산술, 자산이 융합 철자를 썼다면 그 동사). 채널을 못 고르면 nil.
+    private static func remapAxes(_ output: String?, operation: RemapOperation?)
+        -> (channel: RemapChannel, operation: RemapOperation, fused: RemapVerb?)? {
+        // 주입기 `0x1401bfbba` 가 심는 부재 기본. 로케일 'Assign' 이 말하듯 `remap` 이 아니다.
+        let injectedOperation = operation ?? .multiply
+        guard let raw = output?.lowercased() else {
+            // `output` 부재 → 주입기 `0x1401bfbf5` 가 `[0x140484e90]` = "size" 를 심는다.
+            return (.size, injectedOperation, nil)
         }
+        // 자산·직접 조립 def 가 융합 철자를 썼으면 거기서 두 축을 되푼다. 다만 `operation` 키가
+        // 명시돼 있으면 **명시 쪽이 산술 축을 이긴다** — 실물엔 두 필드가 따로 있기 때문이다.
+        if let fused = RemapVerb(rawValue: raw) {
+            let axes = RemapSpec.axes(of: fused)
+            return (axes.channel, operation ?? axes.operation, fused)
+        }
+        guard let channel = RemapChannel(rawValue: raw) else { return nil }
+        return (channel, injectedOperation, nil)
     }
 
     /// initializer JSON 배열 → (이니셜라이저 목록, mapSequenceAxis) 조립.
@@ -1853,13 +2083,16 @@ public struct ParticleSystemDef: Equatable {
                 // `inputrangemin`/`inputrangemax` 도 확장 키다 — 레거시 경로(.remapValue)에는
                 // 입력 구간을 실을 자리가 없어서, 이 둘이 있으면 반드시 Ex 경로로 보내야 한다.
                 // (동봉 도달은 0 — `inputrange*` 를 쓰는 3+1건이 전부 output=color 라 이미 Ex 였다.)
+                // `inputcomponent`/`outputcomponent` 는 **실물 키**다(`0x14048f760`/`0x14048f810`).
+                // `component` 는 Waple 레거시 별칭이라 남겨 둔다 — 셋 다 동봉 도달 0건이다.
                 let extKeys = ["input", "operation", "transformoctaves",
                                "blendinstart", "blendinend", "blendoutstart", "blendoutend",
                                "inputcontrolpoint0", "inputcontrolpoint1",
-                               "outputcontrolpoint0", "outputcontrolpoint1", "component",
+                               "outputcontrolpoint0", "outputcontrolpoint1",
+                               "inputcomponent", "outputcomponent", "component",
                                "inputrangemin", "inputrangemax"]
                 let hasExt = extKeys.contains { o[$0] != nil }
-                // `operation` 은 동사 선택(아래 remapVerb)과 RemapSpec 양쪽이 쓴다 — 한 번만 판다.
+                // `operation` 은 산술 축(아래 remapAxes)과 RemapSpec 양쪽이 쓴다 — 한 번만 판다.
                 let parsedOperation = (o["operation"] as? String).flatMap { RemapOperation(rawValue: $0.lowercased()) }
                 if !hasExt, outputName == "velocity" {
                     ops.append(.remapValue(output: .velocity(min: pvec3OrScalar(o["outputrangemin"]) ?? Vec3(x: 0, y: 0, z: 0),
@@ -1869,11 +2102,18 @@ public struct ParticleSystemDef: Equatable {
                     ops.append(.remapValue(output: .speed(min: pfloat(o["outputrangemin"]) ?? 0,
                                                           max: pfloat(o["outputrangemax"]) ?? 1),
                                            fbm: fbm, inputScale: scale))
-                } else if let verb = remapVerb(outputName, operation: parsedOperation) {
+                } else if let axes = remapAxes(outputName, operation: parsedOperation) {
                     let spec = RemapSpec(
-                        verb: verb,
+                        outputChannel: axes.channel,
+                        operation: axes.operation,
+                        // 주입기 `0x1401bfc21`/`0x1401bfc0b` 둘 다 `[0x140484e40]` = "all".
+                        outputComponent: premapcomponent(o["outputcomponent"]) ?? .all,
+                        // `component` 는 실물 키가 아니다(바이너리 0건) — Waple 레거시 별칭이라
+                        // `inputcomponent` 가 없을 때만 본다. 둘 다 동봉 도달 0건.
+                        inputComponent: premapcomponent(o["inputcomponent"])
+                            ?? pcomponent(o["component"]).map { RemapSpec.legacyComponent($0) } ?? .all,
+                        verb: axes.fused,
                         input: (o["input"] as? String).flatMap { RemapInput(rawValue: $0.lowercased()) },
-                        operation: parsedOperation ?? .remap,
                         transform: (o["transformfunction"] as? String).flatMap { RemapTransform(rawValue: $0.lowercased()) },
                         octaves: max(1, pint(o["transformoctaves"]) ?? 3),
                         inputScale: scale,
@@ -1888,14 +2128,15 @@ public struct ParticleSystemDef: Equatable {
                         inputCP1: pint(o["inputcontrolpoint1"]) ?? 1,
                         outputCP0: pint(o["outputcontrolpoint0"]) ?? 0,
                         outputCP1: pint(o["outputcontrolpoint1"]) ?? 1,
-                        component: pcomponent(o["component"]) ?? 0,
                         // 주입기 0x1401bfbb0: 부재 시 min=int 0(0x1401bfc8c) · max=int 1(0x1401bfd76).
                         // 리더는 outputrange* 와 같은 vec3-또는-스칼라(0x1401ce836 / 0x1401ce98c).
                         inMin: injectedVec3OrScalar(o, "inputrangemin", Vec3(x: 0, y: 0, z: 0)),
                         inMax: injectedVec3OrScalar(o, "inputrangemax", Vec3(x: 1, y: 1, z: 1)))
                     ops.append(.remapValueEx(spec: spec))
                 } else {
-                    WapleLog.warn("[Waple] remapvalue unsupported output dropped: \(outputName ?? "nil")")
+                    // 실물 매퍼(0x140260f50)가 못 찾으면 센티넬 0x15 를 내고, VM 이
+                    // `dec`+`cmp 0x11`+`ja`(0x140245993)로 걸러 **무동작**이 된다. 드롭과 관측이 같다.
+                    WapleLog.warn("[Waple] remapvalue unknown output channel dropped: \(outputName ?? "nil")")
                 }
             case "capvelocity":
                 // G-C2-01. 주입기 0x1401bfab0 이 `maxspeed` 부재에 100 을 심는다(2D 경로 상수
@@ -2498,7 +2739,17 @@ private func pvec3OrScalar(_ v: Any?) -> Vec3? {
     if let s = pfloat(v) { return Vec3(x: s, y: s, z: s) }
     return nil
 }
-/// remapvalue "component": "x"/"y"/"z" 문자열 또는 0/1/2 숫자 → 0/1/2.
+/// `inputcomponent`/`outputcomponent` 문자열 → 축 8종(매퍼 0x140261030, 표 0x140484e40).
+/// 실물 매퍼는 `stricmp` 라 대소문자를 무시한다. 못 찾으면 nil → 호출부가 실물 부재 기본 `.all` 로.
+/// (미지 문자열은 실물에선 `9` 센티넬이 되어 그 오퍼레이터가 **무동작**이 된다 — **[미해결]**,
+/// 동봉 도달 0건이라 재현하지 않았다.)
+private func premapcomponent(_ v: Any?) -> RemapComponent? {
+    guard let s = v as? String else { return nil }
+    return RemapComponent(rawValue: s.lowercased())
+}
+
+/// **레거시 별칭** `component`: "x"/"y"/"z" 문자열 또는 0/1/2 숫자 → 0/1/2.
+/// 실물 키가 아니다(`wallpaper64.exe` 전수 0건) — 직접 조립한 def·기존 테스트 호환 전용이다.
 private func pcomponent(_ v: Any?) -> Int? {
     if let s = v as? String {
         switch s.lowercased() {

@@ -298,7 +298,9 @@ public struct ParticleSimulator {
                 case let .speed(mn, mx): rms.append(.speed(min: mn, max: mx, fbm: fbm, scale: scale))
                 }
             case let .remapValueEx(spec):
-                rms.append(.general(spec))
+                // 실물이 무동작인 채널과 Waple 미구현 채널은 **핫루프에 넣지 않는다**(아래
+                // `remapChannelIsApplied`). def 에는 그대로 남으므로 파스 정보는 잃지 않는다.
+                if Self.remapChannelIsApplied(spec.outputChannel) { rms.append(.general(spec)) }
             case let .capVelocity(maxSpeed):
                 caps.append((maxSpeed, bw))
             case let .reduceMovementNearControlPoint(dIn, dOut, rIn, rOut, target):
@@ -361,8 +363,8 @@ public struct ParticleSimulator {
         remaps = rms
         hasDisplayRemaps = rms.contains {
             guard case let .general(spec) = $0 else { return false }
-            switch spec.verb {
-            case .setOpacity, .multiplyOpacity, .setColor, .multiplyColor, .setSize, .multiplySize: return true
+            switch spec.outputChannel {
+            case .size, .opacity, .color: return true    // 표시 파생 — display() 에서 적용
             default: return false
             }
         }
@@ -567,27 +569,72 @@ public struct ParticleSimulator {
                 case let .speed(mn, mx, fbm, scale):
                     speedFactor *= mn + (mx - mn) * remapNoise01(fbm, base * scale, SIMD3(7.7, 33.1, 61.9))
                 case let .general(spec):
-                    // 확장 파이프라인 — 물리 동사는 여기서, 표시 파생 동사는 display() 에서 적용.
+                    // 확장 파이프라인 — 물리 채널은 여기서, 표시 파생 채널(size/opacity/color)은
+                    // display() 에서 적용한다. 실물 VM 은 한 곳에서 다 하지만 Waple 은 표시값이
+                    // age 파생 재계산 구조라 두 자리로 갈린다.
+                    switch spec.outputChannel {
+                    case .size, .opacity, .color: continue
+                    default: break
+                    }
                     let (val, w) = remapEval(spec, particles[k])
                     guard w > 0 else { continue }
-                    switch spec.verb {
-                    case .setVelocity:
-                        particles[k].vel += (val - particles[k].vel) * w   // w=1 → 덮어쓰기(레거시 동형)
-                    case .addVelocity:
-                        remapAddVel += val * w
-                    case .multiplySpeed:
-                        speedFactor *= 1 + (val.x - 1) * w                 // w=1 → val.x(레거시 동형)
-                    case .setRotation:
-                        particles[k].rotation += (val - particles[k].rotation) * w
-                    case .addRotation:
-                        particles[k].rotation += val * (w * dt)            // [추정] 가산율(dt 곱)
-                    case .setAngularVelocity:
-                        particles[k].angularVel += (val - particles[k].angularVel) * w
-                    case .addAngularVelocity:
-                        particles[k].angularVel += val * (w * dt)
-                    case .setOpacity, .multiplyOpacity, .setColor, .multiplyColor,
-                         .setSize, .multiplySize:
-                        break   // 표시 파생 — display() 적용
+                    switch spec.outputChannel {
+                    case .velocity:
+                        // 실물 0x1402464e6 — `mov ecx,[r14+0x20]`(outputcomponent) 로 축을 먼저
+                        // 고르고(all 진입 0x140246679) 그 안에서 4산술을 [rsi+0x2c8/0x2d0/0x2d8]
+                        // 에 건다. **Waple 은 add/subtract 만 비파괴**로
+                        // 둔다(remapAddVel — 이번 스텝 적분에만 실린다). 종전 규약이고
+                        // `testRemapValueEx_addVelocityIsNonDestructive` 가 못박는다.
+                        // 실물은 넷 다 속도 배열을 직접 고친다 — **의도적 이탈, 동봉 도달 0건**.
+                        switch spec.operation {
+                        case .add:      remapAddVel += Self.remapAxisMask(val, spec.outputComponent) * w
+                        case .subtract: remapAddVel -= Self.remapAxisMask(val, spec.outputComponent) * w
+                        case .remap, .multiply:
+                            particles[k].vel = Self.remapCombine3(particles[k].vel, val,
+                                                                  spec.operation, w, spec.outputComponent)
+                        }
+                    case .speed:
+                        // 실물 0x140245b05–0x140245ba7: `s = |v|`(sqrtps @0x140245b3a) 에 operation 을
+                        // 걸어 `s'` 를 만들고(`v` / `s·v` / `s+v` / `s−v`), `v *= (s>0 ? s'·rcp(s) : s')`
+                        // 로 **방향을 보존한 채 크기만** 바꾼다(blendvps @0x140245b79).
+                        // Waple 은 저장 vel 을 안 건드리고 이번 스텝 적분에만 곱한다(레거시
+                        // `.remapValue(.speed)` 와 같은 비파괴 규약 — 복리 폭주 방지).
+                        // `multiply` 는 `s'/s` 에서 s 가 정확히 상쇄돼 종전 산술과 **비트동일**이다.
+                        switch spec.operation {
+                        case .multiply:
+                            speedFactor *= 1 + (val.x - 1) * w
+                        case .remap, .add, .subtract:
+                            let s = simd_length(particles[k].vel)
+                            let ns = Self.remapCombine(s, val.x, spec.operation, w)
+                            speedFactor *= s > 0 ? ns / s : ns
+                        }
+                    case .rotation:
+                        // 실물 0x140245bac: 목적지가 **[rsi+0x290] 하나**다. 회전 배열은
+                        // 0x280/0x288/0x290 이므로(형제 angularmovement 핸들러가 여섯 포인터를
+                        // 0x14024000d–0x140240039 에서 한 줄씩 잡아 확정) 그것은 **rot.z** 다.
+                        // outputcomponent 스위치가 없고 값은 x 레인(xmm3)이다.
+                        // **dt 곱은 없다** — 핸들러 전 구간(0x140244874–0x140246ec0)에 dtScaled
+                        // 슬롯 `[rbp+0xf0]` 참조가 0건이다(덤프해 세었다). 종전의 `val * (w*dt)`
+                        // 는 근거 없는 [추정] 이었다.
+                        particles[k].rotation.z =
+                            Self.remapCombine(particles[k].rotation.z, val.x, spec.operation, w)
+                    case .angularSpeed:
+                        // 실물 0x140245c20: `test byte [rsi+0x24],2` 게이트를 지나 **[rsi+0x2a8]**
+                        // 하나 = angvel.z(각속도 배열 0x298/0x2a0/0x2a8). dt 곱 없음.
+                        // 게이트 비트의 의미는 안 봤다 — **[미해결]**.
+                        particles[k].angularVel.z =
+                            Self.remapCombine(particles[k].angularVel.z, val.x, spec.operation, w)
+                    case .position:
+                        // 실물 0x140246252 — outputcomponent → operation → [rsi+0x2b0/0x2b8/0x2c0].
+                        particles[k].pos = Self.remapCombine3(particles[k].pos, val,
+                                                              spec.operation, w, spec.outputComponent)
+                    case .maxLifetime:
+                        // 실물 0x1402459a7 — [rsi+0x260] 스칼라. 수명이 바뀌면 수명 비율과 컬링이
+                        // 따라 움직인다(실물도 같다 — 그냥 배열에 쓴다).
+                        particles[k].lifetime =
+                            Self.remapCombine(particles[k].lifetime, val.x, spec.operation, w)
+                    default:
+                        break   // 무동작·미구현 채널 — 캐시(remapChannelIsApplied)가 이미 걸렀다
                     }
                 }
             }
@@ -1435,16 +1482,26 @@ public struct ParticleSimulator {
         if hasDisplayRemaps {
             for r in remaps {
                 guard case let .general(spec) = r else { continue }
+                switch spec.outputChannel {
+                case .size, .opacity, .color: break
+                default: continue          // 물리 채널은 _step 적분 단계 적용
+                }
                 let (val, w) = remapEval(spec, p)
                 guard w > 0 else { continue }
-                switch spec.verb {
-                case .setSize: d.size += (val.x - d.size) * w
-                case .multiplySize: d.size *= 1 + (val.x - 1) * w
-                case .setColor: d.color += (val - d.color) * w
-                case .multiplyColor: d.color *= SIMD3<Float>(1, 1, 1) + (val - SIMD3<Float>(1, 1, 1)) * w
-                case .setOpacity: d.alpha = max(0, min(1, d.alpha + (val.x - d.alpha) * w))
-                case .multiplyOpacity: d.alpha = max(0, min(1, d.alpha * (1 + (val.x - 1) * w)))
-                default: break   // 물리 동사는 _step 적분 단계 적용
+                switch spec.outputChannel {
+                case .size:
+                    // 실물 0x140245a1d — [rsi+0x270] 스칼라(값은 x 레인). outputcomponent 스위치 없음.
+                    d.size = Self.remapCombine(d.size, val.x, spec.operation, w)
+                case .opacity:
+                    // 실물 0x140245a91 — [rsi+0x310] 스칼라. 클램프는 Waple 규약이다(실물은 여기서
+                    // 자르지 않는다 — `flags & 2` 가 출력 매핑 직후에 이미 잘랐다).
+                    d.alpha = max(0, min(1, Self.remapCombine(d.alpha, val.x, spec.operation, w)))
+                case .color:
+                    // 실물 0x140245fce — **outputcomponent 가 먼저**(all/x/y/z), 그 안에서 4산술.
+                    // 축은 값 레인도 함께 고른다(x→xmm3 · y→[rbp-0x80] · z→[rbp-0x70]).
+                    d.color = Self.remapCombine3(d.color, val, spec.operation, w, spec.outputComponent)
+                default:
+                    break
                 }
             }
         }
@@ -1656,13 +1713,117 @@ public struct ParticleSimulator {
         return 0.5 * (1 + max(-1, min(1, sum / norm)))
     }
 
+    /// `remapvalue` 의 **적용 산술 4종**(스칼라 자리). 실물 `output:"size"` 케이스
+    /// 0x140245a1d–0x140245a8c 를 그대로 옮긴 것이고, 다른 13 채널도 목적지 배열만 다를 뿐
+    /// 같은 네 갈래다(`movups`/`mulps`/`addps`/`subps`):
+    /// ```
+    ///   remap    dst = v          multiply dst = v·dst
+    ///   add      dst = v + dst    subtract dst = dst − v
+    /// ```
+    /// 페이드 창 가중은 필드별 `new = old + w·(unweighted − old)` 다 — 이 형태는 opid 39 변종
+    /// (0x14024800a–0x1402480c7)이 네 산술 전부에 대해 확정해 준다. 창이 비활성이면 w ≡ 1 이라
+    /// 위 네 줄과 정확히 같아진다.
+    ///
+    /// 표기 순서까지 종전 코드와 맞춰 뒀다 — `remap`/`multiply` 는 이 저장소의 종전 산술과
+    /// **비트동일**이어야 한다(그 둘이 동봉 자산 전건이 타는 경로다).
+    @inline(__always)
+    static func remapCombine(_ old: Float, _ v: Float, _ op: RemapOperation, _ w: Float) -> Float {
+        switch op {
+        case .remap:    return old + (v - old) * w
+        case .multiply: return old * (1 + (v - 1) * w)
+        case .add:      return old + v * w
+        case .subtract: return old - v * w
+        }
+    }
+
+    /// 벡터 채널의 적용 — `outputcomponent` 가 **목적 축과 값 레인을 함께** 고른다
+    /// (color 케이스: x→0x2f8/xmm3 @0x1402460ed · y→0x300/[rbp-0x80] @0x140246071 ·
+    ///  z→0x308/[rbp-0x70] @0x140245ff5 · all→셋 전부 @0x140246161).
+    /// `sum`/`average`/`max`/`min` 은 **입력 축약 전용**이라 출력에 오면 실물이
+    /// `jne 0x140246e52` 로 통째 무동작이다(0x140245fef).
+    @inline(__always)
+    static func remapCombine3(_ old: SIMD3<Float>, _ v: SIMD3<Float>,
+                              _ op: RemapOperation, _ w: Float,
+                              _ c: RemapComponent) -> SIMD3<Float> {
+        var out = old
+        switch c {
+        case .all:
+            out.x = remapCombine(old.x, v.x, op, w)
+            out.y = remapCombine(old.y, v.y, op, w)
+            out.z = remapCombine(old.z, v.z, op, w)
+        case .x: out.x = remapCombine(old.x, v.x, op, w)
+        case .y: out.y = remapCombine(old.y, v.y, op, w)
+        case .z: out.z = remapCombine(old.z, v.z, op, w)
+        case .sum, .average, .max, .min: break
+        }
+        return out
+    }
+
+    /// 비파괴 가산(velocity add/subtract) 용 축 마스크 — 고른 축만 남긴다.
+    @inline(__always)
+    static func remapAxisMask(_ v: SIMD3<Float>, _ c: RemapComponent) -> SIMD3<Float> {
+        switch c {
+        case .all: return v
+        case .x:   return SIMD3<Float>(v.x, 0, 0)
+        case .y:   return SIMD3<Float>(0, v.y, 0)
+        case .z:   return SIMD3<Float>(0, 0, v.z)
+        case .sum, .average, .max, .min: return SIMD3<Float>(0, 0, 0)
+        }
+    }
+
+    /// `inputcomponent` 축약 — 실물 0x140244ffe–0x140245091(점프테이블 0x14024bc80, 7항).
+    /// 산술 순서까지 맞춰 뒀다(`y + x`, 그다음 `+ z`; `average` 는 ×0.33333334 @0x140492db0).
+    ///
+    /// `all`(=0)은 실물에서 **축약하지 않는다** — `dec`+`cmp eax,6`+`ja`(0x140245002–0x140245007)로
+    /// 표를 건너뛰고 세 성분이 각자 정규화·변환을 지나 출력 축으로 흐른다. Waple 의 입력
+    /// 파이프라인은 아직 스칼라라 `all` 을 x 로 떨어뜨린다 — 종전 기본(`component ?? 0` = x)과
+    /// 같은 값이라 무회귀다. **[미해결]** — 3성분 입력 파이프라인은 이 갭 밖이다.
+    @inline(__always)
+    static func remapReduce(_ v: SIMD3<Float>, _ c: RemapComponent) -> Float {
+        switch c {
+        case .all, .x:  return v.x
+        case .y:        return v.y
+        case .z:        return v.z
+        case .sum:      return v.y + v.x + v.z
+        case .average:  return (v.y + v.x + v.z) * (1.0 / 3.0)
+        case .max:      return Swift.max(Swift.max(v.x, v.y), v.z)
+        case .min:      return Swift.min(Swift.min(v.x, v.y), v.z)
+        }
+    }
+
+    /// `remapValueEx` 중 시뮬레이터가 **실제로 적용하는** 채널.
+    ///
+    /// 실물 20채널 중 6종은 실물도 무동작이고(`RemapChannel.isNoOpOutput`), 남은 14 중 CP 계열
+    /// 5종(`controlpoint` · `distancetocontrolpoint` · `positionbetweentwocontrolpoints` ·
+    /// `deltatocontrolpoint` · `directiontocontrolpoint`)은 **[미해결] 미구현**이다 — 실물은 위치
+    /// 배열과 함께 CP 배열 `[rsi+0x400]` 을 건드리는데(핸들러 0x140245c9e·0x140245dba·0x140246781·
+    /// 0x140246a55·0x140246c0e) Waple 의 컨트롤포인트는 `def.controlPoints` 라는 시스템 수준
+    /// 상수라 파티클 루프에서 쓰려면 def 를 변형해야 한다. 동봉 도달 0건이라 지어내지 않는다.
+    ///
+    /// 걸러진 스펙도 `def.operators` 에는 그대로 남는다 — 파스 정보는 잃지 않고 핫루프만 짧아진다.
+    static func remapChannelIsApplied(_ c: RemapChannel) -> Bool {
+        switch c {
+        case .maxLifetime, .size, .opacity, .speed, .rotation, .angularSpeed,
+             .color, .position, .velocity:
+            return true
+        case .lifetimeFraction, .runtime, .timeOfDay, .particleSystemTime, .layerTime, .layerOrigin,
+             .distanceToControlPoint, .positionBetweenTwoControlPoints, .controlPoint,
+             .deltaToControlPoint, .directionToControlPoint:
+            return false
+        }
+    }
+
     /// remapValueEx 입력 CP 룩업(범위 밖 id → 원점).
     private func remapCP(_ id: Int) -> SIMD3<Float> {
         id >= 0 && id < def.controlPoints.count ? s3(def.controlPoints[id]) : SIMD3(0, 0, 0)
     }
 
-    /// remapValueEx 평가(순수 — RNG 無, 스폰 시드 remapPhase 만 참조): 입력 신호 → transform([0,1])
-    /// → operation 셰이핑 → 출력 범위 매핑 + blend 창(수명 비율) 가중. step/display 양쪽에서 결정적 재평가.
+    /// remapValueEx **값 산출**(순수 — RNG 無, 스폰 시드 remapPhase 만 참조):
+    /// 입력 신호 → inputcomponent 축약 → transform([0,1]) → 출력 범위 매핑 + blend 창 가중.
+    /// step/display 양쪽에서 결정적으로 재평가한다.
+    ///
+    /// **`operation` 은 여기 없다.** 실물도 그렇다 — 값 산출 구간에 `[r14+0x10]` 읽기가 0회다.
+    /// 적용 산술은 호출부(`remapCombine`/`remapCombine3`)가 목적지 배열에 대고 건다.
     private func remapEval(_ spec: RemapSpec, _ p: Particle) -> (value: SIMD3<Float>, weight: Float) {
         let n = p.lifetime > 0 ? min(1, p.age / p.lifetime) : 1
         // 1) 입력 신호([추정] 의미론 — RemapInput doc 주석 참조).
@@ -1680,7 +1841,7 @@ public struct ParticleSimulator {
             x = simd_length(p.pos - remapCP(spec.inputCP0)) * spec.inputScale
         case .some(.directionToControlPoint):
             let d = normalizeSafe(remapCP(spec.inputCP0) - p.pos)
-            x = d[min(2, max(0, spec.component))] * spec.inputScale
+            x = Self.remapReduce(d, spec.inputComponent) * spec.inputScale
         case .some(.positionBetweenControlPoints):
             let a = remapCP(spec.inputCP0), b = remapCP(spec.inputCP1)
             let ab = b - a
@@ -1712,13 +1873,13 @@ public struct ParticleSimulator {
         case .some(.fbmnoise):
             v01 = remapNoiseOctaves(spec.octaves, x, SIMD3(p.remapPhase, 0, 0))
         }
-        // 3) operation 단항 셰이핑(RemapOperation doc 주석 참조 — multiply/add 는 단항 부호화
-        //    불가라 항등 보류. 종전의 average/square 는 WE 표에 없는 값이라 열거에서 걷어냈다).
-        let v: Float
-        switch spec.operation {
-        case .remap, .multiply, .add: v = v01
-        case .subtract: v = 1 - v01
-        }
+        // 3) **없다.** 종전에 여기 있던 `operation` 단항 셰이핑(`subtract` → `v = 1 − v01`)은
+        //    반증됐다 — VM 핸들러의 값 산출 구간(0x140244874–0x1402459a5)은 `operation`
+        //    (`[r14+0x10]`)을 **한 번도 읽지 않는다**. 32번의 읽기가 전부 output 디스패치
+        //    (`jmp rcx` @0x1402459a5) **뒤**이고, 최소 주소가 0x1402459a7 이다.
+        //    `operation` 은 값 곡선이 아니라 **목적지 배열에 대한 적용 산술**이고, 소비는
+        //    이 함수 밖(_step/display 의 `remapCombine`)이다. `RemapOperation` 주석 참조.
+        let v = v01
         // 4) blend 창(수명 비율). **[2026-08-20 실측으로 교체]** 종전 구현의 결함 셋:
         //  ① `blendoutstart`/`blendoutend` 기본이 0 이었다(실물 1.0/1.0). 가드 덕에 우연히
         //     같은 결과였지만, `blendoutstart` 만 명시한 자산에서 갈렸다.

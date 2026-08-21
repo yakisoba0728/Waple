@@ -166,14 +166,23 @@ final class ParticleExtendedKeysTests: XCTestCase {
         }
         XCTAssertNil(spec("remap", "none")?.transform, "none 은 nil = 변환 없음")
 
-        // operation 4종. WE 표에 없는 문자열은 표 첫 항목(remap)으로 떨어진다.
+        // operation 4종.
         for (raw, want) in [("remap", RemapOperation.remap), ("multiply", .multiply),
                             ("add", .add), ("subtract", .subtract)] {
             XCTAssertEqual(spec(raw, "triangle")?.operation, want, "operation \(raw)")
         }
-        XCTAssertEqual(spec("square", "triangle")?.operation, .remap,
-                       "종전 열거가 지어냈던 square 는 이제 미지 문자열이라 remap 으로 떨어져야 한다")
-        XCTAssertEqual(spec("average", "triangle")?.operation, .remap, "average 도 마찬가지")
+        // **[정정 2026-08-21] "미지 문자열은 표 첫 항목(remap)으로 떨어진다" 는 틀렸다.**
+        // 실물 매퍼 0x140260fb0 은 못 찾으면 `mov eax,5`(0x140261018) 센티넬을 내고, VM 의
+        // 4갈래 스위치가 `cmp ecx,1`/`jne 0x140246e57`(예: 0x140245a34) 로 걸러 **그 오퍼레이터를
+        // 통째로 무동작**으로 만든다 — 첫 항목으로 떨어지지 않는다.
+        // Waple 은 열거에 센티넬 자리가 없어 `nil` → 부재 기본으로 떨어지고, 그 부재 기본이
+        // `remap` 이 아니라 **`multiply`** 다(주입기 0x1401bfbba → [0x140484f28] = "multiply").
+        // 그래서 여기서 확인하는 것은 "WE 어휘 밖 문자열은 열거에 없다" 까지다.
+        // **[미해결]** — 센티넬(=오퍼레이터 무동작)의 재현은 동봉 도달 0건이라 미뤄 뒀다.
+        // 근거 전문: `docs/re/remap-operation.md` §3.2 · §5.2 · §6.
+        XCTAssertEqual(spec("square", "triangle")?.operation, .multiply,
+                       "종전 열거가 지어냈던 square 는 미지 문자열 → 부재 기본 multiply")
+        XCTAssertEqual(spec("average", "triangle")?.operation, .multiply, "average 도 마찬가지")
     }
 
     func testRemapValueParse_legacyOutputsStayLegacyWithoutExtKeys() {
