@@ -849,8 +849,18 @@ extension SceneRenderer {
             }
             if let texs = mp0["textures"] as? [Any] { matTextures = texs.map { $0 as? String } }
         }
-        // G-B4-08: 관례 폴백의 basename 은 디렉터리명이 아니라 `replacementkey` 다. 동봉 최상위
+        // G-B4-08: 관례 폴백의 basename 후보로 `replacementkey` 를 먼저 본다. 동봉 최상위
         // effect.json 46개가 전건 이 키를 갖고 7개가 디렉터리명과 다르다(EffectManifest 주석 참조).
+        //
+        // **[2026-08-20 근거 정정] 이건 WE 규약이 아니라 우리 휴리스틱이다.** 문자열
+        // `replacementkey` 는 `wallpaper64.exe` 에 **ASCII·UTF-16LE 모두 0건**이다(전수 검색).
+        // 즉 플레이어는 이 키를 읽지 않는다 — 동봉 자산 68개 파일이 갖고 있으니 **에디터/저작
+        // 도구 쪽 키**다. 종전 서술("basename 은 … `replacementkey` 다")은 원본 근거가 없다.
+        //
+        // 그래도 코드를 그대로 두는 이유: 아래 실재 확인 때문에 **틀릴 수 없는 휴리스틱**이기
+        // 때문이다. 셰이더가 실제로 있을 때만 채택하므로 최악이라도 디렉터리명 폴백과 같다.
+        // 다만 "WE 가 이렇게 한다" 는 근거로 인용하면 안 된다 — WE 가 실제로 어떻게 관례
+        // 폴백의 이름을 정하는지는 **확인 못 했다**(파서가 이 키를 안 읽는다는 것만 확정).
         //
         // 다만 **그 키를 맹신하지 않는다.** 7개 중 6개는 실제 자산명과 맞는데
         // (`watercaustics→caustics` 의 머티리얼이 `caustics.json`, `blurprecise→blur_precise` 가
