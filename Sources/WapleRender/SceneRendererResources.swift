@@ -98,6 +98,10 @@ extension SceneRenderer {
         //  어긋난 것만 버린다.)
         /// 아직 `clearColor` 초기화를 못 받은 인덱스. 생성 직후 1회만 비운다 —
         /// **매 프레임 비우면 누적 자체가 성립하지 않는다**(그게 이 버퍼들의 존재 이유다).
+        /// T09-D1 이후 소비처가 하나 늘었다: 스크립트의 `executeMaterialFunction(name)` 요청도
+        /// 여기로 들어온다(applyEffect 의 드레인 블록). 그쪽은 unique 가 아닌 인덱스도 넣을 수
+        /// 있고 — 실물 클리어 루프에 unique 분기가 없다 — 어느 쪽이든 클리어 직후 비워지므로
+        /// "이 집합에 든 것만 이번 프레임에 비운다" 는 규약은 그대로다.
         var pendingClear: Set<Int> = []
         /// S5-2: 예산 초과로 공유 풀 폴백을 택했다는 경고를 **이펙트 인스턴스당 1회만** 낸다.
         /// 이 경로는 프레임마다 지나가므로 무조건 로그하면 로그가 프레임 예산을 잡아먹는다.
@@ -126,6 +130,37 @@ extension SceneRenderer {
         /// ApplyBlending(31)=A+B·opacity 로 색×커버리지를 직접 낸다). 소비처는 encodeLayer 의
         /// f_main_premul 분기. 코퍼스 도달은 lightshafts 41패스/23씬 전건이다(아래 makeTranslatedEffect 주석).
         var outputPremultiplied: Bool = false
+        /// T09-D1: 매니페스트 `functions` 를 **fboSpecs 좌표**로 푼 표 — 이름 → 클리어할 인덱스들.
+        /// 소비처는 applyEffect 의 pendingClear 블록 하나뿐이고, `thisObject.executeMaterialFunction(name)`
+        /// 요청(TextScriptEngine.drainMaterialFunctionCalls)을 이 표로 인덱스로 옮긴다.
+        /// **비어 있으면 그 블록이 통째로 건너뛰어져 종전 경로와 비트 동일**이다 — 동봉 `effect.json`
+        /// 128건 중 `functions` 보유는 `effects/fluidsimulation` **1건**뿐이라(전수 파스 실측, preview
+        /// 사본에도 없다) 나머지 127건은 드레인(JS 왕복)조차 일어나지 않는다.
+        /// 표를 짓는 곳은 buildTranslatedEffect 의 `functionClears`.
+        var functionClears: [String: [Int]] = [:]
+    }
+
+    /// T09-D1 **순수 로직**: 머티리얼 함수 요청 이름들 → 이번 프레임에 클리어할 FBO 인덱스 집합.
+    ///
+    /// 인코더에서 떼어낸 이유는 검증 가능성이다 — Metal 도 JSContext 도 안 타므로 리눅스에서
+    /// 단독 컴파일·실행으로 없는 이름·중복 호출·범위 밖 인덱스를 전수 확인할 수 있다.
+    ///
+    ///   · `table` 에 없는 이름은 **무시**한다. 실물도 `functions` 선형 탐색이 miss 면 아무 일도
+    ///     하지 않고 반환한다(0x1401ee403–0x1401ee40c 의 루프 탈출 → 0x1401ee509 로 직행).
+    ///   · 같은 이름을 여러 번 불러도 집합이 흡수한다. 실물은 호출마다 클리어하지만
+    ///     (0x1401ee440–0x1401ee4fe), 같은 프레임에서 같은 색으로 두 번 비운 결과는 한 번과 같다.
+    ///   · `0..<fboCount` 밖은 버린다. 표는 빌드 시점에 이미 유효 인덱스만 담지만, 소비 시점의
+    ///     `fboTex` 가 더 짧을 수 있는 경로(할당 실패 조기 반환)가 있어 상한을 한 번 더 본다.
+    static func materialFunctionClearTargets(_ requests: [String],
+                                             table: [String: [Int]],
+                                             fboCount: Int) -> Set<Int> {
+        guard !requests.isEmpty, !table.isEmpty, fboCount > 0 else { return [] }
+        var out: Set<Int> = []
+        for name in requests {
+            guard let indices = table[name] else { continue }
+            for i in indices where i >= 0 && i < fboCount { out.insert(i) }
+        }
+        return out
     }
 
     func pkgURL(in folder: URL) -> URL? {
@@ -769,10 +804,49 @@ extension SceneRenderer {
             FBOSpec(scale: f.scale, fixedWidth: f.fixedWidth, fixedHeight: f.fixedHeight,
                     pixelFormat: fboFormats[i], unique: f.unique, clearColor: f.clearColor)
         }
+        // T09-D1: `functions` 를 **fboSpecs 좌표**로 옮겨 둔다(소비는 applyEffect 의 pendingClear 블록).
+        //
+        // 좌표계가 다르다는 게 핵심이다. `Function.fboIndices` 는 파스가 **원시** `manifest.fbos`
+        // 에서 이름을 찾아 넣은 값인데(EffectManifest.parseFunctions — 0x1401e8630–0x1401e867d 의
+        // 선형 탐색, 0x1401e8691 에서 그 인덱스를 push), `fboSpecs` 는 X-⑪ 의 `conditions` 필터로
+        // **압축된** `liveFbos` 좌표다. 조건으로 빠진 fbo 가 앞쪽에 하나만 있어도 그 뒤 인덱스가
+        // 전부 한 칸씩 밀린다 — 동봉 fluidsimulation 은 유일한 조건부 fbo(`_rt_SmokeNormal`,
+        // LIGHTING==1)가 배열 **끝**(원시 8)이라 우연히 원시==live 지만, 워크샵 이펙트에서는
+        // 그대로 어긋난다. 그래서 원시→live 사상을 지어 옮기고, 조건으로 사라진 fbo 를 가리키던
+        // 원소는 **버린다**(존재하지 않는 타깃이라 실물에도 클리어할 대상이 없다).
+        //
+        // 매니페스트에 `functions` 가 없으면(동봉 128건 중 127건 — 전수 파스 실측) 이 블록이 통째로 안 돌고
+        // 표는 빈 채로 남아 프레임 경로가 종전과 같아진다 — `EffectManifest.evaluate` 재호출 비용도
+        // 그때는 0이다(빌드 시점 1회이고, 조건 평가는 순수·결정적이라 위 `liveFbos` 필터와 같은 답).
+        var functionClears: [String: [Int]] = [:]
+        if !manifest.functions.isEmpty {
+            var rawToLive = [Int](repeating: -1, count: manifest.fbos.count)
+            var liveCursor = 0
+            for r in manifest.fbos.indices
+            where EffectManifest.evaluate(manifest.fbos[r].conditions, combos: instanceCombos) {
+                rawToLive[r] = liveCursor
+                liveCursor += 1
+            }
+            for fn in manifest.functions {
+                // 실물은 이름으로 **첫 일치**를 쓴다(0x1401ee3d0–0x1401ee40a). `parseFunctions` 가
+                // 사전 키를 도는 터라 이름 중복은 애초에 생길 수 없지만, 표를 덮어쓰지 않아
+                // 그 규약을 코드로도 남긴다.
+                guard functionClears[fn.name] == nil else { continue }
+                let mapped = fn.fboIndices.compactMap { r -> Int? in
+                    guard r >= 0, r < rawToLive.count, rawToLive[r] >= 0 else { return nil }
+                    return rawToLive[r]
+                }
+                // 실물은 인덱스가 하나도 없는 항목을 아예 만들지 않는다(0x1401e884a) — 여기서도
+                // 조건 탈락으로 전멸한 항목은 표에 넣지 않아 "없는 이름" 과 같은 취급이 되게 한다.
+                guard !mapped.isEmpty else { continue }
+                functionClears[fn.name] = mapped
+            }
+        }
         return EffectGPU(pipeline: passes[0].pipeline,
                          bind: .translated(passes: passes, fboSpecs: specs,
                                            uniqueStore: UniqueFBOStore()),
-                         outputPremultiplied: outputPremultiplied)
+                         outputPremultiplied: outputPremultiplied,
+                         functionClears: functionClears)
     }
 
     /// ① 매니페스트 로드: effect.json 이 없으면 관례 단일 패스("effects/<name>" 셰이더).
