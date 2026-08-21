@@ -1,4 +1,5 @@
 import AppKit
+import WapleCore
 
 public final class ParallaxController {
     public var onOffset: ((CGPoint) -> Void)?
@@ -70,7 +71,10 @@ public final class ParallaxController {
     public static func smoothed(current: SIMD2<Float>, target: SIMD2<Float>,
                                 dt: Float, delay: Float) -> SIMD2<Float> {
         guard delay > 0 else { return target }
-        let alpha = min(1, 10 * (1 - delay / 3) * dt)
+        // 산술 본체는 `WapleCore.SceneCameraMath.parallaxAlpha` 하나다 — 리눅스에서 실행 검증되는
+        // 자리에 두고 여기서는 위임만 한다(WapleRender 는 `import Metal`/`AppKit` 이라 리눅스에서
+        // 타입체크까지만 된다). 두 벌로 갈라 놓으면 한쪽만 고쳐지는 사고가 난다.
+        let alpha = SceneCameraMath.parallaxAlpha(dt: dt, delay: delay)
         return current + (target - current) * alpha
     }
 }
