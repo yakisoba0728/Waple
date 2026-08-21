@@ -31,10 +31,11 @@ public struct PuppetModel: Equatable {
 
     public struct Key: Equatable {
         public let position: SIMD3<Float>
-        /// 오일러 3축 — **파일 바이트 순서 그대로**(키 +0x0c, +0x10, +0x14)이고 그 의미는 (Z, Y, X) 다.
-        /// (x,y,z) 이름은 저장 순서일 뿐 축 이름이 아니다. WE 로더가 이 셋을 반각(0.5f @ 0x1404926c0)
-        /// 으로 sin/cos 해 `Rz(+0x0c)·Ry(+0x10)·Rx(+0x14)` 쿼터니언을 굽는다
-        /// (0x140264188–0x1402642ae). 해석은 `PuppetPose.rotationQuaternion` 단일 소스.
+        /// 오일러 3축 — **파일 바이트 순서 그대로**(키 +0x0c, +0x10, +0x14)이고 그 의미는 (X, Y, Z) 다.
+        /// WE 로더가 이 셋을 반각(0.5f @ 0x1404926c0)으로 sin/cos 해 포즈 SoA 슬롯 3..6 (= w,x,y,z)
+        /// 에 굽는데(0x140264188–0x1402642ae), 그 결과는 `Rz(+0x14)·Ry(+0x10)·Rx(+0x0c)` 다.
+        /// 슬롯 순서의 근거(행렬→쿼터니언 0x140215730 이 스칼라부를 첫 칸에 쓴다)와 반증 이력은
+        /// `PuppetPose.rotationQuaternion` 주석 단일 소스.
         /// 단위는 라디안(반각 계수가 0.5f 이지 π/360 이 아니다).
         public let angles: SIMD3<Float>
         public let scale: SIMD3<Float>

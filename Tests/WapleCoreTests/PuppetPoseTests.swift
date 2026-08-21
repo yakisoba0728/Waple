@@ -23,11 +23,13 @@ final class PuppetPoseTests: XCTestCase {
         return m
     }
 
-    /// `rz` 는 **파일 첫 각 슬롯**(키 +0x0c)에 들어간다 — WE 는 그 슬롯을 Z(yaw)로 읽는다
-    /// (MDL 로더 오일러→쿼터니언 0x140264188–0x1402642ae). 종전엔 이 헬퍼가 세 번째 슬롯(+0x14)에
-    /// 넣고 있었고, 그 슬롯은 실제로 X(roll)라 2D 퍼펫이 화면 밖으로 접혔다.
+    /// `rz` 는 **파일 세 번째 각 슬롯**(키 +0x14)에 들어간다 — 그 슬롯이 Z(yaw)다.
+    /// 굽기 0x140264188–0x1402642ae 의 네 결과는 포즈 SoA 슬롯 3..6 = (w,x,y,z) 에 들어가고
+    /// (슬롯 순서 근거: 시딩 0x1401fe2f2–0x1401fe657 + 행렬→쿼터니언 0x140215730),
+    /// 대입하면 `Rz(+0x14)·Ry(+0x10)·Rx(+0x0c)` 다. 첫 슬롯에 넣으면 X(roll) 회전이 되어
+    /// 2D 퍼펫이 화면 밖으로 접힌다.
     private func key(_ x: Float, _ y: Float, rz: Float = 0, s: Float = 1) -> PuppetModel.Key {
-        .init(position: SIMD3(x, y, 0), angles: SIMD3(rz, 0, 0), scale: SIMD3(s, s, s))
+        .init(position: SIMD3(x, y, 0), angles: SIMD3(0, 0, rz), scale: SIMD3(s, s, s))
     }
 
     func testBindPoseIsIdentity() {
@@ -88,7 +90,7 @@ final class PuppetPoseTests: XCTestCase {
         // 반반 정점(5,5): root 성분은 불변, child 성분은 child 원점(10,0) 기준 (5,5)-(10,0)=(-5,5) 회전→(-5,-5)+((10,0)=(5,-5)
         XCTAssertEqual(pos[2].x, 5, accuracy: 1e-3)
         XCTAssertEqual(pos[2].y, 0, accuracy: 1e-3, "0.5*(5) + 0.5*(-5)")
-        // z==0 판별 — 종전 규약(각 3축을 (x,y,z)로 읽음)이면 이 회전은 **X축** 회전이 되어
+        // z==0 판별 — 각 3축의 파일 순서를 (z,y,x)로 잘못 읽으면 이 회전이 **X축** 회전이 되어
         // 정점이 xy 평면 밖으로 나간다(z=2.5). 그때도 위 두 단언은 우연히 통과했다.
         XCTAssertEqual(pos[2].z, 0, accuracy: 1e-3, "z 회전은 평면 안 — X 축으로 새면 안 됨")
     }

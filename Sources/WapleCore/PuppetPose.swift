@@ -102,35 +102,47 @@ public enum PuppetPose {
         return (q0 * (sin((1 - t) * omega) / s)) + (b * (sin(t * omega) / s))
     }
 
-    /// 키의 오일러 3축 → 쿼터니언.
+    /// 키의 오일러 3축 → 쿼터니언. **파일 3축은 (X, Y, Z)** 이고 합성은 `Rz(z)·Ry(y)·Rx(x)` 다.
     ///
-    /// **파일에 저장된 3축 순서는 (Z, Y, X)** 다. MDL 로더가 36B 키의 +0x0c/+0x10/+0x14 를 읽어
-    /// 반각(×0.5f, 상수 VA 0x1404926c0)으로 sin/cos 한 뒤 조립하는 식(0x140264188–0x1402642ae,
-    /// 두 번째 사본 0x1402644c7–0x1402645ea)을 그대로 옮기면:
+    /// MDL 로더가 36B 키의 +0x0c/+0x10/+0x14 를 반각(×0.5f, 상수 VA 0x1404926c0)으로 sin/cos 해
+    /// 네 값을 굽고(0x140264188–0x1402642ae, 두 번째 사본 0x1402644c7–0x1402645ea) 포즈 SoA 의
+    /// 슬롯 3/4/5/6 에 넣는다. `a = key[+0x14]·0.5, b = key[+0x10]·0.5, g = key[+0x0c]·0.5` 라 할 때
     /// ```
-    /// γ = key[+0x0c]·0.5, β = key[+0x10]·0.5, α = key[+0x14]·0.5
-    /// w = cα·cβ·cγ + sα·sβ·sγ        ; 0x14026422e
-    /// x = sα·cβ·cγ − cα·sβ·sγ        ; 0x140264250
-    /// y = sα·cβ·sγ + cα·sβ·cγ        ; 0x14026427c
-    /// z = cα·cβ·sγ − sα·sβ·cγ        ; 0x14026426e
+    /// slot3 = ca·cb·cg + sa·sb·sg   ; addss 0x14026422e → store 0x140264244  (base [rbp-0x70] = r15+3N)
+    /// slot4 = ca·cb·sg − sa·sb·cg   ; subss 0x14026426e → store 0x140264277  (base [rsp+0x30] = 4N, +r15)
+    /// slot5 = sa·cb·sg + ca·sb·cg   ; addss 0x14026427c → store 0x140264291  (base [rsp+0x60] = r15+5N)
+    /// slot6 = sa·cb·cg − ca·sb·sg   ; subss 0x140264250 → store 0x1402642ae  (base [rsp+0x74] = r15+6N)
     /// ```
-    /// 이는 `Rz(key[+0x0c]) · Ry(key[+0x10]) · Rx(key[+0x14])` 와 항등(수치 검증 완료).
-    /// 즉 파서가 (+0x0c,+0x10,+0x14) 를 (x,y,z) 로 이름 붙여 담아도 **의미는 (z,y,x)** 다.
-    /// 종전 Waple 은 이 셋을 (x,y,z) 로 읽어 `Rz(.z)·Ry(.y)·Rx(.x)` 를 만들었다 — X 축과 Z 축이
-    /// 뒤바뀐 상태였고, z 회전 위주인 2D 퍼펫이 화면 밖으로 접히는 결함이었다.
+    /// (슬롯 베이스는 0x1402640e0–0x140264129 에서 `r15 + k·N` 으로 조립된다. N = 4·r12 는
+    ///  `lea r13d,[r12*4]` @0x140263fd3 → `mov [rsp+0x30], r13d` @0x140263fe9.)
     ///
-    /// 참고로 씬스크립트 `setLocalBoneAngles(bone, Vec3)` 은 **공개 API 답게 (x,y,z)** 다
-    /// (0x14020fd38–0x14020fe09: m00 = cos(v.y)·cos(v.z) → `Rz(v.z)·Ry(v.y)·Rx(v.x)`).
-    /// 뒤바뀐 것은 파일 바이트 순서지 회전 합성 순서가 아니다.
+    /// **슬롯 3..6 의 성분 순서는 `(w, x, y, z)`** 다 — 식 모양으로 이름을 붙이면 안 되고, 같은 SoA 에
+    /// 본 레스트를 시딩하는 루프(0x1401fe2f2–0x1401fe657)가 그 순서를 못 박는다: 시딩은 행렬→쿼터니언
+    /// 변환 `0x140215730` 의 출력 4 float 을 [rbp+0x280]→슬롯3, [+0x284]→슬롯4, [+0x288]→슬롯5,
+    /// [+0x28c]→슬롯6 으로 흩어 쓰는데, 0x140215730 은 trace 분기(0x14021590b–0x140215934)에서
+    /// `0.5·sqrt(1+trace)` = **스칼라부** 를 `[rdi+0]` 에 먼저 저장한다. 첫 칸이 w 다.
+    ///
+    /// 그 순서를 대입하면 굽힌 쿼터니언은
+    /// `(x,y,z,w) = (slot4, slot5, slot6, slot3) = Rz(key[+0x14])·Ry(key[+0x10])·Rx(key[+0x0c])` 다
+    /// (400개 무작위 3축에 대해 엔진 알고리즘을 그대로 옮겨 수치 대조 — 불일치 0).
+    /// 즉 파일 순서는 **평범하게 (x, y, z)** 이고, 씬스크립트 `setLocalBoneAngles(bone, Vec3)`
+    /// (0x14020fce0)이 같은 규약이다 — 0x14020fe09/0x14020fe2b/0x14020fe31 이
+    /// `m00 = cos(v.y)·cos(v.z)`, `m10 = cos(v.y)·sin(v.z)`, `m20 = −sin(v.y)` 를 저장해
+    /// `Rz(v.z)·Ry(v.y)·Rx(v.x)` 를 만든다(행렬 메모리는 열 우선).
+    ///
+    /// ⚠️ **반증 기록**: 커밋 18a7ae6 은 "파일 순서가 (Z,Y,X)라 X·Z 가 뒤바뀌어 있다" 며 두 축을
+    /// 맞바꿨는데, 그것이 근거로 든 네 식은 맞았지만 **슬롯 순서를 (w,z,y,x)로 가정**한 것이 틀렸다.
+    /// 그 커밋이 오히려 축을 뒤바꾼 쪽이었고 여기서 되돌린다(그 커밋의 나머지 변경 — nlerp 보간,
+    /// 레이어 마스크, 모드 문자열, `layerWeight` — 은 재검증 결과 전부 옳아 그대로 둔다).
     static func rotationQuaternion(_ fileAngles: SIMD3<Float>) -> SIMD4<Float> {
-        let g = fileAngles.x * 0.5   // Z (yaw)   — 파일 +0x0c
+        let a = fileAngles.x * 0.5   // X (roll)  — 파일 +0x0c
         let b = fileAngles.y * 0.5   // Y (pitch) — 파일 +0x10
-        let a = fileAngles.z * 0.5   // X (roll)  — 파일 +0x14
+        let g = fileAngles.z * 0.5   // Z (yaw)   — 파일 +0x14
         let ca = cos(a), sa = sin(a)
         let cb = cos(b), sb = sin(b)
         let cg = cos(g), sg = sin(g)
         return SIMD4(sa * cb * cg - ca * sb * sg,
-                     sa * cb * sg + ca * sb * cg,
+                     ca * sb * cg + sa * cb * sg,
                      ca * cb * sg - sa * sb * cg,
                      ca * cb * cg + sa * sb * sg)
     }
@@ -273,8 +285,8 @@ public enum PuppetPose {
     }
 
     /// 성분 → 로컬 행렬. 2D 퍼펫·3D 모델(Model3DPose) 공용 — 회전 규약 단일 소스.
-    /// `angles` 는 **파일 바이트 순서**(+0x0c,+0x10,+0x14) 그대로다 — 의미는 (Z, Y, X).
-    /// 자세한 근거는 `rotationQuaternion` 주석 참조.
+    /// `angles` 는 **파일 바이트 순서**(+0x0c,+0x10,+0x14) 그대로이고 그 의미는 (X, Y, Z),
+    /// 합성은 `Rz(z)·Ry(y)·Rx(x)` 다. 자세한 근거는 `rotationQuaternion` 주석 참조.
     static func localMatrix(position: SIMD3<Float>, angles: SIMD3<Float>, scale: SIMD3<Float>) -> simd_float4x4 {
         trsMatrix(TRS(position: position, rotation: rotationQuaternion(angles), scale: scale))
     }
