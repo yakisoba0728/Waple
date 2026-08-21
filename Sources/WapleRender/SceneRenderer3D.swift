@@ -2113,9 +2113,20 @@ extension SceneRenderer {
     /// 그래서 여기서도 `m` 을 정규화하지 않고 열을 그대로 넘긴다.
     ///
     /// 단 그 합성은 **무조건이 아니다**: 0x14023761b 이 시스템 worldspace 비트를 먼저 보고, 켜져 있으면
-    /// 부모 top 을 합성하지 않고 오브젝트 **로컬** 4×4 를 top 에 통째로 덮어쓴다(0x140237628–0x140237646).
-    /// 우리 게이트는 worldspace 를 배제하므로 이 분기에는 닿지 않는다 — 즉 `worldBasis` 를 먹는 시스템의
-    /// top 은 항상 `parent · local` 전체 체인이다. (worldspace 쪽 드로우 규약은 `particle3DVertices` 소관.)
+    /// 부모 top 을 합성하지 않고 그 시스템 인스턴스의 4×4(`psys+0x3a0`)를 top 에 통째로 덮어쓴다
+    /// (0x140237628–0x140237646). 우리 게이트는 worldspace 를 배제하므로 이 분기에는 닿지 않는다 — 즉
+    /// `worldBasis` 를 먹는 시스템의 top 은 항상 `parent · local` 전체 체인이다.
+    /// (worldspace 쪽 **드로우** 규약은 2026-08-21 에 확정했다 — 렌더는 top 을 렌더 패스의 stack0 루트
+    /// `ctx+0xAF0` 으로 덮어써 오브젝트 변환을 통째로 버린다. 근거는 `particle3DVertices` 주석과
+    /// `docs/re/particle-world-basis.md` §6.)
+    ///
+    /// **`[rsi]`/`[rbx]` 는 씬 오브젝트가 아니라 그래픽스 컨텍스트다** — 변환 스택은 컨텍스트에 산다
+    /// (베이스 ctx+0x2F0/0x4F0/0x6F0, top 포인터 ctx+0x30/0x38/0x40 — 0x14017c6e0–0x14017c739). 스택이
+    /// "월드"를 담는다는 것은 **업데이트 단계**의 성질이다: 그때 stack0 루트는 항등(0x14017d56c–0x14017d60f)
+    /// 이라 top = 순수 월드행렬이다. 렌더 패스는 stack0 루트를 뷰 행렬로 갈아끼우지만(0x1401ecc30) 진입 시
+    /// top 을 저장하고 종료 시 복원하므로(0x1401ecb6c–0x1401ecbdc ↔ 0x1401eceaf–0x1401ecebf) 시뮬이 보는
+    /// 값은 오염되지 않는다. 오퍼레이터 VM(0x14023fbc0)은 시뮬 스텝(0x140236cd0)에서만 불리고 렌더
+    /// 경로(0x1402366f0)는 그것을 부르지 않는다 — 그래서 `worldBasis` 는 뷰가 섞이지 않은 월드 기저다.
     ///
     /// **행/열 규약을 확정한 근거**(추론이 아니라 관측): 실물이 *같은* 4×4 를 두 조각으로 쪼개는 자리가
     /// 있다 — 0x140238dd6 이 블록 0..2 를 0x1400dd7d0 으로 기저 3×3 으로 뽑고, 곧바로 0x140238de4 가
@@ -2259,7 +2270,8 @@ extension SceneRenderer {
     }
 
     /// 파티클 스냅샷 → 월드공간 카메라-페이싱 쿼드 정점(정점당 9 float: world.xyz, uv, rgba).
-    /// 월드 중심 = m · 파티클 로컬 pos(F731: def.flags worldspace 시 m 우회 직결). 반경 = 0.5·size·(m 열0 길이)
+    /// 월드 중심 = m · 파티클 로컬 pos(F731: def.flags worldspace 시 m 우회 직결 — 실물도 오브젝트 변환을
+    /// 통째로 버린다, 아래 F731 블록의 0x14023670c/ctx+0xAF0 근거). 반경 = 0.5·size·(m 열0 길이)
     /// — in-plane 스케일만 크기에 반영, z 스케일(예: speedline 0.6)은 위치에 이미 m 으로 반영됨.
     /// 세로 = 반경·texRatio(WE ComputeParticlePosition). 쿼드 배향 = def.orientation(F732).
     /// ponytail: 트레일(spritetrail/rope)은 3D 리본 미구현 — 헤드 위치 쿼드로 폴백(파티클 등장은 보장,
@@ -2268,10 +2280,54 @@ extension SceneRenderer {
                             m: simd_float4x4, right: SIMD3<Float>, up: SIMD3<Float>) -> [Float] {
         var verts: [Float] = []
         verts.reserveCapacity(snapshot.count * 54)
-        // F731(S-23): def.flags bit1(worldspace) — 파티클 pos 가 이미 월드 좌표라 오브젝트 변환 m 을
-        // 우회해 직결한다(크기도 월드 단위 → colScale=1). bit4(perspective)는 3D 경로가 viewProj 원근
-        // 투영을 내재해(멀수록 작아짐이 자동) 추가 z-스케일이면 이중 원근 — 여기선 의도적으로 미적용
-        // (실소비처는 직교 2D 경로, 오역보다 폴터).
+        // F731(S-23): def.flags **값 1**(= bit0, worldspace) — 파티클 pos 가 이미 월드 좌표라 오브젝트
+        // 변환 m 을 우회해 직결한다(크기도 월드 단위 → colScale=1). 값 4(= bit2, perspective)는 3D 경로가
+        // viewProj 원근 투영을 내재해(멀수록 작아짐이 자동) 추가 z-스케일이면 이중 원근 — 여기선 의도적으로
+        // 미적용(실소비처는 직교 2D 경로, 오역보다 폴터).
+        //
+        // **실물 확정(2026-08-21, `docs/re/particle-world-basis.md` §6).** WE 의 파티클 드로우는 CPU 에서
+        // 위치를 만지지 않는다 — 정점 셰이더 `genericparticle.vert` 가 `gl_Position =
+        // mul(vec4(ComputeParticlePosition(...),1), g_ModelViewProjectionMatrix)` 로 `a_Position`(= 시뮬이
+        // 적재한 파티클 위치 SoA)을 그대로 모델뷰에 태운다. 그래서 "worldspace 드로우 규약"은 곧 그
+        // 모델뷰가 무엇이냐다.
+        //
+        // 파티클 시스템 render vfunc(vtable `0x140491600` → 0x140236600)는 stack0 을 push 하고
+        // `top = 부모top · 자기로컬`(0x140236697, 0x14005ecb0)로 눌러 쓴 뒤 0x1402366f0 을 부른다.
+        // 그 첫 분기가 이것이다:
+        //   0x14023670c  test byte [rcx+0x20], 1      ; 시스템 worldspace 비트
+        //   0x140236718  je   0x14023674c             ; 꺼짐 → 손대지 않음(부모·자기 합성 유지)
+        //   0x14023671d  movups xmm0, [rax+0xAF0]     ; 켜짐 → ctx+0xAF0 의 4×4 를
+        //   0x140236728  movups [rdx], xmm0 …         ;        stack0 top 에 통째로 덮어씀
+        // `ctx+0xAF0` 은 **렌더 패스의 stack0 루트 스냅샷**이다 — 컨텍스트 생성 시 항등(0x14017cbbf–
+        // 0x14017cc0a, 세 스택 베이스 ctx+0x2F0/0x4F0/0x6F0 도 같은 자리에서 항등 0x14017d56c–0x14017d60f),
+        // 씬 패스 진입 직후 `ctx+0xAF0..0xB2F := *[ctx+0x30]` 로 루트를 떠 두고(0x1401ecd03–0x1401ecd2b,
+        // 패스 변종 0x1402083dd–0x140208405), 패스 종료 시 다시 항등(0x1401ecece–0x1401ecf1c).
+        // 2D 정사영 패스에서 그 루트는 `inverse(씬 루트 4×4)` = **뷰 행렬**임이 보인다(0x1401ecbf8 의
+        // vfunc `+0x80` → 0x14005f730 역행렬 → 0x1401ecc30 이 stack0 베이스에 기록; stack1 베이스는 항등,
+        // stack2 베이스는 ortho `[vtbl+0x18]` @0x1401eccf9). 3D 패스는 `[scene+0x304] & 2` 로 이 셋업을
+        // 건너뛰고(0x1401ecb54/0x1401ecbef) 호출자가 세운 루트를 그대로 뜬다.
+        //
+        // 어느 경우든 `ctx+0xAF0` 에는 **오브젝트 변환이 한 조각도 안 들어간다**(부모 체인도, 자기 로컬도).
+        // 즉 worldspace 파티클의 modelview = 패스 루트(뷰)뿐이고 model 부분은 항등 — pos 는 **순수 월드
+        // 좌표**로 소비된다. 여기 `center = p.pos` + `colScale = 1`(뷰는 강체라 크기도 월드 단위)이 그
+        // 규약과 일치한다. 비-worldspace 갈래는 실물이 손대지 않는 쪽이라 종전 `m` 경로 그대로다.
+        //
+        // 교차검증: 같은 "합성 대신 치환" 규칙이 시뮬 쪽에도 있다 — 자식 인스턴스 순회가 worldspace 면
+        // `top := psys+0x3a0`(0x140237626–0x140237646 · 0x14023b0f4–0x14023b11f), 아니면 `top ·= psys+0x3a0`
+        // (0x14023764c · 0x14023b121). 그 `psys+0x3a0` 를 굽는 0x14022a360 은 worldspace 갈래에서
+        // `inverse(top)` 을 곱해(0x14022a46f–0x14022a482) **절대좌표**로 저장한다. 업데이트 단계의 stack0
+        // 루트는 항등이므로 그 "절대"가 곧 월드다. 렌더가 top 을 패스 루트로 되돌리는 것이 이 규약의
+        // 반대쪽 짝이다.
+        //
+        // **[미해결]** 실물의 worldspace *방출* 위치가 오브젝트 월드행렬을 이미 머금는지는 확정 못 했다.
+        // 방출 셋업(0x140238c8f)은 worldspace 면 위치 변환을 항등으로 두고(0x140238c7a/0x140238c83 →
+        // 0x14005f680, xmm1=xmm12=1.0), 아니면 `inverse(stack0 top)` 으로 둔다(0x140238cc8 → 0x14005f730)
+        // — 에미터 4×4(`emitter+0xb8`, 컨트롤포인트 노드 `+0x18` 에서 복사 0x14023adf3)가 절대좌표라야
+        // "worldspace=월드 방출 / 아니면 로컬 방출"이 성립하는데, 그 컨트롤포인트 행렬까지는 안 따라갔다.
+        // Waple `ParticleSimulator` 는 worldspace 여부와 무관하게 **에미터 로컬**로 방출하므로, 만약
+        // 실물이 월드 방출이라면 두 구현은 오브젝트 월드행렬이 항등일 때만 일치한다. 동봉 camera3D 12씬의
+        // 파티클 마운트 4건은 **전부 비-worldspace**(도달 0)라 이 갭으로 바뀌는 동봉 그림은 없고, 고칠
+        // 자리도 드로우가 아니라 **방출**(WapleCore)이라 여기서는 손대지 않았다.
         let worldspace = (sys.def.flags & 1) != 0
         let colScale = worldspace ? Float(1) : simd_length(SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z))
         // F732(S-26): def.orientation — screen(기본)은 전달된 right/up 그대로(기존 폴터 비트동일).
