@@ -56,6 +56,47 @@ public enum Model3DFormat {
     /// 메시 뒤 트레일러(게이트A/B 블롭 + v≥23 모프 레코드)가 있는가.
     public static func hasMeshTrailer(version: Int) -> Bool { version >= 21 }
 
+    /// 메시 헤더의 `gateWord` 뒤에 붙는 **여분 u32 개수** — bit1 이 서면 정확히 1개, 아니면 0개.
+    /// 브루트포스 탐색이 아니라 **결정론적 분기**다(엔진은 `if` 하나뿐이라 2개 이상은 발생 불가):
+    ///
+    ///     0x140261979  cmp edi, 4 / jl 0x14026198a  → v<4 면 gateWord 리드 자체가 없다(eax=0 대입)
+    ///     0x140261983  call 0x14009c560             → gateWord = readU32()
+    ///     0x14026198c  mov [rbp+0x88], eax          → 메시 구조체 +0x88 에 gateWord 보관
+    ///     0x140261992  test al, 2                   → **gateWord & 2** (bit1)
+    ///     0x140261994  je 0x1402619a6               → 안 서면 곧장 AABB 게이트로
+    ///     0x14026199b  call 0x14009c560             → 서면 u32 를 **딱 한 번** 더 읽고
+    ///     0x1402619a0  mov [rbp+0x8c], eax          → +0x8c(gateWord 바로 뒤 슬롯)에 보관
+    ///     0x1402619a6  cmp edi, 0x11                → 그다음이 AABB(v≥17) 게이트
+    ///
+    /// 필드 오프셋도 같은 말을 한다 — +0x88 gateWord, +0x8c 여분, +0x90..+0xa4 AABB 6f,
+    /// +0xa8 per-mesh formatFlag 로 이어지는 연속 구조체다.
+    public static func extraMeshHeaderWords(gateWord: UInt32) -> Int {
+        (gateWord & 2) != 0 ? 1 : 0
+    }
+
+    /// MDLS 스켈레톤의 **본 개수 상한 = 128**. 엔진은 초과를 "거부"하지 않는다 — 즉사시킨다:
+    ///
+    ///     0x1402624f4  call 0x14009c560   → boneCount = readU32()
+    ///     0x1402624f9  mov r15d, eax      → 이 값이 본 레코드 루프의 상한(0x1402625bd `cmp esi, r15d`)
+    ///     0x140262501  cmp eax, 0x80      → **0x80 = 128**
+    ///     0x140262506  jbe 0x14026250c    → 128 **이하**만 통과(초과 시 아래로 낙하)
+    ///     0x140262508  xor ecx, ecx
+    ///     0x14026250a  int 0x29           → __fastfail(0) = 프로세스 즉사
+    ///     0x140262516  call 0x140269330   → vector<본>.resize(boneCount), 원소 0xF0(240B)
+    ///
+    /// 비교 대상이 본 개수임은 두 갈래로 확정된다: ① 같은 eax(=r15d)가 본 레코드 루프
+    /// (0x140262530–0x1402625c0)의 상한이고, ② 그 루프가 원소 0xF0 짜리 벡터를 훑으며
+    /// cstring 이름 → u32(+0x64) → u32 parent(+0x60) → 64B 행렬(+0x20) → cstring props(+0x68)
+    /// 를 읽는다 = Waple `Bone` 레코드와 동형.
+    ///
+    /// 같은 함수의 다른 `int 0x29` 는 전부 런타임 크기와의 비교(하드닝된 인덱스 검사)인데
+    /// 여기만 **리터럴 0x80** 이다 — 컴파일타임 상한, 즉 포맷 규약이다.
+    ///
+    /// Waple 은 죽지 않는다 — 상한 초과면 본 없이(정적 메시) 진행한다. 엔진이 즉사하는 파일은
+    /// 애초에 배포될 수 없으므로 실물 회귀 위험은 없고, 매직 스캔 오탐이 뽑은 폭주 카운트를
+    /// 종전 `< 100_000` 보다 훨씬 이르게 잘라 낸다.
+    public static let maxBoneCount = 128
+
     /// 메시마다 읽는 머티리얼 cstring 개수 = 헤더 오프셋 13 의 skinCount(스킨 = **같은 메시의 재질
     /// 변형**, 모델 옵션 json 의 `skins` 배열과 1:1). 실측 분포는 {1: 450, 2: 1}.
     /// 0 은 실물 미목격 — 방어적으로 1 개(종전 동작)로 본다. 폭주값은 nil 로 거부한다.
