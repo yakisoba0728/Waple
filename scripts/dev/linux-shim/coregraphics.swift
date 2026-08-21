@@ -54,6 +54,23 @@ public struct CGAffineTransform: Equatable {
         self.a = a; self.b = b; self.c = c; self.d = d; self.tx = tx; self.ty = ty
     }
     public init() { self.init(a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0) }
+    /// 실제: `public init(rotationAngle angle: CGFloat)` — 반시계 회전.
+    /// [2026-08-21] `--tests` 가 요구한 표면(`MediaFixRegressionTests:481` 이 30° 회전을
+    /// "8원소 어디에도 안 맞는다" 는 음성 대조로 쓴다). **값이 맞아야 한다** — 그 단언은
+    /// 실제 성분을 보고 `nil` 을 기대하므로 더미(항등)로 두면 테스트의 의미가 뒤집힌다
+    /// (타입만 맞추는 다른 심들과 다른 예외다. 여기서는 산식이 짧고 명확해서 그대로 적는다).
+    public init(rotationAngle angle: CGFloat) {
+        let c = cos(angle), s = sin(angle)
+        self.init(a: c, b: s, c: -s, d: c, tx: 0, ty: 0)
+    }
+    /// 실제: `public init(scaleX sx: CGFloat, y sy: CGFloat)`
+    public init(scaleX sx: CGFloat, y sy: CGFloat) {
+        self.init(a: sx, b: 0, c: 0, d: sy, tx: 0, ty: 0)
+    }
+    /// 실제: `public init(translationX tx: CGFloat, y ty: CGFloat)`
+    public init(translationX tx: CGFloat, y ty: CGFloat) {
+        self.init(a: 1, b: 0, c: 0, d: 1, tx: tx, ty: ty)
+    }
     public static let identity = CGAffineTransform(a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0)
     /// 실제: `public var isIdentity: Bool { get }`
     public var isIdentity: Bool { self == .identity }

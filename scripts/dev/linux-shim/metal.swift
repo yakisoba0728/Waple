@@ -344,9 +344,25 @@ public protocol MTLRenderCommandEncoder: MTLCommandEncoder {
                                indexBuffer: MTLBuffer, indexBufferOffset: Int, instanceCount: Int)
 }
 
+/// 실제: `public enum MTLCommandBufferStatus: UInt { case notEnqueued, enqueued, committed,
+///        scheduled, completed, error }`
+/// [2026-08-21] `--tests` 가 요구한 표면 — `LDRBloomPassTests:81` 이
+/// `XCTAssertEqual(commandBuffer.status, .completed)` 로 커맨드버퍼 완료를 단언한다.
+/// `XCTAssertEqual` 이 `Equatable` 을 요구하므로 **반드시 `Equatable` 이어야 한다**
+/// (첫 시도는 그것을 빠뜨려 `type 'Equatable' has no member 'completed'` 로 걸렸다).
+public enum MTLCommandBufferStatus: UInt, Equatable {
+    case notEnqueued = 0
+    case enqueued = 1
+    case committed = 2
+    case scheduled = 3
+    case completed = 4
+    case error = 5
+}
+
 /// 실제: `public protocol MTLCommandBuffer: NSObjectProtocol { ... }`
 public protocol MTLCommandBuffer: AnyObject {
     var label: String? { get set }
+    var status: MTLCommandBufferStatus { get }
     func makeRenderCommandEncoder(descriptor renderPassDescriptor: MTLRenderPassDescriptor) -> MTLRenderCommandEncoder?
     func makeBlitCommandEncoder() -> MTLBlitCommandEncoder?
     func present(_ drawable: MTLDrawable)
