@@ -447,7 +447,7 @@ WE 실물이 무조건 합성하므로(§4) 이동한 쪽이 맞다.
 
 ---
 
-## 9. 넘길 정정안 (이 문서 밖 — 소유권이 다른 파일)
+## 9. 넘길 정정안 (이 문서 밖 — 소유권이 다른 파일) — **§13 에서 적용 완료**
 
 > **행번호 주의**: 아래 `SceneDocument.swift` 행번호는 **2026-08-21 조사 시점** 값이다.
 > 같은 파일을 여러 에이전트가 동시에 고치고 있어 드리프트한다. 적용 전에
@@ -671,3 +671,66 @@ WE 실물이 무조건 합성하므로(§4) 이동한 쪽이 맞다.
 **교차 확인.** 결론 ①~⑨ 는 서로 독립인 세 증거로 겹쳐 잡았다 —
 (a) `wallpaper64.exe` 디스어셈블, (b) `wallpaperui.exe` 프로퍼티 행 정의 + `locale/*.json` 평문,
 (c) `scenescript64.dll` 훅 이름 테이블 `0x1819a3ee0` 직독. 셋이 같은 답을 준다.
+
+---
+
+## 13. 적용 기록 — 2026-08-21, 2차 웨이브 클러스터 M
+
+§9 의 정정안을 **실제로 적용했다**. 적용 전에 §2·§3·§4·§5·§6 의 핵심 주장을 이 문서의 VA 를
+베끼지 않고 **다시 떴다**(브리프 함정 16).
+
+### 13.1 독립 재확인 결과 — 전건 일치
+
+| 재확인 대상 | 방법 | 결과 |
+|---|---|---|
+| 기저 ctor 리터럴 | `pe.read(0x1401ddc72, 10)` | `66 41 c7 86 20 01 00 00 01 20` = `mov word [r14+0x120], 0x2001` — **일치** |
+| 디스크립터 항목 경계 | `0x1401e1180`–`0x1401e1389` 재덤프, `call 0x14000f880`(이름 대입) 기준 절단 | `solid` 이름 `lea 0x1401e1272` → `call 0x1401e1283`, `+0x34 = 0x120`, `+0x30 = 6`; `disablepropagation` 이름 `lea 0x1401e131a` → `call 0x1401e132b`, `+0x34 = 0x120`, `+0x30 = 6`. **함정 16 의 끼어들기도 그대로 재현**됨(`lea "disablepropagation"` @`0x1401e129a` 이 `solid` 엔트리 스토어 사이에 있다) |
+| 비트 번호 | 썽크 4+4개 직접 디스어셈블 | `solid`: 역직렬화 `0x14019c425` `btr edx,0xd`/`bts ecx,0xd` · 직렬화 `0x14019c4ca` `test dword [rcx],0x2000` · 게터 `0x14019c600` `shr edx,0xd`. `disablepropagation`: `0x14019bb75` `btr edx,0xe` · `0x14019bc1a` `…,0x4000` · `0x14019bd57` `shr edx,0xe`. **일치** |
+| 합성부가 플래그를 읽는가 | `merged(0x1401850a0)` = `0x1401850a0`–`0x1401852f7`(8조각) 전문 디스어셈블(113줄) | `0x120` **0건** · `bt/bts/btr/btc` **0건** · `0x4000`/`0x2000` **0건**. 참조는 `+0x180`(parent) 3건 · `+0x190`(attachment) 2건뿐이고, `0x1401852b0` 이 자기 자신을 재귀 호출한다. **일치** |
+| bit14 소비처 개수 | `.text` 4,344,076바이트 **바이트 스캔**(imm8=0x0e 인 `0f ba /4..7` · `c1 /5,/7` · imm32=0x4000 인 `81`/`f7 /0`/`a9` · 16비트 `66 81`/`66 f7` · 레지스터 마스크 `b8+r 00 40 00 00`) → 원시 204건 중 ±40바이트 안에 disp32 `0x120` 이 있는 것만 | **1건** — `0x14018a877`(`66 0f ba e0 0e` = `bt ax, 0xe`). **일치** |
+| 위 스캐너의 위음성 여부 | **돌연변이**: 같은 스캐너를 bit13(0x0d/0x2000)으로 재실행 | 레지스터 마스크 경로가 `0x14018a00c`(`41 b8 00 20 00 00` = `mov r8d,0x2000`, 알려진 `solid` 게이트)와 `0x14018a3f5` 를 잡았고 즉치 경로가 `+0x118` 오탐 3건을 잡았다 → **스캐너는 살아 있다**. bit14 의 레지스터 마스크 경로는 **0건** |
+| 에디터 라벨 | `wallpaper_engine/locale/ui_en-us.json` grep | `:2540` `"ui_editor_properties_disable_click_propagation" : "Disable click propagation"` · `:2594` `"ui_editor_properties_enable_click_events" : "Enable click events"`. **일치** |
+
+### 13.2 무회귀 — 범위 라벨 붙인 도달 건수(직접 재측정)
+
+| 변경 | 동봉 `WEAssets`(json **1,698**) | 설치본 `wallpaper_engine`(json **2,143**) | 워크샵(162씬, 기록치 인용 — 재측정 불가) |
+|---|---:|---:|---|
+| ① 트랜스폼 가드 제거 | **0** (`disablepropagation` 문자열 0건) | **0** (0건) | image `true` **≤34** + 그 자손. text 742 / particle 408 / camera 34 / node 595 / sound 188 / model 265 / light 16 / shape 14 는 **전건 `false`** — 그쪽 가드는 원래도 no-op |
+| ② `solid` 기본 true | 그림 **0** — `"solid"` 는 18건이고 **전건 `true`**, 게다가 `isSolid` 소비처가 0건 | 그림 **0** — 40건 전건 `true`, 소비처 0건 | 그림 **0**(소비처 0건). 기록치도 `bool(전건 true)` |
+| ③ `instanceoverride` 애니 캡처 | 보존값 **5블록/5파일**(`controlpointangle1` 4 · `controlpoint1` 1), 그림 **0**(소비처 0건) | 동수(같은 6파일) | 미측정 |
+
+즉 **출하 자산(동봉·설치본)의 렌더 결과는 세 변경 모두 한 픽셀도 바뀌지 않는다.**
+바뀔 수 있는 최대치는 ①의 워크샵 이미지 레이어 ≤34개와 그 자손이고,
+그 34개가 실제로 `parent` 를 가졌는지는 원본 코퍼스 없이 확정 불가다(§6.3, §11 ①).
+
+### 13.3 적용한 것 / 안 한 것
+
+**적용**
+
+- `Sources/WapleCore/SceneDocument.swift` — §9.1 전건(12지점): `composeTargets` 가드 ·
+  `world()` 단락 · `buildParentTransformMap` 의 `noPropagate`(선언·삽입 2곳·반환) ·
+  `worldParentTransform` 파라미터·단락·재귀 인자 · `composeTextParentTransforms` 3곳 ·
+  `composeParticleParentTransforms` 3곳. **파스 4곳과 모델 필드 4곳은 유지**(§9.1 단서대로).
+- 같은 파일 §9.2: `isSolid` 선언 4곳 `= true`, 파스 4곳 `weBool(obj["solid"], true)`, 문서표 정정.
+- `docs/re/scene-object-model.md` §4.5 와 `solid` 행 — §9.3.
+- 테스트: `CoreParseSceneFixRegressionTests`(기대값 반전 + 텍스트/파티클 짝 + 조상 체인 중간마디 3건),
+  `SceneDocumentFidelityTests`(`solid` 4파스지점 잠금 + 태그5 케이스 재배치).
+
+**안 한 것**
+
+- `Sources/WapleCore/ParticleSystem.swift` 의 `ParticleInstanceOverride` 에 애니 슬롯을 넣는 안은
+  **소유 밖**이라 하지 않았다. 대신 `SceneParticle.instanceOverrideAnimations` 로 받았다.
+- §10 의 커서 경로 구현은 이 라운드 범위 밖이다(별도 클러스터가 `Sources/WapleCore/PointerHit.swift` 로
+  순수 기하를 진행 중 — 이 문서가 확정한 5번 규칙(`disablepropagation && visible && 조상 visible`
+  → 순회 중단)이 그쪽 소비처가 된다).
+
+### 13.4 검증
+
+`scripts/dev/linux-core-tests.sh --filter
+'SceneDocument|SceneDocumentFidelity|CoreParseSceneFixRegression|SceneText|SceneGeneralKeys|SceneParticle|PropertyAnimation'`
+→ **248 tests / 0 failures**. `scripts/spec/check_*.py` 14개(`check_stray_artifacts.py` 제외) 전부 통과.
+
+**돌연변이 8건 주입 / 8건 검출**(전부 되돌림, 되돌린 뒤 바이트 동일 확인):
+`composeTargets` 가드 복원 · 텍스트 가드 복원 · 파티클 가드 복원 ·
+`weBool(obj["solid"], true)` → `weBool(obj["solid"])` 4파스지점 각각 ·
+`instanceoverride` 애니 캡처 제거.

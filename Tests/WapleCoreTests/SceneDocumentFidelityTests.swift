@@ -18,6 +18,14 @@ final class SceneDocumentFidelityTests: XCTestCase {
     private let modelJSON = #"{"width":100,"height":100,"material":"materials/m.json"}"#
     private let materialJSON = #"{"passes":[{"shader":"genericimage2","textures":["pic"]}]}"#
 
+    private func cameraScene(_ objExtra: String) throws -> SceneDocument {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"id":7,"camera":"default","fov":60\(objExtra)}]}
+        """
+        return try SceneDocument.parse(package: ScenePackage.assemble([("scene.json", d(scene))]))
+    }
+
     private func imageScene(_ objExtra: String) throws -> SceneDocument {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100}},
@@ -82,21 +90,39 @@ final class SceneDocumentFidelityTests: XCTestCase {
         XCTAssertTrue(layer.clampUVs)
     }
 
-    /// 기본이 **거짓**인 키에서 숫자 1 은 참이 아니다. `solid` `+0x120` bit13(등록 `0x1401e1283`) ·
-    /// `perspective` bit7 · `ledsource` `+0x304` bit8 · `disablepropagation` bit14.
+    /// 기본이 **거짓**인 키에서 숫자 1 은 참이 아니다.
+    /// `perspective` bit7 · `ledsource` `+0x304` bit8 · `disablepropagation` `+0x120` bit14.
+    ///
+    /// **정정(2026-08-21)**: 종전 이 테스트는 `solid` 도 "기본 거짓" 쪽에 넣고 `XCTAssertFalse(isSolid)`
+    /// 를 걸었는데 그게 틀렸다 — `solid` 는 같은 워드 **bit13** 이고 기저 ctor 리터럴
+    /// `mov word [r14+0x120], 0x2001`(`0x1401ddc72`)이 `0x2001` = bit0(`visible`) | **bit13** 을 깔아
+    /// **기본 true** 다(bit14 는 안 서므로 `disablepropagation` 만 기본 false 가 맞다).
+    /// 태그5 게이트가 실패하면 스토어를 건너뛰어 ctor 값이 남으므로 `"solid":1` 은 **true 로 남아야** 한다.
+    /// 그래서 `solid` 단언은 아래 `testNumericOneDoesNotClearDefaultTrueSolid` 로 옮겼다.
     func testNumericOneDoesNotSetDefaultFalseFlags() throws {
         let layer = try XCTUnwrap(
-            imageScene(#","solid":1,"perspective":1,"ledsource":1,"disablepropagation":1"#).layers.first)
-        XCTAssertFalse(layer.isSolid)
+            imageScene(#","perspective":1,"ledsource":1,"disablepropagation":1"#).layers.first)
         XCTAssertFalse(layer.perspective)
         XCTAssertFalse(layer.ledSource)
         XCTAssertFalse(layer.disablePropagation)
     }
 
+    /// `solid` `+0x120` bit13(등록 `0x1401e1283`, 게터 `0x14019c600` `shr edx,0xd`)은 기본 **true** 다 —
+    /// 숫자 1 도 문자열도 태그 5 가 아니라 스토어를 건너뛰고 ctor `0x2001` 의 bit13 이 그대로 남는다.
+    /// (에디터 라벨: `ui_editor_properties_enable_click_events` = "Enable click events".)
+    func testNumericOneDoesNotClearDefaultTrueSolid() throws {
+        XCTAssertTrue(try XCTUnwrap(imageScene(#","solid":1"#).layers.first).isSolid)
+        XCTAssertTrue(try XCTUnwrap(imageScene(#","solid":0"#).layers.first).isSolid,
+                      "숫자 0 도 태그 5 가 아니라 ctor 기본 true 를 유지한다")
+        XCTAssertFalse(try XCTUnwrap(imageScene(#","solid":false"#).layers.first).isSolid,
+                       "평문 false 만 실제로 끈다")
+    }
+
     /// 문자열 `"true"` 도 태그 4 라 참이 아니다(태그 5 만 통과).
+    /// `solid` 는 기본이 true 라 "문자열이 못 덮는다" = **true 가 남는다**(위 테스트 주석의 ctor 근거).
     func testStringTrueIsNotBoolean() throws {
         let layer = try XCTUnwrap(imageScene(#","solid":"true","copybackground":"false""#).layers.first)
-        XCTAssertFalse(layer.isSolid)
+        XCTAssertTrue(layer.isSolid, "문자열은 기본값(true)을 못 덮는다")
         XCTAssertTrue(layer.copyBackground, "문자열은 기본값을 못 덮는다")
     }
 
@@ -324,5 +350,135 @@ final class SceneDocumentFidelityTests: XCTestCase {
         XCTAssertTrue(def.operators.contains(
             .controlPointAttract(scale: 2, threshold: 10, target: Vec3(x: 7, y: 7, z: 7))),
             "게이트된 CP 는 프리셋 좌표로 베이크돼야 한다 — got \(def.operators)")
+    }
+
+    // MARK: - ④ instanceoverride 의 {animation} 바인딩 (클러스터 K 이관)
+
+    /// **동봉 실물 그대로.** `scenes/particleelementpreviews/maintaindistancebetweencontrolpoints/scene.json`
+    /// 의 `/objects/1/instanceoverride/controlpoint1` 은 `{"animation":{c0,c1,c2,options}, "value":"…"}` 인데,
+    /// 종전 `particleInstanceOverride` 는 `vec3()` 의 정적 `value` 언랩만 해서 트랙을 통째로 버렸다.
+    ///
+    /// **범위 라벨**: 동봉 `WEAssets`(json 1,698) 전수에서 `"animation"` 딕셔너리는 7건이고 그중
+    /// **5건**이 `instanceoverride` 밑이다(`controlpointangle1` 4 · `controlpoint1` 1).
+    /// 설치본 `wallpaper_engine`(json 2,143)도 같은 6파일로 동수 — 즉 **이 경로가 애니 블록의 다수파**다.
+    ///
+    /// 소비처는 아직 없어 **그림은 바뀌지 않는다**(파스·보존 전용).
+    func testInstanceOverrideAnimationBindingIsCaptured() throws {
+        let io = """
+        {"controlpoint1":{
+           "animation":{
+             "c0":[{"frame":0,"value":0,
+                    "front":{"enabled":true,"magic":true,"x":1,"y":0},
+                    "back":{"enabled":true,"magic":true,"x":-1,"y":-0.0},
+                    "lockangle":true,"locklength":true},
+                   {"frame":30,"value":0,
+                    "front":{"enabled":true,"magic":true,"x":1,"y":0},
+                    "back":{"enabled":true,"magic":true,"x":-1,"y":-0.0},
+                    "lockangle":true,"locklength":true}],
+             "c1":[{"frame":0,"value":436.42032,
+                    "front":{"enabled":true,"magic":true,"x":1,"y":0},
+                    "back":{"enabled":true,"magic":true,"x":-1,"y":-0.0},
+                    "lockangle":true,"locklength":true},
+                   {"frame":30,"value":145.37645,
+                    "front":{"enabled":true,"magic":true,"x":1,"y":0},
+                    "back":{"enabled":true,"magic":true,"x":-1,"y":-0.0},
+                    "lockangle":true,"locklength":true}],
+             "c2":[{"frame":0,"value":0,
+                    "front":{"enabled":true,"magic":true,"x":1,"y":0},
+                    "back":{"enabled":true,"magic":true,"x":-1,"y":-0.0},
+                    "lockangle":true,"locklength":true},
+                   {"frame":30,"value":0,
+                    "front":{"enabled":true,"magic":true,"x":1,"y":0},
+                    "back":{"enabled":true,"magic":true,"x":-1,"y":-0.0},
+                    "lockangle":true,"locklength":true}],
+             "options":{"fps":30,"length":60,"mode":"loop","wraploop":true}},
+           "value":"0.00000 436.42032 0.00000"}}
+        """
+        let doc = try particleDoc(io, particle: plainParticle)
+        let sp = try XCTUnwrap(doc.particles.first)
+
+        // ① 정적 `value` 는 종전 그대로 def 에 착지한다(무회귀).
+        XCTAssertEqual(sp.def.controlPoints[1], Vec3(x: 0, y: 436.42032, z: 0))
+
+        // ② 트랙이 살아난다 — 종전엔 이 사전이 통째로 비어 있었다.
+        let anim = try XCTUnwrap(sp.instanceOverrideAnimations["controlpoint1"],
+                                 "instanceoverride 의 {animation} 바인딩이 드롭되면 안 된다")
+        XCTAssertEqual(anim.fps, 30)
+        XCTAssertEqual(anim.length, 60)
+        XCTAssertEqual(anim.mode, "loop")
+        XCTAssertTrue(anim.wrapLoop)
+        XCTAssertEqual(anim.tracks.count, 3, "c0/c1/c2 세 채널")
+
+        // ③ **실제로 움직인다** — c1(= y 성분)이 frame 0 의 436.42032 에서 frame 30 의 145.37645 로 간다.
+        //    정적 언랩만 하던 종전에는 y 가 436.42032 에 고정이었다.
+        XCTAssertEqual(anim.value(component: 1, atTime: 0, base: 0), 436.42032, accuracy: 1e-3)
+        XCTAssertEqual(anim.value(component: 1, atTime: 1.0, base: 0), 145.37645, accuracy: 1e-3,
+                       "frame 30 @ 30fps = 1.0s")
+        let mid = anim.value(component: 1, atTime: 0.5, base: 0)
+        XCTAssertGreaterThan(mid, 145.37645)
+        XCTAssertLessThan(mid, 436.42032)
+        // 다른 두 채널은 상수 0.
+        XCTAssertEqual(anim.value(component: 0, atTime: 0.5, base: 0), 0, accuracy: 1e-6)
+        XCTAssertEqual(anim.value(component: 2, atTime: 0.5, base: 0), 0, accuracy: 1e-6)
+    }
+
+    /// 애니가 **아닌** 바인딩/평문은 이 사전에 담기지 않는다 — `PropertyAnimation.parse` 는
+    /// `"animation"` 키가 없으면 nil 이라 `{user,value}`·평문 문자열·숫자는 전부 통과한다(무회귀 가드).
+    func testInstanceOverrideWithoutAnimationCapturesNothing() throws {
+        let io = """
+        {"id":126,"count":2.0,"controlpoint1":"22 0 0",
+         "size":{"user":"psize","value":2.0}}
+        """
+        let doc = try particleDoc(io, particle: plainParticle)
+        let sp = try XCTUnwrap(doc.particles.first)
+        XCTAssertTrue(sp.instanceOverrideAnimations.isEmpty)
+        XCTAssertEqual(sp.def.controlPoints[1], Vec3(x: 22, y: 0, z: 0))
+    }
+
+    /// 동봉 다수파인 `controlpointangle1` 쪽(4/5건)도 같은 규약으로 잡힌다.
+    func testInstanceOverrideControlPointAngleAnimationIsCaptured() throws {
+        let io = """
+        {"controlpointangle1":{
+           "animation":{"c2":[{"frame":0,"value":0},{"frame":15,"value":1.5708}],
+                        "options":{"fps":15,"length":30,"mode":"loop"}},
+           "value":"0 0 0"}}
+        """
+        let doc = try particleDoc(io, particle: plainParticle)
+        let sp = try XCTUnwrap(doc.particles.first)
+        let anim = try XCTUnwrap(sp.instanceOverrideAnimations["controlpointangle1"])
+        XCTAssertEqual(anim.fps, 15)
+        XCTAssertEqual(anim.value(component: 2, atTime: 1.0, base: 0), 1.5708, accuracy: 1e-4)
+        XCTAssertEqual(sp.def.controlPointAngles[1], Vec3(x: 0, y: 0, z: 0), "정적 value 는 그대로")
+    }
+
+    /// `solid` 기본값 **true** 를 **네 파스 지점 전부**에서 잠근다(image · text · camera · particle).
+    ///
+    /// 근거는 하나다 — 기저 오브젝트 생성자 `sub_1401ddbb0` 의
+    /// `mov word [r14+0x120], 0x2001`(`0x1401ddc72`, 바이트 `66 41 c7 86 20 01 00 00 01 20`).
+    /// `0x2001` = bit0(`visible`) | **bit13(`solid`)** 이고 bit14(`disablepropagation`)는 서지 않는다.
+    /// `solid`/`disablepropagation` 은 **같은 기저 디스크립터 표**의 이웃 항목이라 둘 다
+    /// 멤버 오프셋 `+0x120` · 타입 6(bool)이고, 비트만 13/14 로 다르다
+    /// (썽크로 재확인: `solid` 역직렬화 `0x14019c3f0` `btr edx,0xd`/`bts ecx,0xd` ·
+    ///  직렬화 `0x14019c4ca` `test dword [rcx],0x2000` · 게터 `0x14019c600` `shr edx,0xd` ↔
+    ///  `disablepropagation` 역직렬화 `0x14019bb40` `btr edx,0xe` · 직렬화 `0x14019bc1a` `…,0x4000` ·
+    ///  게터 `0x14019bd50` `shr edx,0xe`).
+    /// 파생 ctor 중 bit13 을 끄는 곳은 없다.
+    ///
+    /// 종전 Waple 은 네 곳 모두 `= false` + `weBool(obj["solid"])` 라, **키 부재**와 **비-bool 태그**에서
+    /// 실물과 반대로 접혔다. `isSolid` 소비처가 0건이라 그림은 안 바뀐다(무회귀).
+    func testSolidDefaultsTrueAcrossAllFourParseSites() throws {
+        // 키 부재 → ctor 기본 true.
+        XCTAssertTrue(try XCTUnwrap(imageScene("").layers.first).isSolid)
+        XCTAssertTrue(try XCTUnwrap(textScene("").texts.first).isSolid)
+        XCTAssertTrue(try XCTUnwrap(cameraScene("").cameraObjects.first).isSolid)
+        XCTAssertTrue(try XCTUnwrap(particleDoc(#"{"count":1}"#, particle: plainParticle).particles.first).isSolid)
+        // 비-bool 태그 → 스토어를 건너뛰어 ctor 기본 true 유지.
+        XCTAssertTrue(try XCTUnwrap(imageScene(#","solid":0"#).layers.first).isSolid)
+        XCTAssertTrue(try XCTUnwrap(textScene(#","solid":0"#).texts.first).isSolid)
+        XCTAssertTrue(try XCTUnwrap(cameraScene(#","solid":0"#).cameraObjects.first).isSolid)
+        // 평문 false 만 실제로 끈다.
+        XCTAssertFalse(try XCTUnwrap(imageScene(#","solid":false"#).layers.first).isSolid)
+        XCTAssertFalse(try XCTUnwrap(textScene(#","solid":false"#).texts.first).isSolid)
+        XCTAssertFalse(try XCTUnwrap(cameraScene(#","solid":false"#).cameraObjects.first).isSolid)
     }
 }

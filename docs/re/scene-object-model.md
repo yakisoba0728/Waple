@@ -142,7 +142,7 @@
 | `depth` | 48 | 52 | 0 | 0 | int(51) · float(1) | **없음** | 안 읽음 |
 | `locktransforms` | 24 | 53 | 7 | 35 | bool | **없음** | `:1859`·`2121`·`2198`·`2804` 파스만(소비처 0) |
 | `particlesrc` | 21 | 21 | 0 | 0 | null(21) | **없음** | 안 읽음 |
-| `solid` | 17 | 37 | 3 | 22 | bool(전건 true) | 디스크립터 `+0x120` bit — `0x1401e1283` | `:1860`·`2122`·`2199`·`2805` |
+| `solid` | 17 | 37 | 3 | 22 | bool(전건 true) | 디스크립터 `+0x120` **bit13** — `0x1401e1283`. **생성자 기본 `true`**(`mov word [r14+0x120], 0x2001` @`0x1401ddc72`), 뜻은 커서 히트테스트 참가(`ui_editor_properties_enable_click_events` = "Enable click events") | `SceneDocument.parseLayer`/`parseCameraObject`/`parseText`/`parseParticle` 의 `weBool(obj["solid"], true)`(소비처 0) |
 
 > **[2026-08-21 정정] `objects[].config` 는 리더 0 인 유령 키다 — 이전 판이 남의 파서를 갖다 붙였다.**
 >
@@ -461,7 +461,13 @@ if (parent) {
 ### 4.5 계층
 
 `parent` 는 **오브젝트 `id`** 를 가리킨다(`0x1401de470`–`0x1401de741` 이 `parent`/`attachment` 를 읽는다).
-`disablepropagation`(`+0x120` bit, `0x1401e132b`)이 전파 차단 플래그다. 동봉 코퍼스 도달은 §11.2.
+`disablepropagation`(`+0x120` **bit14**, 등록 `0x1401e132b`)은 **커서 클릭 전파 차단**이지
+**트랜스폼 상속과 무관하다**. 부모→자식 합성부 `sub_1401850a0`(vtbl `+0x80`, `0x1401850a0`–`0x1401852f7`)은
+`[obj+0x180](parent)` 만 보고 플래그워드 `+0x120` 을 **아예 읽지 않으며**(전문 참조 0건, 10 vtable 오버라이드 0),
+bit14 를 읽는 코드는 이미지 전체에서 커서 이벤트 디스패처 `0x14018a877` **1곳**뿐이다.
+에디터가 이 키를 로케일 키 `ui_editor_properties_disable_click_propagation`
+(= "Disable click propagation")에 묶는다. 상세는 `docs/re/object-propagation.md` §3·§4·§5.
+동봉 코퍼스 도달은 §11.2.
 
 ---
 
