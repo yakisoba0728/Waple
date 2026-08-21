@@ -1211,7 +1211,10 @@ extension SceneRenderer {
             // `fit` **미선언 FBO 는 아래 두 갈래 종전 그대로** 둔다 — 특히 scale 갈래의 나눗셈은
             // 정수 바닥이 아니라 부동소수(`lh/s`)라, 여기서 정수화하면 dst 가 scale 로 나누어
             // 떨어지지 않는 모든 씬에서 값이 움직인다(무회귀 규약).
-            if let box = fbo.fittedBox(baseWidth: texW, baseHeight: texH) {
+            // 베이스는 이 함수의 인자 `lw`/`lh`(= 호출부 `Float(max(1, texW))`, 1214 위 727행) 다.
+            // `texW`/`texH` 라는 이름은 이 스코프에 **없다** — 여긴 Metal 전용이라 CI 밖에서는
+            // `swiftc -parse` 만 돌아 타입체크가 안 되고, 그래서 990aa2a 가 macOS 빌드를 깼다.
+            if let box = fbo.fittedBox(baseWidth: Int(lw), baseHeight: Int(lh)) {
                 let fw = Float(box.width), fh = Float(box.height)
                 texRes[slot] = SIMD4(fw, fh, fw, fh)
             } else if let fw = fbo.fixedWidth, let fh = fbo.fixedHeight {
