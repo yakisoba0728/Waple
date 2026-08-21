@@ -78,6 +78,89 @@
    ]
   },
   {
+   "id": "linkedLibs.asciiOnly",
+   "value": {
+    "왜 따로 재는가": "위 sourcePaths/assertions 는 UTF-16LE 전용이다. 그 근거가 MSVC 어서션의 __FILE__ 이고, 그게 wide 인 이유는 `_wassert` 를 쓰는 **C++ 라이브러리**이기 때문이다. 즉 이 방법은 **C 라이브러리를 원리적으로 못 본다** — 그쪽은 narrow 문자열만 남긴다.",
+    "[2026-08-20 자기정정]": "이 문서가 함정 ⑨('ASCII-only 검색이 거짓 부재를 만든다')를 세워 놓고 **반대 방향으로 같은 실수**를 하고 있었다. 아래 넷은 UTF-16LE 스캔에 한 건도 안 걸린다(utf16leHits 전부 0) — 정본이 '서드파티 전수' 라고 적으면서 넷을 통째로 빠뜨렸다.",
+    "libraries": {
+     "harfbuzz": {
+      "role": "텍스트 셰이핑. 정적 링크(코드 대역이 .text 후반 상당 부분).",
+      "markers": {
+       "harfbuzz ": {
+        "ascii": "0x46f5a0",
+        "utf16le": null
+       },
+       "buffer verify error: clusters are not monotone.": {
+        "ascii": "0x46f5b0",
+        "utf16le": null
+       },
+       "struct hb_shape_plan_t *__cdecl hb_shape_plan_create2": {
+        "ascii": "0x470430",
+        "utf16le": null
+       }
+      },
+      "utf16leHits": 0
+     },
+     "freetype": {
+      "role": "폰트 래스터. 모듈 19종 등록(truetype·cff·type1·pcf·bdf·sdf·ot-svg …).",
+      "markers": {
+       "FREETYPE_PROPERTIES": {
+        "ascii": "0x435800",
+        "utf16le": null
+       },
+       "resource.frk/": {
+        "ascii": "0x435710",
+        "utf16le": null
+       },
+       ".AppleDouble/": {
+        "ascii": "0x435730",
+        "utf16le": null
+       }
+      },
+      "utf16leHits": 0
+     },
+     "zlib": {
+      "role": "inflate 전용(1.3.1). deflate 없음 — FreeType ftgzip.c 동봉분으로 보인다[추정].",
+      "markers": {
+       " inflate 1.3.1 Copyright 1995-2024 Mark Adler ": {
+        "ascii": "0x451308",
+        "utf16le": null
+       }
+      },
+      "utf16leHits": 0
+     },
+     "wuffs": {
+      "role": "이미지·JSON 코덱(google/wuffs). `#png:`/`#json:`/`#gzip:` 상태 문자열이 고유 규약. 라이브러리 이름 문자열 자체는 없어 동정은 **강한 추정**이다.",
+      "markers": {
+       "wuffs_aux::DecodeJson: no match": {
+        "ascii": "0x478020",
+        "utf16le": null
+       },
+       "#png: internal error: zlib decoder did not exhaust its input": {
+        "ascii": "0x478678",
+        "utf16le": null
+       },
+       "#gzip: bad encoding flags": {
+        "ascii": "0x4790f0",
+        "utf16le": null
+       }
+      },
+      "utf16leHits": 0
+     }
+    },
+    "총계": "UTF-16LE 경로로 잡히는 5종 + ASCII 로만 잡히는 4종 = 9종",
+    "남은 한계": "이 목록도 **하드코딩 마커**다. 새 라이브러리가 들어오면 여전히 못 잡는다. 구조적으로 닫으려면 문자열이 아니라 코드 지문(고유 상수·함수 시그니처)으로 가야 하는데 그건 별건이다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본, sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes)",
+     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋 · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
+    }
+   ]
+  },
+  {
    "id": "linkedLibs.matrixConvention",
    "value": {
     "fact": "DirectXMath(행벡터·행우선)와 GLM(열벡터·열우선)이 **동시에** 링크돼 있다.",
@@ -105,6 +188,7 @@
      "'GLM 언급 0건' → 링크돼 있다. 어느 정본도 몰랐다(양쪽 리포 grep 0건)."
     ],
     "rule": "바이너리 부재를 주장하려면 **어떤 인코딩으로 어떤 명령을 돌렸는지**를 함께 적을 것.",
+    "[2026-08-20] 이 규칙을 이 문서가 스스로 어겼다": "위 규칙을 세워 놓고 정작 자기는 UTF-16LE 만 돌려서 harfbuzz·freetype·zlib·wuffs 를 통째로 놓쳤다(linkedLibs.asciiOnly 참조). 규칙은 대칭이다 — **어느 한쪽 인코딩만 돌린 결과로 부재를 주장하지 마라.**",
     "propagatedInto": "Waple 로 전파된 것은 docs/handoff-2026-08-17.md:176,234 두 줄뿐이었고 정정했다. spec/ 정본은 같은 검사를 전수 통과했다."
    },
    "status": "확정",

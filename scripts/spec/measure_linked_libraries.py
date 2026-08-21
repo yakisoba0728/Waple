@@ -63,6 +63,31 @@ ASSERTIONS = {
     "ffts": ["N == 32"],
 }
 
+# ── [2026-08-20] 이 측정의 **구조적 사각지대** ────────────────────────────────
+# 위 스캔은 UTF-16LE 전용이다. 그건 근거가 MSVC 어서션의 `__FILE__` 이기 때문인데,
+# 그 경로가 wide 인 이유는 `_wassert` 를 쓰는 **C++ 라이브러리**여서다.
+#
+# 즉 이 방법은 **C 라이브러리를 원리적으로 못 본다.** 그쪽은 `assert`/자기 로그가
+# narrow 문자열이라 UTF-16LE 스캔에 한 건도 안 걸린다. 실제로 넷을 통째로 놓치고 있었다.
+#
+# 함정 ⑨("ASCII-only 검색이 거짓 부재를 만든다")를 이 문서가 세워 놓고, 정작 자신은
+# **반대 방향으로 같은 실수**를 하고 있었다 — UTF-16-only 검색도 똑같이 거짓 부재를 만든다.
+ASCII_MARKERS = {
+    "harfbuzz": ["harfbuzz ", "buffer verify error: clusters are not monotone.",
+                 "struct hb_shape_plan_t *__cdecl hb_shape_plan_create2"],
+    "freetype": ["FREETYPE_PROPERTIES", "resource.frk/", ".AppleDouble/"],
+    "zlib": [" inflate 1.3.1 Copyright 1995-2024 Mark Adler "],
+    "wuffs": ["wuffs_aux::DecodeJson: no match", "#png: internal error: zlib decoder"
+              " did not exhaust its input", "#gzip: bad encoding flags"],
+}
+ASCII_ROLE = {
+    "harfbuzz": "텍스트 셰이핑. 정적 링크(코드 대역이 .text 후반 상당 부분).",
+    "freetype": "폰트 래스터. 모듈 19종 등록(truetype·cff·type1·pcf·bdf·sdf·ot-svg …).",
+    "zlib": "inflate 전용(1.3.1). deflate 없음 — FreeType ftgzip.c 동봉분으로 보인다[추정].",
+    "wuffs": "이미지·JSON 코덱(google/wuffs). `#png:`/`#json:`/`#gzip:` 상태 문자열이 고유 규약. "
+             "라이브러리 이름 문자열 자체는 없어 동정은 **강한 추정**이다.",
+}
+
 
 def classify(path):
     """소스 경로 → 라이브러리 이름. `src\\lib\\include\\<x>` 와 `src\\<x>` 둘 다 받는다."""
@@ -87,6 +112,18 @@ def main():
         if SOURCE_PATH.match(text):
             by_lib[classify(text)][text] = f"0x{m.start():x}"
 
+    # ── ASCII 전용 라이브러리 ───────────────────────────────────────────────
+    ascii_libs = {}
+    for lib, toks in ASCII_MARKERS.items():
+        found = {}
+        for t in toks:
+            i = data.find(t.encode("ascii"))
+            j = data.find(t.encode(ENCODING))
+            found[t] = {"ascii": f"0x{i:x}" if i >= 0 else None,
+                        "utf16le": f"0x{j:x}" if j >= 0 else None}
+        ascii_libs[lib] = {"role": ASCII_ROLE[lib], "markers": found,
+                           "utf16leHits": sum(1 for v in found.values() if v["utf16le"])}
+
     # ── 어서션 ─────────────────────────────────────────────────────────────
     asserts = {}
     for lib, toks in ASSERTIONS.items():
@@ -104,6 +141,22 @@ def main():
                       {lib: dict(sorted(paths.items())) for lib, paths in sorted(by_lib.items())},
                       "확정", [ev]),
         specfmt.entry("linkedLibs.assertions", asserts, "확정", [ev]),
+        specfmt.entry("linkedLibs.asciiOnly", {
+            "왜 따로 재는가": "위 sourcePaths/assertions 는 UTF-16LE 전용이다. 그 근거가 MSVC "
+                             "어서션의 __FILE__ 이고, 그게 wide 인 이유는 `_wassert` 를 쓰는 "
+                             "**C++ 라이브러리**이기 때문이다. 즉 이 방법은 **C 라이브러리를 "
+                             "원리적으로 못 본다** — 그쪽은 narrow 문자열만 남긴다.",
+            "[2026-08-20 자기정정]": "이 문서가 함정 ⑨('ASCII-only 검색이 거짓 부재를 만든다')를 "
+                                     "세워 놓고 **반대 방향으로 같은 실수**를 하고 있었다. "
+                                     "아래 넷은 UTF-16LE 스캔에 한 건도 안 걸린다(utf16leHits 전부 0) — "
+                                     "정본이 '서드파티 전수' 라고 적으면서 넷을 통째로 빠뜨렸다.",
+            "libraries": ascii_libs,
+            "총계": f"UTF-16LE 경로로 잡히는 {len(by_lib)}종 + ASCII 로만 잡히는 "
+                    f"{len(ascii_libs)}종 = {len(by_lib) + len(ascii_libs)}종",
+            "남은 한계": "이 목록도 **하드코딩 마커**다. 새 라이브러리가 들어오면 여전히 못 잡는다. "
+                        "구조적으로 닫으려면 문자열이 아니라 코드 지문(고유 상수·함수 시그니처)으로 "
+                        "가야 하는데 그건 별건이다.",
+        }, "확정", [ev]),
         specfmt.entry("linkedLibs.matrixConvention", {
             "fact": "DirectXMath(행벡터·행우선)와 GLM(열벡터·열우선)이 **동시에** 링크돼 있다.",
             "whyItMatters": "mul-convention.json 과 Scene3DMath 의 전치 논증은 행벡터 규약을 전제한다. "
@@ -126,6 +179,10 @@ def main():
                 "'GLM 언급 0건' → 링크돼 있다. 어느 정본도 몰랐다(양쪽 리포 grep 0건).",
             ],
             "rule": "바이너리 부재를 주장하려면 **어떤 인코딩으로 어떤 명령을 돌렸는지**를 함께 적을 것.",
+            "[2026-08-20] 이 규칙을 이 문서가 스스로 어겼다":
+                "위 규칙을 세워 놓고 정작 자기는 UTF-16LE 만 돌려서 harfbuzz·freetype·zlib·wuffs 를 "
+                "통째로 놓쳤다(linkedLibs.asciiOnly 참조). 규칙은 대칭이다 — **어느 한쪽 인코딩만 "
+                "돌린 결과로 부재를 주장하지 마라.**",
             "propagatedInto": "Waple 로 전파된 것은 docs/handoff-2026-08-17.md:176,234 두 줄뿐이었고 "
                               "정정했다. spec/ 정본은 같은 검사를 전수 통과했다.",
         }, "확정", [ev]),
