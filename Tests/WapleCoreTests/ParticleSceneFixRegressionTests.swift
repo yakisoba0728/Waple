@@ -365,6 +365,17 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
 
     /// axis "0 1 0"(실측 2씬) → XZ 평면 각도. (1,0,0) 위치: Y축=atan2(1,0)=π/2 → t=0.75,
     /// 레거시 Z축=atan2(0,1)=0 → t=0.5.
+    ///
+    /// **[2026-08-21 경고] 이 테스트가 잠그는 것은 "실물 동작" 이 아니라 "현재 Waple 동작" 이다.**
+    /// 이 저장소에서 직접 다시 떠서 확인한 결과, 실물 `mapsequencearoundcontrolpoint`(opid 13,
+    /// 핸들러 0x14023c4cf) / `mapsequencebetweencontrolpoints`(opid 14, 0x14023ca93)는
+    /// **위치 이니셜라이저**이고 스프라이트 시퀀스 슬롯 `+0x268` 을 **한 번도** 안 만진다
+    /// (두 핸들러의 SoA 슬롯 전수: 위치 +0x2b0/+0x2b8/+0x2c0 · 속도 +0x2c8/+0x2d0/+0x2d8 ·
+    ///  기준 size +0x278(between 만) · CP +0x400 · 시스템 flags +0x20). 즉 아래 `p.frame` 기대치는
+    /// 실물 근거가 없다 — `Initializer.mapSequence` 주석의 [근거없음] 항목을 보라.
+    /// 걷어내도 그림은 안 바뀐다(코퍼스 19건이 쓰는 텍스처 5종에 TEXS 가 없다). 다만 그 삭제는
+    /// `TexFramesAndMapSequenceTests.swift`(이 라운드 소유 밖)의 세 테스트를 같이 고쳐야 해서
+    /// 이번엔 미적용이다.
     func testF630_MapSequenceAxisSelectsPlane() {
         let def = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"boxrandom","origin":"1 0 0","distancemax":"0 0 0","rate":100}],

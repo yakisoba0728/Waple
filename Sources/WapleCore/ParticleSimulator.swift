@@ -17,6 +17,10 @@ public struct Particle {
     public var uid: Int = 0
     /// 스프라이트시트 시퀀스 인덱스(mapsequence 이니셜라이저가 스폰 시 확정). -1 = 미지정
     /// (시트가 있으면 렌더러가 age/frametime 으로 gif 애니).
+    /// **[2026-08-21]** 실물에서 이 값을 정하는 것은 `animationmode:"randomframe"`
+    /// **하나뿐**이다 — `mapsequence*` 는 **위치** 이니셜라이저라 시퀀스 슬롯(+0x268)을
+    /// 안 만진다(`Initializer.mapSequence` 주석). Waple 의 mapsequence 배선은 걷어낼
+    /// 자리로 표시만 해 뒀다(소유 밖 테스트 파일이 걸려 이번 라운드 미적용).
     public var frame: Float = -1
     public var initialSize: Float = 1
     public var initialAlpha: Float = 1
@@ -1035,8 +1039,10 @@ public struct ParticleSimulator {
         p.pos += emitOrigin   // 자식 인스턴스: 부모 위치(또는 링크 origin) 오프셋. 루트는 0.
         p.uid = nextUID; nextUID += 1
         // F622: animationmode=randomframe — 스폰 시 시퀀스 인덱스 1개 확정(sheetFrameIndex 가
-        // 프레임 수로 접는다). mapsequence 이니셜라이저가 있으면 뒤의 apply 가 덮어써 그쪽이 승
-        // (cherry_blossoms 류 — 각도→프레임 명시 매핑이 더 구체적).
+        // 프레임 수로 접는다). mapsequence 이니셜라이저가 있으면 뒤의 apply 가 덮어써 그쪽이 승.
+        // **[2026-08-21]** 그 덮어쓰기는 실물에 대응이 없다(`case .mapSequence` 의
+        // [근거없음] 주석). 걷어낼 때 이 문장도 같이 지워야 한다 — 동봉·설치 코퍼스의
+        // `mapsequence*` 19건은 전부 animationmode 부재라 지금 겹치는 자산은 0건이다.
         if def.animationMode == .randomframe { p.frame = rng.range(0, 4096) }
         // 스폰 VM 서두의 무조건 1드로(0x14023b372 → 0x14023b381). 이니셜라이저 디스패치
         // (0x14023b5c0)보다 **먼저**이고 그 사이에 분기가 없다 — `Particle.sharedRandom` 주석 참조.
@@ -1365,6 +1371,26 @@ public struct ParticleSimulator {
             p.color *= c
             p.initialColor = p.color
         case let .mapSequence(count, _, between):
+            // **[근거없음 — 2026-08-21 실측으로 확정. 걷어낼 자리다.]**
+            // 실물 `mapsequencearoundcontrolpoint`(opid 13, 핸들러 0x14023c4cf) /
+            // `mapsequencebetweencontrolpoints`(opid 14, 0x14023ca93)는 **위치 이니셜라이저**이고
+            // 스프라이트 시퀀스 슬롯을 만지지 않는다. 두 핸들러가 참조하는 SoA 슬롯을 전수로 뽑으면
+            // 위치 +0x2b0/+0x2b8/+0x2c0 · 속도 +0x2c8/+0x2d0/+0x2d8 · 기준 size +0x278(between 만) ·
+            // CP 배열 +0x400 · 시스템 flags +0x20 뿐이고 시퀀스 슬롯 **+0x268 은 0회**다
+            // (+0x268 이 시퀀스 슬롯인 근거: 프롤로그 0x14023b4ef/0x14023b503, remap 출력 arm
+            //  0x14023ce8b). 아래 `t → p.frame` 매핑은 실물에 대응이 없다.
+            //
+            // **왜 아직 안 걷었나**: 걷어내면 `Tests/WapleCoreTests/TexFramesAndMapSequenceTests.swift`
+            // 의 세 테스트(`testMapSequenceBetween_projectsOntoSegment` 2.0 /
+            // `…_clampsOutsideSegment` 0 / `testMapSequenceAround_angleToSequence` 4.0)가 깨지는데
+            // 그 파일은 이 라운드의 소유 밖이다. 그림 자체는 안 바뀐다는 것까지는 확인했다 —
+            // 동봉·설치 두 코퍼스에서 `mapsequence*` 선언 19건(17파일)이 쓰는 텍스처 5종
+            // (particle/halo, halo_2, beam/beam_0, beam/beam_2, misc/star_0)에 **TEXS 섹션이 없어**
+            // 렌더러의 `p.frame >= 0` 분기(SceneRendererFrameEncoder:123/:264, SceneRenderer3D:2367)가
+            // 애초에 도달하지 않는다(그 분기는 `if !sys.frames.isEmpty` 안에 있고 `frames` 는
+            // TEXS 에서만 온다). 19건 전부 `animationmode` 부재라 randomframe 경로와도 안 겹친다.
+            // 근거 전문은 `Initializer.mapSequence` 주석(ParticleSystem.swift).
+            //
             // 시퀀스 위치 t(0..1) → frame = t·count. 시트 폴드(mirror/loop)는 렌더 시 sheetFrameIndex.
             let t: Float
             if between {

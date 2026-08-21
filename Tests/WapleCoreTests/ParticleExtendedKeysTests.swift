@@ -1147,6 +1147,46 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertEqual(def.children[3].controlPointStartIndex, 0, "문자열은 파티클 규약상 거부 → 0")
     }
 
+    /// ④-b `children[].flags` — `controlpointstartindex` 의 **게이트**다(bit0). 종전엔 미파스라
+    /// 그 정보가 파스 단계에서 통째로 소실됐다.
+    ///
+    /// 실측(이 저장소에서 직접 다시 떴다): 리더는 형제 키 **바로 앞** 자리다 —
+    /// 키 `lea "flags"` 0x1401d09a3 → `find` 0x1401d09aa → `asInt` 0x1401d09b2 →
+    /// 링크 `+0x64` 스토어 0x1401d09be (`controlpointstartindex` 는 `+0x68`, 0x1401d09db).
+    /// 주입 기본 **0** — `xor r8d,r8d` 0x1401c1732 → `H_INT` 0x1401c173f (키 `lea` 0x1401c1735).
+    /// **함정 16**: 인접 `lea` 로 귀속하면 `controlpointstartindex` 의 `xor` 0x1401c1720 을
+    /// `flags` 것으로 잘못 읽는다 — 두 쌍을 각각 떠서 갈랐다.
+    ///
+    /// 소비는 두 겹 게이트(0x14022cccb 스폰 / 0x14022a593 매 프레임)이고 **아직 미배선**이다.
+    /// 여기서는 값이 살아남는 것과 `feedsControlPoints` 판정만 잠근다.
+    /// 동봉/설치 코퍼스 도달: bit0 이 선 링크 4건(부재 86 · 0:9 · 1:4 · 2:2).
+    func testChildFlagsParsedAsControlPointFeedGate() {
+        let stub = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],"maxcount":2}
+        """), material: nil)
+        let def = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],"maxcount":4,
+         "children":[{"name":"a.json","flags":1,"controlpointstartindex":1},
+                     {"name":"b.json"},
+                     {"name":"c.json","flags":0},
+                     {"name":"d.json","flags":2},
+                     {"name":"e.json","flags":null},
+                     {"name":"f.json","flags":"1"}]}
+        """), material: nil) { _ in stub }
+        XCTAssertEqual(def.children.count, 6)
+        XCTAssertEqual(def.children[0].flags, 1, "동봉 thunderbolt_child_spawner 계열 — bit0")
+        XCTAssertTrue(def.children[0].feedsControlPoints, "bit0 = 부모 파티클이 자식 CP 를 먹인다")
+        XCTAssertEqual(def.children[1].flags, 0, "부재 주입 기본 0 (0x1401c1732)")
+        XCTAssertFalse(def.children[1].feedsControlPoints)
+        XCTAssertEqual(def.children[2].flags, 0)
+        XCTAssertEqual(def.children[3].flags, 2, "동봉 2건 — bit1 은 실물이 안 읽지만 값은 보존한다")
+        XCTAssertFalse(def.children[3].feedsControlPoints, "bit0 이 아니면 피드는 꺼진다")
+        XCTAssertEqual(def.children[4].flags, 0, "null → asInt(null)=0")
+        XCTAssertEqual(def.children[5].flags, 0, "문자열은 파티클 규약상 거부 → 0")
+        // 게이트가 두 값으로 갈리는 것이 이 키의 전부다 — startIndex 는 게이트와 독립으로 보존된다.
+        XCTAssertEqual(def.children[0].controlPointStartIndex, 1)
+    }
+
     /// ⑥ 충돌 오퍼레이터 6종 — 종전엔 이름 자체가 `unsupported operator dropped` 로 사라졌다.
     /// 공통 리더 0x1401c03f0: `collisionbehavior` → `[op+0x10]` 정수
     /// (slide 1 @0x1401c0485 · stop 2 @0x1401c04b4 · delete 3 @0x1401c04e3 · 그 외 0 @0x1401c04ec),
