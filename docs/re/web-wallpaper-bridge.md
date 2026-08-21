@@ -441,6 +441,336 @@ LED 출력만 조용히 생략하고 화면 렌더는 정상 동작한다(`corsa
 - **이 문자열들은 `webwallpaper64.exe` 에 없다** — 웹 파서와 별개 경로다. 이번 과제 범위(웹)
   밖이라 파서 VA 는 확정하지 않았다.
 
+## 9. `wallpaperPropertyListener` 계약 전표 (2026-08-21 재실측 · 클러스터 AN)
+
+§3.3 을 **원문 문자열 단위로** 다시 떴다. 아래 JS 는 조립 순서대로 이어 붙인 결과 그대로다.
+
+### 9.1 콜백 이름은 정확히 5개다 (전수)
+
+설치본 전체(`bin/*.exe` · `bin/*.dll` · `wallpaper64.exe` · `wallpaper32.exe` ·
+`binaries/webwallpaper64.exe`)를 `wallpaperPropertyListener\.([A-Za-z_][A-Za-z0-9_]*)` 로
+**ASCII·UTF-16LE 둘 다** 훑은 결과:
+
+| 콜백 | 보유 바이너리 |
+| --- | --- |
+| `applyUserProperties` | `webwallpaper64.exe` 만 |
+| `applyGeneralProperties` | 〃 |
+| `setPaused` | 〃 |
+| `userDirectoryFilesAddedOrChanged` | 〃 |
+| `userDirectoryFilesRemoved` | 〃 |
+
+**여섯 번째는 없다.** `edgewallpaper64.exe`·`wallpaperui.exe`·`scenescript64.dll` 등 어디에도 0건.
+
+### 9.2 조립 원문
+
+```
+applyUserProperties      (0x1400199e2–0x140019a3b, 함수 0x140018550–0x14001b4d7)
+  "if(" "window.wallpaperPropertyListener" "&&"
+  "window.wallpaperPropertyListener.applyUserProperties" "){"
+  "window.wallpaperPropertyListener.applyUserProperties" ( <유저 프로퍼티 JSON> ");}"
+
+applyGeneralProperties   (0x140020730–0x1400207c2)
+  "if(" "window.wallpaperPropertyListener" "&&"
+  "window.wallpaperPropertyListener.applyGeneralProperties" "){"
+  "window.wallpaperPropertyListener.applyGeneralProperties" "(" <JSON> ");}"
+
+setPaused(true)          (0x1400201f7–0x14002029f)
+  "if(" "window.wallpaperPropertyListener" "&&"
+  "window.wallpaperPropertyListener.setPaused" "&&!window.___wpxAnimLocked){"
+  "window.wallpaperPropertyListener.setPaused" "(" "true" ");}"
+  "window.___wpxPause();"                       ← **뒤**에 붙는다
+
+setPaused(false)
+  "window.___wpxUnpause();"                     ← **앞**에 붙는다
+  "if(" … "setPaused" "(" "false" ");}"
+
+userDirectoryFilesAddedOrChanged  (0x140009c9a–0x14000a0cf, 함수 0x140009af0–0x14000a718)
+  "if(" "window.wallpaperPropertyListener" "&&"
+  "window.wallpaperPropertyListener.userDirectoryFilesAddedOrChanged" "){"
+  "window.wallpaperPropertyListener.userDirectoryFilesAddedOrChanged"
+  "('" <속성명> "',[" "\"" f0 "\"" "," "\"" f1 "\"" … "]);}"
+
+userDirectoryFilesRemoved         (0x14000a0f7–0x14000a50f)  ─ 위와 동일 형태
+```
+
+확정된 세부 셋:
+
+1. **`&&!window.___wpxAnimLocked` 는 재진입 가드다.** pause 때는 `___wpxPause()` 가 **뒤**에
+   오므로 첫 진입에서 플래그가 아직 false → 통과. unpause 때는 `___wpxUnpause()` 가 **앞**에
+   와서 플래그를 내린 뒤 검사한다. 즉 "같은 방향으로 두 번 오면 두 번째는 삼킨다".
+   Waple 브리지의 `if (lastPaused === paused) { return; }`(`WallpaperBridgeJS.swift:279`)이
+   같은 일을 하고, 양방향 모두 덮는다는 점에서 더 넓다.
+2. **디렉터리 콜백의 인자 따옴표가 다르다** — 속성명은 `'…'`(작은따옴표), 파일 항목은
+   `"…"`(큰따옴표, 0x14011aaa8) 이고 구분자는 `,`(0x14011aaac).
+3. **한 통지당 파일 상한 200** — 0x14000a002 `cmp esi, 0xc8` / `ja 0x14000a087` 로 루프를
+   끊고 `"]);}"` 로 닫는다. Waple 에는 이 상한이 없다(대신 열거 엔트리 상한
+   `WebRenderer.maxEnumeratedEntries = 20_000` 이 그 위에 있다).
+4. **파일 경로 이스케이프는 확인 못 했다(미해결).** 경로는 `WideCharToMultiByte(CP_UTF8)`
+   (0x140009e0c/0x140009e86, `mov ecx, 0xfde9`)로만 좁혀서 `"` 사이에 그대로 끼워 넣는 것으로
+   보인다 — 윈도우 경로의 `\` 가 JS 문자열 이스케이프로 해석될 텐데, 그 앞의 헬퍼
+   (0x14007e950 → 0x14007e820)가 `generic_string()` 류로 `/` 로 바꿔 주는지 **확정하지 못했다**.
+   Waple 쪽은 `JSONEncoder` 로 인코딩하므로(`WebRenderer.jsArrayLiteral`) 이 문제가 없다.
+
+### 9.3 인자 모양 — 코퍼스가 말해 주는 것
+
+설치본 웹 벽지는 **2건**(`corsair_collection`·`corsair_o_tron`)뿐이다. 그 2건 전수:
+
+| 콜백 | 구현한 벽지 |
+| --- | --- |
+| `applyUserProperties` | 2 / 2 |
+| `applyGeneralProperties` | 2 / 2 |
+| `setPaused` | 2 / 2 |
+| `userDirectoryFilesAddedOrChanged` | 0 / 2 |
+| `userDirectoryFilesRemoved` | 0 / 2 |
+| `wallpaperPluginListener.onPluginLoaded` | 2 / 2 |
+| `wallpaperRegisterAudioListener` | 1 / 2 (`corsair_o_tron/js/main.js:413`) |
+
+**두 콜백의 값 모양이 다르다** — 이건 코퍼스가 직접 보여 준다:
+
+- `applyUserProperties(props)` → `props[key]` 는 **객체**이고 최소한 `.value` 를 갖는다.
+  `corsair_o_tron/js/main.js:341,354,393` 이 `properties.schemecolor.value` ·
+  `properties.logorings.value === true` · `properties.sensitivity.value` 로 읽는다.
+- `applyGeneralProperties(general)` → `general[key]` 는 **원시 스칼라**다.
+  `corsair_o_tron/js/main.js:330-333` 이 `properties.fps` 를 그대로 비교하고,
+  `corsair_collection/main.…js` 의 `applyGeneralPropertiesHandler` 는
+  `Object.keys(t).forEach(n => { r.value = t[n]; … })` 로 **자기가 `.value` 로 감싼다**.
+
+Waple 대조: `WallpaperProperties.weUserPropertiesJSON`(`:248-263`)이
+`{key: {"type": …, "value": …}}` 를 만들어 `applyUserProperties` 로 보내고(모양 일치),
+general 은 `WebRenderer.didFinish` 가 `{ fps: 30 }` 을 보낸 뒤 브리지가 `language` 를
+스칼라로 채운다(`WallpaperBridgeJS.swift:withDefaultLanguage`) — 둘 다 모양 일치.
+**차이**: WE 의 유저 프로퍼티 JSON 은 `project.json` 원본 객체(=`text`/`min`/`max`/`options`
+까지)일 가능성이 크지만 Waple 은 `{type, value}` 만 보낸다. 도달한 벽지 2건은 `.value` 만
+읽으므로 실증적 차이는 0 이다(**추정** — WE 쪽 JSON 직렬화 지점을 끝까지 못 따라갔다).
+
+---
+
+## 10. `wallpaperRegisterAudioListener` 계약
+
+### 10.1 WE 실측
+
+| 사실 | 근거 |
+| --- | --- |
+| 렌더러가 만드는 배열 길이 = **128** | `CefV8Value::CreateArray(0x80)` — 0x140010c0f `mov edx, 0x80` → 0x140010c18 |
+| 원소는 **double** (원본은 float32) | 루프 0x140010c20–0x140010c5e: `movss xmm1,[rbp+rcx*4+0x100]` → `cvtps2pd` → `CreateDouble`(0x14007fa60) → `SetValue(index)`(vtable `[rdi+0x110]`). 임포트 문자열에도 `cef_v8_value_create_array` · `cef_v8_value_create_double` 가 있어 두 래퍼 판독이 교차 확인된다 |
+| 루프 상한 128 | 0x140010c58 `cmp esi, 0x80` / `jb` |
+| 전송 페이로드 = **512바이트** | 0x140010be7 `lea rdx,[rbp+0x100]` / `mov r8d, 0x200` — 128×4 |
+| 배달 트리거 = 프로세스 메시지 `SendAudioSample` | 수신 비교 0x140010ad0, 송신 조립 0x140020a58 (문자열 0x14011b0a0) |
+| 리스너 등록 통지 | `AudioContextRegistered`(0x1400101ce) — 등록될 때만 오디오를 보낸다 |
+| 무음/유휴 시 0 채움 | `wallpaper64.exe` 0x1400d1f52 `mov r8d, 0x200`(memset 512B), 1000 ms 무패킷 워치독 0x1400d14ac `comiss xmm7, [0x140492944]`(= 1000.0) |
+| 창은 **겹치지 않는다** | `wallpaper64.exe` 0x1400d1b6b `cmp r13d, edi`(창이 정확히 찼을 때만 FFT) → 0x1400d1e21 `xor r13d, r13d`(카운터 리셋) |
+
+**좌우 분리는 배열 안에서 한다.** WE 자체가 채널 태그를 붙이지 않고, 벽지가 절반으로 가른다 —
+`corsair_o_tron/js/main.js:278-281`:
+
+```js
+var halfWayThough = Math.floor(audioData.length / 2);
+var left  = audioData.slice(0, halfWayThough);
+var right = audioData.slice(halfWayThough, audioData.length);
+```
+
+즉 규약은 **`[L0..L63, R0..R63]`** 이다(길이 128, 앞 절반 좌 · 뒤 절반 우).
+
+**호출 주기는 이 바이너리에서 확정되지 않는다(미해결).** `webwallpaper64.exe` 는 상위
+프로세스가 준 512바이트를 그대로 중계할 뿐 자체 타이머가 없다. 주기는 `wallpaper64.exe` 의
+캡처 루프가 정한다.
+
+### 10.2 Waple 대조
+
+`SystemAudioSpectrumProvider.analyzeWindow`(`:177`)가 `(bands(l) + bands(r)).prefix(128)` 로
+**64+64 = 128 float** 을 만들고, `WebRenderer.mount`(`:157-158`)가 그것을
+`window.__wapleAudio([...])` 로 넣는다. 브리지(`WallpaperBridgeJS.swift:148-158`)가
+`wallpaperRegisterAudioListener` 로 등록된 콜백에 그대로 넘기고 동일출처 자식 프레임에도 전파한다.
+
+- 길이·좌우 순서 **일치**(128 = 64L + 64R).
+- 무음 시 0 배열 공급 **일치**(`feedZeros`, 128개).
+- **비유한 값 방어는 Waple 쪽에만 있다** — `TextScriptEngine.jsNumber` 를 통과시켜 `inf`/`nan`
+  이 JS 리터럴을 깨뜨리지 않게 한다(`WebRenderer.swift:157`).
+- **주기는 다르다(구조적)**: WE 는 캡처 폴 간격, Waple 은 FFT 창(2048 샘플, 겹침 없음) 단위 —
+  48 kHz 에서 ≈23.4 회/초. 벽지 쪽 계약(길이·순서)에는 영향이 없지만 트윈 속도 체감은 달라질 수
+  있다. **동등성 주장 안 함.**
+
+---
+
+## 11. 파일 접근 API — WE 의 범위와 Waple 의 봉쇄
+
+### 11.1 WE 는 봉쇄하지 않는다 (확정)
+
+`wallpaperRequestRandomFileForProperty(name, cb)`(등록 0x140013f04, 핸들러 0x14001592f)는
+프로세스 메시지 `RequestRandomFile`(0x140015e48)을 보낸다. 받는 쪽
+(`OnProcessMessageReceived` 0x14000f090–0x140011fb2, 첫 비교가 0x14000f119)은:
+
+1. `args->GetString(0)`(0x14000f1fd, vtable `+0x78`)로 속성명을 꺼내고
+2. **FNV-1a**(0x14000f257 `0xcbf29ce484222325`, 0x14000f272 `0x100000001b3`)로 해시해
+   속성 해시맵(`[rsi+0x288]`)을 조회하고
+3. 그 속성 레코드의 **미리 만들어 둔 파일 벡터**(`[r13+0xa0]`..`[r13+0xa8]`, 원소 0x20바이트)를
+   커서(`[r13+0xd8]`)로 하나 꺼내 커서를 증가시킨다(0x14000f314–0x14000f383).
+4. 커서가 끝에 닿으면 0x14000f388 이하로 내려가 **다시 섞는다**(0x14000f3a9 이후의 RNG + `div`).
+
+⇒ **"랜덤"은 독립 균등추출이 아니라 셔플된 순열을 한 바퀴 도는 것**이다. 같은 파일이 한
+사이클 안에서 두 번 나오지 않는다. Waple 은 `regularFiles(in:).randomElement()`
+(`WebRenderer.swift:randomFilePath`)라 매번 독립 추출이다 — **의도적 차이가 아니라 미구현**.
+연속 중복이 눈에 띄는 벽지(슬라이드쇼)라면 여기가 체감 차이가 난다. **[미해결/넘길 것]**
+
+디렉터리 감시 진입점(0x1400098a0–0x140009ae9)은:
+
+```
+is_directory(path)                       0x140009942 → 실패 시 "Not a directory: %s\n"(0x140009955)
+FindFirstChangeNotificationW(path, TRUE, 0x13)   0x140009988 → 실패 시 로그(0x1400099a1)
+```
+
+`bWatchSubtree = 1`(재귀), 필터 `0x13` = FILE_NAME | DIR_NAME | LAST_WRITE.
+**프로젝트 폴더 봉쇄 검사가 한 줄도 없다.** 경로는 사용자가 WE UI 에서 고른 값이고 WE 는 그것을
+전적으로 신뢰한다.
+
+### 11.2 Waple 의 봉쇄 (WE 에 대응물 없음)
+
+| 자리 | 규칙 |
+| --- | --- |
+| 상대 경로 | `WallpaperPathSecurity.containedFileURL(rel, root: 프로젝트폴더)` |
+| 절대 경로 | `WebRenderer.resourceURL`(`:555`) — `userSelectedResourceOverrides[key]` 와 **정확히 같을 때만** 허용(사용자가 직접 고른 파일/프리셋 리소스) |
+| 열거 결과 | 엔트리마다 `isRegularFile(url, containedIn: root)` 로 realpath 재대조 |
+| 폭주 | 동시 워크 2개(`maxInFlightDirectoryWalks`), 열거 20,000 엔트리(`maxEnumeratedEntries`), 브리지 문자열 1,024바이트(`maxBridgeStringBytes`) |
+
+### 11.3 적대적 검증 결과 — 통과 / 뚫림 / 고침
+
+`Tests/WapleCoreTests/WallpaperPathSecurityTests.swift`(신규)가 아래를 고정한다.
+표는 **리눅스 실측**(2026-08-21, 단독 프로브 + 테스트).
+
+**막힌다(전부 `nil`)**
+
+| 부류 | 벡터 |
+| --- | --- |
+| 상위 탈출 | `..` · `../secret` · `a/../../secret` · `a/..` · `AAA/../BBB` |
+| 역슬래시 | `..\secret` · `a\..\..\secret` |
+| 퍼센트 1~4중 | `%2e%2e/secret` · `%2E%2E%2Fsecret` · `..%2fsecret` · `..%5csecret` · `%252e%252e/…` · `%25252e%25252e/…` · `%2525252e%2525252e/…` |
+| 절대·UNC | `/etc/passwd` · `\\server\share\x` · `//server/share/x` |
+| 스킴 | `file:///etc/passwd` · `FILE:///…`(대소문자 무관) · `http://evil/x` · `waple-asset://…` · `javascript:…` · `C:\Windows\win.ini` · `c:/Windows/win.ini` |
+| 널바이트 | `a\0b` · `a%00b` · `%00` |
+| 빈 결과 | `""` · `"   "` · `"///"` · `"\\\"` |
+
+**탈출은 아니지만 알아 둘 것**
+
+- 퍼센트 디코드는 **4중까지**다(`fullyPercentDecoded`). 5중(`%252525252e%252525252e/secret`)은
+  `%2e%2e/secret` 로 남는데, 그건 `..` 성분이 아니라 **`%2e%2e` 라는 이름의 디렉터리**로
+  취급되므로 여전히 루트 안이다. 테스트가 "결과에 `..` 성분이 없다" 는 불변식으로 고정한다.
+- `contains` 는 **대소문자 구분**이다. 대소문자 무시 파일시스템(APFS 기본)에서 루트 표기가
+  다르면 **정상 경로를 거부**한다 — fail-closed 라 보안 문제는 아니다.
+- `normalizedRelativePath` 가 퍼센트 디코드를 하므로, 스킴 핸들러 경로에서는
+  **이중 디코드**가 된다(WebKit 이 `URL.path` 에서 이미 한 번 디코드한다). 이름에 리터럴
+  `%2F` 가 들어간 실제 파일은 못 찾는다. 탈출 방향으로는 안전(디코드 결과에 `..` 가 있으면
+  거부)하지만 **기능적 결함**이다. 다만 **도달은 0** 이다 — 설치본
+  `projects/` · `assets/` 전수에서 이름에 `%` 가 든 파일이 한 건도 없다. 고치려면
+  "검증은 디코드본으로, 반환은 원본으로" 로 갈라야 하는데, 그 반환값이
+  `ScenePackage`·`SceneRendererResources`·`DeepScan` 의 조회 키로도 쓰여
+  **공유 프리미티브의 의미론 변경**이 된다. 도달 0 인 결함을 고치려고 그 위험을 지지
+  않았다. **[넘길 것]**
+
+**뚫려 있었고 이번에 고쳤다 — 심링크 + 없는 잎(leaf)**
+
+종전 `containedFileURL` 은 `FileManager.fileExists(atPath: candidate.path)` 가 참일 때만
+realpath 를 대조했다. `fileExists` 는 심링크를 따라가므로 심링크 자체와 그 아래 **존재하는**
+파일은 잡혔지만, **아직 없는 이름**은 검사가 통째로 생략됐다:
+
+```
+root/link -> /outside                      (디렉터리 심링크)
+containedFileURL("link")             -> nil                        ✔ 막힘
+containedFileURL("link/secret.txt")  -> nil                        ✔ 막힘
+containedFileURL("link/missing.txt") -> root/link/missing.txt      ✘ /outside/missing.txt 로 해석
+```
+
+지금 구현은 **존재하는 가장 깊은 조상**까지 올라가 그 realpath 를 루트의 realpath 와 대조한다.
+심링크 없는 정상 트리에서는 조상 탐색이 루트(또는 실재 중간 디렉터리)에서 멈추므로 판정이
+종전과 같다(무회귀). 새로 거부되는 것은 조상 중 하나가 루트 밖을 가리키는 심링크뿐이다.
+
+읽기 전용 소비자만 있는 지금은 실제 유출로 이어지지 않았지만(열면 ENOENT), **경계 함수가
+루트 밖을 가리키는 URL 을 돌려주면 안 된다** — 생성/쓰기 소비자가 하나만 붙어도 곧바로 탈출이다.
+
+남는 한계(정직하게): 검사와 `open()` 사이의 **TOCTOU** 는 그대로다. 여기서 막는 것은 패키지에
+심링크를 심어 두는 정적 공격이지 능동 레이스가 아니다.
+
+---
+
+## 12. 스킴 · 오리진 · CORS · CSP
+
+### 12.1 WE — 커스텀 스킴이 없고, 웹 보안이 꺼져 있다 (확정)
+
+- **스킴 핸들러 팩토리를 등록하지 않는다.** `webwallpaper64.exe` 의 CEF C API 임포트
+  52개 중 스킴/리소스 관련은 **하나도 없고**(`cef_register_scheme_handler_factory` 0건),
+  브라우저 생성은 `cef_browser_host_create_browser` 하나다(URL 관련은 `cef_uriencode`/`cef_uridecode` 뿐).
+- 로드 URL 은 URL 해석 함수 0x14000bd80–0x14000d978 이 만든다. `":/"`(0x14011ab88) 또는
+  `":\"`(0x14011ab90)가 **없으면**(=스킴도 드라이브 문자도 없으면) 0x14000c0c2 에서
+  UTF-16 리터럴 `"http://"`(0x14011ab98)를 앞에 붙인다. 있으면 그대로 쓴다 —
+  즉 로컬 벽지는 `C:\…\index.html` 을 CEF 가 `file:` 로 여는 것이고, 원격 벽지는
+  `http(s)://…` 다. (주의: 이 두 상수는 UTF-16LE 라 ASCII 스트링 덤프에서는 `':'` 로만 보인다.)
+- **`--disable-web-security` 를 무조건 붙인다.** `OnBeforeCommandLineProcessing`
+  0x14000de50–0x14000f089 안에서 0x14000e5bb 가 문자열을 만들고 0x14000e5da 가
+  `AppendSwitch`(vtable `+0x70`)를 부른다. 그 앞뒤로 조건 분기는 CefString 소멸자 가드
+  (`je 0x14000e603`)뿐이다 — **런타임 옵션이 아니라 항상**이다.
+- 같은 함수가 함께 붙이는 것들(전수, 등록 순):
+  `disable-extensions` · `disable-pdf-extension` · `disable-plugins-discovery` ·
+  `disable-default-apps` · `disable-sync` ·
+  `disable-features=,IsolateOrigins,site-per-process,Autofill,PrivacySandboxAdsAPIs,`
+  `HardwareMediaKeyHandling,WebContentsOcclusion,CalculateNativeWinOcclusion,`
+  `AttributionReportingCrossAppWeb,ConversionMeasurement,AttributionReporting` ·
+  `disable-gpu-shader-disk-cache` · `disable-site-isolation-trials` ·
+  **`disable-web-security`** · `wpx-no-auto-focus` · `force-device-scale-factor=1` ·
+  `high-dpi-support=1` · `autoplay-policy=no-user-gesture-required` ·
+  `disable-background-timer-throttling` · `disable-backgrounding-occluded-windows` ·
+  `disable-background-media-suspend` · `disable-renderer-backgrounding` ·
+  `disable-client-side-phishing-detection` · `safebrowsing-disable-auto-update` ·
+  `disable-test-root-certs` · `disable-bundled-ppapi-flash` · `disable-breakpad` ·
+  `disable-field-trial-config` · `no-experiments` · `wpxex-is-screensaver`
+- **CSP 도, CORS 헤더도 없다.** `Content-Security-Policy` · `Access-Control-Allow-Origin`
+  문자열이 바이너리에 0건이고, 애초에 HTTP 서버가 없다.
+
+⇒ **WE 웹 벽지는 동일출처 정책이 꺼진 `file:` 오리진에서 돈다.** 임의 원격 fetch/XHR/WebSocket
+도, 로컬 파일 읽기도 전부 열려 있다.
+
+### 12.2 Waple 대조
+
+| 축 | WE | Waple |
+| --- | --- | --- |
+| 스킴 | `file:`(로컬) / `http(s):`(원격) | 커스텀 `waple-asset://wallpaper/` (`WallpaperSchemeHandler.scheme`/`.host`) |
+| 오리진 | `file://`(널 오리진 취급) | `waple-asset://wallpaper` 단일 오리진 |
+| 동일출처 | **꺼짐**(`--disable-web-security`) | 켜짐(WKWebView 기본) |
+| CORS | 없음 | 모든 응답에 `Access-Control-Allow-Origin: waple-asset://wallpaper` |
+| CSP | 없음 | `WallpaperSchemeHandler.contentSecurityPolicy` — `connect-src`/`form-action` 에 원격 스킴을 넣지 않아 **fetch/XHR/WS/beacon/폼 반출을 차단**하고, img/media/font/style/script 는 `https:` 유지 |
+| Range | (해당 없음) | `Accept-Ranges: bytes`, 단일 레인지 206/416 지원(zcompat 패치본만 200 전체) |
+| 내비게이션 | 제한 없음 | 톱프레임 = `waple-asset://wallpaper` + `about:blank` 만, 서브프레임 = 거기에 `data:` 추가 |
+
+즉 **Waple 은 WE 보다 훨씬 좁다.** WE 호환을 위해 남긴 구멍은 하나뿐이고 이미 문서화돼 있다 —
+`img-src https:` 로 인한 수동 비콘 반출(`<img src="https://…?d=…">`). WE 를 흉내 내려면
+`--disable-web-security` 에 해당하는 것을 켜야 하는데 WKWebView 에는 그 스위치가 없고,
+있어도 켜지 않는 것이 맞다.
+
+**미해결**: `file:` 오리진에서 도는 실물 벽지가 `fetch('file:///…')` 로 패키지 밖을 읽는
+사례가 있는지는 코퍼스가 2건뿐이라 표본이 없다(두 건 다 상대 경로만 쓴다).
+
+---
+
+## 13. 일시정지 — `setPaused(true)` 가 실제로 무엇을 멈추나
+
+WE 의 정본은 `___STAHP` 원문(@0x119ca0, 5,936바이트)이다. 아래는 그 코드를 그대로 읽은 것이다.
+
+| 대상 | WE `___wpxPause()` | Waple `__wapleHardPauseController.setPaused(true)` |
+| --- | --- | --- |
+| `requestAnimationFrame` | 정지 중 **큐잉**(최대 `maxQueue = 1000`), 해제 시 `RAF(e.fn)` 재발행 | 가상 ID 로 기록 → `nativeCancelRAF` 후 해제 시 재무장(상한 없음) |
+| `setInterval` | **네이티브 타이머는 계속 돈다.** 래퍼가 `if (!state.isPaused) fn()` 로 **몸통만 건너뛴다**. 정지 중 **등록**된 것만 큐잉 | `nativeClearTimeout` 으로 **실제로 멈추고**, 남은 시간을 기록했다가 재무장 |
+| `setTimeout` | **정지 전에 걸린 타임아웃은 그대로 발화한다**(`TIM(fn, d)` 무래핑 통과). 정지 중 등록된 것만 큐잉 | 남은 시간(`deadline - now`)을 기록하고 정지, 해제 시 잔여 시간으로 재무장 |
+| CSS 애니메이션 | `html` 에 `wpxPausePseudoAnimationAll` + 계산 스타일이 기본값이 아닌 **모든 원소**에 `animationPlayState='paused'` 직접 지정 | 동일 계열 스타일 시트(`html.…, html.… *, ::before/::after`) 주입 |
+| Web Animations API | **없음** | `pauseAnimations()` — `document.getAnimations()` + `Element.animate`/`Animation.play` 후킹 |
+| `<video>`/`<audio>` | 재생 중인 것만 `pause()`, 해제 시 `play()` | 동일 + 정지 중 시작된 재생을 `play` 캡처 리스너로 추가 포착 |
+| `AudioContext` | **`window.AudioContext` 로 생성된 것만** `WeakRef` 추적 → `running` 이면 `suspend()` | `AudioContext` **와 `webkitAudioContext`** 둘 다 후킹, 페이지의 `resume()` 의사까지 기록 |
+| 자식 프레임 | 없음(주입이 프레임마다 돌 뿐 상태 전파 없음) | `postMessage` 채널(`waple-hard-pause`)로 직접 자식에 전파 |
+| 가시성 스푸핑 | WE 는 별도로 `document.hidden` 을 조작하지 않는다(`___STAHP` 에 없음) | `WallpaperBridgeJS` 가 `hidden`/`visibilityState` 를 정지 상태에 물리고 `visibilitychange` 를 발화 |
+
+**결론: `setPaused(true)` 에서 WE 는 rAF 는 멈추지만 타이머는 완전히는 멈추지 않는다.**
+`setInterval` 은 네이티브 타이머가 계속 돌면서 몸통만 비고, `setTimeout` 은 **정지 전에 예약된
+것이 그대로 발화한다**. Waple 의 하드포즈는 그 둘을 실제로 해제·재무장하므로 **엄격하게 더
+많이 멈춘다**. 정지 중 CPU 소모는 Waple 쪽이 낮고, 반대로 "정지 중에도 타이머가 한 번 돌 것"
+을 가정한 벽지가 있다면 그쪽에서는 Waple 이 다르게 보인다(코퍼스 2건에는 그런 것이 없다).
+
 ## 8. 미확정으로 남긴 것
 
 - **전표 디렉터리의 기준 경로.** 0x140006b20(`GetModuleFileNameW`) → 0x140006790(부모) →
