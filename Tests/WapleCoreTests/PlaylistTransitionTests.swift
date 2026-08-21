@@ -143,30 +143,100 @@ final class PlaylistTransitionTests: XCTestCase {
     }
 
     func testNonEmptyPoolDrawsOnlyFromPool() {
-        let pool: Set<Int> = [0, 13, 26]
+        let pool = [0, 13, 26]
         var seen = Set<Int>()
         for rand in 0...32767 {
             seen.insert(PlaylistRandomDraw.effectID(pool: pool, unit: PlaylistRandomDraw.unit(weRand: rand)))
         }
-        XCTAssertEqual(seen, pool)
+        XCTAssertEqual(seen, Set(pool))
     }
 
-    func testPoolIsOrderedAscendingLikeStdSet() {
-        // std::set 이라 인덱스 0 은 항상 최솟값이다. 순서가 계약이라는 것을 잠근다.
-        let pool: Set<Int> = [26, 3, 9]
-        XCTAssertEqual(PlaylistRandomDraw.effectID(pool: pool, unit: 0.0), 3)
-        XCTAssertEqual(PlaylistRandomDraw.effectID(pool: pool, unit: 0.5), 9)
-        XCTAssertEqual(PlaylistRandomDraw.effectID(pool: pool, unit: 1.0), 26)
+    /// **[2026-08-21] 풀은 `std::vector<int>` 다 — 저작 순서가 곧 인덱스다.**
+    ///
+    /// 종전 테스트(`testPoolIsOrderedAscendingLikeStdSet`)는 "std::set 이라 인덱스 0 은
+    /// 항상 최솟값" 을 잠갔는데 그 전제가 틀렸다. 추첨이 `mov ecx, [rax + rbx*4]`
+    /// (0x140069249)로 **연속 배열**을 인덱싱하고, 원소 수는 `(end-begin)/4`
+    /// (0x1400691fb–0x140069202)다. 트리라면 둘 다 성립할 수 없다.
+    ///
+    /// 그래서 같은 집합이라도 저작 순서가 다르면 뽑히는 값이 다르다 — 그 자리를 값으로 잠근다.
+    func testPoolIndexFollowsAuthoredOrderNotSortOrder() {
+        let authored = [26, 3, 9]
+        XCTAssertEqual(PlaylistRandomDraw.effectID(pool: authored, unit: 0.0), 26,
+                       "인덱스 0 은 저작 첫 원소다(오름차순이면 3 이었을 것)")
+        XCTAssertEqual(PlaylistRandomDraw.effectID(pool: authored, unit: 0.5), 3)
+        XCTAssertEqual(PlaylistRandomDraw.effectID(pool: authored, unit: 1.0), 9,
+                       "인덱스 n-1 은 저작 마지막 원소다(오름차순이면 26 이었을 것)")
+
+        let ascending = [3, 9, 26]
+        XCTAssertEqual(PlaylistRandomDraw.effectID(pool: ascending, unit: 0.0), 3,
+                       "같은 집합인데 순서만 바꾸면 결과가 바뀐다 — 그게 vector 라는 증거다")
+        XCTAssertNotEqual(PlaylistRandomDraw.effectID(pool: authored, unit: 0.0),
+                          PlaylistRandomDraw.effectID(pool: ascending, unit: 0.0))
+    }
+
+    /// 삽입 헬퍼 0x140077840 은 정렬도 중복 제거도 하지 않는 순수 `push_back` 이다.
+    /// 그래서 같은 값을 두 번 적으면 **확률이 두 배**가 된다 — `Set` 이었다면 사라졌을 사실이다.
+    func testPoolKeepsDuplicatesSoWeightsAreAuthorable() {
+        let pool = [0, 0, 26]
+        XCTAssertEqual(pool.count, 3, "중복이 살아 있어야 n = 3 이다")
+        var histogram: [Int: Int] = [:]
+        for rand in 0...32767 {
+            let id = PlaylistRandomDraw.effectID(pool: pool, unit: PlaylistRandomDraw.unit(weRand: rand))
+            histogram[id, default: 0] += 1
+        }
+        XCTAssertEqual(Set(histogram.keys), [0, 26])
+        let fade = histogram[0] ?? 0
+        let boil = histogram[26] ?? 0
+        XCTAssertGreaterThan(fade, boil, "Fade 가 두 칸을 차지하므로 더 자주 나온다")
+        // 32768 추첨 중 인덱스 0·1 이 Fade, 인덱스 2 가 Boilover — 정확히 2:1 에 가깝다.
+        XCTAssertEqual(Double(fade) / Double(fade + boil), 2.0 / 3.0, accuracy: 0.001)
     }
 
     /// 풀 경로는 0..26 클램프를 **거치지 않는다**(0x14006924c 의 jmp 가 클램프를 건너뛴다).
     /// 그래서 원시 id 는 범위를 벗어날 수 있고, Waple 쪽 `kind(pool:unit:)` 이 그걸 막는다.
     func testPoolBypassesEngineClampButKindDoesNot() {
-        let pool: Set<Int> = [99]
+        let pool = [99]
         XCTAssertEqual(PlaylistRandomDraw.effectID(pool: pool, unit: 0.5), 99,
                        "엔진과 같게 — 원시값을 그대로 낸다")
         XCTAssertEqual(PlaylistRandomDraw.kind(pool: pool, unit: 0.5), .boilover,
                        "Waple 소비 지점에서는 클램프한다")
+    }
+
+    /// 파스는 **문자열 원소만** 받는다(0x14007591c `cmp al, 4`). 숫자로 적힌 원소는
+    /// 0 이 되는 게 아니라 **아예 안 들어간다** — 태그 검사가 `push_back` 앞에 있기 때문이다.
+    func testParsePoolTakesStringElementsOnlyInOrder() {
+        let parsed = PlaylistRandomDraw.parsePool([
+            .string("18"), .other, .string("0"), .string("18"), .string("nonsense"),
+        ])
+        XCTAssertEqual(parsed, [18, 0, 18, 0],
+                       "순서 보존 · 중복 보존 · 비문자열 탈락 · atoi 실패는 0(0x1400759de 와 같은 관용)")
+        XCTAssertEqual(PlaylistRandomDraw.parsePool([]), [])
+        XCTAssertEqual(PlaylistRandomDraw.parsePool([.other, .other]), [],
+                       "문자열이 하나도 없으면 빈 풀 = 전체 허용")
+    }
+
+    /// **Waple 은 `Double` 로 계산하고 WE 는 `float32` 로 계산한다.** 그 자리가 갈리는지를
+    /// 추측하지 않고 **전 정의역을 훑어** 확인한다 — `rand()` 의 정의역은 0…32767 뿐이다.
+    ///
+    ///     0x1400691d2  cvtdq2ps  xmm1, xmm1        ; (float)rand()
+    ///     0x1400691d5  divss     xmm1, 32767.0f
+    ///     0x1400691dd  mulss     xmm1, 27.0f
+    ///     0x1400691e9  cvttss2si eax, xmm1
+    ///
+    /// 32768 × (풀 크기 1…30) 전건에서 두 경로가 **같은 인덱스**를 낸다. 이 테스트가 깨지면
+    /// `index(unit:count:)` 를 `Float` 로 내려야 한다는 뜻이다.
+    func testDoublePathMatchesEngineFloat32PathOverWholeRandDomain() {
+        for count in 1...30 {
+            for rand in 0...32767 {
+                let f32unit = Float(rand) / Float(PlaylistRandomDraw.weRandMax)
+                let engine = min(max(Int(Float(f32unit * Float(count)).rounded(.towardZero)), 0), count - 1)
+                let waple = PlaylistRandomDraw.index(unit: PlaylistRandomDraw.unit(weRand: rand), count: count)
+                if engine != waple {
+                    XCTFail("count=\(count) rand=\(rand): 엔진 \(engine) != Waple \(waple)")
+                    return
+                }
+            }
+        }
     }
 
     // MARK: - 타이밍 (0x14005a351–0x14005a3d1)
@@ -439,7 +509,7 @@ final class PlaylistTransitionTests: XCTestCase {
         XCTAssertEqual(settings.transitionConfigValue, -1, "0x14007579f mov dword [r8], 0xffffffff")
         XCTAssertEqual(settings.transition, .noTransition)
         XCTAssertEqual(settings.transitionTimeMillis, 500, "0x140075a2f mov dword [r14+4], 0x1f4")
-        XCTAssertTrue(settings.transitionPool.isEmpty, "빈 풀 = 전체 허용")
+        XCTAssertEqual(settings.transitionPool, [], "빈 풀 = 전체 허용")
         XCTAssertEqual(PlaylistSettings.uiDefaultTransitionTimeMillis, 1500, "UI 는 다른 값을 쓴다")
         XCTAssertEqual(PlaylistSettings.minimumDelayMinutes, 0.01, "0x140492620")
     }
@@ -573,6 +643,81 @@ final class PlaylistTransitionTests: XCTestCase {
                        "그리고 종료 경로는 아무것도 안 한다")
     }
 
+    // MARK: - 틱 델타 상한 (0x140076c56)
+
+    /// **한 틱이 더할 수 있는 초에 상한이 있다** — `minss xmm6, 5.0f`.
+    /// 절전에서 깨어난 직후 `elapsed` 가 한꺼번에 튀지 않는다. `Date()` 차분을 그대로 더하는
+    /// 재구현은 여기서 갈리고, 그 증상은 "복귀하자마자 전환이 연달아 일어난다" 다.
+    func testTickDeltaIsClampedToFiveSeconds() {
+        XCTAssertEqual(PlaylistSettings.maxTickDeltaSeconds, 5.0, "0x140492858 f32=5.0")
+        XCTAssertEqual(PlaylistSettings.clampedTickDelta(0.016), 0.016, accuracy: 1e-6,
+                       "보통 프레임은 그대로 지난다")
+        XCTAssertEqual(PlaylistSettings.clampedTickDelta(5.0), 5.0)
+        XCTAssertEqual(PlaylistSettings.clampedTickDelta(4999.0), 5.0,
+                       "절전 83분 뒤에도 한 틱은 5초다")
+        // 아래 둘은 WE 주장이 아니라 재구현 방어다(엔진에는 대응 명령이 없다).
+        XCTAssertEqual(PlaylistSettings.clampedTickDelta(-3.0), 0.0, "시계 역행 방어")
+        XCTAssertEqual(PlaylistSettings.clampedTickDelta(.nan), 0.0, "NaN 방어")
+
+        // 상한이 실제로 전진 시점을 늦춘다 — 1분 간격에 5초 틱이면 12틱이 필요하다.
+        var settings = PlaylistSettings()
+        settings.delayMinutes = 1
+        var elapsed: Float = 0
+        var ticks = 0
+        while !settings.shouldTimerAdvance(elapsedSeconds: elapsed, isPaused: false,
+                                           currentIsVideo: false) {
+            elapsed += PlaylistSettings.clampedTickDelta(3600)   // 한 시간이 지났다고 우겨도
+            ticks += 1
+            if ticks > 100 { break }
+        }
+        XCTAssertEqual(ticks, 12, "5초 × 12 = 60초 — 상한이 없으면 1틱이었을 것이다")
+    }
+
+    // MARK: - 동영상 전진 관문의 여집합 (0x140076d7c–0x140076d8e)
+
+    /// 타이머가 동영상 전진을 보류하는 조건이 **둘**이다 — `videosequence` 와 **인트로 래치**.
+    /// 종전 모델에는 두 번째가 없었다.
+    func testVideoTimerAdvanceIsAlsoBlockedByIntroLatch() {
+        var settings = PlaylistSettings()
+        settings.delayMinutes = 1
+        settings.videoSequence = false          // 첫 관문은 열어 둔다
+        let past: Float = 120                    // delay 를 이미 넘겼다
+
+        XCTAssertTrue(settings.shouldTimerAdvance(elapsedSeconds: past, isPaused: false,
+                                                  currentIsVideo: true, introShowing: false),
+                      "videosequence 도 인트로도 없으면 동영상이어도 타이머가 넘긴다")
+        XCTAssertFalse(settings.shouldTimerAdvance(elapsedSeconds: past, isPaused: false,
+                                                   currentIsVideo: true, introShowing: true),
+                       "0x140076d87 cmp byte [rbx+0xe2], 0 — 인트로 벽지면 보류한다")
+        XCTAssertTrue(settings.shouldTimerAdvance(elapsedSeconds: past, isPaused: false,
+                                                  currentIsVideo: false, introShowing: true),
+                      "동영상이 아니면 두 관문 다 안 본다(0x140076d7f jne 가 건너뛴다)")
+    }
+
+    /// 두 관문이 §6.6 의 전진 관문과 **정확한 여집합**인지 — 네 조합을 전부 센다.
+    /// 한쪽이 보류하면 반드시 다른 쪽이 받는다는 것이 이 서브시스템의 설계다.
+    func testTimerDeferralAndVideoEndAdvanceAreComplementary() {
+        let past: Float = 120
+        for videoSequence in [false, true] {
+            for introShowing in [false, true] {
+                var settings = PlaylistSettings()
+                settings.delayMinutes = 1
+                settings.mode = .timer
+                settings.beginFirst = true
+                settings.playIntro = introShowing   // 인트로가 걸려 있으려면 playintro 가 켜져야 한다
+                settings.videoSequence = videoSequence
+
+                let timerDefers = !settings.shouldTimerAdvance(
+                    elapsedSeconds: past, isPaused: false,
+                    currentIsVideo: true, introShowing: introShowing)
+                let videoEndTakes = settings.shouldAdvanceOnVideoEnd(introShowing: introShowing)
+                XCTAssertEqual(timerDefers, videoEndTakes,
+                               "videoSequence=\(videoSequence) introShowing=\(introShowing): "
+                               + "타이머 보류와 동영상종료 전진은 같은 조건이어야 한다")
+            }
+        }
+    }
+
     // MARK: - sorted 커서
 
     func testSortedCursorCycles() {
@@ -600,8 +745,28 @@ final class PlaylistTransitionTests: XCTestCase {
         var cursor = PlaylistSortedCursor()
         XCTAssertNil(cursor.next(count: 0, playIntro: false))
         XCTAssertEqual(cursor.next(count: 1, playIntro: false), 0)
+    }
+
+    /// **[2026-08-21 정정] 이 자리는 갈리지 않는다.**
+    ///
+    /// 종전 단언은 "항목 1개 + playintro 는 Waple 이 더한 가드로 0 을 낸다(WE 는 1 을 낸다)"
+    /// 였다. WE 에도 같은 가드가 있다 — `playintro` 분기와 `mov [r14+0x78], 1` 사이에
+    /// 항목 수 비교가 끼어 있다:
+    ///
+    ///     0x140068298  sub r8, [r14+0x38] / sar r8, 3 / imul r8, r15
+    ///     0x1400682a4  cmp r8, 1
+    ///     0x1400682a8  jbe 0x1400682b7      ; 항목 ≤ 1 이면 인덱스 0 그대로
+    ///
+    /// 그러니 0 이 **엔진과 같은 답**이다. 값으로 잠가 둔다.
+    func testSortedCursorSingleItemIgnoresPlayIntro() {
+        var cursor = PlaylistSortedCursor()
         XCTAssertEqual(cursor.next(count: 1, playIntro: true), 0,
-                       "항목 1개 + playintro 는 Waple 이 더한 가드로 0 을 낸다(WE 는 1 을 낸다)")
+                       "0x1400682a4 cmp r8, 1 / jbe — 항목 1개면 인트로 건너뛰기를 하지 않는다")
+        XCTAssertEqual(cursor.next(count: 1, playIntro: true), 0, "두 번째도 같다")
+        // 항목이 2개가 되는 순간부터 건너뛰기가 산다.
+        var two = PlaylistSortedCursor()
+        XCTAssertEqual(two.next(count: 2, playIntro: true), 1,
+                       "항목 2개면 0x1400682aa 가 실행돼 인덱스 1 이 된다")
     }
 
     // MARK: - 시각 기반 선택
