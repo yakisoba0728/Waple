@@ -1,10 +1,16 @@
 import XCTest
 @testable import WapleCore
 
-/// X-⑩: WE 소비단 오디오 스테이지. 원본 `0x140111085` 실측 규약을 고정한다.
+/// X-⑩: WE 소비단 오디오 스테이지. 원본 `0x140110630`(primary)의 오디오 구간
+/// `0x140111662–0x1401131bf` 실측 규약을 고정한다.
 ///
 /// 이 단계를 통째로 빼먹어서 우리 스펙트럼은 레벨이 3.5~5배 모자랐다. 프로듀서의 절대 게인
 /// (162.56)을 소수점까지 유도해 놓고 정작 그 뒤를 안 붙인 것이다.
+///
+/// 그리고 그 뒤를 붙일 때 **분모를 틀렸다**. 아래 `MARK: 그룹 정규화` 의 두 테스트는 원래
+/// "그룹 순간 피크로 한 프레임에 나눈다" 를 고정하고 있었는데, 원본의 분모는 프레임을 넘어
+/// 사는 **피크 엔벨로프**다(`[r15+0x1b0]`, `0x1401121b1` 이 그걸 읽어 역수를 만든다). 그래서
+/// 두 테스트를 "엔벨로프가 수렴한 뒤" 로 고쳤고, 엔벨로프 자체를 고정하는 절을 새로 붙였다.
 final class AudioSpectrumProcessorTests: XCTestCase {
 
     private func raw(_ f: (Int) -> Float) -> [Float] { (0..<128).map(f) }
@@ -46,35 +52,122 @@ final class AudioSpectrumProcessorTests: XCTestCase {
 
     /// 그룹은 128 float 을 **연속 8개씩** 16개로 나눈다 — 그룹 0..7 이 Left, 8..15 가 Right 다.
     /// 정규화가 그룹 단위라, 한 그룹 안에서만 상대 크기가 보존되고 그룹 간 절대 레벨은 눌린다.
-    func testGroupPeakNormalizationIsPerEightBands() {
+    ///
+    /// 종전 이 테스트는 dt=1.0 **한 프레임**으로 두 그룹이 다 1.0 이 되기를 요구했다. 그건
+    /// "분모 = 그룹 순간 피크" 일 때 이야기다. 원본의 분모는 엔벨로프라 그룹 1 은 첫 프레임에
+    /// 0.5/0.75 = 0.667 이 나온다(엔벨로프가 리시드 1.0 에서 dt·0.5 만큼만 내려오므로).
+    /// "자기 그룹 피크로 정규화" 는 **엔벨로프가 수렴한 뒤에** 성립하는 성질이다.
+    func testGroupPeakNormalizationIsPerEightBandsOnceEnvelopeSettles() {
         var p = AudioSpectrumProcessor()
-        // 그룹 0 은 최대 1.0, 그룹 1 은 최대 0.5 — 정규화 후 둘 다 자기 그룹 안에서 1.0 이 돼야 한다.
+        // 그룹 0 은 최대 1.0, 그룹 1 은 최대 0.5 — 수렴 후 둘 다 자기 그룹 안에서 1.0 이 돼야 한다.
         // (0.5 는 0.333·globalPeak(=0.333) 보다 커서 비율 하한에 걸리지 않는다.)
         var input = [Float](repeating: 0, count: 128)
         input[0] = 1.0
         input[8] = 0.5
-        // dt 를 크게 줘서 1-pole·슬루가 한 프레임에 수렴하게 한다(alpha=1, slew=1).
-        let out = p.process(raw: input, dt: 1.0)
+
+        // 첫 프레임은 아직 아니다 — 분모가 엔벨로프라는 증거 그 자체.
+        let first = p.process(raw: input, dt: 1.0)
+        XCTAssertEqual(first.spec64[8], 0.5 / 0.75, accuracy: 1e-5,
+                       "리시드 1.0 → dt=1 에 0.5·1.0 만큼 하강해 0.75, 0.5/0.75 = 0.667")
+
+        // 하강 0.5/s 이므로 1.0 → 0.5 에 1초. 60fps 로 200프레임(≈3.3초)이면 넉넉하다.
+        var out = first
+        for _ in 0..<200 { out = p.process(raw: input, dt: 1.0 / 60) }
         XCTAssertEqual(out.spec64[0], 1.0, accuracy: 1e-5, "그룹 0 의 피크는 자기 그룹으로 정규화")
         XCTAssertEqual(out.spec64[8], 1.0, accuracy: 1e-5, "그룹 1 도 자기 그룹 피크로 정규화")
+        XCTAssertEqual(p.peakEnvelope[1], 0.5, accuracy: 1e-5, "엔벨로프가 그룹 1 의 피크에 앉았다")
     }
 
     /// 비율 하한 `0.333·globalPeak` — 조용한 그룹이 통째로 증폭돼 노이즈가 만개하는 것을 막는다.
+    /// 하한은 **엔벨로프의 목표**에 걸린다(`0x140111c99` 의 `maxps` 가 슬루 계산 앞이다).
     func testQuietGroupIsFlooredByGlobalPeakRatio() {
         var p = AudioSpectrumProcessor()
         var input = [Float](repeating: 0, count: 128)
         input[0] = 1.0        // 그룹 0
         input[8] = 0.01       // 그룹 1 — 0.333·1.0 보다 훨씬 작다
-        let out = p.process(raw: input, dt: 1.0)
+        var out = AudioSpectrumProcessor.reduce([Float](repeating: 0, count: 128))
+        for _ in 0..<200 { out = p.process(raw: input, dt: 1.0 / 60) }
         XCTAssertEqual(out.spec64[0], 1.0, accuracy: 1e-5)
-        // 하한이 0.333 이므로 0.01/0.333 = 0.03 — 1.0 으로 부풀지 않는다.
+        // 하한이 0.333 이므로 엔벨로프도 0.333 에 앉고 0.01/0.333 = 0.03 — 1.0 으로 부풀지 않는다.
+        XCTAssertEqual(p.peakEnvelope[1], AudioSpectrumProcessor.groupPeakFloorRatio, accuracy: 1e-6)
         XCTAssertEqual(out.spec64[8], 0.01 / AudioSpectrumProcessor.groupPeakFloorRatio, accuracy: 1e-4)
         XCTAssertLessThan(out.spec64[8], 0.05, "하한이 없었다면 1.0 이 됐을 것")
     }
 
-    /// 무음은 **출력만** 0 이고 상태는 유지된다 — 원본이 그렇다(`0x140112646` 이 출력 버퍼만
+    // MARK: 피크 엔벨로프 — 분모의 정체
+
+    /// 분모는 그룹 **순간 피크가 아니라** 프레임을 넘어 사는 엔벨로프다(`0x1401121b1` 이
+    /// `[r15+0x1b0]` 을 읽어 `rcpps` 로 역수를 만든다). 순간 피크였다면 아래 그룹 1 은 한
+    /// 프레임에 1.0 이 됐을 것이다.
+    func testNormalizationDividesByEnvelopeNotInstantPeak() {
+        var p = AudioSpectrumProcessor()
+        var input = [Float](repeating: 0, count: 128)
+        input[0] = 1.0
+        input[8] = 0.5
+        let out = p.process(raw: input, dt: 1.0)     // alpha=1, slew=1 — 시간 스무딩은 다 빠진다
+        XCTAssertEqual(out.spec64[8], 2.0 / 3.0, accuracy: 1e-5)
+        XCTAssertNotEqual(out.spec64[8], 1.0, accuracy: 1e-3, "순간 피크로 나눴다면 1.0 이었다")
+    }
+
+    /// 비대칭 슬루 — 상승 1.0/s(`0x140111ef1` 의 `xmm11`=1.0), 하강 0.5/s(`0x140111ef7` 의 -0.5).
+    /// 같은 dt 에서 올라가는 폭이 내려가는 폭의 정확히 2배여야 한다.
+    func testPeakEnvelopeRisesTwiceAsFastAsItFalls() {
+        var p = AudioSpectrumProcessor()
+        let loud = [Float](repeating: 1, count: 128)
+        for _ in 0..<200 { _ = p.process(raw: loud, dt: 1.0 / 60) }
+        XCTAssertEqual(p.peakEnvelope[1], 1.0, accuracy: 1e-6, "먼저 1.0 에 앉혀 둔다")
+
+        // 그룹 0 만 소리를 남겨 globalPeak=1.0 을 유지한다. 그룹 1 의 목표는 비율 하한 0.333.
+        var group0Only = [Float](repeating: 0, count: 128)
+        for i in 0..<8 { group0Only[i] = 1.0 }
+
+        _ = p.process(raw: group0Only, dt: 0.1)
+        XCTAssertEqual(p.peakEnvelope[1], 0.95, accuracy: 1e-6, "하강 = 0.1초 × 0.5/s = 0.05")
+        _ = p.process(raw: group0Only, dt: 0.1)
+        XCTAssertEqual(p.peakEnvelope[1], 0.90, accuracy: 1e-6, "두 번째도 같은 폭")
+
+        _ = p.process(raw: loud, dt: 0.1)
+        XCTAssertEqual(p.peakEnvelope[1], 1.0, accuracy: 1e-6, "상승 = 0.1초 × 1.0/s = 0.10 — 2배")
+    }
+
+    /// 무음에도 엔벨로프는 계속 내려간다 — 원본은 엔벨로프 루프(`0x140111ed0`)를 무음 분기
+    /// (`0x14011242f`)보다 **앞에서** 돈다. 출력만 0 이고 분모는 살아 움직인다.
+    func testEnvelopeKeepsDecayingWhileSilent() {
+        var p = AudioSpectrumProcessor()
+        let loud = [Float](repeating: 1, count: 128)
+        for _ in 0..<200 { _ = p.process(raw: loud, dt: 1.0 / 60) }
+
+        let silent = [Float](repeating: 0, count: 128)
+        let out = p.process(raw: silent, dt: 0.1)
+        XCTAssertTrue(out.spec64.allSatisfy { $0 == 0 }, "출력은 0")
+        XCTAssertEqual(p.peakEnvelope[0], 0.95, accuracy: 1e-6, "그래도 0.1초 × 0.5/s 만큼 내려갔다")
+    }
+
+    /// 리시드 — 엔벨로프가 죽은 상태에서 소리를 만나면 16개 전부가 **1.0** 으로 앉는다
+    /// (`0x140111cd2`부터 16번의 `mov dword [rax+n], 0x3f800000`). 이게 없으면
+    /// `max(env, 0.001)` 때문에 첫 프레임이 1000배로 터진다.
+    func testDeadEnvelopeReseedsToOneWhenAudioReturns() {
+        var p = AudioSpectrumProcessor()
+        // dt=0 이면 슬루 스텝이 0 이라 리시드 값만 남는다 — 리시드 단독 관찰.
+        _ = p.process(raw: [Float](repeating: 0.25, count: 128), dt: 0)
+        XCTAssertEqual(p.peakEnvelope, [Float](repeating: 1.0, count: 16),
+                       "첫 소리 프레임: 순간 피크(0.25)가 아니라 1.0 으로 앉는다")
+
+        // 무음을 길게 흘리면 엔벨로프가 0 까지 죽는다(하강 → 스냅).
+        let silent = [Float](repeating: 0, count: 128)
+        for _ in 0..<30 { _ = p.process(raw: silent, dt: 1.0) }
+        XCTAssertEqual(p.peakEnvelope[0], 0, accuracy: 1e-9)
+
+        // 그리고 다시 소리가 들어오면 또 1.0 에서 시작한다.
+        _ = p.process(raw: [Float](repeating: 0.5, count: 128), dt: 0.01)
+        XCTAssertEqual(p.peakEnvelope[0], 0.995, accuracy: 1e-5,
+                       "1.0 리시드 후 dt=0.01 만큼 하강 → 1.0 − 0.01·0.5")
+    }
+
+    /// 무음은 **출력만** 0 이고 1-pole 상태는 유지된다 — 원본이 그렇다(`0x140112646` 이 출력 버퍼만
     /// memset 하고 `state`/`prev` 는 별도 버퍼라 안 만진다). 소리가 돌아오면 처음부터가 아니라
     /// 끊긴 자리에서 이어 올라간다. 상태까지 지우면 무음이 낄 때마다 어택이 재시작돼 굼떠진다.
+    /// (엔벨로프만은 예외로 계속 내려간다 — `testEnvelopeKeepsDecayingWhileSilent`.)
     func testSilenceZeroesOutputButKeepsState() {
         var p = AudioSpectrumProcessor()
         let loud = raw { _ in 1.0 }

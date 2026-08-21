@@ -6,26 +6,59 @@ import Foundation
 /// 이 단계가 있다는 것을 몰라서 우리 스펙트럼은 레벨이 3.5~5배 모자랐다. 프로듀서의 절대 게인
 /// (162.56)까지 소수점으로 맞춰 놓고, **정작 그 뒤에 붙는 정규화·스무딩을 통째로 빼먹었다**.
 ///
-/// 원본 `0x140111085`(씬 오디오 업데이트, 매 프레임) 실측. 순서가 전부다:
+/// 원본 `0x140110630`(씬 업데이트, primary)의 오디오 구간 `0x140111662–0x1401131bf` 실측.
+/// 순서가 전부다:
 ///
 /// ```
-///   ① 8밴드 × 16그룹 피크          (128 float 을 연속 8개씩)
-///   ② peak[g] = max(peak[g], 0.333·globalPeak, 0.001)     ← 하한 둘
-///   ③ state[i] += (raw[i]·(1/peak[g]) − state[i]) · min(dt·20, 1)     1-pole
-///   ④ out[i]   = prev[i] + clamp(state[i] − prev[i], −min(dt·40,1), +min(dt·40,1))   슬루 제한
-///   ⑤ mono[i]  = 0.5·(L[i] + R[i])
-///   ⑥ spec32[j] = max(spec64[2j], spec64[2j+1])
-///   ⑦ spec16[j] = max(spec32[2j], spec32[2j+1])
+///   ① 8밴드 × 16그룹 순간 피크 (128 float 을 연속 8개씩)      0x1401116f0–0x140111bb2
+///   ② peak[g] = max(peak[g], 0.333·globalPeak)               0x140111c7d, 0x140111c99
+///   ③ env[0] ≤ 1e-4 이고 소리가 있으면 env[0..15] = 1.0       0x140111cd2–0x140111da3  (리시드)
+///   ④ d = peak[g] − env[g]                                    0x140111dc7 이후
+///      |d| ≤ 1e-4 → env[g] = peak[g]                          0x140111f18  (스냅)
+///      d > 0      → env[g] += min(dt,1)⌃|d| · **1.0**         0x140111ef1  (상승)
+///      d < 0      → env[g] −= min(dt,1)⌃|d| · **0.5**         0x140111ef7  (하강)
+///   ⑤ div[g] = max(env[g], 0.001), 역수                       0x1401121b8, 0x1401122d2 (rcpps)
+///   ⑥ state[i] += (raw[i]·(1/div[g]) − state[i]) · min(dt·20,1)      1-pole  0x14011246f
+///   ⑦ out[i]   = prev[i] + clamp(state[i] − prev[i], ±min(dt·40,1))  슬루 제한 0x140112492
+///   ⑧ mono[i]  = 0.5·(L[i] + R[i])                            0x1401126b6
+///   ⑨ spec32[j] = max(spec64[2j], spec64[2j+1])               0x1401128e0
+///   ⑩ spec16[j] = max(spec32[2j], spec32[2j+1])               0x140112b6f
 /// ```
+/// (`⌃` 는 "목표를 넘지 않게 자른다" — `minss xmm0, xmm2` 가 |d| 로 스텝을 제한한다.)
 ///
-/// ④ 의 결과가 64밴드 버퍼에 **in-place** 로 다시 쓰이므로, 16·32·64 **세 유니폼 전부가**
-/// 정규화·스무딩을 거친 값이다. "씬 audio-responsive 프로퍼티 전용" 이 아니다.
+/// **⑦ 의 결과가 64밴드 버퍼에 in-place 로 다시 쓰이므로**(`0x1401124ba`), 16·32·64 세 유니폼
+/// 전부가 정규화·스무딩을 거친 값이다. "씬 audio-responsive 프로퍼티 전용" 이 아니다.
 ///
 /// **축약은 평균이 아니라 MAX 다**(`maxss` — `0x1401128e0`, `0x140112b6f`). 종전 구현은 4개
 /// 평균이었는데, 순음 저역에서 최대 4배 차이가 난다(4밴드 중 하나만 뜨면 평균은 1/4).
 ///
-/// 세 버퍼는 서로 다른 힙이고 크기도 다르다(memset 192/96/48 float — `0x140115403`).
-/// 각 버퍼는 [Left | Right | Mono] 3분면이며 mono 분면은 셰이더 유니폼으로 노출되지 않는다.
+/// 세 버퍼는 서로 다른 힙이고 크기도 다르다(memset 0x300/0x180/0xc0 B = 192/96/48 float —
+/// `0x14011540c`, `0x140115420`, `0x140115434`). 각 버퍼는 [Left | Right | Mono] 3분면이며
+/// mono 분면은 셰이더 유니폼으로 노출되지 않는다.
+///
+/// ### 정규화 분모는 순간 피크가 아니라 **시간 엔벨로프**다
+///
+/// 종전 구현은 `1/max(그룹 순간 피크, …)` 로 나눴다. 원본은 그렇지 않다. 그룹 피크 16개는
+/// `[r15+0x1b0]` 의 **전용 힙(64 B = 16 float, `0x14010dc4f` 의 `alloc(0x40,16)`)** 에 프레임을
+/// 넘어 살아 있고, 매 프레임 순간 피크를 향해 **비대칭 선형 슬루**로 기어간다 — 올라갈 땐 초당
+/// 1.0, 내려갈 땐 초당 0.5(`0x140111ef1` / `0x140111ef7`). ⑥ 의 분모는 그 엔벨로프다
+/// (`0x1401121b1` 이 `[r15+0x1b0]` 을 다시 읽어 `rcpps` 로 역수를 만든다).
+///
+/// 결과가 크게 다르다. 어떤 그룹이 방금 조용해져도 분모는 즉시 따라 내려가지 않아 그 그룹은
+/// 한동안 **작게** 나온다(종전 구현은 바로 1.0 으로 되살아났다). 반대로 갑자기 커지면 분모가
+/// 초당 1.0 으로만 쫓아가 순간적으로 1.0 을 넘겨 나온다. 즉 이 단계는 그룹별 **AGC** 이지
+/// 프레임 단위 정규화가 아니다.
+///
+/// ③ 의 리시드가 그 AGC 의 초기값을 준다. 엔벨로프가 0 근처로 죽은 상태(무음이 길었거나 첫
+/// 프레임)에서 소리가 들어오면 16개 전부를 **1.0** 으로 앉힌다 — 없으면 `max(env,0.001)` 때문에
+/// 첫 프레임이 1000배로 터진다.
+///
+/// 남은 차이 하나: 원본은 `rcpps`(≈12비트 근사 역수, 상대오차 ≤ 3.7e-4)를 쓰고 우리는 정확한
+/// 나눗셈을 쓴다. 눈에 보이는 차이가 아니라 맞추지 않았다.
+///
+/// dt 에 대해서도 한 가지: 원본의 dt 는 `[rbp+0x378]` = `rate · fadeIn · frameDelta`
+/// (`0x1401114c3–0x14011150f`)다. `rate` 는 씬 프로퍼티(`0x1401152d9`, 기본 1.0), `fadeIn` 은
+/// 0↔1 램프다. 둘 다 기본값이면 그냥 프레임 dt 이고, 우리는 그 기본값 경로만 쓴다.
 public struct AudioSpectrumProcessor {
 
     /// 밴드 수(채널당). 프로듀서가 내는 폭.
@@ -35,18 +68,31 @@ public struct AudioSpectrumProcessor {
     public static let groupSize = 8
     /// 그룹 피크의 하한 계수. `peak[g] = max(peak[g], 0.333·globalPeak)` (`0x140111c7d`).
     public static let groupPeakFloorRatio: Float = 0.333
-    /// 절대 하한 — 이게 없으면 무음 근처에서 1/peak 가 발산한다(`0x1401122b7`).
-    public static let absolutePeakFloor: Float = 0.001
-    /// 이 아래면 정규화·스무딩을 통째로 건너뛰고 0 을 낸다(`0x140111c8c` 의 `comiss … 1e-4`).
+    /// 이 아래면 스무딩 단계를 통째로 건너뛰고 출력만 0 으로 지운다
+    /// (`0x140111c8c` 의 `comiss … 1e-4` → `0x14011242f` 의 `je` → `0x140112646` 의 memset).
     public static let silenceThreshold: Float = 1e-4
+    /// 엔벨로프 분모의 절대 하한 — 이게 없으면 무음 근처에서 1/env 가 발산한다(`0x1401121b8`).
+    public static let peakEnvelopeFloor: Float = 0.001
+    /// 목표와 이만큼 이내로 붙으면 슬루하지 않고 그대로 앉힌다(`0x140111ee0` 의 `comiss |d|, 1e-4`).
+    public static let peakEnvelopeSnapEpsilon: Float = 1e-4
+    /// 엔벨로프 **상승** 속도(초당). `0x140111ef1` 이 계수로 `xmm11`(=1.0)을 고른다.
+    public static let peakEnvelopeRiseRate: Float = 1.0
+    /// 엔벨로프 **하강** 속도(초당). `0x140111ef7` 의 `-0.5` — 상승의 절반이다.
+    public static let peakEnvelopeFallRate: Float = 0.5
+    /// 죽은 엔벨로프가 소리를 만났을 때 앉는 값(`0x140111cd2` 의 `mov dword [rax], 0x3f800000`).
+    public static let peakEnvelopeReseed: Float = 1.0
     /// 1-pole 계수 `min(dt·20, 1)` (`0x140112363`).
     public static let smoothingRate: Float = 20
     /// 슬루 제한 `±min(dt·40, 1)` (`0x1401123f0`, `0x14011240f`).
     public static let slewRate: Float = 40
 
-    /// 1-pole 상태. 프레임을 넘어 유지된다.
+    /// 그룹별 피크 엔벨로프 16개(`[r15+0x1b0]`). 프레임을 넘어 유지되고, **무음 프레임에도**
+    /// 계속 감쇠한다(원본은 `0x140111ed0` 의 엔벨로프 루프를 무음 분기보다 **앞에서** 돈다).
+    /// 테스트가 분모를 직접 고정할 수 있게 모듈 안에서만 읽히게 열어 둔다.
+    internal private(set) var peakEnvelope = [Float](repeating: 0, count: 16)
+    /// 1-pole 상태(`[r15+0x1a8]`). 프레임을 넘어 유지된다.
     private var state = [Float](repeating: 0, count: 128)
-    /// 직전 프레임의 출력 — 슬루 제한의 기준점.
+    /// 직전 프레임의 출력(`[r15+0x1a0]`) — 슬루 제한의 기준점.
     private var previous = [Float](repeating: 0, count: 128)
 
     public init() {}
@@ -63,12 +109,13 @@ public struct AudioSpectrumProcessor {
     }
 
     /// - raw: 128 float(64L + 64R). 길이가 모자라면 0 으로 채우고, 넘치면 앞 128 만 쓴다.
-    /// - dt: 직전 프레임과의 간격(초). 0 이면 스무딩이 멈추므로(계수 0) 상태가 그대로 유지된다.
+    /// - dt: 직전 프레임과의 간격(초). 0 이면 엔벨로프도 스무딩도 멈춘다(계수 0).
     public mutating func process(raw: [Float], dt: Float) -> Output {
         var input = [Float](repeating: 0, count: 128)
         for i in 0..<Swift.min(128, raw.count) where raw[i].isFinite { input[i] = raw[i] }
+        let dt = Swift.max(dt, 0)
 
-        // ① 그룹 피크 + 전체 피크
+        // ① 그룹 순간 피크 + 전체 피크. 전체 피크는 0 아래로 안 내려간다(`0x140111bc4`).
         let groups = 128 / Self.groupSize
         var peak = [Float](repeating: 0, count: groups)
         var globalPeak: Float = 0
@@ -79,25 +126,47 @@ public struct AudioSpectrumProcessor {
             globalPeak = Swift.max(globalPeak, p)
         }
 
-        // 무음: 정규화가 의미 없고 1/peak 가 발산한다. **출력만 0 으로 지우고 상태는 그대로 둔다** —
-        // 원본이 그렇다(`0x140112646` 이 출력 버퍼 0x200 B 만 memset 하고 스무딩 단계를 건너뛴다.
-        // `state`/`prev` 는 별도 버퍼 `[r15+0x1A8]`/`[r15+0x1A0]` 이고 그 경로에서 안 만진다).
+        // ② 비율 하한. **절대 하한 0.001 은 여기 없다** — 그건 ⑤ 의 엔벨로프에만 걸린다.
+        let ratioFloor = globalPeak * Self.groupPeakFloorRatio
+        for g in 0..<groups { peak[g] = Swift.max(peak[g], ratioFloor) }
+
+        let audible = globalPeak >= Self.silenceThreshold
+
+        // ③ 리시드. 조건은 `env[0]` **하나만** 본다(`0x140111ca1` 의 `comiss xmm6, [rax]`) —
+        // 16개가 늘 함께 움직이므로 대표 하나로 충분하다는 판단이다.
+        if audible && peakEnvelope[0] <= Self.silenceThreshold {
+            for g in 0..<groups { peakEnvelope[g] = Self.peakEnvelopeReseed }
+        }
+
+        // ④ 비대칭 선형 슬루. 무음 분기보다 **앞**이라 소리가 없어도 계속 내려간다 —
+        // 그래서 무음이 충분히 길면 엔벨로프가 0 에 닿고, 다음 소리에 ③ 이 다시 문다.
+        let envStep = Swift.min(dt, 1)
+        for g in 0..<groups {
+            let d = peak[g] - peakEnvelope[g]
+            if abs(d) <= Self.peakEnvelopeSnapEpsilon {
+                peakEnvelope[g] = peak[g]
+            } else if d > 0 {
+                peakEnvelope[g] += Swift.min(envStep, d) * Self.peakEnvelopeRiseRate
+            } else {
+                peakEnvelope[g] -= Swift.min(envStep, -d) * Self.peakEnvelopeFallRate
+            }
+        }
+
+        // 무음: **출력만 0 으로 지우고 state/prev 는 그대로 둔다** — 원본이 그렇다
+        // (`0x140112646` 이 출력 버퍼 0x200 B 만 memset 하고 `0x1401125e2` 의 prev 복사도 건너뛴다.
+        // `state`/`prev` 는 별도 버퍼 `[r15+0x1a8]`/`[r15+0x1a0]` 이고 그 경로에서 안 만진다).
         // 그래서 소리가 돌아오면 처음부터가 아니라 **끊긴 자리에서 이어서** 올라간다.
-        // 여기서 상태까지 0 으로 되돌리면 무음이 끼일 때마다 어택이 다시 시작돼 원본보다 굼뜨다.
-        guard globalPeak >= Self.silenceThreshold else {
+        guard audible else {
             return Self.reduce([Float](repeating: 0, count: 128))
         }
 
-        // ② 하한 둘
-        let ratioFloor = globalPeak * Self.groupPeakFloorRatio
-        for g in 0..<groups { peak[g] = Swift.max(Swift.max(peak[g], ratioFloor), Self.absolutePeakFloor) }
-
-        // ③④ 1-pole + 슬루 제한
-        let alpha = Swift.min(Swift.max(dt, 0) * Self.smoothingRate, 1)
-        let slew = Swift.min(Swift.max(dt, 0) * Self.slewRate, 1)
+        // ⑤⑥⑦ 엔벨로프 역수 + 1-pole + 슬루 제한
+        let alpha = Swift.min(dt * Self.smoothingRate, 1)
+        let slew = Swift.min(dt * Self.slewRate, 1)
         var out = [Float](repeating: 0, count: 128)
         for i in 0..<128 {
-            let normalized = input[i] / peak[i / Self.groupSize]
+            let divisor = Swift.max(peakEnvelope[i / Self.groupSize], Self.peakEnvelopeFloor)
+            let normalized = input[i] / divisor
             state[i] += (normalized - state[i]) * alpha
             let delta = Swift.min(Swift.max(state[i] - previous[i], -slew), slew)
             out[i] = previous[i] + delta
@@ -106,7 +175,7 @@ public struct AudioSpectrumProcessor {
         return Self.reduce(out)
     }
 
-    /// ⑤⑥⑦ — mono 분면 채우기 + MAX 축약 두 단.
+    /// ⑧⑨⑩ — mono 분면 채우기 + MAX 축약 두 단.
     /// 순수 함수라 테스트가 스무딩 없이 축약만 검증할 수 있다.
     static func reduce(_ stereo128: [Float]) -> Output {
         precondition(stereo128.count == 128)
