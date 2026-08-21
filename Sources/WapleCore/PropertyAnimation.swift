@@ -69,10 +69,39 @@ public struct PropertyAnimation: Equatable {
     /// 정합적(마운트 직후 다수 상태와 일치). 트리거 이후 값은 여전히 미반영(별건 — caveats 참조).
     public let startPaused: Bool
 
-    // `options.random`(flags bit2, 파스 VA 0x1401a9777 "random" → 0x1401a8ca5 `or dword [rbx+0xc], 4`)
-    // 은 에디터의 "Random start frame"(`ui_editor_animation_modal_random_start_frame`)이다.
-    // 인스턴스마다 시작 시각을 난수로 밀어야 해서 **평가기가 아니라 런타임 상태**의 몫이고,
-    // 동봉·설치본 애니 7블록에 **도달 0** 이라 파스도 소비도 하지 않는다.
+    // **`options.random` 은 이 빌드에서 죽은 비트다 — 반증 기록(2026-08-21).**
+    // 종전 주석은 "런타임 상태의 몫이라 미구현" 이라고만 했는데, 실제로는 **WE 자신이 읽지 않는다**.
+    //   ① 파서는 정상이다 — `find "random"`(0x1401a9777) → `cmp byte ptr [rsi+8], 5`(0x1401a97f9)
+    //      → `asBool`(0x140086300) → 5번째 인자로 넘겨(0x1401a9850) `or dword ptr [rbx+0xc], 4`
+    //      (0x1401a8ca5) 로 flags bit2 를 세운다. 여기까지는 형제 5키와 완전히 같은 모양이다.
+    //   ② **소비가 없다.** flags 워드는 옵션 구조체 `+0xc`(= 애니 객체 `+0x44`) 한 자리뿐이라
+    //      읽는 쪽은 `[X+0xc]` 이나 `[X+0x44]` 로드를 거칠 수밖에 없다. `.text` 전체
+    //      (4,344,320바이트 · 재동기 선형 스윕 1,146,785 명령)를 `.pdata` 병합 함수 단위로 훑어
+    //      그런 로드에서 시작해 **함수 끝까지** 레지스터 복사를 따라가며 bit2 가 선 즉시값으로
+    //      `test`/`and`/`bt`/`cmp` 하는 자리를 전수 수집하면 바이너리 전체 54건이고 **애니 코드에는
+    //      0건**이다. 애니 영역 유일 히트 0x1401aa147 `and dword ptr [rbx+0xc], 0x7fffffff` 는
+    //      미러 방향비트를 지우는 마스크라 bit2 를 **보존**한다(읽지 않는다).
+    //      애니 상태 flags 를 실제로 읽는 자리는 이게 전부이고 전부 다른 비트다 —
+    //      0x1401a9f69 로드 → 0x1401a9f73(bit29|30) · 0x1401a9f88(bit1 single) ·
+    //      0x1401a9fb7 `shr r12d, 0x1f`(bit31 역주행) · 0x1401aa055(bit0 mirror);
+    //      0x1401aa147·0x1401aa165(bit31 토글) · 0x1401aa181(bit30 single 종료);
+    //      0x1401a5762(bit4 wraploop); 스크립트 IAnimation 제어 0x1401707f7·0x14017080e(play) ·
+    //      0x140170827(pause) · 0x140170837·0x140170845(stop) · 0x140170867(isPlaying)은
+    //      bit29/30 만 만진다.
+    //      **고정 창 스윕으로는 이 판정을 못 한다** — 로드 0x1401a9f69 에서 bit0 검사 0x1401aa055
+    //      까지가 65 명령이라 20명령 창이면 대조군(mirror)조차 못 찾는다. 종전 주석이 그 창으로
+    //      "대조군을 전부 찾아낸다" 고 적었던 것은 사실이 아니다(2026-08-21 재검증에서 정정).
+    //      함수 전체 추적으로 바꾸면 대조군 bit0·bit1·bit4·bit29/30 이 전부 잡히고 bit2 만 0 이다.
+    //   ③ 에디터도 안 쓴다 — 로케일에 `ui_editor_animation_modal_random_start_frame`
+    //      ("Random start frame")이 남아 있지만 `ui/` 전체에서 그 키를 참조하는 곳이 **0건**이다
+    //      (형제 `..._start_paused` 1건 · `..._loop_wrap` 3건 — `grep -ro` 전수 실측).
+    //      애니 옵션 화이트리스트에도 없다: 퍼펫 `case"length":case"fps":case"wraploop":
+    //      case"smoothing":case"stiffness":case"mode":case"events"`(scripts.js char@235954),
+    //      카메라경로는 같은 형태에서 `wraploop`/`mode`/`events` 만(char@281098).
+    //   ④ 자산 도달 0 — 동봉·설치본 애니 7블록 전수에 키 자체가 없다.
+    // 그래서 파스도 소비도 하지 않는다. 세 층(런타임·에디터·자산) 모두에서 흔적만 남은 키라
+    // 의미를 확정할 근거가 없고, 추측 구현은 무회귀를 깬다. WE 가 이 비트를 되살리면
+    // 그때 시작 프레임 난수화를 붙일 자리는 평가기가 아니라 마운트 시점의 시간 오프셋이다.
 
     public init(tracks: [[PropertyKeyframe]], fps: Float, length: Float, mode: String, relative: Bool,
                 events: [AnimationMarker] = [], startPaused: Bool = false, wrapLoop: Bool = false) {
@@ -179,25 +208,85 @@ public struct PropertyAnimation: Equatable {
         return bez(p0y, p1y, p2y, p3y, (lo + hi) / 2)
     }
 
-    /// `options.wraploop` 후처리(VA 0x1401a98b0–0x1401a9b90, 호출부 VA 0x1401a5762–0x1401a5793).
+    /// `options.wraploop` 후처리(VA 0x1401a98b0–0x1401a9bb3, 호출부 VA 0x1401a5762–0x1401a5793).
+    /// 엔진 시그니처는 `void wrapLoop(int lengthFrames /*ecx*/, vector<Keyframe>* track /*rdx*/)` 다 —
+    /// 호출부가 `mov ecx, [r13+0x48]`(0x1401a5780) · `mov rdx, rbx`(0x1401a5784) 로 넘기고
+    /// 트랙 벡터를 stride **0x30** 으로 순회한다(Track = `vector<Keyframe>`+0x00 · 프레임 캐시
+    /// `vector<float>`+0x18). 키프레임 stride 는 **0x1c**(0x1401a98d9 의 `imul rax, 0x6db6…db7`
+    /// = ÷7 후 0x1401a98fb `imul rax, rax, 0x1c`).
     /// 에디터 라벨이 그대로 규약이다 — "Sets the last frame of the animation equal to the first
     /// frame, resulting in a smooth loop that ends exactly where it starts"
     /// (`locale/ui_en-us.json: ui_editor_animation_modal_loop_wrap_help_body`).
     ///
-    /// 1. `frame > length` 인 꼬리 키프레임을 버린다(키프레임 2개 미만이 되면 중단).
+    /// 1. `frame > length` 인 꼬리 키프레임을 버린다(1개가 남으면 거기서 멈춘다 — 0x1401a9935 `jbe`).
+    ///    그 뒤 개수가 다시 2 미만이면 **아무것도 쓰지 않고** 반환한다(0x1401a996e `jbe 0x1401a9b90`).
+    ///    버린 것을 되돌리지는 않는다 — vector 의 end 포인터를 이미 줄여 놨다(0x1401a993e).
     /// 2. 남은 마지막이 `frame == length` 면 그 자리를 덮고, 아니면 `frame = length` 키프레임을 붙인다.
+    ///    붙이는 쪽은 `{frame=length, 나머지 전부 0}` 으로 초기화되므로 front 는 disabled, step 은 0 이다.
     /// 3. 그 끝점의 **value = 첫 키프레임의 value**, **back 핸들 = −(첫 키프레임의 front 핸들)**
     ///    (VA 0x1401a9b58 `xorps` 부호반전, 0x1401a9b5f 저장, 0x1401a9b8b 에서 value 저장).
     ///    첫 키프레임의 front 가 disabled 면 끝점의 back 도 disabled 다(VA 0x1401a9b66 `and eax,~1`).
     ///
-    /// 도달: 동봉·설치본 애니 블록 7개 중 **2개**가 `wraploop: true`
-    /// (`assets/scenes/particleelementpreviews/maintaindistancebetweencontrolpoints/scene.json`,
-    /// length 60 인데 마지막 키프레임이 frame 30 — 미적용이면 타임라인 **후반 절반이 정지**한다.
-    /// 실측 최대 차이 291.0 = 값 범위 전체).
+    /// **샘플러의 "마지막→처음 랩어라운드" 가 아니다.** 흔한 오독이라 못박아 둔다: WE 는 평가기에
+    /// 순환 구간을 넣지 않는다. 위 세 단계는 전부 **파스 시점에 키프레임 배열 자체를 다시 쓰는**
+    /// 후처리이고(호출부가 트랙 벡터를 stride 0x30 으로 순회한다 — 0x1401a5769–0x1401a5793),
+    /// 평가기(0x1401a9bc0)와 시간 진행(0x1401a9f60)은 bit4 를 아예 읽지 않는다. 그래서
+    /// - 끝점의 들어오는 핸들은 첫 키프레임의 `back` 이 아니라 **`front` 를 부호반전한 것**이다
+    ///   (0x1401a9b48 `test r10b, 2` = 첫 키프레임 flags bit1 → 0x1401a9b58 `xorps` 부호마스크
+    ///   0x140492ff0 `{0x80000000}×4` → 0x1401a9b5f `movsd [rcx-0x10]` 로 backX·backY 동시 저장).
+    ///   첫 키프레임의 `back` 을 그대로 쓰면(순환 보간의 자연스러운 오독) 다른 곡선이 나온다.
+    ///   **접선까지 같아지는 것은 조건부다** — 이 파일의 제어점 규약은 `P1 = P0 + (0.5·dx·front.x,
+    ///   front.y)` / `P2 = P3 + (0.5·dx·back.x, back.y)` 라 x 성분에 구간폭 `dx` 가 곱해진다.
+    ///   그래서 끝점의 나가는 기울기가 frame 0 의 들어오는 기울기와 **정확히** 같아지는 것은
+    ///   마지막 구간폭이 첫 구간폭과 같을 때뿐이다. 동봉 두 블록은 키프레임이 0/30 이고 끝점이
+    ///   60 이라 `dx` 가 둘 다 30 — 정확히 맞는다. 일반 저작에서는 "핸들 부호반전" 이지
+    ///   "기울기 일치" 가 아니다(에디터 라벨의 *smooth* 는 전자를 가리킨다).
+    /// - `frame > length` 인 키프레임은 **파괴된다** — 순환 보간 해석에는 없는 부작용이다.
+    /// - `frame == length` 가 이미 있으면 붙이는 게 아니라 **덮는다**(front 핸들과 step 비트는 보존).
     ///
-    /// - Note: WE 는 2번의 "덮기" 경로에서 flags bit0 만 지우고 backX/backY 는 남긴다. Waple 의
-    ///   평가기는 `backEnabled` 를 게이트로 쓰므로 그 잔존값이 실효하지 않는다 — 동봉 자산 도달 0
-    ///   (wraploop 두 블록 모두 마지막 키프레임이 length 와 달라 "붙이기" 경로).
+    /// **`mode` 와 직교한다.** 호출부는 flags bit4 하나만 보고 mode 비트(bit0 mirror/bit1 single)를
+    /// 보지 않는다 — `parse` 의 wraploop 주석 참조. `"loop"` 강제는 에디터 저작 측 제약이다.
+    ///
+    /// 도달(2026-08-21 재측정 — 동봉 트리와 설치본 `assets/` 는 같은 집합, `projects/` 는 애니 0건):
+    /// 애니 블록 **7개 / 파일 6개**, `wraploop` 키는 7/7 에 있고 값은 `true` 2 · `null` 5.
+    /// `true` 2블록은 둘 다 같은 파일
+    /// `scenes/particleelementpreviews/maintaindistancebetweencontrolpoints/scene.json` 의
+    /// `/objects/0/origin` 과 `/objects/1/instanceoverride/controlpoint1` 이고, 저장소 규약상
+    /// **non-preview** 다(경로 세그먼트 중 `preview` 로 **시작**하는 것이 없다 —
+    /// `particleelementpreviews` 는 `particle` 로 시작한다). `null` 5블록은 preview 4 +
+    /// non-preview 1(`presets/magic/preset.json`)이다.
+    ///
+    /// **코퍼스 도달과 Waple 파스 도달이 다르다.** `SceneDocument.parseObject` 는 오브젝트 애니를
+    /// `["origin","scale","alpha","angles","color"]` 다섯 키에서만 캡처하고 `instanceoverride`
+    /// 아래 바인딩은 정적 value 만 언랩한다(SceneDocument.swift:1592 / 2497 — 이 레인 밖,
+    /// docs/re/property-animation.md §6.1). 그래서 `true` 2블록 중 **지금 실제로 이 후처리를
+    /// 타는 것은 `/objects/0/origin` 하나**다. 나머지 하나와 `controlpointangle1` 4블록은
+    /// `PropertyAnimation.parse` 에 도달조차 하지 않는다. 도달 0 인 `null` 블록 중
+    /// `effects/blendgradient/preview/.../constantshadervalues/multiply` 는
+    /// `constantAnimations`(SceneDocument.swift:2839) 경로로 도달한다.
+    ///
+    /// 실측 어긋남: 두 블록 다 `length: 60` 인데 키프레임이 `frame 0`/`frame 30` 뿐이라
+    /// 미적용이면 타임라인 **후반 절반이 정지**한다. `/objects/1/…/controlpoint1` 의 c1 은
+    /// `436.42032 → 145.37645` 라 끝점 복귀 폭이 **291.04387 = 값 범위 전체**,
+    /// `/objects/0/origin` 의 c1 은 `0 → -126.1462` 라 126.1462 다.
+    /// **지금 Waple 이 실제로 보는 것은 후자(126.1462)뿐**이다 — 전자는 위 문단대로 파스에 닿지 않는다.
+    /// (전자를 인용하는 테스트가 있는 이유는 그 트랙 모양이 랩 후처리를 가장 크게 드러내기 때문이고,
+    ///  그 테스트는 `PropertyAnimation.parse` 를 직접 부르므로 SceneDocument 의 드롭과 무관하다.)
+    ///
+    /// - Note: WE 는 2번의 "덮기" 경로에서 flags bit0 만 지우고(0x1401a9b66 `and eax, 0xfffffffe`)
+    ///   backX/backY 는 남긴다. Waple 의 평가기는 `backEnabled` 를 게이트로 쓰므로 그 잔존값이
+    ///   실효하지 않는다 — 동봉 자산 도달 0(wraploop 두 블록 모두 마지막 키프레임이 length 와
+    ///   달라 "붙이기" 경로). 그래도 잔존값 자체는 보존한다(엔진과 필드 단위로 일치시켜 두면
+    ///   나중에 라운드트립·비교가 생겨도 갈리지 않는다).
+    /// - Note: **[미해결] `length` 가 정수가 아닐 때 끝점 프레임과 루프 주기가 갈린다.**
+    ///   WE 는 `length` 를 `asInt`(0x1401a9815)로 **한 번** i32 화해 끝점 프레임에도 루프 주기에도
+    ///   같은 정수를 쓴다. Waple 은 끝점만 `lengthFrames = length.rounded(.towardZero)` 로 절단하고
+    ///   `PropertyAnimation.length` 는 원래 Float 를 유지한다 — `length: 45.9` 면 끝점은 frame 45
+    ///   인데 loop 랩은 45.9 에서 일어나 45–45.9 구간이 끝점 값에 고정된다. 동봉·설치본 7블록의
+    ///   `length` 는 전수 정수(60×6 · 30×1)라 **도달 0**. 고치지 않은 이유는 `length` 자체를
+    ///   절단하면 wraploop 과 무관한 모든 애니의 loop/mirror 주기가 바뀌어 이 레인의 무회귀
+    ///   예산을 넘기 때문이다. 키프레임 `frame` 도 같은 성격의 미해결이 하나 더 있다 — WE 는
+    ///   `asInt`(0x1401a8fb5) 로 i32 화하는데 Waple 은 Float 로 둔다(코퍼스 frame 전수 정수).
     static func wrapLooped(_ track: [PropertyKeyframe], lengthFrames: Float) -> [PropertyKeyframe] {
         guard track.count > 1, let first = track.first else { return track }
         var out = track
@@ -291,21 +380,77 @@ public struct PropertyAnimation: Equatable {
         // 공용 유한-검사 파서(Double/Int 만 — 키프레임 규약). NaN/Inf/Float 범위 밖 → nil → 바인딩 드롭.
         // (종전 로컬 구현은 isFinite 미검사였으나 JSON 표준상 NaN/Inf 리터럴 불가라 실입력 도달 희박.)
         func f(_ v: Any?) -> Float? { strictFloat(v) }
+        // **애니 스키마의 bool 여섯 자리는 전부 `cmp byte ptr [..+8], 5` 로 jsoncpp 태그를 먼저
+        // 보지만, 검사가 실패했을 때 무엇이 되는지는 두 부류로 갈린다.** 종전 주석은 여섯을 한
+        // 덩어리로 묶고 "태그 5 아니면 전부 false" 라고 적었는데 **틀렸다**(2026-08-21 재검증에서
+        // 디스어셈으로 반증). 실제 분기 타깃은 이렇다:
+        //
+        //   | 자리 | 태그 검사 | 실패 분기 | 부재/비-bool 결과 |
+        //   |---|---|---|---|
+        //   | `options.wraploop`    | 0x1401a985d | `jne 0x1401a9887`(or 건너뜀) | **false** |
+        //   | `options.startpaused` | 0x1401a97df | `jne 0x1401a97f6` → `xor r13d,r13d` | **false** |
+        //   | `options.random`      | 0x1401a97f9 | `jne 0x1401a9810` → `xor edi,edi`  | **false** |
+        //   | 키프레임 `step`        | 0x1401a8f77 | `jne 0x1401a8faf` → `xor sil,sil`  | **false** |
+        //   | `back.enabled`        | 0x1401a8ebb | `jne 0x1401a8eed` → **`mov bpl,1`**  | **true** |
+        //   | `front.enabled`       | 0x1401a8f1c | `jne 0x1401a8f4e` → **`mov r14b,1`** | **true** |
+        //
+        // 즉 핸들 두 자리만 **폴라리티가 반대**다. `back`/`front` 가 객체(태그 7)이기만 하면
+        // (바깥 검사 0x1401a8e94 `cmp byte ptr [r15+8], 7` / 0x1401a8ef5 `cmp byte ptr [r14+8], 7`)
+        // `enabled` 는 **기본 켜짐**이고, 끄는 방법은 **진짜 bool `false` 하나뿐**이다.
+        // (r15 = `back`(find 0x1401a8e2d) · r14 = `front`(find 0x1401a8e54) — 이름 대응도 종전
+        //  주석이 뒤집어 적었다.) 핸들 자체가 없거나 객체가 아니면 disabled 다.
+        //
+        // **태그 게이트 자체는 장식이 아니라 하중을 받는다** — `asBool`(0x140086300)은 관대해서
+        // 태그 1/2 를 `cmp qword ptr [rcx], 0; setne al`(0x14008634b)로, 태그 3(real)을 double
+        // 비교(0x14008632e)로 받아 **`1` 을 true 로 돌려준다**. 태그 0(null)만
+        // `xor al,al`(0x14008635a). 앞단 태그 검사가 없었다면 WE 도 `"wraploop": 1` 을 true 로
+        // 읽었을 것이다. 그래서 `false` 부류 네 자리에는 이 게이트가 필요하고,
+        // `true` 부류 두 자리에는 **게이트를 그대로 옮기면 오히려 원본과 갈린다**(아래 handleEnabled).
+        //
+        // 종전 Waple 은 맨 `as? Bool` 이었고 이게 원본과 **반대로 갈리는 입력**이 있다.
+        // Foundation 의 `JSONSerialization` 은 숫자와 불리언을 똑같이 `NSNumber` 로 주고 Swift 의
+        // 동적 캐스트가 둘을 섞는다 — 리눅스 실측: `{"wraploop":1}` → `as? Bool` == **true**,
+        // `{"wraploop":1.0}` → **true**(`{"wraploop":"true"}`·`null` 은 nil 이라 우연히 맞았다).
+        // 즉 `"wraploop": 1` 한 줄이 WE 에서는 무시되는데 Waple 에서는 트랙을 통째로 다시 쓰게 했다.
+        // `EffectManifest.isJSONBool` 이 이미 `NSNumber.objCType == "c"` 로 이 구분을 하고 있어
+        // 그대로 재사용한다.
+        //
+        // **동봉·설치본 도달 0** — 애니 7블록의 bool 값을 전수 타입 census 하면
+        // `wraploop` null×5 / bool×2, `front`/`back` 의 `enabled` 는 **양면 합쳐 bool×76**
+        // (키프레임 38 × 2면, 전부 진짜 bool), `step`·`random`·`startpaused` 는 아예 없다.
+        // 숫자·문자열로 적힌 bool 도, `enabled` 를 생략한 핸들도 한 건도 없으므로 이 게이트도
+        // 아래 `handleEnabled` 도 코퍼스 위에서 **비트 동일**이고, 손으로 저작된 값만 갈린다.
+        func b(_ v: Any?) -> Bool { EffectManifest.isJSONBool(v) && (v as? Bool) == true }
+        /// 핸들(`front`/`back`)의 `enabled` — 위 표의 **true 부류**. 객체가 아니면 disabled,
+        /// 객체면 `enabled` 가 진짜 bool 일 때만 그 값을 쓰고 **부재·비-bool 은 enabled** 다
+        /// (VA 0x1401a8ebb back / 0x1401a8f1c front, 실패 분기가 `mov …,1`).
+        ///
+        /// 종전 트리의 미커밋 변경은 여기에도 `b()` 를 걸어 **원본과 반대로** 만들었다 —
+        /// `{"front":{"x":1,"y":5}}`(enabled 생략)를 WE 는 그 핸들로 곡선을 휘게 읽는데
+        /// `b()` 를 걸면 직선이 된다. 그 변경 **직전** 코드(`(v as? Bool) == true`)는
+        /// `"enabled": 1` 에서는 우연히 원본과 같았고 부재에서는 역시 틀렸다.
+        /// 코퍼스 도달 0(76/76 이 명시 bool)이라 어느 쪽도 동봉 자산을 바꾸지 않지만,
+        /// 원본과 갈리는 방향으로 굳힐 이유가 없어 실물 규칙을 그대로 옮긴다.
+        func handleEnabled(_ h: [String: Any]?) -> Bool {
+            guard let h = h else { return false }   // 태그 7 아님 → disabled
+            let e = h["enabled"]
+            return EffectManifest.isJSONBool(e) ? ((e as? Bool) == true) : true
+        }
         func keyframes(_ arr: Any?) -> [PropertyKeyframe]? {
             guard let list = arr as? [[String: Any]] else { return nil }
             var out: [PropertyKeyframe] = []
             for k in list {
                 guard let frame = f(k["frame"]), let value = f(k["value"]) else { return nil }
-                let front = k["front"] as? [String: Any] ?? [:]
-                let back = k["back"] as? [String: Any] ?? [:]
+                let front = k["front"] as? [String: Any]
+                let back = k["back"] as? [String: Any]
                 out.append(PropertyKeyframe(
                     frame: frame, value: value,
-                    frontEnabled: (front["enabled"] as? Bool) ?? false,
-                    frontX: f(front["x"]) ?? 0, frontY: f(front["y"]) ?? 0,
-                    backEnabled: (back["enabled"] as? Bool) ?? false,
-                    backX: f(back["x"]) ?? 0, backY: f(back["y"]) ?? 0,
+                    frontEnabled: handleEnabled(front),
+                    frontX: f(front?["x"]) ?? 0, frontY: f(front?["y"]) ?? 0,
+                    backEnabled: handleEnabled(back),
+                    backX: f(back?["x"]) ?? 0, backY: f(back?["y"]) ?? 0,
                     // step: 이 키프레임이 오른쪽인 구간을 계단으로(파스 VA 0x1401a8f56–0x1401a8fb2).
-                    step: (k["step"] as? Bool) ?? false))
+                    step: b(k["step"])))
             }
             // WE 는 **정렬하지 않고** `frame <= 직전 frame` 인 키프레임을 버린다(VA 0x1401a8fc1
             // `cmp eax, [rsp+0xe8]` / `jle`, 초기 비교값 -1 → frame < 0 도 탈락). Waple 은 정렬로
@@ -331,6 +476,12 @@ public struct PropertyAnimation: Equatable {
         }
         while tracks.last?.isEmpty == true { tracks.removeLast() }
         guard !tracks.isEmpty else { return nil }
+        // WE 는 `options` 자체가 **객체(태그 7)여야** 애니를 만든다 — 옵션 파서 진입부가
+        // `cmp byte ptr [rcx+8], 7`(0x1401a96bb)로 걸러 false 를 돌리고, 호출부도 파서를 부르기 전에
+        // 같은 검사를 한 번 더 한다(0x1401a56a6 `cmp byte ptr [r15+8], 7` → `jne 0x1401a57e1`).
+        // 즉 `options` 부재/비객체는 **애니 전체 드롭**이다. Waple 은 빈 딕셔너리로 관용한다 —
+        // 아래 `length`/`fps` 와 같은 이유(동봉·설치본 7블록 전수가 options 객체를 갖고 있어 도달 0,
+        // 그리고 정지시키는 쪽이 더 나쁜 실패)다.
         let opts = a["options"] as? [String: Any] ?? [:]
         // 이벤트 마커: options.events[] = {frame, name}(실물 3737268876). 형식 이상 항목은 드롭.
         let events: [AnimationMarker] = ((opts["events"] as? [[String: Any]]) ?? []).compactMap { e in
@@ -343,9 +494,24 @@ public struct PropertyAnimation: Equatable {
         // Waple 은 30fps · 마지막 키프레임 길이로 기워 넣는다: 동봉·설치본 7블록 전수가 fps·length
         // 를 모두 적어 도달 0 이고, 부재 시 정지시키는 쪽이 더 나쁜 실패다.
         let length = f(opts["length"]) ?? (tracks.compactMap { $0.last?.frame }.max() ?? 0)
-        // wraploop 은 **bool 일 때만** 선다(VA 0x1401a985d `cmp byte ptr [rbx+8], 5`) —
-        // 실물에 흔한 `"wraploop": null` 은 타입 0 이라 세워지지 않는다(설치본 7블록 중 5개가 null).
-        let wrapLoop = (opts["wraploop"] as? Bool) ?? false
+        // wraploop 은 **bool 일 때만** 선다(VA 0x1401a985d `cmp byte ptr [rbx+8], 5` → 0x1401a9881
+        // `or dword ptr [r12+0xc], 0x10`) — 실물에 흔한 `"wraploop": null` 은 타입 0 이라 세워지지
+        // 않는다(동봉·설치본 7블록 중 5개가 null, 2개가 true).
+        //
+        // **`mode` 와 직교한다 — 어느 쪽도 상대를 이기지 않는다.** 런타임에는 모드 게이트가
+        // 아예 없다: 옵션 파서가 flags bit4 를 mode 와 무관하게 세우고(0x1401a9881), 호출부는
+        // `test byte ptr [r13+0x44], 0x10` **하나만** 보고 트랙마다 후처리를 돈다
+        // (0x1401a5762–0x1401a5793). 초기화(0x1401a8c10)가 세우는 mirror(bit0)·single(bit1)은
+        // 시간 진행(0x1401a9f60)에서만 읽히고 bit4 를 건드리지 않는다. 즉 `wraploop` 은
+        // **파스 시점의 키프레임 배열 재작성**이고 `mode` 는 **재생 시점의 클록 정책**이라,
+        // `{"mode":"mirror","wraploop":true}` 는 "랩된 트랙을 미러 재생" 으로 둘 다 걸린다.
+        // 모드 제약은 **에디터에만** 있다 — 체크박스가 `ng-if="settings.mode === \'loop\'"`
+        // (scripts.js char@810392)이고 저장 시 `"loop"!==e.mode&&delete e.wraploop`(char@575499)
+        // 라 저작이 막힐 뿐이다. 그래서 여기서도 mode 를 보지 않는다
+        // (동봉 도달: `mirror`+wraploop 조합 0건 — `true` 2블록 다 `"loop"`).
+        // (scripts.js 오프셋 인용은 이 파일·docs/re/property-animation.md 전부 **문자 오프셋**이다.
+        //  파일이 UTF-8 이라 바이트 오프셋과 최대 238 만큼 다르다 — 바이트 1,187,134 / 문자 1,186,896.)
+        let wrapLoop = b(opts["wraploop"])
         // 길이는 엔진에서 i32 다(`asInt` VA 0x1401a9815) — 소수 길이는 0 방향 절단.
         let lengthFrames = length.rounded(.towardZero)
         if wrapLoop {
@@ -372,7 +538,7 @@ public struct PropertyAnimation: Equatable {
             // C⑤: startpaused(=스크립트 play() 전까지 정지) — 부재/false 는 종전대로 무조건 재생(무회귀).
             // 엔진에서도 이 비트(flags 0x20000000, VA 0x1401a8cb0)가 시간 진행을 통째로 막는다
             // (VA 0x1401a9f73 `test r14d, 0x60000000` → 즉시 return), 그래서 값이 frame 0 에 고정된다.
-            startPaused: (opts["startpaused"] as? Bool) ?? false,
+            startPaused: b(opts["startpaused"]),
             wrapLoop: wrapLoop)
     }
 }
