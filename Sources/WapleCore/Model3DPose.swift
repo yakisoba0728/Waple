@@ -4,22 +4,37 @@ import simd
 /// 3D 모델(MDLV0023 + MDLA0006) 스킨 행렬 평가(순수) — 2D PuppetPose 의 3D 대응.
 ///
 /// 규약(2026-07-04 헥스 리버스 + 실측): bind = 부모상대 로컬 레스트 변환 → bindWorld(부모 체인).
-/// 애니 키 = pos + 오일러각(라디안, Rz·Ry·Rx) + scale, 프레임당 1키(트랙 인덱스 = 본 인덱스).
+/// 애니 키 = pos + 오일러각(라디안) + scale, 프레임당 1키(트랙 인덱스 = 본 인덱스).
+/// 키 각 3축의 **파일 순서는 (Z, Y, X)** 이고 합성은 `Rz·Ry·Rx` 다 — MDL 로더의 오일러→쿼터니언
+/// 굽기(0x140264188–0x1402642ae, 반각 상수 0x1404926c0)에서 확정. 상세는 PuppetPose.rotationQuaternion.
 /// 스킨_i = world_i(t) × bindWorld_i⁻¹ (메시 정점은 bindWorld 레스트 포즈에서 저작).
 /// 2D 와 달리 키0 ≠ bind 인 캐릭터가 흔함(바인드=T포즈, idle=이완포즈) — t=0 항등 가정은 버리되
 /// 위 식은 그대로 정답(애니 첫 프레임 포즈로 변형). 오일러 순서·bindWorld 합성은 렌더 실측으로 게이트.
 public enum Model3DPose {
-    /// 트랙 키 선형 보간(프레임당 1키). 빈 트랙 → nil(바인드 로컬 사용).
-    static func sampledLocal(_ keys: [Model3D.Key], frame: Float) -> simd_float4x4? {
+    /// 트랙 키 보간(프레임당 1키) → TRS. 빈 트랙 → nil(바인드 로컬 사용).
+    ///
+    /// 위치·스케일은 성분 lerp, **회전은 오일러 lerp 가 아니라 쿼터니언 nlerp**(최단호 부호보정 +
+    /// 재정규화)다 — WE 는 로드 시점에 키의 오일러를 쿼터니언으로 굽고(0x140264188–0x1402642ae)
+    /// 보간을 전부 쿼터니언 공간에서 한다(0x1401f8d3f–0x1401f8e1a). 오일러 성분 lerp 는 두 키의
+    /// 각도차가 크거나 축이 여러 개일 때 다른 경로를 그린다(±π 를 넘나드는 키에서 특히).
+    /// 프레임 인덱스/보간계수 규약은 `PuppetPose.sampledTRS` 주석(0x140170580) 참조.
+    static func sampledTRS(_ keys: [Model3D.Key], frame: Float) -> PuppetPose.TRS? {
         guard !keys.isEmpty else { return nil }
         let f = max(0, min(frame, Float(keys.count - 1)))
         let i = Int(f)
         let j = min(i + 1, keys.count - 1)
         let t = f - Float(i)
         let a = keys[i], b = keys[j]
-        return PuppetPose.localMatrix(position: a.position + (b.position - a.position) * t,
-                                      angles: a.angles + (b.angles - a.angles) * t,
-                                      scale: a.scale + (b.scale - a.scale) * t)
+        return PuppetPose.TRS(
+            position: a.position + (b.position - a.position) * t,
+            rotation: PuppetPose.nlerpShortest(PuppetPose.rotationQuaternion(a.angles),
+                                               PuppetPose.rotationQuaternion(b.angles), t),
+            scale: a.scale + (b.scale - a.scale) * t)
+    }
+
+    /// 트랙 키 보간 → 로컬 행렬. 빈 트랙 → nil(바인드 로컬 사용).
+    static func sampledLocal(_ keys: [Model3D.Key], frame: Float) -> simd_float4x4? {
+        sampledTRS(keys, frame: frame).map(PuppetPose.trsMatrix)
     }
 
     /// 바인드 월드(부모 체인 합성) — PuppetPose.bindWorlds 의 Model3D.Bone 판. 부모 인덱스가 자신 이후면(비정상 순서) 루트 취급.
