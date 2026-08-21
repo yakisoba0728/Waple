@@ -16,10 +16,13 @@ WE 바이너리에서 **문자열·기본값·심볼**을 뽑는 도구다. 이 
 | `xref.py` | 표준 라이브러리만 | 문자열 VA + `lea [rip+d]` 참조 + 포인터 테이블 |
 | `disasm.py` | `capstone` | 주어진 VA 에서 선형 디스어셈 + rip-상대 피연산자 주석 |
 | `playlist_transition.py` | 표준 라이브러리만 | 전환 효과 표(FADEEFFECT) 를 셰이더·UI·로케일 세 출처에서 교차 검증 |
+| `va_citations.py` | `capstone` | 주석·문서가 인용한 VA 가 **명령 경계**인지 전수 대조. 어긋나면 어느 명령의 몇 바이트 안인지, xref 스캔이 준 disp32 위치인지까지 말해 준다 |
 
 ```bash
 python scripts/re/xref.py flags perspective sphererandom
 python scripts/re/disasm.py 0x1401c55e4 200
+python scripts/re/va_citations.py                    # Sources·Tests·docs·spec 전수
+python scripts/re/va_citations.py docs/re/tonemapping.md
 python scripts/re/playlist_transition.py
 ```
 
