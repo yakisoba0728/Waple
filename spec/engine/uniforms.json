@@ -4,12 +4,41 @@
  "entries": [
   {
    "id": "engine.uniforms.count",
-   "value": 144,
+   "value": 140,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400042f8",
+     "note": "등록 함수 꼬리의 `mov edx,0x28`(stride) + `mov r8d,imm32`(원소 수). 앞 7바이트 대조로 자기검증한다"
+    }
+   ]
+  },
+  {
+   "id": "engine.uniforms.stringScan",
+   "value": {
+    "count": 144,
+    "무엇을 재는가": "바이너리 어디든 나타나는 `g_[A-Z]…` 문자열의 고유 개수. **엔진 유니폼 테이블의 원소 수가 아니다** — 자산(셰이더)이 선언한 이름까지 쓸어온다.",
+    "테이블과의 차": 4,
+    "자산 쪽으로 확인된 이름": [
+     "g_Texture",
+     "g_Texture0MipMapped",
+     "g_Texture1Noise",
+     "g_Texture2Clouds"
+    ],
+    "확인 근거": "g_Texture0MipMapped / g_Texture1Noise / g_Texture2Clouds 는 assets/shaders/HLSL/dx11playlisttransition.frag:18-20 의 `Texture2D … :register(tN)` 선언이다(재생목록 전환 셰이더). g_Texture 는 샘플러 어노테이션 정규식 `^uniform[\\s]+(sampler[\\w]*)[\\s]+g_Texture([\\d]+)` 의 접두사로, 동봉 셰이더 68파일에 등장한다.",
+    "[2026-08-20 정정]": "종전 `engine.uniforms.count` 가 이 스캔 결과(=144)를 테이블 원소 수로 기록하고 있었다. 근거란도 '문자열 전수 스캔' 이라고 정직하게 적혀 있었는데, id 가 count 라 그 구분이 읽는 쪽에 전달되지 않았다."
+   },
    "status": "확정",
    "evidence": [
     {
      "kind": "binary",
      "ref": "wallpaper64.exe 문자열 전수 스캔 (PE 섹션 매핑 포함)"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400042f8",
+     "note": "등록 함수 꼬리의 `mov edx,0x28`(stride) + `mov r8d,imm32`(원소 수). 앞 7바이트 대조로 자기검증한다"
     }
    ]
   },

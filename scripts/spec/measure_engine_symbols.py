@@ -20,6 +20,20 @@ BIN = os.path.join(WE, "wallpaper64.exe")
 UNIFORM = re.compile(rb"g_[A-Z][A-Za-z0-9_]{2,40}")
 RT = re.compile(rb"(?:_rt_|_alias_)[A-Za-z0-9_]{2,40}")
 
+# 유니폼 **테이블**의 원소 수는 문자열 스캔으로 알 수 없다 — 스캔은 자산 쪽 이름까지 쓸어온다.
+# 등록 함수 꼬리가 배열 전체를 소멸시키는 호출에서 원소 수와 stride 를 직접 못박는다:
+#
+#     0x1400042f8  ba 28 00 00 00        mov edx, 0x28        ; stride = 40 B
+#     0x1400042fd  41 b8 8c 00 00 00     mov r8d, 0x8c        ; 원소 수 = 140
+#     0x140004303  48 8d 4d 10           lea rcx, [rbp+0x10]  ; 배열 베이스
+#     0x140004307  e8 ..                 call __ehvec_dtor
+#
+# 함정 ④("호출 지점이 아니라 `mov r9d, imm` 을 세라")가 정확히 이 자리다.
+# 주소를 고정하되 **앞 7바이트를 대조**해 바이너리가 바뀌면 조용히 틀린 수를 내지 않고 죽는다.
+TABLE_DTOR_VA = 0x1400042F8
+TABLE_DTOR_PREFIX = bytes.fromhex("ba28000000" "41b8")   # mov edx,0x28 ; mov r8d,imm32
+TABLE_STRIDE = 0x28
+
 
 def section_map(data):
     pe_off = struct.unpack_from("<I", data, 0x3C)[0]
@@ -46,6 +60,27 @@ def va_of(off, secs):
     return None, None
 
 
+def off_of(va, secs):
+    for _name, s, e, base in secs:
+        if base <= va < base + (e - s):
+            return s + (va - base)
+    return None
+
+
+def table_count(data, secs):
+    """등록 함수 꼬리의 `mov r8d, imm32` 에서 유니폼 테이블 원소 수를 **직접** 읽는다."""
+    off = off_of(TABLE_DTOR_VA, secs)
+    if off is None:
+        raise SystemExit(f"유니폼 테이블 소멸 호출 VA {TABLE_DTOR_VA:#x} 를 파일에서 못 찾았다")
+    got = data[off:off + len(TABLE_DTOR_PREFIX)]
+    if got != TABLE_DTOR_PREFIX:
+        raise SystemExit(
+            f"{TABLE_DTOR_VA:#x} 의 바이트가 기대와 다르다 — 바이너리가 바뀌었다.\n"
+            f"  기대 {TABLE_DTOR_PREFIX.hex()} / 실제 {got.hex()}\n"
+            f"  이 자리는 `mov edx,0x28; mov r8d,<원소수>` 여야 한다. 재확인 없이 수치를 쓰지 마라.")
+    return struct.unpack_from("<I", data, off + len(TABLE_DTOR_PREFIX))[0]
+
+
 def main():
     with open(BIN, "rb") as fh:
         data = fh.read()
@@ -63,11 +98,39 @@ def main():
 
     uniforms = collect(UNIFORM)
     rts = collect(RT)
+    n_table = table_count(data, secs)
 
     src = specfmt.ev("binary", "wallpaper64.exe 문자열 전수 스캔 (PE 섹션 매핑 포함)")
+    src_tbl = specfmt.ev("binary", f"wallpaper64.exe {TABLE_DTOR_VA:#x}",
+                         "등록 함수 꼬리의 `mov edx,0x28`(stride) + `mov r8d,imm32`(원소 수). "
+                         "앞 7바이트 대조로 자기검증한다")
+
+    # 자산 쪽 이름 — 엔진 유니폼 테이블에 없고 셰이더 자산이 자기 이름으로 선언한 것들.
+    # 문자열 스캔은 이것들을 구분할 수 없다(그게 스캔의 한계다).
+    asset_side = sorted(n for n in uniforms
+                        if n in ("g_Texture", "g_Texture0MipMapped", "g_Texture1Noise",
+                                 "g_Texture2Clouds"))
 
     specfmt.dump(specfmt.doc("scripts/spec/measure_engine_symbols.py", [
-        specfmt.entry("engine.uniforms.count", len(uniforms), "확정", [src]),
+        specfmt.entry("engine.uniforms.count", n_table, "확정", [src_tbl]),
+        specfmt.entry("engine.uniforms.stringScan", {
+            "count": len(uniforms),
+            "무엇을 재는가": "바이너리 어디든 나타나는 `g_[A-Z]…` 문자열의 고유 개수. "
+                            "**엔진 유니폼 테이블의 원소 수가 아니다** — 자산(셰이더)이 선언한 "
+                            "이름까지 쓸어온다.",
+            "테이블과의 차": len(uniforms) - n_table,
+            "자산 쪽으로 확인된 이름": asset_side,
+            "확인 근거": "g_Texture0MipMapped / g_Texture1Noise / g_Texture2Clouds 는 "
+                        "assets/shaders/HLSL/dx11playlisttransition.frag:18-20 의 "
+                        "`Texture2D … :register(tN)` 선언이다(재생목록 전환 셰이더). "
+                        "g_Texture 는 샘플러 어노테이션 정규식 "
+                        "`^uniform[\\s]+(sampler[\\w]*)[\\s]+g_Texture([\\d]+)` 의 접두사로, "
+                        "동봉 셰이더 68파일에 등장한다.",
+            "[2026-08-20 정정]": "종전 `engine.uniforms.count` 가 이 스캔 결과(=%d)를 "
+                                 "테이블 원소 수로 기록하고 있었다. 근거란도 '문자열 전수 스캔' "
+                                 "이라고 정직하게 적혀 있었는데, id 가 count 라 그 구분이 "
+                                 "읽는 쪽에 전달되지 않았다." % len(uniforms),
+        }, "확정", [src, src_tbl]),
         specfmt.entry("engine.uniforms", dict(sorted(uniforms.items())), "확정", [src]),
     ]), os.path.join("spec", "engine", "uniforms.json"))
 
@@ -76,7 +139,8 @@ def main():
         specfmt.entry("engine.renderTargets", dict(sorted(rts.items())), "확정", [src]),
     ]), os.path.join("spec", "engine", "render-targets.json"))
 
-    print(f"유니폼 {len(uniforms)}종, 렌더타깃 {len(rts)}종")
+    print(f"유니폼 테이블 {n_table}종 · g_* 문자열 스캔 {len(uniforms)}종"
+          f"(차 {len(uniforms) - n_table}: {asset_side}) · 렌더타깃 {len(rts)}종")
     for k in sorted(rts):
         print(f"  {k}")
 
