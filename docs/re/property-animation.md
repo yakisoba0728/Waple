@@ -677,6 +677,83 @@ Waple 은 프로퍼티의 성분 수를 모른다(그건 `origin`(vec3)인지 `a
 
 ---
 
+### 3.6 보간 종류는 **둘뿐**이다 — 그리고 `enabled` 비트는 재생에 안 쓰인다 (2026-08-21 클러스터 AF)
+
+임무가 "커브 종류 열거를 바이너리에서 확정하라(**상수 적재** 자리를 세라 — 호출 자리 말고)"
+였다. 셌다.
+
+**키프레임 flags 에 상수를 넣는 자리는 파서 `0x1401a8ce0–0x1401a940c` 안에 정확히 넷이다.**
+
+| VA | 명령 | 뜻 |
+|---|---|---|
+| 0x1401a8fed | `mov r13d, 4` | `step` |
+| 0x1401a8ff8 | `xor r13d, r13d` | 핸들 없음 |
+| 0x1401a9050 | `mov r13d, 1` | `back` enabled |
+| 0x1401a90dd | `or r13d, 2` | `front` enabled |
+
+저장은 둘(`mov [r14+8], r13d` 0x1401a9148 · `mov [rsi+rbp+8], r13d` 0x1401a9257). 즉 flags 워드가
+가질 수 있는 값은 `{0,1,2,3,4}` 뿐이고 **이징/커브 타입 태그가 들어갈 자리가 아예 없다.**
+런타임 보간 종류는 **큐빅 베지어**와 **계단(step)** 둘이 전부다. Waple 은 둘 다 구현한다.
+
+에디터의 `beziermode` 는 여섯이지만(`let n = ["both","left","right","none","magic"]`
+`scripts.js` char@554808 + `"step"` char@566452/@568161) 전부 이 세 비트 + 핸들 좌표로 접힌다:
+
+```js
+back .enabled = mode∈{magic, both, left}      front.enabled = mode∈{magic, both, right}
+back .magic   = (mode === "magic")            front.magic   = (mode === "magic")
+back .x = -1, back.y = 0                      front.x = +1, front.y = 0     // char@566180
+mode === "step" → keyframe.step = true                                       // char@566452
+```
+
+`magic` 은 **저작 시점에** 이웃 프레임 간격으로 핸들을 재배치하는 표식일 뿐이다
+(char@556010 `a.back.magic&&(a.back.x=-.5-s,a.back.y=-.1*r)` /
+`a.front.magic&&(a.front.x=.5+o,a.front.y=.1*i)`) — 그 결과가 x/y 에 구워져 저장되므로 런타임에는
+자리가 없다. §2.2 가 이미 확인한 대로 `magic`/`lockangle`/`locklength` 문자열은 여섯 바이너리
+어디에도 없다.
+
+#### 3.6.1 `enabled`(bit0/bit1)은 **평가기가 읽지 않는다** — 그리고 그게 실제로 갈렸다
+
+키프레임 배열을 stride **0x1c** 로 인덱싱하는 함수는 이미지 전체 `imul r,r,0x1c` 스캔으로
+**넷뿐**이다 — 파서 `0x1401a8ce0`(4자리) · `wrapLoop` `0x1401a98b0`(7) · 평가기
+`0x1401a9bc0`(3) · 벡터 복사 헬퍼 `0x1401aa430`(4, flags 를 아예 안 본다).
+그 넷 안에서 키프레임 flags 를 **읽는** 명령은 딱 둘이다:
+
+```
+0x1401a9b48   test r10b, 2                    ; wrapLoop — **첫** 키프레임의 front(bit1)
+0x1401a9d18   test byte ptr [r10+r11+8], 4    ; 평가기 — **오른쪽** 키프레임의 step(bit2)
+```
+
+`bit0`(back enabled)은 **넷 어디서도 읽히지 않는다.** 쓰기만 셋이다(파서 0x1401a9050 ·
+`wrapLoop` 의 `or eax,1` 0x1401a9b51 / `and eax,0xfffffffe` 0x1401a9b66).
+제어점 조립(0x1401a9d6d · 0x1401a9d74 · 0x1401a9e58 · 0x1401a9e8f)은 `enabled` 를 보지 않고
+**무조건** 네 좌표를 쓴다. disabled 핸들이 접히는 것은 **파서**가 좌표를 안 읽어 0 이 남기
+때문이다(0x1401a8fd1 `xorps xmm6/7/8/9` → 0x1401a8ffb / 0x1401a907f 의 `test` 로 읽기 블록 건너뜀).
+
+**Waple 은 반대로 하고 있었다** — 파스에서 좌표를 담고 `segment()` 에서 `enabled` 로 접었다.
+코퍼스 위에서는 동치지만(핸들 76/76 이 명시 bool + 좌표 일치) **`wrapLoop` 덮기 경로에서 갈린다**:
+그 경로는 실물처럼 bit0 만 지우고 backX/backY 를 남기는데(§2.4 5항), 평가기가 bit0 을 안 보므로
+**실물에서는 그 잔존 좌표가 그대로 곡선을 휜다.** 합성 반례
+
+```json
+{"animation": {
+  "c0": [{"frame": 0,  "value": 10, "front": {"enabled": false, "x": 0, "y": 0}},
+         {"frame": 60, "value": 99, "back":  {"enabled": true,  "x": -1, "y": 20}}],
+  "options": {"fps": 30, "length": 60, "mode": "loop", "wraploop": true}}}
+```
+
+에서 frame 31 값이 **10.000000(종전) ↔ 18.888773(실물)** 로 갈렸다(돌연변이로 재현 확인).
+
+**고쳤다.** `parse` 가 disabled 핸들의 x/y 를 0 으로 굽고(`keyframes()`), `segment()` 는
+`enabled` 를 보지 않는다. 정상 파스 경로의 결과는 **한 건도 바뀌지 않는다**(코퍼스 재측정).
+잠금: `PropertyAnimationOptionsTests.testDisabledHandleCoordinatesAreZeroedAtParse` ·
+`…testWrapLoopOverwriteStaleBackHandleStillShapesTheCurve`.
+
+> 부수 효과: `PropertyAnimationTests` 의 `kf(enabled:false)` 헬퍼가 종전에는 `fx:1`/`bx:-1` 을
+> 그대로 넘겨 **실물 파서가 절대 만들지 않는 키프레임**으로 선형성을 시험하고 있었다.
+> 헬퍼도 좌표를 0 으로 맞췄다.
+
+---
+
 ## 4. 에디터(JS)가 알려주는 것
 
 `ui/dist/scripts/scripts.js` (바이트 1,187,134 / 문자 1,186,896 — **아래 `@` 는 전부 문자 오프셋**이다.
@@ -728,6 +805,23 @@ UTF-8 이라 두 값이 최대 238 만큼 다르므로 `grep -b` 로는 재현�
 **결론: 고치지 않는다.** 닫으려면 `parse`(또는 `value(component:)`)가 프로퍼티 성분 수를 받아야
 한다 — §6.7 의 넘길 것.
 잠금: `PropertyAnimationOptionsTests.testMissingChannelKeepsBaseAndDoesNotCollapseToZero`.
+
+> **[2026-08-21 클러스터 AF 판단]** §3.5.5 가 "(b) 명시적 `"cN": []` 만은 성분 수 없이도
+> 닫을 수 있다(파스가 `a[key] != nil` 을 이미 구분한다)" 고 지적했고, 그 판단은 맞다.
+> 그래도 **이번에도 넣지 않는다.** 이유 셋:
+> 1. 도달 0 — 설치본·동봉 애니 7블록 19트랙에 빈 배열이 **0건**이다.
+> 2. `PropertyAnimation` 의 **공개 타입 계약을 넓혀야** 한다(트랙 배열 밖에 "명시적 빈 채널"
+>    비트를 하나 더 들고 다녀야 한다). 소비처가 0인 상태에서 공개 표면을 넓히는 것은
+>    이 파일이 지금까지 일관되게 피해 온 선택이다.
+> 3. 닫아도 **부분적으로만** 실물과 같아진다 — 위 1·2·3 항의 성분 수 게이트가 남기 때문에,
+>    "(b) 에서 0.0" 을 넣은 뒤에도 vec3 프로퍼티에 `{"c0":[…],"c1":[],"c2":[…]}` 가 오면
+>    실물은 (트랙 3개 == 성분 3개라) 애니를 **살려서** c1 만 0 을 내는데 Waple 은 c1 만 0 을
+>    내는 것까지는 같아지지만, 반대로 `{"c0":[…],"c1":[]}` 같은 저작에서는 실물이 애니를
+>    **끄고** Waple 은 c1=0 으로 그린다. 즉 반쪽만 맞는 상태가 되고, 그 반쪽을 위해 공개
+>    계약을 넓히는 교환이 남는다.
+>
+> 진짜 열쇠는 §3.5.4 가 말한 대로 **`constantshadervalues` 의 성분 수를 파스 경로에서 얻는
+> 설계**다. 설계 후보를 §6 에 적어 뒀다.
 
 ### 5.2 정수 프레임 양자화를 옮기지 않은 근거
 
@@ -811,6 +905,22 @@ UTF-8 이라 두 값이 최대 238 만큼 다르므로 `grep -b` 로는 재현�
    있고(§3.5.2), `constantshadervalues` 만이 진짜로 유도 불가다 — 성분 수가 **셰이더 유니폼
    선언**에서 온다(§3.5.3). 브리프의 조건("전면 적용이 안 되면 적용하지 마라")에 따라
    **적용하지 않았다.** 재현 코퍼스 도달도 0 이다(§3.5.4).
+8. **[2026-08-21 클러스터 AF] `constantshadervalues` 성분 수를 파스 경로에서 얻는 설계 후보.**
+   §3.5.4 가 남긴 유일한 열쇠다. 실물이 보는 값(`movsx ecx, byte [rbx+0x44]` 0x14015545b)은
+   **컴파일된 셰이더의 유니폼 리플렉션**이라 JSON 만으로는 안 나온다. 이 리포에는 이미 그 정보를
+   가진 자리가 이미 있다 — `GLSLTranslator.parseUniforms`(`Sources/WapleCore/GLSLTranslator.swift`
+   1303행)가 `uniform <type> <name>;` 을 훑어 `(GLSLType, name)` 목록을 내놓는다. 필요한 것은
+   그 `GLSLType` 을 성분 수 1..4 로 접는 것뿐이다. 따라서:
+   - `EffectManifest`(또는 `GLSLTranslator`)가 이펙트별 `유니폼 이름 → 성분 수(1..4)` 사전을
+     내놓게 하고,
+   - `SceneDocument` 가 `constantshadervalues` 를 파스할 때 그 사전에서 성분 수를 뽑아
+     `PropertyAnimation.parse(_:components:)` 로 넘긴다(오브젝트 프로퍼티는 §3.5.2 의 고정 표,
+     `instanceoverride` 는 §3.5 의 디스크립터 표에서 온다).
+   - 사전에 없는 유니폼(셰이더 미해석·미번역)은 **게이트를 적용하지 않는다** — 지금 동작 유지.
+   이러면 §3.5.4 가 우려한 "실물이 살리는 애니를 죽인다" 가 구조적으로 불가능해진다(모르는
+   유니폼은 게이트를 안 타므로). **이번 라운드에서는 하지 않았다** — `GLSLTranslator` ·
+   `EffectManifest` · `SceneDocument` 셋이 전부 이 레인 밖이고, 코퍼스 도달이 0이라
+   회귀 위험만 있고 관측 이득이 없다. 착수하려면 이 세 파일의 소유자와 함께 가야 한다.
 
 ---
 
@@ -854,7 +964,13 @@ unary          → ("+"|"-"|"!") unary | primary                        ; @16826
 브라우저 경로에는 정규화가 하나 더 있다: `l.condition = l.condition.replace("$","")` — **첫 `$` 하나**를
 지운다(@88419). 에디터 경로에는 없다. Waple 은 이 정규화를 하지 않는다(설치본 코퍼스 도달 0).
 
-### 7.2 실물 조건 코퍼스 (설치본 전수, 22건 / 고유 16종)
+### 7.2 실물 조건 코퍼스 (설치본 전수, 22건 / 고유 16종) — **§7.6 에서 정정됨**
+
+> **[2026-08-21 클러스터 AF 정정]** 아래 표의 "22건 / 고유 16종" 은 **서로 다른 두 키를 합산한
+> 수**다. 특히 "맨 숫자 리터럴 `1` / `0` 5건" 은 이 문법이 **아니다** — `scene.json` 의
+> `<binding>.user.condition` 이고 콤보 값 동등비교다. 갈라 센 수와 근거는 §7.6.
+> 표 자체는 툼스톤으로 남긴다.
+
 
 | 형태 | 건수 | Waple |
 |---|---:|---|
@@ -920,6 +1036,147 @@ K 는 이 항목을 "고치면 `canEvaluate` 가 뒤집혀 두 소비처가 함�
   `!n.value == 1` → `(!2)==1` = **false**(`!(2==1)` 로 묶였다면 true).
   `&&`/`||` 가 피연산자 대신 `Bool` 을 돌려주는 것도 최종 소비가 `truthy` 하나라 관측 차이가 없다.
 
+### 7.6 **`condition` 은 두 개의 다른 키다** (2026-08-21 클러스터 AF)
+
+설치본 JSON **2,143개**를 전수로 걸어(JSONC 관용 파서, 파스 실패 1) `condition` 문자열을
+키 위치별로 갈랐다.
+
+설치본에 `condition` 이라는 이름의 키는 **46건**이고 값 타입이 문자열 22 · **객체 24** 다.
+셋으로 갈린다.
+
+| 포인터 | 건수 | 고유 | 문법 | 파스 | 소비 |
+|---|---:|---:|---|---|---|
+| `/general/properties/<k>/condition` | **17** | **14**(빈 문자열 1 포함) | AngularJS 식 | 브라우저 `$eval` | 표시 여부 |
+| `/objects/N/visible/user/condition` | **5** | 2 (`"0"`·`"1"`) | **값 동등비교** | `wallpaper64.exe` 0x1401a4f1b | **런타임 바인딩 값** |
+| `/gizmos/N/condition` | **24** | 8 | **셰이더 콤보 맵**(객체) | 에디터 | 기즈모 표시 |
+
+셋째는 `{"PERSPECTIVE": 1}` ×10 · `{"POINTEMITTER": {"op":"ge","value":1..4}}` ·
+`{"LINEEMITTER": {"op":"ge","value":1..3}}` 뿐이다(파일 10개, 고유 8종). WE 변경로그가 문법의
+출처를 밝힌다 — *"Added complex condition support to shader passes, FBOs, bindings (only
+supporting ge operator for now)"*(char@705260) · *"Added gt, le, lt condition operators to
+passes etc."*(char@705129). 다만 **이 24건이 붙은 `gizmos` 자체가 에디터 전용**이다
+(`gizmos` 문자열이 `wallpaper64.exe` 에 ASCII·UTF-16LE 어느 쪽에도 없다 —
+`docs/re/unimplemented-json-keys.md` 21행). 변경로그가 말하는 엔진 쪽 자리(`passes`/`fbos`/
+바인딩)에 붙은 `condition` 은 설치본 도달 **0** 이다.
+**세 문법 중 AngularJS 식은 첫째 하나뿐이다.**
+
+
+후자는 `projects/defaultprojects/shimmering_particles/scene.json` 의 `/objects/0..4/visible/user`
+다섯이 전부다:
+
+```json
+{"user": {"condition": "0", "name": "style"}, "value": true}    // objects/0
+{"user": {"condition": "1", "name": "style"}, "value": false}   // objects/1..4
+```
+
+**문법이 다르다.** 파서는 `user` 객체(태그 7)에서 `name`(태그 4 필수) · `condition`(태그 4일
+때만) · `type` 셋을 `Json::Value::find` 로 읽어 0x60 바이트 객체에 굽는다:
+
+```
+0x1401a4ee2  cmp eax, 7                       ; user 가 객체인가
+0x1401a4ef5  lea rdx, "name"      → find      ; 0x1401a4f01
+0x1401a4f1b  lea rdx, "condition" → find      ; 0x1401a4f27
+0x1401a4f41  lea rdx, "type"      → find      ; 0x1401a4f4d
+0x1401a4f5d  cmp byte [r14+8], 4              ; name 은 **문자열이어야** 한다
+0x1401a4f6d  call 0x14028af20 (ecx=0x60)      ; 객체 할당
+0x1401a4fcf  asString(name)  → +0x20          ; std::string
+0x1401a501b  cmp byte [r15+8], 4 → asString(condition) → +0x40
+0x1401a5075  cmp byte [rsi+8], 4 → 0x140153700(type) → +0x18   ; "system"→1 · "usershortcut"→2 · 그 외 0
+0x1401a509e  call 0x140175880                 ; 등록기(이름으로 해시 맵)
+```
+
+에디터가 이 값을 **콤보 옵션 드롭리스트**로만 고르게 한다는 것이 결정적이다:
+
+```js
+// scripts.js char@621236  — 현재 condition 이 옵션 목록에 없으면 options[0].value 로 되돌린다
+e.options.findIndex(o => o.value === selectedProperty.condition) < 0 &&
+  (selectedProperty.condition = e.options[0].value)
+// char@621718 — combo 일 때만 condition 을 붙인다
+case "combo":        e = {name: …, condition: selectedProperty.condition}; break;
+case "usershortcut": e = {name: …, type: "usershortcut"};
+// 템플릿 char@904986
+dp-options="project.data.general.properties[selectedProperty.selected].options"
+dp-selected="selectedProperty.condition"
+```
+
+라벨도 `ui_editor_user_properties_combo_value` = *"Selected combo value for this link:"* 다.
+**Waple 은 이걸 이미 맞게 하고 있다** — `SceneDocument.resolveUserBindings` 가
+`(current == condition)` 동등비교로 풀고(`TexImage.VariantCondition` 과 동형),
+`PropertyConditionEvaluator` 는 손대지 않는다. 잘못돼 있던 것은 **문서의 도달 수**뿐이다.
+
+#### 7.6.1 엔진도 조건을 **저작한다** — 그리고 절대 평가하지 않는다
+
+`"condition"` 문자열(`0x140474a60`)의 이미지 전체 disp32 xref 는 **16자리**다. 그중 **10 이 쓰기**로,
+전부 내장 프로퍼티 주입기 `0x140104b60–0x140108c17` 안에 있다. 이 함수는 브라우저 패널에
+엔진이 얹는 프로퍼티 열여섯을 `Json::Value` 로 조립한다 — `volume`(slider) · `rate`(slider) ·
+`cameraparallax`(bool) · `alignment`(combo, 옵션 6) · `alignmentposition`/`alignmentx`/
+`alignmenty`/`alignmentz`(slider) · `alignmentfliph`(bool) · `wcc_v`(**combolutfilters**) ·
+`wcc_amt`(slider) · `wec_e`(bool) · `wec_brs`/`wec_con`/`wec_sa`/`wec_hue`(slider).
+쓰는 키는 `value` · `type` · `min` · `max` · `icon` · `text` · `order` · `options{label,value}` ·
+`condition` 이다.
+
+조건 고유 5종:
+
+```
+alignment.value<2&&checkPositionVisibility()   ; 0x1401060e1 · 0x14010620e
+alignment.value==3||alignment.value==4         ; 0x1401064d1 · 0x14010688f
+alignment.value==4                             ; 0x140106c37
+wcc_v.value                                    ; 0x14010779c
+wec_e.value                                    ; 0x140107e28 · 0x1401081bd · 0x14010858b · 0x140108a8e
+```
+
+**`checkPositionVisibility()` 가 결정적 반증이다** — 그 함수는 브라우저 스코프에만 있다
+(`scripts.js` char@106119, `ea.checkPositionVisibility = function(){…}`). 엔진에는 없으므로
+엔진은 자기가 쓴 조건조차 평가할 수 없다. 나머지 **읽기 6자리**도 표시 조건식 평가기가 아니다:
+씬 `user` 바인딩 파서 둘(0x1401a4f1b · 0x14017512c), TEXB 변형 조건 둘(0x14015cc13 = 바깥
+`condition` · 0x14015cd74 = 안쪽 `condition`, 형제 `name` 이 0x14015cd61 — `TexImage
+.VariantCondition` 이 파스하는 이중 구조 그대로), 그리고 0x14001f39b · 0x140134c81.
+**§7.1 의 "평가는 UI 몫" 을 이걸로 확정한다.**
+
+이 다섯은 `general.properties` 에 실리지 않으므로 Waple 파서 도달은 여전히 0 이다. 다만
+**문법 커버리지의 상한**을 보여준다: `<` · `==` · `&&` · `||` · 식별자 truthiness 는 되고
+**함수 호출은 안 된다**(토크나이저가 `(`/`)` 를 남겨 `isAtEnd` 가 거짓 → 전체 파스 실패 →
+관용 표시). `alignment` 의 옵션 값은 `Json::Value(intValue)`+0 대입(0x140105a4f `mov edx,1` →
+0x140086ca0)이라 **숫자**이므로 `<`/`==` 는 수치 비교다.
+잠금: `PropertyConditionEvaluatorTests.testEngineInjectedConditionsShowGrammarCeiling`.
+
+#### 7.6.2 평가 컨텍스트와 "없는 프로퍼티"
+
+```js
+var ea = T.$new(true);                       // 격리 스코프 — checkPositionVisibility 만 얹혀 있다
+W.evalCondition = e => … && ta.$eval(e, W.currentSelection.properties[W.selectedMonitor.location]);
+```
+(char@106464) 즉 **locals 가 프로퍼티 맵**이다. AngularJS 1.6 의 컴파일된 게터는 멤버 접근이
+null-safe 라(`a === undefined ? undefined : a.value`) 없는 키를 던지지 않고 `undefined` 를 낸다.
+관측 다섯 — `missing.value` falsy · `== 'x'` false · `> 0` false · `!missing.value` true ·
+`undefined == undefined` true — 을 우리 `ConditionValue.none` 이 전부 같이 낸다.
+잠금: `…testMissingPropertyReferenceIsUndefinedLikeAngular`.
+
+#### 7.6.3 설치본 17건 전수 평가 결과
+
+각 파일의 **실제 기본값** 위에서 평가하면 이렇다(`…testInstalledProjectConditionCorpusEvaluatesAsAuthored`):
+
+| 파일 | 조건 | 기본값에서 |
+|---|---|---|
+| corsair_collection ×3 | `scene.value !== 'cartoon' && scene.value !== 'ram'` | **표시** |
+| corsair_collection ×2 | `effect.value.startsWith('rainbow') === false` | 숨김 |
+| corsair_collection | `effect.value.endsWith('pulse') === true` | **표시** |
+| corsair_collection | `… && pulseanimation.value !== 'static'` | **표시** |
+| corsair_collection | `… && pulseanimation.value === 'static'` | 숨김 |
+| corsair_collection ×3 | `effect.value.endsWith('spiral') === true …` | 숨김 |
+| corsair_collection | `effect.value === 'visor'` | 숨김 |
+| corsair_collection | `effect.value.endsWith('wave') === true` | 숨김 |
+| corsair_o_tron | `showbottom.value > 0` | **표시** |
+| corsair_o_tron | `rainbowscheme.value` | 숨김 |
+| dino_run | `""` | **표시**(조건 없음과 동일) |
+| shimmering_particles | `style.value=='1'` | 숨김 |
+
+`showbottom` 은 **슬라이더인데 `value` 가 문자열 `"150"`** 이다(실물 그대로). JS 의 `"150" > 0`
+은 ToNumber 로 150 > 0 = true 이고, `WallpaperProperties.parse` 의 lenient 경로도
+`.number(150)` 을 만들어 같은 답을 낸다.
+
+---
+
 ---
 
 ## 8. `PropertyDecoration` — 장식 프로퍼티
@@ -937,3 +1194,118 @@ scenetexture · usershortcut · divider` (+ 그룹 컨테이너 `group`).
 설치본 코퍼스의 프로퍼티 `type` 분포는 `color 203 · slider 18 · combo 14 · bool 7 · checkbox 2`
 로 `divider` 0건, `imgsrc*` 키 0건이다. 즉 종전 휴리스틱(imgsrc/`<img`/`<a`/`<hr`)과 새로 넣은
 `divider` 는 **둘 다 이 코퍼스 도달 0** 이고, 근거는 각각 워크샵 실측(WaifuX)과 WE 템플릿이다.
+
+> **[2026-08-21 클러스터 AF 정정]** 위 분포 `slider 18 · checkbox 2` 는 **세 스키마를 섞어 센 수**다.
+> `checkbox` 2건과 `slider` 1건은 `projects/templates/gif/project.json` 의
+> `templateoptions[0].options[]` — 즉 **템플릿 마법사 옵션**이고 `general.properties` 가 아니다
+> (`{"type":"checkbox","label":"Compressed (DXT5)","key":"gif_compression",
+> "texture":"materials/background.tex.json"}` — `texture` 키가 있는 전혀 다른 스키마).
+> 실제 `general.properties` 전수는 **241개**다: `color 203 · slider 17 · combo 14 · bool 7`.
+> 결론(`divider` 0 · `imgsrc*` 0 · 도달 0)은 그대로다. 전체 census 와 타입별 필수/선택 키,
+> 기본값 규칙은 §9.
+
+### 8.1 이 판정은 **편집 UI 전용이다** (2026-08-21 클러스터 AF)
+
+임무가 "에디터 UI 전용이면 못 박아라" 였다. 근거 셋이고 전부 결정적이다.
+
+1. **로케일**(`wallpaper_engine/locale/ui_en-us.json` — 값싸고 결정적):
+   `ui_editor_user_properties_condition` = **"Display Condition"**,
+   `ui_editor_user_properties_condition_placeholder` = `"otherkey.value == XYZ"`,
+   `ui_editor_user_properties_value` = **"Default Value"**.
+   조건은 *표시* 를 정하고 `value` 는 *기본값* 이다.
+2. **템플릿이 `ng-if`/`ng-show` 하나로 끝난다.** 조건이 거짓이면 행이 안 그려질 뿐,
+   `property.value` 는 그대로 남아 `callbackWallpaperPropertyChanged` 로 엔진에 나간다.
+   숨겨진 프로퍼티의 값을 바꾸거나 지우는 코드는 없다(char@750308 · @757571 · @945562 · @993077).
+3. **엔진은 조건을 쓰기만 한다** — §7.6.1 의 16 xref 분해와 `checkPositionVisibility()` 반증.
+
+따라서 `PropertyDecoration.visibleIndices` 는 **패널에 무엇을 그릴지**만 정한다.
+값 합성은 `WallpaperProperties.applying(overrides:to:)` 와 `SceneDocument.resolveUserBindings`
+가 하고 **둘 다 이 판정을 보지 않는다** — 숨겨진 프로퍼티도 값은 살아 있다. WE 와 같다.
+
+`group` 은 장식으로 치지 **않는다**. `divider` 는 `<hr>` 하나뿐이지만 `group` 은 제목 + 접기
+컨테이너를 그리고 자기 `condition` 으로 **그룹 전체**를 숨긴다(char@757571). 값이 없다는 점은
+같아도 화면에 남는 것이 있어 성격이 다르고, 설치본 도달 0(`group` 0건)이라 어느 쪽을 골라도
+코퍼스가 안 움직인다 — 정보를 지우지 않는 쪽으로 뒀다.
+
+---
+
+## 9. `general.properties` 타입 전수 (2026-08-21 클러스터 AF)
+
+### 9.1 타입 집합 — 세 층이 다르다
+
+| 층 | 타입 | 근거 |
+|---|---|---|
+| 브라우저가 **그릴 줄 아는** 것 (12+1) | `color` `bool` `textinput` `slider` `volume` `combo` `combolutfilters` `directory` `file` `scenetexture` `usershortcut` `divider` + 컨테이너 `group` | `browseruserproperties.html` char@750151–757383 의 `ng-if` 전수 + 목록 빌더 char@88480 |
+| 에디터가 **저작하게 해 주는** 것 (10) | scene 프로젝트: `color slider bool combo textinput scenetexture usershortcut group` / 그 외: `color slider bool combo textinput directory file group` | `EditorUserPropertyDetailsModalCtrl.typeOptions` char@617200–618900 |
+| 엔진이 **주입만** 하는 것 (3) | `volume` `combolutfilters` `divider` | `wallpaper64.exe` 0x140104b60(`volume`/`rate`/`wcc_v`) · 0x14010c650(키 `_d0` = `divider`, 0x14010ce56) |
+
+로케일이 두 번째 층을 그대로 확증한다 — `ui_editor_user_properties_type_*` 열 개가 존재하고
+(`color`=Color · `slider`=Slider · `bool`=**Checkbox** · `combo`=Combo · `textinput`=**Text** ·
+`directory`=Directory · `file`=File · `scenetexture`=**Texture** · `usershortcut`=User shortcut ·
+`group`=Group) `volume`/`combolutfilters`/`divider` 라벨은 **없다**.
+즉 **워크샵 `project.json` 에 나올 수 있는 타입은 10 이 상한**이다.
+
+### 9.2 타입별 키와 기본값 규칙
+
+에디터가 타입을 바꿀 때 도는 함수(char@616842, 원문):
+
+```js
+delete min, max, mode, options, step, precision, fraction;
+switch (type) {
+  default:          value = "";                                       // textinput/file/scenetexture/usershortcut
+  case "directory": value = "", mode = "ondemand";
+  case "color":     value = "1 0 0";
+  case "slider":    value = 1, min = 0, max = 1, fraction = true, precision = 1;
+  case "bool":      value = true;
+  case "combo":     options = [], value = undefined;
+}
+```
+
+저장(`ok()` char@619685):
+
+- `precision` 은 **로드 시 −1 · 저장 시 +1** 된다 → **파일의 `precision` 은 UI 의
+  "Decimal Places" 보다 1 크다.**
+- `slider` + `fraction` → `precision` 을 1..4 로 클램프하고
+  `step = (precision == 1) ? 1 : 0.1^(precision-1)` 을 **파생**한다.
+  `fraction` 이 거짓이면 `step`·`precision` 을 **지운다**(정수 슬라이더).
+  실물 대조: `shimmering_particles/count` = `{fraction:true, precision:2, step:0.1}` ✔
+- 슬라이더가 아니면 `step`·`precision`·`fraction` 셋 다 지운다.
+- `combo` 는 `options` 가 비면 저장이 막히고(`isOkDisabled`), `value` 가 어느 옵션과도 안 맞으면
+  **`options[0].value` 로 강제**된다.
+- `key` = `toLowerCase().replace(/\W+/g,"")`, 숫자로 시작하면 `_` 접두, 비면 `"newproperty"`.
+- `file`/`directory` → `fileType` ∈ {`image`,`video`}; `directory` 는 추가로
+  `mode` ∈ {`ondemand`,`fetchall`}.
+- 브라우저 렌더 폴백(파일에 없을 때): rzslider 가 `step: step||1` · `precision: precision||1`
+  (char@751619), `floor/ceil` = `min`/`max`.
+
+### 9.3 설치본 코퍼스 도달 (`project.json` 191개 · JSON 2,143개 전수 워크)
+
+```
+general.properties 를 가진 파일 180 / 프로퍼티 241개
+  color   203  type·text·value 203/203 · order 182 · condition 4 · index 3 · shadername 2
+  slider   17  type·text·value·order·min·max 17/17 · precision 9 · step 9 · fraction 6
+                   · condition 4 · editable 3 · index 2
+  combo    14  type·text·value·options 14/14 · order 13 · condition 7 · index 1
+  bool      7  type·text·value·order 7/7 · condition 2
+  value 의 JSON 타입: color 전건 문자열 · combo 전건 문자열 · bool {bool 6, 문자열 1}
+                       · slider {int 15, float 1, 문자열 1}
+  options 원소 키는 {label, value} 둘뿐(53쌍)
+```
+
+`textinput` · `file` · `directory` · `scenetexture` · `usershortcut` · `group` · `divider` ·
+`volume` · `combolutfilters` 는 **도달 0**. 동봉 트리(`Sources/WapleRender/Resources/WEAssets`)는
+프로퍼티 161개가 **전부 `color`** 다. 2,143 JSON 전수 워크에서 241/241 이 `/general/properties`
+밑이었다 — 다른 자리에 사는 `properties` 맵은 없다.
+
+**Waple 파서가 아직 안 읽는 키**: `precision`(9) · `fraction`(6) · `editable`(3) ·
+`shadername`(2) · `icon`(0) · `disabledcondition`(0). 전부 편집 UI 메타이고 런타임 값과 무관해
+소비처가 생기기 전엔 담을 이유가 없다. 담게 되면 §9.2 의 `precision` ±1 규약을 같이 옮겨야 한다.
+
+**[미해결] `order` 와 `index` 의 관계.** 브라우저는 `i.sort((e,t) => e.order - t.order)` 하나뿐이고
+(char@88420) `index` 를 정렬에 쓰지 않는다. 그런데 에디터의 프로퍼티 목록은 현대 판에서
+**`order` 를 지우고 `index` 를 0부터 다시 매긴다**(char@503002
+`delete e.order, e.index = t, ++t` · char@503858 `movePropertyToIndex`). 설치본
+`shimmering_particles` 는 여섯 프로퍼티가 `index` 0·0·1·2·3·4(0 이 둘)이고 `order` 는 둘만 있다 —
+두 키가 실제로 어떻게 화해하는지 확정하지 못했다. Waple 은 `order` 부재를 **맨 뒤 + key 오름차순**
+으로 결정화한다(브라우저의 `NaN` 비교는 V8 TimSort 의 삽입 순서에 의존해 결정적이지 않다).
+설치본에서 `order` 부재는 22건(color 21 · combo 1)이다.

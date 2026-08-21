@@ -24,31 +24,119 @@ import Foundation
 /// (`PropertyDecoration.visibleIndices` → `PropertyEditorView`, 그리고 분석기
 /// `WallpaperCompatibilityAnalyzer` 의 `canEvaluate` 경고).
 ///
-/// **아래 파서가 실물과 갈리는 지점**(전부 설치본 코퍼스 도달 0 — `condition` 문자열 22건 /
-/// 고유 16종 전수 확인, 아래 §도달 참조. 고치지 않은 이유는 각 항목에 적었다):
+/// **아래 파서가 실물과 갈리는 지점**(전부 설치본 코퍼스 도달 0 — `general.properties` 의
+/// `condition` **17건 / 고유 14종** 전수 확인, 아래 §도달 참조. 종전 판의 "22건 / 고유 16종" 은
+/// 다른 키를 섞어 센 수였다 — §도달의 정정표. 고치지 않은 이유는 각 항목에 적었다):
 ///
 /// 1. ~~equality 와 relational 이 한 레벨~~ → **2026-08-21 클러스터 Q 에서 닫았다.**
 ///    `parseEquality`/`parseRelational` 로 갈라 각각 좌결합 반복시킨다. 그래서 `a == b == c` 는
 ///    `(a==b)==c`, `a > b == c` 는 `(a>b)==c`, `a == b > c` 는 `a == (b>c)` 로 Angular 와 같이 읽는다.
 ///    (종전에는 셋 다 **파스 실패**(`nil`) → `isVisible` 이 관용적으로 **표시**였다.)
 ///    이 변경은 **단조 확대**라 종전에 파스되던 식의 결과는 하나도 바뀌지 않는다 —
-///    설치본 조건 22건 / 고유 16종에 비교 연산자 연쇄가 **0건**이므로 그 코퍼스 위에서
+///    설치본 조건 17건 / 고유 14종에 비교 연산자 연쇄가 **0건**이므로 그 코퍼스 위에서
 ///    `canEvaluate`·`evaluate` 가 한 건도 움직이지 않는다(재측정으로 확인).
 /// 2. **`+ - * / %` 와 단항 `+`/`-` 가 없다.** 토크나이저가 미지 연산자를 만나면 `failed` 로
 ///    전체를 파스 실패시킨다(부분 평가로 엉뚱한 확정을 내는 것보다 안전). 코퍼스 도달 0.
 /// 3. **`==` 와 `===` 를 구분하지 않는다.** `equals()` 가 먼저 `number()` 로 양변을 수치화하므로
 ///    `'1' === 1` 이 **true** 다(JS/Angular 는 `false`). 반대로 느슨한 쪽도 완전하지는 않다 —
 ///    `'' == 0` 은 JS 가 `true` 인데 여기서는 `Double("")` 이 nil 이라 `false` 다.
-///    코퍼스 도달 0: `===`/`!==` 를 쓰는 12건은 전건 좌변이 문자열 프로퍼티이고 우변이 문자열
-///    리터럴 또는 `true`/`false` 라 두 규약이 같은 답을 낸다.
+///    코퍼스 도달 0: `===`/`!==` 를 쓰는 12건은 전건 좌변이 문자열 프로퍼티(또는 `startsWith`/
+///    `endsWith` 가 이미 접은 `true`/`false`)이고 우변이 문자열 리터럴 또는 `true`/`false` 라
+///    두 규약이 같은 답을 낸다.
 /// 4. **`&&`/`||` 가 피연산자가 아니라 `Bool` 을 돌려준다.** Angular 는 JS 처럼 피연산자를
 ///    돌려주지만, 이 평가기의 최종 소비는 `truthy` 하나뿐이라 관측 차이가 없다.
 ///
-/// **도달**(설치본 전수, 2026-08-21 재측정 — 동봉 트리 0건 · `assets/` 0건 · `projects/` **22건**):
-/// 고유 16종은 `'1'`×4 · `scene.value !== 'cartoon' && scene.value !== 'ram'`×3 ·
-/// `effect.value.startsWith('rainbow') === false`×2 · `'0'` · `''` · `style.value=='1'` ·
-/// `rainbowscheme.value` · `showbottom.value > 0` · `effect.value === 'visor'` ·
-/// `effect.value.endsWith(…) === true` 계열 7종이다. 전건이 위 문법 부분집합 안에 들어온다.
+/// **도달**(설치본 전수, 2026-08-21 클러스터 AF 재측정 — JSON 2,143개 전수 워크, 파스 실패 1).
+///
+/// > **[정정] 종전 판의 "22건 / 고유 16종" 은 서로 다른 두 키를 합산한 수였다**(함정 8 —
+/// > "비슷한 이름의 형제 키에 속는다"). 갈라 세면 이렇다:
+/// >
+/// > | 키 | 건수 | 고유 | 문법 | 파스/소비 |
+/// > |---|---|---|---|---|
+/// > | `general.properties.<k>.condition` | **17** | **14**(빈 문자열 1 포함) | AngularJS 식 | 브라우저 `$eval` — **이 파일** |
+/// > | `<binding>.user.condition`(scene.json) | **5** | 2(`"0"`·`"1"`) | **콤보 값 동등비교** | `wallpaper64.exe` 0x1401a4f1b → `SceneDocument.resolveUserBindings` |
+/// >
+/// > 후자는 `shimmering_particles/scene.json` 의 `/objects/0..4/visible/user` 다 —
+/// > `{"user":{"condition":"1","name":"style"},"value":false}` 형태이고 "그 콤보가 이 값일 때
+/// > 이 오브젝트가 보인다" 라는 **런타임** 바인딩이지 표시 조건식이 아니다. 에디터가 후보를
+/// > 그 콤보의 `options[].value` 드롭리스트로 제한하고(scripts.js char@621236/@621718,
+/// > 템플릿 char@904986) 라벨이 `ui_editor_user_properties_combo_value` =
+/// > *"Selected combo value for this link:"* 다. **이 평가기는 그 문법을 다루지 않아야 맞다.**
+///
+/// `general.properties.*.condition` 17건(고유 14종)은 네 파일에서만 나온다 —
+/// `corsair_collection` 13 · `corsair_o_tron` 2 · `dino_run` 1 · `shimmering_particles` 1
+/// (동봉 트리 `Sources/WapleRender/Resources/WEAssets` 는 프로퍼티 161개가 전부 `color` 라 0건,
+///  `assets/` 도 0건). 전건이 위 문법 부분집합 안에 들어오고, 각 파일의 **실제 기본값** 위에서
+/// 평가한 결과를 `PropertyConditionEvaluatorTests
+/// .testInstalledProjectConditionCorpusEvaluatesAsAuthored` 가 전수로 못박는다.
+///
+/// **엔진이 직접 저작하는 조건도 있다**(도달 계산에서 빠져 있던 자리). `wallpaper64.exe` 의
+/// 내장 프로퍼티 주입기 `0x140104b60–0x140108c17` 이 브라우저 패널에 얹는 프로퍼티
+/// (`volume` · `rate` · `cameraparallax` · `alignment` · `alignmentposition` · `alignmentx` ·
+///  `alignmenty` · `alignmentz` · `alignmentfliph` · `wcc_v` · `wcc_amt` · `wec_e` ·
+///  `wec_brs` · `wec_con` · `wec_sa` · `wec_hue`)에 `condition` 을 **10자리**에 쓴다. 고유 5종:
+/// ```
+/// alignment.value<2&&checkPositionVisibility()   ; 0x1401060e1 · 0x14010620e  (alignmentposition)
+/// alignment.value==3||alignment.value==4         ; 0x1401064d1 · 0x14010688f  (alignmentx/y)
+/// alignment.value==4                             ; 0x140106c37               (alignmentz)
+/// wcc_v.value                                    ; 0x14010779c               (wcc_amt)
+/// wec_e.value                                    ; 0x140107e28 · 0x1401081bd · 0x14010858b · 0x140108a8e
+/// ```
+/// (`alignment` 의 `options[].value` 는 `Json::Value(intValue)` + 0 대입 — 0x140105a4f
+///  `mov edx,1` → 0x140086ca0 — 이라 **숫자**다. 그래서 `<`·`==` 가 수치 비교다.)
+/// 이미지 전체 disp32 스캔으로 `"condition"` 문자열(0x140474a60) xref 는 **16자리**다:
+/// **쓰기 10**(전부 이 주입기) + **읽기 6** — 씬 `user` 바인딩 파서 둘(0x1401a4f1b `find` ·
+/// 0x14017512c), TEXB 변형 조건 둘(0x14015cc13 = 바깥 `condition` · 0x14015cd74 = 안쪽
+/// `condition`, 형제 `name` 은 0x14015cd61 — `TexImage.VariantCondition` 이 파스하는 바로 그
+/// 이중 구조다), 그리고 0x14001f39b · 0x140134c81.
+/// **이 바이너리에 이 식을 평가하는 자리는 없다** — 결정적 반증은 `checkPositionVisibility()` 로,
+/// 그건 브라우저 스코프 함수다(scripts.js char@106119, `evalCondition` 이 쓰는 격리 스코프 `ea`).
+/// 즉 엔진은 조건을 **쓰기만** 하고 평가는 언제나 브라우저가 한다.
+///
+/// **평가 컨텍스트가 `$eval(expr, locals)` 라는 것**도 여기서 확정된다(char@106464):
+/// `ta.$eval(e, W.currentSelection.properties[W.selectedMonitor.location])` — **locals 가
+/// 프로퍼티 맵**이고 스코프에는 `checkPositionVisibility` 하나만 얹혀 있다. AngularJS 1.6 의
+/// 컴파일된 게터는 멤버 접근이 null-safe 라(`a === undefined ? undefined : a.value`)
+/// **없는 프로퍼티 참조는 던지지 않고 `undefined`**, 즉 falsy 다. 우리 `ConditionValue.none`
+/// 이 그 다섯 관측(`falsy` · `== 'x'` false · `> 0` false · `!x` true · `undefined == undefined`
+/// true)을 전부 같이 낸다 — `testMissingPropertyReferenceIsUndefinedLikeAngular` 가 잠근다.
+///
+/// **빈 문자열 조건은 "조건 없음" 이다.** 템플릿이 `ng-if="!property.condition ||
+/// evalCondition(property.condition)"`(char@750308 · 그룹은 `ng-show` char@757571 ·
+/// 플러그인 옵션 char@945562 · 에디터 목록 char@993077)라 `""` 는 falsy → 무조건 표시.
+/// `isVisible` 의 `!condition.isEmpty` 가 같은 답을 낸다.
+///
+/// **아직 옮기지 않은 것 둘**(둘 다 `general.properties` 도달 0):
+/// 1. **함수 호출.** 위 `checkPositionVisibility()` 가 유일한 실물 용례이고 브라우저 전용이다.
+///    토크나이저가 `(`/`)` 를 남겨 `isAtEnd` 가 거짓이 되므로 **전체 파스 실패 → 관용 표시**다.
+/// 2. **`$` 스트립.** 브라우저 목록 빌더가 평가 전에
+///    `l.condition = l.condition.replace("$","")` 를 한다(char@88445). JS `replace` 는
+///    문자열 패턴이면 **첫 한 번만** 지운다. 에디터 목록(char@375231
+///    `l.$eval(e, l.pConditionScope||l)`)과 플러그인 설정(char@613938)에는 이 전처리가 **없다** —
+///    같은 `condition` 이 어디서 평가되느냐에 따라 달라진다는 뜻이라, 한쪽만 옮기면 다른 쪽과
+///    갈린다. 실물 조건 17건에 `$` 는 0건이다.
+///
+/// **형제 키에 속지 마라.** 설치본 JSON 전수에서 `condition` 이라는 이름의 키는 **46건**이고
+/// **세 가지 문법**으로 갈린다(값 타입: 문자열 22 · 객체 24):
+/// ```
+/// 24  /gizmos/N/condition                셰이더 콤보 맵 — {"PERSPECTIVE":1} ×10 ·
+///                                        {"POINTEMITTER":{"op":"ge","value":1..4}} ·
+///                                        {"LINEEMITTER":{"op":"ge","value":1..3}}  (고유 8종)
+///  5  /objects/N/visible/user/condition  콤보 값 동등비교(위 정정표)
+/// 17  /general/properties/<k>/condition  **이 파일**
+/// ```
+/// 첫째는 셰이더 **콤보/디파인 맵**이고 **AngularJS 식이 아니다.** 문법의 출처는 WE 변경로그가
+/// 밝힌다 — *"Added complex condition support to shader passes, FBOs, bindings (only supporting
+/// ge operator for now)"*(scripts.js char@705260) · *"Added gt, le, lt condition operators to
+/// passes etc."*(char@705129). 다만 **이 24건이 붙어 있는 `gizmos` 자체가 에디터 전용**이다 —
+/// `gizmos` 문자열이 `wallpaper64.exe` 에 ASCII·UTF-16LE 어느 쪽에도 없다
+/// (`EffectManifest` 주석 · `docs/re/unimplemented-json-keys.md` 21행). 변경로그가 말하는
+/// 엔진 쪽 자리(`passes`/`fbos`/바인딩)에 붙은 `condition` 은 설치본 도달 **0** 이다.
+///
+/// 그리고 에디터 프로퍼티 목록에는 `disabledcondition` 이 따로 있고
+/// (`$eval(property.disabledcondition)` char@993569 등 — 숨기는 게 아니라 **위젯을 비활성화**),
+/// 텍스처 변형에는 `variantcondition` 이 있다(char@392362, 후보 타입이 `["bool","combo"]`).
+/// 둘 다 `general.properties` 스키마가 아니고 설치본 도달 0 이다.
 public enum PropertyConditionEvaluator {
     public static func isVisible(_ property: WallpaperProperty, in properties: [WallpaperProperty]) -> Bool {
         guard let condition = property.condition?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -206,7 +294,8 @@ public enum PropertyConditionEvaluator {
     /// (`ui/dist/scripts/scripts.js` @106522), 에디터 프로퍼티 목록도 같은 `$eval` 을 쓴다(@375231).
     /// 그래서 문자열 메서드 호출이 그대로 성립한다.
     ///
-    /// **도달**: WE 설치본의 실물 `condition` 22건(고유 16종) 중 **9건(고유 8종)** 이 이 형태다
+    /// **도달**: WE 설치본의 `general.properties` 조건 **17건(고유 14종)** 중 **9건(고유 8종)** 이
+    /// 이 형태다(분자는 종전과 같다 — 바뀐 것은 분모다. §도달의 정정표)
     /// (`projects/defaultprojects/corsair_collection/project.json` 의
     /// `effect.value.endsWith('pulse') === true` 류). 종전에는 `effect.value.startsWith` 가 식별자로
     /// 토큰화된 뒤 남은 `('rainbow')` 때문에 파스 실패 → 조건 무시(항상 표시)로 흘렀다.
@@ -428,7 +517,7 @@ private struct Parser {
     /// 때문에 `parser.isAtEnd` 가 거짓). 2026-08-21 클러스터 Q 에서 두 레벨로 갈랐다 —
     /// 소비처 영향은 **단조 확대**다(지금 파스되는 식은 전부 그대로 파스된다):
     /// `WallpaperCompatibilityAnalyzer` 의 `propertyDisplayCondition` 경고는 **줄기만** 하고
-    /// `DeepScan` 의 `conditionsEvaluable` 는 **늘기만** 한다. 설치본 조건 **22건 / 고유 16종**을
+    /// `DeepScan` 의 `conditionsEvaluable` 는 **늘기만** 한다. 설치본 조건 **17건 / 고유 14종**을
     /// 전수 재측정해 비교 연산자가 둘 이상 연쇄하는 식이 **0건**임을 확인했으므로(전부 `&&`
     /// 로만 이어진다) 그 코퍼스 위에서 두 소비처의 수치는 **한 건도 움직이지 않는다**.
     private mutating func parseEquality() -> ConditionValue? {

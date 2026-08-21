@@ -11,12 +11,34 @@ import Foundation
 /// **lockangle/locklength/magic 은 재생에 없다** — 세 문자열 모두 wallpaper64.exe 에 xref 0건이고
 /// 에디터 JS 에만 있다(`ui/dist/scripts/scripts.js`: `beziermode` 가 magic/step 을 고르고
 /// lockangle/locklength 는 핸들 드래그 제약). 핸들 좌표에 이미 반영돼 있다.
+///
+/// **보간 종류는 둘뿐이다 — 큐빅 베지어와 계단(step). 이징 열거형은 존재하지 않는다**
+/// (2026-08-21 클러스터 AF, 상수 **적재** 자리를 셌다 — 호출 자리가 아니다).
+/// 키프레임 파서 `0x1401a8ce0–0x1401a940c` 안에서 flags 레지스터(`r13d`)에 상수를 넣는 자리는
+/// **정확히 넷**이다: `mov r13d, 4`(0x1401a8fed, step) · `xor r13d, r13d`(0x1401a8ff8, 없음) ·
+/// `mov r13d, 1`(0x1401a9050, back) · `or r13d, 2`(0x1401a90dd, front). 저장은
+/// `mov [r14+8], r13d`(0x1401a9148)와 `mov [rsi+rbp+8], r13d`(0x1401a9257) 둘. 즉 flags 워드가
+/// 가질 수 있는 값은 `{0,1,2,3,4}` 뿐이고 **커브 타입 태그가 들어갈 자리가 없다**.
+/// 에디터의 `beziermode` 는 여섯 가지지만(`["both","left","right","none","magic"]`
+/// scripts.js char@554808 + `"step"` char@566452) 전부 이 세 비트 + 핸들 좌표로 접힌다 —
+/// `magic` 은 저작 시점에 이웃 프레임 간격으로 핸들 x/y 를 자동 배치하는 것뿐이고
+/// (char@556010 `a.back.magic&&(a.back.x=-.5-s,a.back.y=-.1*r)`), 그 결과가 좌표에 구워진다.
 public struct PropertyKeyframe: Equatable {
     public let frame: Float
     public let value: Float
+    /// flags bit1. **런타임 평가기는 이 비트를 읽지 않는다**(2026-08-21 클러스터 AF 확정).
+    /// 키프레임 배열을 stride **0x1c** 로 인덱싱하는 함수는 `imul r,r,0x1c` 전수 스캔으로 넷뿐이고
+    /// (파서 0x1401a8ce0 · `wrapLoop` 0x1401a98b0 · 평가기 0x1401a9bc0 · 벡터 복사 0x1401aa430),
+    /// 그 넷 안에서 키프레임 flags 를 **읽는** 명령은 딱 둘이다: `test r10b, 2`(0x1401a9b48 —
+    /// `wrapLoop` 이 **첫** 키프레임의 bit1 을 보고 끝점 back 을 만들지 결정) 와
+    /// `test byte ptr [r10+r11+8], 4`(0x1401a9d18 — 평가기의 step). 복사 함수는 flags 를 아예 안
+    /// 본다. **bit0 은 넷 어디서도 읽히지 않는다** — 쓰기만 셋이다(파서 `mov r13d,1` 0x1401a9050 ·
+    /// `wrapLoop` 의 `or eax,1` 0x1401a9b51 / `and eax,0xfffffffe` 0x1401a9b66).
+    /// 즉 `enabled` 는 **파스 시점에 x/y 를 읽을지**만 정하고, 곡선은 언제나 x/y 만 본다.
     public let frontEnabled: Bool
     public let frontX: Float
     public let frontY: Float
+    /// flags bit0. 위 `frontEnabled` 주석 참조 — **읽는 자리가 하나도 없다.**
     public let backEnabled: Bool
     public let backX: Float
     public let backY: Float
@@ -226,9 +248,20 @@ public struct PropertyAnimation: Equatable {
     /// 저작 기본값 `front.x=+1 / back.x=-1` 은 이 규약에서 두 제어점이 구간 중점에 모이는
     /// 대칭 ease 이고, 종전 규약에서는 끝점에 거의 붙은 전혀 다른 곡선이었다.
     ///
-    /// `enabled=false` 핸들은 WE 가 **파스 단계에서 x/y 를 읽지 않아 0** 이다
-    /// (VA 0x1401a8ff8 / 0x1401a8f53) — 여기서 끝점으로 접는 것과 동치이고, 양쪽이 0 이면
-    /// x·y 가 같은 u 다항식을 타므로 정확히 선형이 된다.
+    /// **`enabled` 비트를 여기서 보지 않는다**(2026-08-21 클러스터 AF 에서 고쳤다). 실물 평가기
+    /// 0x1401a9bc0 은 제어점을 조립할 때 flags 를 **step(bit2) 하나만** 본다(0x1401a9d18) —
+    /// `mulss xmm9,[r10+r11-8]`(k1.frontX) · `mulss xmm8,[r10+r11+0xc]`(k2.backX) ·
+    /// `addss xmm0,[r10+r11-4]`(k1.frontY) · `addss xmm0,[r10+r11+0x10]`(k2.backY) 넷이 전부
+    /// **무조건** 실행된다. disabled 핸들이 접히는 것은 **파서**가 x/y 를 아예 읽지 않아 0 으로
+    /// 남기 때문이다(0x1401a8fd1 의 `xorps xmm6/7/8/9` → 0x1401a8ffb/0x1401a907f 의 `test`
+    /// 로 읽기 블록을 건너뜀). 그래서 `parse` 쪽에서 0 을 굽고 여기서는 좌표를 그대로 쓴다.
+    ///
+    /// 종전 구현은 반대로 파스에서 좌표를 담고 **여기서** `enabled` 로 접었다. 코퍼스에서는
+    /// 동치지만(76/76 이 명시 bool + 좌표 일치) `wrapLooped` 의 **덮기 경로**에서 갈렸다:
+    /// 그 경로는 실물처럼 flags bit0 만 지우고 backX/backY 를 남기는데(0x1401a9b66), 평가기가
+    /// bit0 을 안 보므로 **실물에서는 그 잔존 좌표가 그대로 곡선을 휜다**. 합성 반례
+    /// (`kf0{front disabled}`, `kf1{frame == length, back{-1, +20}}`, `wraploop`)에서 frame 31 값이
+    /// **10.000000 ↔ 18.888773** 으로 갈렸다. 코퍼스 도달 0(덮기 경로 자체가 0건).
     ///
     /// 근 찾기는 WE 가 `u=0` 에서 0.999 를 반씩 줄이며 `|X(u)-frame| < 0.01` 프레임에서 멈추는
     /// 이분법이다(VA 0x1401a9d90–0x1401a9e23, 상한 1000회, 이후 `clamp(u, 0, 1)`).
@@ -238,10 +271,10 @@ public struct PropertyAnimation: Equatable {
         let p0x = k1.frame, p0y = k1.value
         let p3x = k2.frame, p3y = k2.value
         let half = 0.5 * (p3x - p0x)
-        let p1x = k1.frontEnabled ? p0x + half * k1.frontX : p0x
-        let p1y = k1.frontEnabled ? p0y + k1.frontY : p0y
-        let p2x = k2.backEnabled ? p3x + half * k2.backX : p3x
-        let p2y = k2.backEnabled ? p3y + k2.backY : p3y
+        let p1x = p0x + half * k1.frontX
+        let p1y = p0y + k1.frontY
+        let p2x = p3x + half * k2.backX
+        let p2y = p3y + k2.backY
         func bez(_ a: Float, _ b: Float, _ c: Float, _ d: Float, _ u: Float) -> Float {
             let m = 1 - u
             return m * m * m * a + 3 * m * m * u * b + 3 * m * u * u * c + u * u * u * d
@@ -576,12 +609,24 @@ public struct PropertyAnimation: Equatable {
                 //  실물의 "안 읽는다" 와 필드 단위로 같은 결과다.)
                 let front = step ? nil : k["front"] as? [String: Any]
                 let back = step ? nil : k["back"] as? [String: Any]
+                // **disabled 핸들의 x/y 는 읽지 않는다** — 실물 파서는 진입부에서
+                // `xorps xmm6/7/8/9`(0x1401a8fd1–0x1401a8fdc)로 네 좌표를 0 으로 깔고,
+                // `test bpl,bpl`(0x1401a8ffb, back.enabled) / `test r14b,r14b`(0x1401a907f,
+                // front.enabled)가 거짓이면 `find("x")`/`find("y")` 블록을 **통째로 건너뛴다**
+                // (각각 `je 0x1401a907f` / `je 0x1401a910a`). 저장부(0x1401a912d–0x1401a9139,
+                // 0x1401a913f)는 그 0 을 그대로 굽는다.
+                // 종전 Waple 은 여기서 좌표를 담고 `segment()` 에서 `enabled` 로 접었다 —
+                // 코퍼스 위에서는 동치지만 `wrapLooped` 덮기 경로에서 갈렸다(`segment` 주석).
+                let frontOn = handleEnabled(front)
+                let backOn = handleEnabled(back)
                 out.append(PropertyKeyframe(
                     frame: frame, value: value,
-                    frontEnabled: handleEnabled(front),
-                    frontX: f(front?["x"]) ?? 0, frontY: f(front?["y"]) ?? 0,
-                    backEnabled: handleEnabled(back),
-                    backX: f(back?["x"]) ?? 0, backY: f(back?["y"]) ?? 0,
+                    frontEnabled: frontOn,
+                    frontX: frontOn ? (f(front?["x"]) ?? 0) : 0,
+                    frontY: frontOn ? (f(front?["y"]) ?? 0) : 0,
+                    backEnabled: backOn,
+                    backX: backOn ? (f(back?["x"]) ?? 0) : 0,
+                    backY: backOn ? (f(back?["y"]) ?? 0) : 0,
                     step: step))
             }
             // WE 는 **정렬하지 않고** `frame <= 직전 frame` 인 키프레임을 버린다(VA 0x1401a8fc1

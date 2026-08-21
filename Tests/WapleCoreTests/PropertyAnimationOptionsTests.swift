@@ -951,4 +951,64 @@ final class PropertyAnimationOptionsTests: XCTestCase {
         """#)
         XCTAssertEqual(explicitEmpty.value(component: 1, atTime: 0.5, base: 77), 77)
     }
+
+    // MARK: - ⑪ `enabled` 비트는 **파스에서만** 쓰인다 (2026-08-21 클러스터 AF)
+
+    /// 실물 파서는 disabled 핸들의 `x`/`y` 를 **읽지 않는다** — 진입부
+    /// `xorps xmm6/7/8/9`(0x1401a8fd1–0x1401a8fdc)가 네 좌표를 0 으로 깔고,
+    /// `test bpl,bpl`(0x1401a8ffb, back) / `test r14b,r14b`(0x1401a907f, front)가 거짓이면
+    /// `find("x")`/`find("y")` 블록을 통째로 건너뛴다. 저장부(0x1401a912d–0x1401a913f)가 그 0 을
+    /// 그대로 굽는다. 종전 Waple 은 좌표를 담고 `segment()` 에서 접었다 — 여기서 필드로 잠근다.
+    func testDisabledHandleCoordinatesAreZeroedAtParse() throws {
+        let anim = try parseJSON(#"""
+        {"animation": {
+          "c0": [
+            {"frame": 0, "value": 0,
+             "front": {"enabled": false, "x": 1.5, "y": 40},
+             "back":  {"enabled": false, "x": -1.5, "y": -40}},
+            {"frame": 30, "value": 100,
+             "front": {"enabled": true, "x": 1, "y": 0},
+             "back":  {"enabled": true, "x": -1, "y": 0}}],
+          "options": {"fps": 30, "length": 30, "mode": "loop"}}}
+        """#)
+        let k0 = anim.tracks[0][0]
+        XCTAssertFalse(k0.frontEnabled)
+        XCTAssertFalse(k0.backEnabled)
+        XCTAssertEqual(k0.frontX, 0, "disabled front 의 x 는 읽히지 않는다")
+        XCTAssertEqual(k0.frontY, 0)
+        XCTAssertEqual(k0.backX, 0, "disabled back 의 x 도 마찬가지")
+        XCTAssertEqual(k0.backY, 0)
+        // enabled 핸들은 그대로 담긴다(무회귀).
+        XCTAssertTrue(anim.tracks[0][1].backEnabled)
+        XCTAssertEqual(anim.tracks[0][1].backX, -1, accuracy: 1e-6)
+    }
+
+    /// **덮기 경로의 잔존 back 좌표는 실물에서 곡선을 휜다.** 두 사실이 겹친 결과다:
+    /// (a) `wrapLoop` 은 첫 키프레임 front 가 disabled 면 끝점 flags 의 **bit0 만** 지우고
+    ///     backX/backY 는 남긴다(0x1401a9b66 `and eax, 0xfffffffe` — 0x1401a9b5f 의 저장을 건너뜀).
+    /// (b) 평가기는 **bit0 을 읽지 않는다** — 키프레임을 만지는 세 함수 안에서 flags 를 읽는
+    ///     자리는 `test r10b,2`(0x1401a9b48)와 `test byte [r10+r11+8],4`(0x1401a9d18) 둘뿐이고,
+    ///     제어점 조립(0x1401a9d6d/0x1401a9d74/0x1401a9e58/0x1401a9e8f)은 무조건 실행된다.
+    ///
+    /// 종전 Waple 은 `segment()` 에서 `backEnabled` 로 접어 이 구간을 **평평하게** 만들었다.
+    /// 아래 저작에서 frame 31 값이 10.000000(종전) ↔ 18.888773(실물) 로 갈린다.
+    /// 코퍼스 도달 0(덮기 경로 자체가 동봉·설치본 0건 — wraploop 2블록 다 붙이기 경로).
+    func testWrapLoopOverwriteStaleBackHandleStillShapesTheCurve() throws {
+        let anim = try parseJSON(#"""
+        {"animation": {
+          "c0": [
+            {"frame": 0,  "value": 10, "front": {"enabled": false, "x": 0, "y": 0}},
+            {"frame": 60, "value": 99, "back": {"enabled": true, "x": -1, "y": 20}}],
+          "options": {"fps": 30, "length": 60, "mode": "loop", "wraploop": true}}}
+        """#)
+        XCTAssertEqual(anim.tracks[0].count, 2, "덮기 경로 — frame 60 == length")
+        let end = anim.tracks[0][1]
+        XCTAssertFalse(end.backEnabled, "첫 front 가 disabled → bit0 클리어")
+        XCTAssertEqual(end.backX, -1, accuracy: 1e-6, "그래도 좌표는 남는다")
+        XCTAssertEqual(end.backY, 20, accuracy: 1e-6)
+        XCTAssertEqual(end.value, 10, accuracy: 1e-6, "value 는 첫 키프레임 값")
+        // frame 31 (= 31/30 초) — 접었다면 양 끝이 10 이라 평평한 10 이 나온다.
+        XCTAssertEqual(anim.value(component: 0, atTime: 31.0 / 30.0, base: 0), 18.888773,
+                       accuracy: 0.01, "잔존 back 좌표가 곡선을 위로 휜다(접었다면 10.0)")
+    }
 }
