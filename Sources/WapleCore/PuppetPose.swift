@@ -14,7 +14,13 @@ import simd
 ///     가중 블렌드 0x1401f9020–0x1401f97f8, 가산 0x1401f9820–0x1401fa270.
 ///   · 로드 시점에 키의 오일러 3축을 쿼터니언으로 굽는다(0x140264188–0x1402642ae).
 ///   · 회전 보간은 **nlerp + 최단호 부호보정 + 재정규화**이지 slerp 가 아니다.
-///   · 로컬→월드는 `world[i] = world[parent] × local[i]`(0x1401fea63–0x1401feada).
+///   · 로컬→월드는 `world[i] = world[parent] × local[i]`(0x1401fea10–0x1401feadf).
+///     **[2026-08-21 3차] 피연산자 순서를 직접 떠서 확정했다** — 종전엔 자기정합 추정이었다.
+///     상세는 `bindWorlds` 주석.
+///   · 정점 스키닝은 **선형 블렌드 스키닝(LBS)** 이다. 듀얼 쿼터니언은 없다 — 동봉 셰이더
+///     137개 전수 grep 에서 `dualquat`/`DQS` 계열 식별자 0건, `g_Bones` 를 쓰는 9개 전부가
+///     `Σ wᵏ·Mᵏ` 가중 행렬합이다. 그리고 스키닝은 **정점 위치만** 건드린다 — 텍스처 좌표는
+///     `v_TexCoord.xy = a_TexCoord` 로 그대로 통과한다(§`skinnedPositions`).
 /// 상세는 docs/re/skeleton-animation.md.
 public enum PuppetPose {
 
@@ -327,7 +333,15 @@ public enum PuppetPose {
         return m.inverse
     }
 
-    /// 본별 스킨 행렬. animation 인덱스가 범위 밖이면 항등(정지 포즈).
+    /// 본별 스킨 행렬 = `world_i(t) × bindWorld_i⁻¹`. animation 인덱스가 범위 밖이면 항등(정지 포즈).
+    ///
+    /// **역바인드는 파일에 없다** — MDLS 본 레코드는 64B 행렬 하나뿐이고(`0x140262573`,
+    /// `r8d=0x40`) 그게 부모상대 로컬 레스트다. 따라서 모델공간 역바인드는 런타임에
+    /// `bindWorlds` 를 합성해 뒤집는 수밖에 없다. WE 도 매 프레임 `skel+0x2c8` 에 레스트 월드를
+    /// 다시 합성한다(`0x1401fea10`, 레이어 캐스케이드 `0x1401fed50` 보다 **앞**에서 돈다).
+    /// ⚠️ 다만 그 레스트 월드에 역행렬을 걸어 `g_Bones` 팔레트를 만드는 지점은 아직
+    /// 못 찾았다(`0x1401fdf90` 안에는 없다 — 이 함수의 `0x14005f730`(4×4 역행렬) 호출은 0건).
+    /// 곱하는 **순서**(`world × bindWorld⁻¹` vs 그 반대)는 여전히 자기정합(t=0 항등)으로만 지지된다.
     public static func skinMatrices(model: PuppetModel, animation: Int, time: Float) -> [simd_float4x4] {
         let n = model.bones.count
         guard n > 0 else { return [] }
@@ -381,6 +395,34 @@ public enum PuppetPose {
     }
 
     /// 본별 바인드 월드(부모 체인 합성) — 스킨/부착점 공용.
+    ///
+    /// **합성 순서는 실측 확정이다(2026-08-21 3차).** WE 의 계층 합성 루프
+    /// `0x1401fea10`–`0x1401feadf` 는 본 i 마다
+    /// ```
+    /// if ([bone+0x60] == -1) world[i] = local[i]                  ; 0x1401fea5d / 0x1401feaae
+    /// else  call 0x14005ecb0(rcx=tmp, rdx=world[[bone+0x60]], r8=local[i])   ; 0x1401fea8b
+    ///       world[i] = tmp                                        ; 0x1401feace–0x1401feadf
+    /// ```
+    /// 를 돈다(`local[i]` = `bone+0x20` 레스트 행렬 또는 `skel+0x50` 오버라이드 배열 —
+    /// 선택은 `vector::empty()` `0x1401d76a0`. `world` 배열은 `skel+0x2c8`, 원소 64B =
+    /// `sar rax,6` @`0x140215e67`).
+    ///
+    /// 그리고 `0x14005ecb0` 의 산술을 직접 떠 보면(0x14005ecba–0x14005ee4b) 평탄 인덱스로
+    /// `out[4j+i] = Σₖ A[4k+i]·B[4j+k]` 다 — A=rdx 를 4개씩 통째로 읽고 B=r8 의 성분을
+    /// `shufps ..,0` 로 브로드캐스트해 곱한다(`movss xmm5,[r8]` `0x14005ecd3` →
+    /// `shufps xmm5,xmm5,0` `0x14005edd6` → `mulps xmm3,xmm5` `0x14005edda`,
+    /// 저장 `movsd [rcx],xmm3` `0x14005ee3d`).
+    /// **이 식은 열우선/행우선 어느 쪽으로 읽어도 "B 가 먼저 적용된다"** 로 같은 답을 준다
+    /// (열우선이면 out=A·B 이고 열벡터라 B 가 먼저, 행우선이면 out=B·A 이고 행벡터라 또 B 가
+    /// 먼저 — 함정 14 의 모호성이 여기선 상쇄된다). r8 = 자기 로컬이므로
+    /// **로컬 → 부모 순서**, 즉 열벡터 규약의 `world[parent] * local` 이 맞다.
+    ///
+    /// **스케일은 상속된다.** 합성이 4×4 아핀 전체 곱이고(`movups` 64B 복사 4번,
+    /// `0x1401feace`–`0x1401feadf`) 스케일 제거·정규직교화 단계가 없다 — 부모의 비균등
+    /// 스케일은 자식에게 전단(shear)으로 그대로 내려간다.
+    ///
+    /// 부모 인덱스가 자신 이후면 WE 는 아직 안 쓴 슬롯을 읽는다(전 프레임 잔값). Waple 은
+    /// `p < i` 게이트로 루트 취급한다 — 순환/역순 부모에서 무한재귀·미정의값을 막는 의도적 발산.
     static func bindWorlds(_ model: PuppetModel) -> [simd_float4x4] {
         var bw = [simd_float4x4](repeating: matrix_identity_float4x4, count: model.bones.count)
         for (i, b) in model.bones.enumerated() {
@@ -399,11 +441,24 @@ public enum PuppetPose {
     ///   2. `layers` 순서대로 누적한다. **가중치 정규화는 없다** — 레이어 가중치 합이 1을 넘든
     ///      말든 각 레이어가 순서대로 현재 포즈를 자기 포즈 쪽으로 끌어당길 뿐이다
     ///      (0x1401fed50 루프 → 0x1401f9020 호출).
+    ///      **[3차 재확인]** 루프 몸통을 직접 떴다: `test byte [layer+0xd0], 1` `0x1401fed54`
+    ///      (visible 아니면 스킵) → `advance(layer+0xf8, dt·[layer+0xc8])` `0x1401fed81`/`0x1401fed89`
+    ///      → `sample` `0x140170580` → `effectiveBlend` `0x14026c8b0` → 디스패치.
+    ///      누적 대상은 **포즈 SoA(`skel+0x230`) 자기 자신**이라 제자리 캐스케이드다
+    ///      (`mov r8,[rax+0x230]` `0x1401fee9b` 이 블렌드 호출의 인자로 그대로 들어간다) —
+    ///      "각 레이어 포즈를 따로 뽑아 가중 합" 이 아니다.
+    ///      그리고 `dt` 에 rate 를 **곱해 위상을 적분**한다(`xmm13` = 함수 2번째 인자 dt,
+    ///      `0x1401fdfca`) — `time × rate` 순간위상이 아니다. `integratedCascadeFrame` 의 근거.
     ///   3. **그 레이어가 이 본을 건드리지 않으면 건너뛴다.** WE 는 본별 마스크를 `blendvps` 로
     ///      적용해(마스크 로드 0x1401f8c7b, 선택 0x1401f8c9f) 미애니 본의 값을 보존한다.
     ///      종전 Waple 은 빈 트랙을 바인드로 간주해 앞 레이어 결과를 바인드 쪽으로 되끌었다.
     ///   4. weight == 1 이고 가산이 아니면 WE 는 아예 덮어쓰기 경로(0x1401f89a0)로 빠진다 —
     ///      `mixTRS(_, _, 1)` 과 동치라 여기선 분기하지 않는다(부호 트릭 상 nlerp(t=1)=q1).
+    ///      **[3차]** 분기 판정은 `ucomiss xmm8, xmm15` `0x1401fee15` 인데 `xmm15` 는 0 이 아니라
+    ///      **1.0**(`movss xmm15,[0x140492704]` `0x1401fed21`)이다. 즉 "유효 가중치가 정확히 1.0
+    ///      **이고** 가산 비트(`layer+0xd0` bit1)가 꺼졌을 때만" 덮어쓰기이고, 그 밖은 전부
+    ///      가중 블렌드 `0x1401f9020`(`0x1401ff38e`) 또는 가산 `0x1401f9820`(`0x1401ff874`)다.
+    ///      가중치 0 인 절대 레이어도 덮어쓰기가 아니라 `mix(…, 0)` = 무변화로 지나간다.
     /// C④: overrideFrames[i] 가 non-nil 이면 그 레이어의 프레임을 time×rate 순간위상 대신 그대로 쓴다.
     static func worldMatrices(model: PuppetModel,
                               layers: [(anim: Int, additive: Bool, weight: Float, rate: Float)],
@@ -515,11 +570,34 @@ public enum PuppetPose {
         return worldMatrices(model: model, layers: L, time: time)[Int(att.bone)] * att.local
     }
 
-    /// CPU 스키닝: p' = Σ wᵏ · skin[idxᵏ] · p.
+    /// CPU 스키닝: p' = Σ wᵏ · skin[idxᵏ] · p. **선형 블렌드 스키닝(LBS)** 이다.
     ///
-    /// ⚠️ **반증 주의**: WE 는 가중치를 정규화하지 **않는다**. 셰이더가 원시 가중합을 그대로 쓴다
-    /// (`assets/shaders/base/model_vertex_v1.h:147-150`,`assets/shaders/genericimage3.vert:139-142`:
-    ///  `mul(vec4(p,1), g_Bones[i.x]*w.x + g_Bones[i.y]*w.y + g_Bones[i.z]*w.z + g_Bones[i.w]*w.w)`).
+    /// **정점당 본 수는 정확히 4.** 정점 포맷 비트 `0x00800000`(boneIndices 4×u32) /
+    /// `0x01000000`(weights 4×f32) 이고 셰이더도 `.x .y .z .w` 넷만 쓴다.
+    ///
+    /// **듀얼 쿼터니언이 아니다.** 설치본 `assets/shaders/` 137개 전수에서 `dualquat`/`dual_quat`/
+    /// `DQS` 계열 식별자 **0건**, `g_Bones[` 를 쓰는 **9개**(`base/model_vertex_v1.h`,
+    /// `clippingmaskimage4.vert`, `generic3.vert`, `generic4.vert`, `genericimage2.vert`,
+    /// `genericimage3.vert`, `genericimage4.vert`, `passthroughblend.vert`, `shadowcaster.vert`)
+    /// 전부가 가중 **행렬합**이다. 두 가지 철자가 있는데 아핀이라 대수적으로 동치다:
+    /// ```glsl
+    /// // genericimage3.vert:139-142 등 8개 — 행렬을 먼저 섞고 한 번 곱한다
+    /// mul(vec4(p,1), g_Bones[i.x]*w.x + g_Bones[i.y]*w.y + g_Bones[i.z]*w.z + g_Bones[i.w]*w.w)
+    /// // passthroughblend.vert:19-22 — 각각 곱하고 나중에 섞는다 (Σ wᵏ·(Mᵏp) ≡ (Σ wᵏ·Mᵏ)p)
+    /// mul(vec4(p,1), g_Bones[i[0]])*w[0] + … + mul(vec4(p,1), g_Bones[i[3]])*w[3]
+    /// ```
+    ///
+    /// **퍼펫 워프는 텍스처 좌표를 건드리지 않는다.** 스키닝은 `a_Position` 만 변형하고
+    /// `v_TexCoord.xy = a_TexCoord` 로 UV 를 그대로 통과시킨다(`genericimage2.vert:104`,
+    /// `genericimage3.vert:155`, `clippingmaskimage4.vert:113`). UV 를 바꾸는 유일한 콤보는
+    /// `SPRITESHEET`(`g_Texture0Translation` + `g_Texture0Rotation`)이고 본과 무관하다.
+    /// 즉 2D 퍼펫은 **UV 고정 메시 워프**다 — 텍스처 좌표 워프가 아니다.
+    ///
+    /// **가중치 0 슬롯도 건너뛰지 않는다.** 셰이더는 네 슬롯을 무조건 읽어 곱하므로 가중치가 0
+    /// 이어도 `g_Bones[idx]` 인덱싱은 일어난다(범위 밖 인덱스는 GPU 미정의). 음수 가중치도
+    /// 그대로 더해진다. Waple 은 `w != 0` 만 건너뛴다 — 0×NaN 방어이자 값은 동일.
+    ///
+    /// ⚠️ **반증 주의**: WE 는 가중치를 정규화하지 **않는다**(9개 셰이더 어디에도 합 나눗셈 없음).
     /// 즉 합이 1이 아닌 데이터는 WE 에서 축소/확대되어 렌더된다. 여기서 wsum 으로 나누는 것은
     /// Waple 자체 셰이더(Mesh3DShaders.mv_skin)와의 정합을 위한 것이지 WE 파리티가 아니다 —
     /// 실물 자산은 리소스 컴파일러가 정규화해 두므로 차이가 드러나지 않는다. 가중치 합 0 → 원위치.
@@ -531,7 +609,9 @@ public enum PuppetPose {
             let p4 = SIMD4(v.position.x, v.position.y, v.position.z, 1)
             for k in 0..<4 {
                 let w = v.weights[k]
-                guard w > 0 else { continue }
+                // WE 는 네 슬롯을 무조건 더한다 — 음수 가중치도 기여한다. 정확히 0 인 슬롯만
+                // 건너뛴다(값 동일 + 퇴화 행렬의 0×NaN 전파 차단).
+                guard w != 0 else { continue }
                 let bi = min(Int(v.boneIndices[k]), matrices.count - 1)
                 let q = matrices[bi] * p4
                 out += SIMD3(q.x, q.y, q.z) * (w / wsum)
