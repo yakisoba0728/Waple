@@ -751,20 +751,25 @@ WE 에서도 읽히지 않고, Waple `DirectionalShadowMath.validCascades`(전 �
 
 ---
 
-## 7. Waple 배선 — 이번에 바뀐 것
+## 7. Waple 배선 — 배선 완료 (2026-08-21)
 
-### 7.1 `Scene3DLighting.LightSlotBudget` (신규)
+### 7.1 `SceneLightSlotBudget` (WapleCore)
 
-`resolveLights(_:nodes:config:)` 가 `SceneLightConfig?` 를 받아 §4.3 규약대로 소비한다.
+`Scene3DLighting.resolveLights(_:nodes:config:)` 가 `SceneLightConfig?` 를 받아 §4.3 규약대로 소비한다.
+예산 산술 본체는 **`Sources/WapleCore/ScenePBRLighting.swift`** 의 `SceneLightSlotBudget` /
+`SceneLightSlotKind` 다 — `Tests/WapleRenderTests` 는 macOS 전용이라 WapleRender 안에 두면 CI 왕복
+없이는 검증이 안 되고, 예산은 텍스처도 Metal 도 안 쓰는 순수 산술이라 Core 로 뺄 수 있다.
+리눅스 코어 테스트 `Tests/WapleCoreTests/SceneLightConfigBudgetTests.swift`(10 케이스)가 규약을 못박는다.
 
 | 규약 | 구현 |
 | --- | --- |
-| 종별 총량 상한 | `budget.take(kind)` — 소진 시 `continue` |
-| 섀도우 별도 예산 | `budget.takeShadow(kind)` — 실패 시 `castsShadow = false`(셰이딩은 유지) |
+| 종별 총량 상한 | `budget.take(slotKind)` — 소진 시 `continue` |
+| 섀도우 별도 예산 | `budget.takeShadow(slotKind)` — 실패 시 `castsShadow = false`(셰이딩은 유지) |
 | 가시성 우선 | 부모 가시성/유한성 가드 **뒤**에 소비 |
 | 미저작(nil) | 모든 `take` 성공 = 종전 first-8 폴백(**비트동일**) |
+| 저작 전건 0(`{}`) | 전부 드롭 — WE 와 같다(`0x140190ca8`) |
 
-**의도적 차이 3개**
+**의도적 차이 4개**
 
 1. 미저작 씬을 WE 처럼 "V1 라이트 0개" 로 만들지 **않는다**. `arsenal`(ambientcolor 완전 검정) 이
    새까매지고, 우리 메시 셰이더는 레거시 Blinn 레인을 이식하지 않았다 —
@@ -772,30 +777,50 @@ WE 에서도 읽히지 않고, Waple `DirectionalShadowMath.validCascades`(전 �
 2. 소비 시점을 유한성/반경 가드 뒤로 미룬다(WE 는 그 가드가 없어 순서가 무의미).
 3. 셰이더 배열이 8 고정이라 **줄이는 방향만** 반영한다. `lightconfig` 합이 8 을 넘는 씬은 여전히
    앞 8개만 산다 — §9 `[미해결]`.
+4. **예산을 먹는 것은 V1 레인(`lpoint`/`lspot`/`ltube`/`ldirectional`)뿐이다.**
+   `SceneLightSlotKind(weLightType:)` 이 `l` 접두 4종만 받고 나머지는 nil 을 준다. 근거는 §1.1 —
+   `"point"` 와 미지 문자열은 타입 5 라 V1 패커가 통째로 버리고(`0x140191114`) 레거시 4슬롯 레인으로
+   간다. 즉 WE 에서도 `lightconfig` 슬롯을 **안 먹는다**. Waple 의 `Scene3DLightKind(type:)` 은
+   접두 없는 표기도 V1 근사로 그리는 관용인데(§1.1 ⚠️), 그 관용을 예산에까지 들이면 `lightconfig`
+   를 가진 씬의 레거시 라이트가 통째로 사라져 화면이 검어질 수 있다. **예산은 WE 가 실제로 버리는
+   것만 버린다** — 이것이 무회귀 규약의 마지막 한 겹이다.
 
-### 7.2 주석 정정
+### 7.2 주석 정정 둘
 
 - `Scene3DLighting.swift` 의 생성기 범위 `0x1401691c0–0x14016b154` → **`0x140169140–0x14016b0d4`**
   (`primary()` 실측). 인접 `0x14016b0e0–0x14016c3f8` 이 전처리기 파서라는 것과 HLSL 판이
   `0x1400f5cb0–0x1400f8520` 이라는 것도 같이 적었다.
-- `QuadShaders.swift:193` 의 "슬롯 8" 주석에 WE 실물 규약(니블 상한 15 / 2비트 3 / 배열 길이 = 저작값)과
-  2D 레인 미배선 사실을 명시.
+- **`ScenePBRLighting.swift` 의 같은 범위가 `0x140168000–0x14016b154` 로 또 달랐다** — 양쪽 끝이
+  다 틀렸다. `primary(0x140168000)` = `0x140167e10–0x140169138`(앞 함수),
+  `primary(0x14016b154)` = `0x14016b0e0–0x14016c3f8`(뒤 함수). 정정했다.
+  `scripts/spec/check_address_ranges.py` 는 **시작 < 끝** 만 보므로 이 부류를 못 잡는다(§9-9).
+- `QuadShaders.swift` 의 "슬롯 8" 주석은 WE 실물 규약(니블 상한 15 / 2비트 3 / 배열 길이 = 저작값)을
+  이미 담고 있었고, "3D 는 미배선" 문장만 배선 완료로 고쳤다. 2D 레인은 여전히 미배선이다.
 
-### 7.3 착지 못 한 마지막 한 줄 (**타 레인 소유 파일**)
+### 7.3 착지한 5줄
 
-`config:` 인자는 기본값 `nil` 이라 **현재 호출부는 아무것도 안 넘긴다**. 실제로 켜려면:
+`config:` 인자는 기본값 `nil` 이라 종전 호출부는 아무것도 안 넘겼다. 이번에 배선했다:
 
-| 파일(내 소유 아님) | 줄 | 필요한 변경 |
+| 파일 | 줄(배선 후) | 변경 |
 | --- | --- | --- |
-| `Sources/WapleRender/SceneRenderer.swift` | `:1087` 근처 | `var scene3DLightConfig: SceneLightConfig? = nil` 저장 프로퍼티 + `:2288` 리셋 |
-| `Sources/WapleRender/SceneRenderer3D.swift` | `:241` | `scene3DLightConfig = doc.lightConfig` |
-| 〃 | `:1539` | `resolveLights(scene3DLights, nodes: nmap, config: scene3DLightConfig)` |
-| `Sources/WapleRender/SceneRendererFrameEncoder.swift` | `:942` | 같은 인자 추가 |
+| `Sources/WapleRender/SceneRenderer.swift` | `:1093` | `var scene3DLightConfig: SceneLightConfig? = nil` 저장 프로퍼티 |
+| 〃 | `:2295` | `teardown()` 에서 `nil` 리셋(`scene3DLights` 와 동일 수명) |
+| `Sources/WapleRender/SceneRenderer3D.swift` | `:245` | `build3D` 에서 `scene3DLightConfig = doc.lightConfig` |
+| 〃 | `:1543` | `resolveLights(scene3DLights, nodes: nmap, config: scene3DLightConfig)` |
+| `Sources/WapleRender/SceneRendererFrameEncoder.swift` | `:942` | 같은 인자 추가(ortho 3D 경로) |
 
-동봉 도달 기준 화면 변화는 0(§6.3)이라 **무회귀 3줄**이다.
+**무회귀 근거 셋** — 동봉 도달 기준 화면 변화 0(§6.3)이고, 그것을 두 겹으로 잠갔다:
+
+1. `SceneLightConfigBudgetTests.testBundledCorpusIsUnchangedUnderTheBudget` 이 동봉 자산 트리의
+   씬 전수(`general`+`objects` 를 가진 `.json` **172개** — `scenes/gifs/gifscene.json` 처럼 파일명이
+   `scene.json` 이 아닌 것도 포함)를 원문 바이트로 훑어 예산을 실제로 태운다 — 드롭 0 / 섀도우 상실 0 을 단언한다.
+2. 미저작(nil) 경로는 `take`/`takeShadow` 가 무조건 true 라 종전 코드와 **분기 자체가 동일**하다
+   (`testUnauthoredBudgetNeverDropsAnything`). 동봉 172 씬 중 170 씬이 이 경로다.
+3. 레거시 레인(`"point"`)은 §7.1 차이 4로 예산 밖이라, `lightconfig` 가 있는 씬에서도 종전 그대로다.
 
 2D 레인(`SceneDocument.ForwardUniforms`, WapleCore)은 별도다 — 그쪽도 8슬롯 고정이고
-`lightconfig` 를 안 본다.
+`lightconfig` 를 안 본다. 배선하려면 `QuadShaders` 의 `for (int i = 0; i < 8; i++)` 와 팩 쪽을
+같이 봐야 한다(타 레인 소유).
 
 ---
 
@@ -838,6 +863,17 @@ WE 에서도 읽히지 않고, Waple `DirectionalShadowMath.validCascades`(전 �
    중간 행렬곱의 피연산자로만 쓰이는지는 미확정.
 7. **directional 캐스케이드 슬롯 +1 진행이 버그인지 의도인지.** 도달 0건이라 실측 불가.
 8. **워크샵 11 씬의 화면 변화.** 원본 `scene.json` 이 없어 예산 적용 전후 대조 불가.
+   특히 **씬별 `lightconfig` 합이 8 을 넘는지**를 못 본다 — 넘는 씬이 있으면 §9-1 이 실제 도달을 갖는다.
+9. **검증 공백 둘.**
+   · `scripts/spec/check_address_ranges.py` 는 범위 인용을 **시작 < 끝** 으로만 본다. §7.2 의
+     `0x140168000–0x14016b154` 같은 "양 끝이 다 다른 함수인" 오기는 그 그물을 그냥 통과한다
+     (실제로 통과해 있었다). 바이너리를 읽는 `scripts/dev/check-rdata-citations.py` 쪽을
+     `primary()` 대조까지 확장해야 잡힌다.
+   · `Sources/WapleRender/**` 는 리눅스에서 `swiftc -parse` 밖에 못 돌고 `-parse` 는 타입체크를
+     하지 않는다(`bb5f902`). 다만 `Scene3DLighting.swift`/`Scene3DMath.swift` 는 **Metal 을
+     import 하지 않아** 리눅스 `swiftc -typecheck` 가 실제로 돈다(WapleCore + simd 심 모듈 + `simd_min`/
+     `simd_max` 두 개만 보태면 된다 — 그 둘은 현재 simd 심에 없다). 이번 배선은 그렇게 타입체크했고,
+     나머지 세 파일(`SceneRenderer*.swift`)은 **여전히 macOS CI 가 유일한 판정자**다.
 
 ---
 

@@ -939,7 +939,8 @@ extension SceneRenderer {
             nmap[n.id] = Scene3DMath.Node(origin: n.origin, angles: n.angles, scale: n.scale,
                                           parent: n.parent, visible: n.visible)
         }
-        let resolvedLights = Scene3DLighting.resolveLights(scene3DLights, nodes: nmap)
+        let resolvedLights = Scene3DLighting.resolveLights(scene3DLights, nodes: nmap,
+                                                          config: scene3DLightConfig)
         var frameUniform = Scene3DFrameUniform(
             cameraEye: SIMD4(projW / 2, projH / 2, F, 1),   // ortho 관측자 근사(스페큘러 방향용)
             ambient: SIMD4(scene3DAmbient.x, scene3DAmbient.y, scene3DAmbient.z, 0),

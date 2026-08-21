@@ -239,6 +239,10 @@ extension SceneRenderer {
             return
         }
         scene3DLights = doc.lights3D
+        // `general.lightconfig` — 종류별 슬롯 예산(WE 는 이 값으로 셰이더 배열 길이를 정해 씬마다
+        // 새 셰이더를 생성한다: 생성기 0x140169140–0x14016b0d4, 콤보 세터 0x1401a5c40). 우리 배열은
+        // 8 고정이라 **줄이는 방향만** 반영한다. 미저작(nil) 씬은 종전 폴백 그대로라 비트동일.
+        scene3DLightConfig = doc.lightConfig
         scene3DAmbient = SIMD3(doc.ambientColor.x, doc.ambientColor.y, doc.ambientColor.z)
         scene3DSkylight = SIMD3(doc.skylightColor.x, doc.skylightColor.y, doc.skylightColor.z)
         // F662(S-45): scene fog(general.fogdistance*/fogheight*) — SceneDocument 미파스 필드라
@@ -1536,7 +1540,8 @@ extension SceneRenderer {
         let bbUp = Scene3DMath.upReference(forward: fwd, up: upv)
         let right = simd_normalize(simd_cross(fwd, bbUp))
         let camUp = simd_cross(right, fwd)
-        let resolvedLights = Scene3DLighting.resolveLights(scene3DLights, nodes: nmap)
+        let resolvedLights = Scene3DLighting.resolveLights(scene3DLights, nodes: nmap,
+                                                          config: scene3DLightConfig)
         var frameUniform = Scene3DFrameUniform(
             cameraEye: SIMD4(eye.x, eye.y, eye.z, 1),
             ambient: SIMD4(scene3DAmbient.x, scene3DAmbient.y, scene3DAmbient.z, 0),
