@@ -57,6 +57,85 @@ final class JSONNumericsTagGateTests: XCTestCase {
         XCTAssertNil(numericFloat(v("1e300")), "Float 범위 밖은 유한성 프리미티브가 따로 막는다")
     }
 
+    // MARK: 폭 축 — `asUInt`(`0x140085ee0`) 하위 32비트
+
+    /// 태그 1/2 는 `mov eax, dword [rcx]`(`0x140085f1e`) — 64비트 슬롯의 하위 32비트만 가져간다.
+    /// **음수에서만 눈에 보인다**: `-2` → `0xFFFFFFFE`.
+    func testUInt32TruncatesIntegerToLow32Bits() {
+        XCTAssertEqual(strictUInt32(v("-2")), 4_294_967_294, "mov eax,[rcx] — 0x140085f1e")
+        XCTAssertEqual(strictUInt32(v("-1")), 4_294_967_295)
+        XCTAssertEqual(strictUInt32(v("0")), 0)
+        XCTAssertEqual(strictUInt32(v("7")), 7)
+        XCTAssertEqual(strictUInt32(v("4294967295")), 4_294_967_295, "경계 — 그대로")
+        XCTAssertEqual(strictUInt32(v("4294967296")), 0, "2^32 는 하위 32비트가 0")
+        XCTAssertEqual(strictUInt32(v("4294967297")), 1)
+    }
+
+    /// 태그 3 은 `cvttsd2si eax`(`0x140085f12`) — 0 방향 절삭 후 32비트.
+    func testUInt32TruncatesRealTowardZeroThenTo32Bits() {
+        XCTAssertEqual(strictUInt32(v("2.9")), 2)
+        XCTAssertEqual(strictUInt32(v("-2.9")), 4_294_967_294, "-2.9 → -2 → 0xFFFFFFFE")
+        XCTAssertEqual(strictUInt32(v("2147483647.5")), 2_147_483_647)
+    }
+
+    /// Int32 범위 밖·비유한 **실수**는 의도적으로 nil(값을 지어내지 않는다).
+    func testUInt32RefusesOutOfInt32RangeReals() {
+        XCTAssertNil(strictUInt32(v("5000000000.5")), "cvttsd2si 가 32비트에 못 담는 구간")
+        XCTAssertNil(strictUInt32(v("-5000000000.5")))
+        XCTAssertNil(strictUInt32(v("1e300")))
+        XCTAssertNil(strictUInt32(v("\"7\"")), "태그 4 — 실물은 abort, 우리는 nil")
+        XCTAssertNil(strictUInt32(v("null")))
+        XCTAssertNil(strictUInt32(v("[1]")))
+        XCTAssertNil(strictUInt32(nil))
+    }
+
+    /// **[2026-08-21 발견] Foundation 과 jsoncpp 의 "정수 대 실수" 갈림이 다르다.**
+    ///
+    /// jsoncpp 는 **문법**으로 가른다 — `.` 나 `e` 가 있으면 태그 3(real)이다
+    /// (그래서 `5e9` 는 `cvttsd2si eax` 경로이고 32비트에 못 담긴다).
+    /// Foundation 은 **값**으로 가른다 — `5e9` 는 정수값이라 `NSNumber(Int)` 로 온다.
+    /// 그래서 우리는 `mov eax,[rcx]` 쪽(하위 32비트)을 타게 된다.
+    ///
+    /// 코퍼스 도달 **0건**(동봉+설치본 3,655 파일 33,753개 숫자에 `|x| ≥ 2^31` 실수 0 ·
+    /// Int32 범위 밖 정수 0 — `docs/re/json-number-tags.md` §8.1)이라 그대로 두고,
+    /// **다음 사람이 "왜 nil 이 아니지" 로 헤매지 않게** 여기 값으로 못박는다.
+    func testFoundationSplitsIntAndRealByValueNotBySyntax() {
+        XCTAssertEqual(strictUInt32(v("5e9")), 705_032_704,
+                       "Foundation 은 5e9 를 정수로 준다 — 5000000000 mod 2^32")
+        XCTAssertEqual(strictUInt32(v("-5e9")), 3_589_934_592)
+        XCTAssertNil(strictUInt32(v("5000000000.5")), "진짜 실수는 Int32 범위 밖이라 nil")
+    }
+
+    /// 게이트 **없는** `asUInt` 자리는 불리언을 0/1 로 받는다(`0x140085f07 setne`).
+    /// 게이트가 붙은 자리만 거부한다 — 폭이 아니라 **관용**이 갈리는 지점이다.
+    func testUInt32BooleanFollowsTheGate() {
+        XCTAssertEqual(strictUInt32(v("true")), 1, "게이트 없는 asUInt — setne 0x140085f07")
+        XCTAssertEqual(strictUInt32(v("false")), 0)
+        XCTAssertNil(numericUInt32(v("true")), "게이트 있는 자리 — isNumeric 이 태그 5 를 막는다")
+        XCTAssertNil(numericUInt32(v("false")))
+    }
+
+    /// 사다리 순서 `numericUInt32 ⊂ strictUInt32` — 게이트는 폭이 아니라 입력 집합만 좁힌다.
+    func testUInt32LadderIsASubsetRelation() {
+        for lit in ["0", "7", "-2", "2.9", "-2.9", "4294967296", "true", "false", "\"7\"", "null", "[1]"] {
+            let strict = strictUInt32(v(lit))
+            let numeric = numericUInt32(v(lit))
+            if let numeric {
+                XCTAssertEqual(numeric, strict, "\(lit): 게이트를 통과하면 값이 같아야 한다")
+            }
+            if strict == nil { XCTAssertNil(numeric, "\(lit): strict 가 못 읽으면 numeric 도 못 읽는다") }
+        }
+    }
+
+    /// `numericInt` 와 `numericUInt32` 는 **같은 게이트, 다른 폭**이다.
+    /// 실물의 `orthogonalprojection.width/height`(`0x140187578`·`0x140187587`)는 게이트 뒤에
+    /// `asUInt`(`0x14018758f`)를 부르므로 음수 저작은 32비트로 감긴다.
+    func testNumericIntAndNumericUInt32DivergeOnlyOnWidth() {
+        XCTAssertEqual(numericInt(v("-2")), -2, "Int 판은 64비트라 그대로")
+        XCTAssertEqual(numericUInt32(v("-2")), 4_294_967_294, "UInt32 판은 감긴다")
+        XCTAssertEqual(numericInt(v("7")), numericUInt32(v("7")), "양수 소범위는 두 판이 같다")
+    }
+
     func testIsJSONNumericPredicateItself() {
         XCTAssertTrue(isJSONNumeric(v("0")))
         XCTAssertTrue(isJSONNumeric(v("-1.5")))

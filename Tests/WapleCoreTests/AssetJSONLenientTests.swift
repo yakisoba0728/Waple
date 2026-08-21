@@ -114,6 +114,58 @@ final class AssetJSONLenientTests: XCTestCase {
         XCTAssertEqual(d?["b"] as? Int, 1)
     }
 
+    // MARK: 실물 `CharReaderBuilder` 설정과의 대조 (2026-08-21 전수)
+
+    /// `CharReaderBuilder::setDefaults`(`0x140091ef0`–`0x1400924b4`) 12개 설정을 전수한 결과,
+    /// **관용이 필요한 실제 차이는 주석과 트레일링 콤마 둘뿐**이었다. 나머지는 이미 일치하거나
+    /// 우리가 더 엄격하다. 아래 테스트들은 그 "이미 일치" 를 못박는다 — 일치는 우연히 성립하는
+    /// 것이라 누가 `.allowFragments` 를 켜거나 전처리를 넓히면 조용히 깨진다.
+
+    /// `skipBom = true`(`0x140092423`). Foundation 도 BOM 을 먹는다 — 손댈 것이 없다.
+    /// **관용 경로에서도** 살아야 한다(`relaxed` 가 U+FEFF 를 그대로 흘려보내고 재인코딩한다).
+    func testBOMIsAcceptedOnBothTheStrictAndLenientPaths() {
+        let bom: [UInt8] = [0xEF, 0xBB, 0xBF]
+        XCTAssertEqual(AssetJSON.dictionary(Data(bom + Array(#"{"a":1}"#.utf8)))?["a"] as? Int, 1)
+        // BOM + 줄 주석 = 엄격 실패 → 관용 경로. 여기서 BOM 이 깨지면 nil 이 된다.
+        let jsonc = Data(bom + Array("{\r\n\"a\": 1, // c\r\n\"b\": 2\r\n}".utf8))
+        XCTAssertNil(try? JSONSerialization.jsonObject(with: jsonc), "전제: 엄격 파스 실패")
+        let d = AssetJSON.dictionary(jsonc)
+        XCTAssertEqual(d?["a"] as? Int, 1, "BOM + 주석 조합이 관용 경로에서 살아야 한다")
+        XCTAssertEqual(d?["b"] as? Int, 2)
+    }
+
+    /// `rejectDupKeys = false`(`0x14009238b`) — jsoncpp 는 중복 키를 받고 **뒤가 이긴다**
+    /// (`currentValue()[name] = …` 대입 의미). Foundation 도 뒤가 이긴다 → 일치.
+    /// (도달: 설치본 `locale/ui_en-us.json` 1건. 자산 트리에는 0건.)
+    func testDuplicateKeysKeepTheLastOccurrence() {
+        XCTAssertEqual(AssetJSON.dictionary(Data(#"{"a":1,"a":2}"#.utf8))?["a"] as? Int, 2)
+        // 관용 경로(주석 때문에 엄격 실패)를 타도 같은 승자여야 한다.
+        XCTAssertEqual(AssetJSON.dictionary(Data("{\"a\":1,//c\n\"a\":2}".utf8))?["a"] as? Int, 2)
+    }
+
+    /// `allowSpecialFloats = false`(`0x1400923dd`) · `allowSingleQuotes = false`(`0x1400922c1`) ·
+    /// `allowNumericKeys = false`(`0x14009227b`) — 실물이 거부하는 것은 우리도 거부해야 한다.
+    /// **관용을 넓히다가 이쪽이 통과하기 시작하면 실물보다 관대해진 것**이다.
+    func testRealAlsoRejectsTheseSoWeMustToo() {
+        XCTAssertNil(AssetJSON.dictionary(Data(#"{"a":NaN}"#.utf8)), "allowSpecialFloats=false")
+        XCTAssertNil(AssetJSON.dictionary(Data(#"{"a":Infinity}"#.utf8)))
+        XCTAssertNil(AssetJSON.dictionary(Data(#"{"a":-Infinity}"#.utf8)))
+        XCTAssertNil(AssetJSON.dictionary(Data("{'a':1}".utf8)), "allowSingleQuotes=false")
+        XCTAssertNil(AssetJSON.dictionary(Data("{1:2}".utf8)), "allowNumericKeys=false")
+    }
+
+    /// **우리가 더 엄격한 두 갈래(의도적, 도달 0건).**
+    /// `failIfExtra = false`(`0x140092351`)라 실물은 루트 뒤 잔여 바이트를 무시하고,
+    /// `strictRoot = false`(`0x140092195`)라 스칼라 루트도 받는다. 우리는 둘 다 거부한다 —
+    /// 자산 리더는 전부 컨테이너 루트를 기대하고, 잔여 바이트 관용은 잘린 파일을 조용히
+    /// 통과시키는 쪽으로 작동한다. 이 테스트는 그 선택을 **기록**하는 것이지 옳다고 주장하는
+    /// 것이 아니다 — 워크샵에서 도달이 나오면 뒤집을 근거가 된다.
+    func testWeAreDeliberatelyStricterThanRealOnRootShape() {
+        XCTAssertNil(AssetJSON.object(Data(#"{"a":1} trailing"#.utf8)), "failIfExtra=false 인데 우리는 거부")
+        XCTAssertNil(AssetJSON.object(Data("42".utf8)), "strictRoot=false 인데 우리는 거부")
+        XCTAssertNotNil(AssetJSON.object(Data("[1,2]".utf8)), "배열 루트는 양쪽 다 허용")
+    }
+
     /// 동봉 자산 전건 회귀 — 엄격 파스가 실패하는 자산이 **전부** 관용으로 복구돼야 한다.
     /// `WAPLE_WE_ASSETS` 가 없으면(외부 체크아웃) 조용히 건너뛴다.
     func testEveryBundledAssetRecoversWithLeniency() throws {
@@ -150,4 +202,103 @@ final class AssetJSONLenientTests: XCTestCase {
         }
         return nil
     }
+
+    /// **스코프 라벨을 붙인 JSONC 인구조사 — 동봉 WEAssets 단독.**
+    ///
+    /// 2026-08-21 재측정: 동봉 WEAssets `.json` **1,698**개 중 JSONC 는 **31**개
+    /// (줄 주석 **27** + 트레일링 콤마 **4**, 겹침 0)이고 그 31개는 **전건 CRLF** 다.
+    /// 블록 주석·BOM 은 **0건**.
+    ///
+    /// 다른 스코프는 여기서 재지 않는다(CI 에 설치본이 없다) — 설치본
+    /// `wallpaper_engine/assets` 는 동봉본과 바이트 동일이라 같은 31, `projects/` 가 1
+    /// (`defaultprojects/fantasticcar/materials/car/glass.json`)을 더해 **설치본 32**,
+    /// 합 **63** 이다. 그 63 도 전건 CRLF 다.
+    ///
+    /// **[중요] "JSONC 31" 과 "엄격 파스가 실패하는 31" 은 같은 수가 아니다.**
+    /// 이 세션에서 잰 리눅스 `swift-corelibs-foundation` 의 `JSONSerialization` 은
+    /// **트레일링 콤마를 그냥 받는다** — 그래서 이 플랫폼에서 엄격 파스가 실패하는 것은
+    /// 줄 주석 **27**건뿐이다. Darwin `NSJSONSerialization` 은 RFC 엄격이라 31건 전부
+    /// 실패한다고 알려져 있으나 이 세션에서 macOS 를 돌릴 수단이 없다(**추정**).
+    /// `scripts/spec/check_lenient_json_reach.py` 와 `scripts/re/bundled_key_coverage.py` 가
+    /// 말하는 "31" 은 **파이썬 `json.loads` 기준**이라 그쪽은 항상 31 이다.
+    /// 그래서 아래 단정은 **문법 스캔**(플랫폼 무관)으로 하고, 플랫폼 파서 쪽은 범위로만 잠근다.
+    ///
+    /// 이 수가 틀어지면 자산 트리가 재벤더링된 것이다 — 그때 `docs/re/bundled-key-coverage.md`
+    /// §8 과 `scripts/spec/check_lenient_json_reach.py` 의 `MIN_LENIENT_NEEDED` 도 같이 갱신해라.
+    func testBundledJSONCCensusIsExactlyTwentySevenCommentsAndFourTrailingCommas() throws {
+        guard let root = Self.bundledAssetsRoot() else {
+            throw XCTSkip("WAPLE_WE_ASSETS 미지정 — 동봉 자산 트리를 못 찾았다")
+        }
+        guard let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
+            return XCTFail("자산 트리를 못 훑었다")
+        }
+        var total = 0, lineComment = 0, trailingComma = 0, blockComment = 0
+        var bom = 0, jsonc = 0, jsoncCRLF = 0, strictFails = 0, recovered = 0
+        for case let url as URL in en where url.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: url) else { continue }
+            total += 1
+            if data.starts(with: [0xEF, 0xBB, 0xBF]) { bom += 1 }
+            guard let text = String(data: data, encoding: .utf8) else { continue }
+            let f = Self.jsoncFeatures(text)
+            if f.line { lineComment += 1 }
+            if f.trailing { trailingComma += 1 }
+            if f.block { blockComment += 1 }
+            if f.line || f.trailing || f.block {
+                jsonc += 1
+                if text.contains("\r\n") { jsoncCRLF += 1 }
+            }
+            if (try? JSONSerialization.jsonObject(with: data)) == nil {
+                strictFails += 1
+                if AssetJSON.object(data) != nil { recovered += 1 }
+            }
+        }
+        // ── 문법 스캔(플랫폼 무관) ──
+        XCTAssertEqual(total, 1698, "동봉 WEAssets `.json` 파일 수")
+        XCTAssertEqual(lineComment, 27, "줄 주석 `//` 을 가진 동봉 자산")
+        XCTAssertEqual(trailingComma, 4, "트레일링 콤마를 가진 동봉 자산")
+        XCTAssertEqual(blockComment, 0, "블록 주석은 0건 — 그래서 `relaxed` 가 지원하지 않는다")
+        XCTAssertEqual(bom, 0, "동봉 트리에 BOM 자산은 없다")
+        XCTAssertEqual(jsonc, 31, "JSONC 총계 = 27 + 4(겹침 0)")
+        XCTAssertEqual(jsoncCRLF, jsonc, "JSONC 는 **전건 CRLF** — 그게 이 경로가 실전에서 깨져 있던 이유")
+        // ── 플랫폼 파서(범위로만) ──
+        XCTAssertGreaterThanOrEqual(strictFails, 27, "줄 주석은 어느 플랫폼에서도 엄격 파스를 깬다")
+        XCTAssertLessThanOrEqual(strictFails, 31, "많아야 JSONC 전건")
+        XCTAssertEqual(recovered, strictFails, "엄격이 깨진 것은 **전부** 관용으로 복구돼야 한다")
+    }
+
+    /// JSONC 문법 스캔 — 문자열 리터럴 밖에서 `//` · `/* */` · `,` 뒤 `]`/`}` 를 찾는다.
+    /// 파서를 타지 않으므로 플랫폼 무관이다.
+    private static func jsoncFeatures(_ text: String) -> (line: Bool, block: Bool, trailing: Bool) {
+        var line = false, block = false, trailing = false
+        var inString = false
+        var i = text.startIndex
+        while i < text.endIndex {
+            let c = text[i]
+            if inString {
+                if c == "\\" {
+                    let n = text.index(after: i)
+                    if n < text.endIndex { i = text.index(after: n); continue }
+                } else if c == "\"" { inString = false }
+                i = text.index(after: i); continue
+            }
+            if c == "\"" { inString = true; i = text.index(after: i); continue }
+            if c == "/" {
+                let n = text.index(after: i)
+                if n < text.endIndex {
+                    if text[n] == "/" { line = true }
+                    if text[n] == "*" { block = true }
+                }
+            }
+            if c == "," {
+                var j = text.index(after: i)
+                while j < text.endIndex, text[j] == " " || text[j] == "\t" || text[j].isNewline {
+                    j = text.index(after: j)
+                }
+                if j < text.endIndex, text[j] == "]" || text[j] == "}" { trailing = true }
+            }
+            i = text.index(after: i)
+        }
+        return (line, block, trailing)
+    }
+
 }
