@@ -858,19 +858,33 @@ def main():
             },
             "g_BloomBlendParams": {
                 "we": "(T, T-K, 2K, 0.25/(K+1e-5)), K = T*F",
-                "waple": "HDRBloomPyramidPass.swift:193-196 이 동일 식을 이미 쓴다 — **일치**.",
+                "waple": "동일 식을 이미 쓴다 — **일치**. [2026-08-21] 본체가"
+                         " WapleCore/HDRBloomMath.swift:149-152 로 이동했고"
+                         " HDRBloomPyramidPass.swift:162-164 는 위임이다.",
                 "impact": "차이 없음. 독립 재도출로 서로 검증됨.",
             },
             "hdrBloomStrengthNormalization": {
                 "we": f"머티리얼 bloomstrength.x = bloomhdrstrength /"
                       f" (pow(bloomhdrscatter, max(N,2)-2) + 1). 기본값(scatter={scatter:.3f},"
                       f" N={int(iters)})이면 분모 ≈ {we_divisor:.2f} → 실효 {2.0 / we_divisor:.4f}",
-                "waple": "SceneRenderer.swift:1159 단일레벨 경로는 strength × iterations ×"
-                         " strengthScale (곱), SceneRendererFinalizer.swift:35 피라미드 경로는"
-                         " raw strength. 둘 다 나눗셈 정규화가 없다.",
+                "waple": "[2026-08-20 이전 서술 — 아래 `해소` 참조] SceneRenderer.swift:1159"
+                         " 단일레벨 경로는 strength × iterations × strengthScale (곱),"
+                         " SceneRendererFinalizer.swift:35 피라미드 경로는 raw strength."
+                         " 둘 다 나눗셈 정규화가 없다.",
                 "impact": "WE 는 레벨이 늘수록 레벨당 기여를 **줄이고**, Waple 은 늘리거나 그대로 둔다."
                           " 기본 파라미터에서 방향이 반대라 블룸 전역 밝기가 크게 어긋난다."
                           " 이 항이 재구현에서 가장 놓치기 쉬운 부분이다.",
+                "해소": "**[2026-08-21] 피라미드 경로는 해소됐다.** 위 `waple` 서술은 그 시점 상태이고"
+                       " 지금은 HDRBloomPyramidPass 가 추출 유니폼 tintStrength.w 에 같은 식을 그대로"
+                       " 싣는다(HDRBloomPyramidPass.swift:255-256 호출 · :131-132 위임 · 본체는"
+                       " WapleCore/HDRBloomMath.swift:95-98 `normalizedStrength`)."
+                       " 호출부가 raw strength 를 넘기는 것은 맞지만 나눗셈은 패스 안에서 일어난다 —"
+                       " 종전 서술은 호출부만 보고 '정규화가 없다' 고 적은 것이다."
+                       " 지수 N 은 levelCount 결과이고 그 산식도 2026-08-21 에 WE 와 일치시켰다"
+                       " (W-25, spec/engine/hdr-bloom.json `engine.bloom.hdr.levelCountRule`)."
+                       " **남은 갭은 단일레벨 폴백 하나뿐이다** — SceneRenderer.swift 의 곱셈 보정"
+                       " (strength × iterations × strengthScale)은 그대로다."
+                       " 리눅스 회귀 그물: Tests/WapleCoreTests/HDRBloomMathTests.swift.",
             },
             "bloomhdrstrength 기본값": {
                 "we": "2.0 (씬 설정 생성자)",
@@ -888,7 +902,8 @@ def main():
         "확정", [src_bin, src_script, src_shader,
                 specfmt.ev("file", "Sources/WapleCore/GLSLTranslator.swift:1254-1257, 1274-1286"),
                 specfmt.ev("file", "Sources/WapleRender/SceneRendererResources.swift:736, 763"),
-                specfmt.ev("file", "Sources/WapleRender/HDRBloomPyramidPass.swift:193-197"),
+                specfmt.ev("file", "Sources/WapleCore/HDRBloomMath.swift:95-98, 145-152"),
+                specfmt.ev("file", "Sources/WapleRender/HDRBloomPyramidPass.swift:131-132, 162-164, 255-256"),
                 specfmt.ev("file", "Sources/WapleRender/SceneRenderer.swift:1158-1168"),
                 specfmt.ev("file", "Sources/WapleCore/SceneDocument.swift:758-784, 866-867, 2441-2445")]))
 

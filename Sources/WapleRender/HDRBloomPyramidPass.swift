@@ -12,8 +12,10 @@ import WapleCore
 /// 최상위 가중 반전)은 **오차 부호가 서로 반대라 상쇄**되고 있었다 — 그래서 한 건씩 고치면
 /// 회귀한다(정본 spec/engine/hdr-bloom.json: `filterShapeDeviations.orderingConstraint`).
 /// 한 단위로 교체했다.
-/// 소스가 작아 8단이 안 되면 min(8, 허용 mip 수)로 클램프, 2단 미만은 거부(호출부의 단일레벨
-/// HDRBloomPass 폴터). strength/scatter 캘리브는 HDRBloomPass 와 동일.
+/// 레벨 수는 WE 와 같은 **min(W,H) 기준** `min(8, floor(log2(min(W,H))))` 를 저작
+/// `bloomhdriterations` 와 min 한 값이고(W-25, 2026-08-21 해소), 2단 미만은 거부한다
+/// (호출부의 단일레벨 HDRBloomPass 폴터). strength/scatter 캘리브는 HDRBloomPass 와 동일.
+/// 탭 산술 본체는 `WapleCore.HDRBloomMath` 다 — 여기 `static` 은 위임뿐이다.
 struct HDRBloomPyramidParameters: Equatable {
     let strength: Float
     let threshold: Float
@@ -113,113 +115,67 @@ final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
         self.upsampleCubicPipeline = upsampleCubicPipeline
     }
 
-    /// WE 가 추출 단계에 먹이는 **정규화된 블룸 강도**.
-    ///
-    /// `g_BloomStrength = bloomhdrstrength / (bloomhdrscatter^(max(N,2)-2) + 1)`
-    ///
-    /// 이 나눗셈은 업샘플 가중과 **한 쌍**이다. WE 의 업샘플 머티리얼에는 저작 `scatter` 가
-    /// 그대로 들어가 레벨이 깊어질수록 기여가 `scatter^k` 로 커지는데, 그 발산을 추출 강도에서
-    /// 미리 나눠 상쇄한다. 둘 중 하나만 옮기면 화면이 백화되거나(가중만) 블룸이 좁아진다
-    /// (정규화만) — 종전 구현은 가중 쪽만 시도했다가 발산해서 되돌렸고, 그때 남긴 주석의
-    /// 미확인 항목("저작값 scatter 가 셰이더로 그대로 들어가는지")이 정확히 이것이다.
-    ///
-    /// 근거 두 갈래:
-    ///  · 이 리포의 정본 `spec/engine/uniform-feed.json`(entries[14],
-    ///    `hdrBloomStrengthNormalization`)이 **이미 확정 등급으로 같은 식을 담고 있었다** —
-    ///    구현만 따라오지 않은 전파 누락이다. 그 항목의 impact 문장도 "재구현에서 가장 놓치기
-    ///    쉬운 부분" 이라고 적어 두었다.
-    ///  · 원본 wallpaper64.exe 재측정: `powf(scatter, max(N,2)-2)`(0x14017f85e) →
-    ///    `+1.0`(0x14017f86b, 상수 [0x140492704]) → `divss`(0x14017f88f) →
-    ///    `setMaterialParam(mat, "bloomstrength", …)`(0x14017f89b). 업샘플 머티리얼에는
-    ///    scatter 원본이 그대로 실린다(0x14017f944 / 0x14017f96c).
-    ///
-    /// 기본 저작값(scatter 1.619, N 8)에서 분모는 약 19.01 → 실효 강도 약 0.105.
-    /// `max(N,2)-2` 클램프 때문에 N=1 과 N=2 는 같은 값(분모 2)을 낸다.
+    // MARK: - 탭 산술 위임 (본체는 `WapleCore.HDRBloomMath`)
+    //
+    // **[2026-08-21] 본체를 `Sources/WapleCore/HDRBloomMath.swift` 로 옮겼다.** 이 모듈은
+    // `import Metal` 이라 리눅스에서 테스트가 한 줄도 안 돌아, 탭 반경(`b19db5b`)·레벨 수(W-25)
+    // 두 이탈이 전부 macOS CI 왕복으로만 잡혔다. 순수 산술은 `WapleCore` 에 두고
+    // `Tests/WapleCoreTests/HDRBloomMathTests.swift` 가 리눅스에서 덮는다
+    // (선례: `SceneLightSlotBudget` `4eb61f1` · `PointerHit` `aebf586`).
+    // 아래는 **얇은 위임**이다 — 기존 호출부(`SceneRendererFinalizer`)와 macOS 테스트가
+    // `HDRBloomPyramidPass.<이름>` 으로 그대로 부른다. 근거 VA·유도는 전부 그 파일 주석에 있다.
+
+    /// WE 가 추출 단계에 먹이는 **정규화된 블룸 강도**:
+    /// `bloomhdrstrength / (bloomhdrscatter^(max(N,2)-2) + 1)`
+    /// (`powf 0x14017f85e` → `+1.0 0x14017f86b` → `divss 0x14017f88f`).
     public static func normalizedStrength(strength: Float, scatter: Float, levels: Int) -> Float {
-        let exponent = Float(max(levels, 2) - 2)
-        return strength / (powf(scatter, exponent) + 1)
+        HDRBloomMath.normalizedStrength(strength: strength, scatter: scatter, levels: levels)
     }
 
-    // MARK: - WE 탭 오프셋 정본 (`Composite::drawBloomChain` 0x140183610–0x140183948)
-    //
-    // 피라미드 전 패스가 쓰는 `g_RenderVar0` 의 **기저**는 `(1/W, 1/H, −1/W, −1/H)` 이고
-    // `W`=obj+0x84 · `H`=obj+0x88 = **풀 프레임버퍼** 크기다 — 그 패스의 소스 크기가 아니다
-    // (`0x14018367c` `divss xmm9,xmm1` · `0x140183690` · `0x140183694` · `0x140183699` →
-    //  4성분 저장 `0x1401836a0`–`0x1401836ba`). 각 패스는 여기에 **정수 배율**만 곱한다.
-    //
-    // 그래서 같은 UV 오프셋이 패스마다 다른 "소스 텍셀 수" 가 된다. level[i] 폭이 `W >> (i+1)`
-    // 이므로:
-    //   추출(i=0)        배율 1        소스 = 풀(W)          → ±1.0 소스 텍셀 (4×4 박스)
-    //   다운샘플 i≥1     배율 1 << i   소스 = level[i−1]      → ±1.0 소스 텍셀 (4×4 박스)
-    //   업샘플 소스레벨 i 배율 2 << (i−1) 소스 = level[i]      → ±0.5 소스 텍셀 (2×2 박스)
-    // hdr_downsample.frag:22 의 `texSize = 0.5 / g_RenderVar0.xy` 항등식은 **업샘플에서만**
-    // 성립한다(BICUBIC 콤보가 hdr_upsample_cubic 하나에만 걸려 있어 조건이 항상 맞는다).
-    // 그 항등식을 다운샘플에 일반화하면 반경이 정확히 절반이 된다.
-
-    /// 정수 배율을 실제 UV 오프셋으로. `baseWidth/baseHeight` = **풀 프레임버퍼** 크기.
+    /// 정수 배율 → UV 오프셋. `baseWidth`/`baseHeight` = **풀 프레임버퍼** 크기
+    /// (`0x1401836a0`–`0x1401836ba`).
     static func tapOffsetUV(scale: Int, baseWidth: Int, baseHeight: Int) -> SIMD2<Float> {
-        SIMD2(Float(scale) / Float(max(1, baseWidth)), Float(scale) / Float(max(1, baseHeight)))
+        HDRBloomMath.tapOffsetUV(scale: scale, baseWidth: baseWidth, baseHeight: baseHeight)
     }
 
-    /// 추출(level 0)·다운샘플(level ≥ 1) 배율. 추출은 기저를 배율 없이 저장하고(`0x1401836a0`),
-    /// 다운샘플 i 는 `mov eax,1 ; shl eax,cl`(cl=i)로 만든 `1 << i` 를 곱한다
-    /// (`0x14018374a`–`0x14018375c`).
-    static func downsampleTapScale(level: Int) -> Int { 1 << max(0, level) }
+    /// 추출(level 0)·다운샘플(level ≥ 1) 배율 `1 << i` (`0x14018374a`–`0x14018375c`).
+    static func downsampleTapScale(level: Int) -> Int {
+        HDRBloomMath.downsampleTapScale(level: level)
+    }
 
-    /// 업샘플(소스 레벨 i → 목적 레벨 i−1) 배율 — `mov eax,2 ; shl eax,cl`(cl=i−1) =
-    /// `2 << (i−1)` (`0x140183856`–`0x14018386b`). 숫자는 `1 << i` 와 같지만 소스가 한 단
-    /// 더 작은 level[i] 라 반경이 절반이 된다 — **배율이 아니라 소스 레벨이 차이를 만든다**.
-    static func upsampleTapScale(sourceLevel: Int) -> Int { 2 << max(0, sourceLevel - 1) }
+    /// 업샘플 배율 `2 << (i−1)` (`0x140183856`–`0x14018386b`).
+    static func upsampleTapScale(sourceLevel: Int) -> Int {
+        HDRBloomMath.upsampleTapScale(sourceLevel: sourceLevel)
+    }
 
-    /// 검산용 — UV 오프셋을 **소스 텍셀 수**로 환산한다. 소스 폭이 2의 거듭제곱이면 다운샘플
-    /// 계열은 정확히 1.0, 업샘플은 0.5 가 나온다(W-1 의 판정식).
+    /// 검산용 — UV 오프셋을 **소스 텍셀 수**로 환산한다(W-1 의 판정식).
     static func tapRadiusInSourceTexels(offsetUV: Float, sourceWidth: Int) -> Float {
-        offsetUV * Float(max(1, sourceWidth))
+        HDRBloomMath.tapRadiusInSourceTexels(offsetUV: offsetUV, sourceWidth: sourceWidth)
     }
 
-    /// 업샘플 단의 BICUBIC 선택 — WE `0x140183810`–`0x140183822`:
-    /// `mov ecx,0x31a8`(hdr_upsample_cubic) · `eax = [obj+0x3108] − 2` · `cmp ebp, eax` ·
-    /// `cmovl rcx, r15`(r15=0x31a0 = hdr_upsample). `ebp` 는 업샘플의 **소스 레벨**이고
-    /// N−1 → 1 로 내려가므로 `소스레벨 ≥ N−2` 인 **가장 깊은 두 단**만 큐빅이다.
+    /// 가장 깊은 두 단만 BICUBIC (`0x140183810`–`0x140183822`).
     static func upsampleUsesBicubic(sourceLevel: Int, levelCount: Int) -> Bool {
-        sourceLevel >= levelCount - 2
+        HDRBloomMath.upsampleUsesBicubic(sourceLevel: sourceLevel, levelCount: levelCount)
     }
 
-    /// WE `g_BloomBlendParams` 패킹(`0x14017f8bc`–`0x14017f900`):
-    /// `K = threshold × feather`(`0x14017f8cd`) · `P = (threshold, threshold − K, 2K,
-    /// 0.25 / (K + 1e-5))`. 상수는 `0.25`=[0x14049268c] · `1e-5`=[0x1404925ec].
-    /// 음수 knee 방어 `max(K, 0)` 만 Waple 추가(WE 는 음수 feather 를 막지 않는다).
+    /// `g_BloomBlendParams` 패킹 (`0x14017f8bc`–`0x14017f900`).
     static func blendParams(threshold: Float, feather: Float) -> SIMD4<Float> {
-        let knee = max(threshold * feather, 0)
-        return SIMD4(threshold, threshold - knee, 2 * knee, 0.25 / (knee + 1e-5))
+        HDRBloomMath.blendParams(threshold: threshold, feather: feather)
     }
 
-    /// 소스가 허용하는 피라미드 레벨 수(1/2 부터 1×1 까지 halving)와 요청값의 min.
-    /// 호출부는 이 값만큼 levels/scratches 쌍을 할당하면 된다(2 미만이면 인코드 거부).
+    /// 피라미드 레벨 수 — **WE 와 같은 `min(W,H)` 기준** `min(8, floor(log2(min(W,H))))`
+    /// 를 저작 `bloomhdriterations` 와 min 한 값이다(`cmovg 0x14017f363` → `sar 0x14017f376`
+    /// → `jle 0x14017f37d` → `inc [rsi+0x310c] 0x14017f383`, 상한 `cmp ebx,8 0x14017f541`;
+    /// 실효 N 은 `0x14017f7f7`–`0x14017f84c` → `obj+0x3108`).
     ///
-    /// **[2026-08-21] WE 와 산식이 다르다 — 확인했으나 이 레인에서 미반영.**
-    /// WE 는 `_rt_{2<<i}FrameBuffer` 생성 루프에서 **min(W,H)** 를 계속 반으로 나누며
-    /// 0 이 되기 전까지만 센다(`cmovg r14d,r12d` 0x14017f363 → `sar eax,1` 0x14017f376 →
-    /// `jle` 0x14017f37d → `inc [rsi+0x310c]` 0x14017f383, 루프 상한 `cmp ebx,8` 0x14017f541)
-    /// = `min(8, floor(log2(min(W,H))))`. 여기 구현은 `w > 1 || h > 1` 이라 **max 기준**
-    /// `ceil(log2(max(W,H)))` 를 센다.
-    ///
-    /// 짧은 변이 256 이상이면 WE 쪽이 이미 상한 8 에 걸려 양쪽이 같은 값을 낸다 — 실화면
-    /// 크기에서는 차이가 없고, 갈리는 것은 짧은 변 < 256 인 소스뿐이다(64×32 → WE 5, 여기 6).
-    /// N 은 `normalizedStrength` 의 지수로 곧장 들어가므로 틀리면 **강도가 통째로 틀린다.**
-    /// 고치지 않은 이유는 하나뿐이다 — 기대치가 박힌
-    /// `Tests/WapleRenderTests/HDRBloomTests.swift:370`(64×32 → 6)이 이 레인 소유가 아니다.
-    /// 정본: spec/engine/hdr-bloom.json `engine.bloom.hdr.levelCountRule`.
+    /// **[2026-08-21] W-25 해소.** 종전에는 `w > 1 || h > 1` 로 도는 **max 기준**이라
+    /// 짧은 변이 256 미만이고 두 변의 2-거듭제곱 구간이 다르면 한 단 더 셌다(64×32 → 6, WE 5).
+    /// N 은 `normalizedStrength` 의 지수로 직행하므로 강도가 통째로 갈리는 축이다.
+    /// 풀스크린(짧은 변 ≥ 256)에서는 양쪽 다 상한 8 이라 차이가 없지만, 이 리포의 골든
+    /// 썸네일(256×144)과 64×32 렌더 테스트는 갈린다.
     static func levelCount(requested: Int, sourceWidth: Int, sourceHeight: Int) -> Int {
-        var count = 1
-        var w = max(1, sourceWidth / 2)
-        var h = max(1, sourceHeight / 2)
-        while w > 1 || h > 1 {
-            w = max(1, w / 2)
-            h = max(1, h / 2)
-            count += 1
-        }
-        return min(max(requested, 1), count)
+        HDRBloomMath.levelCount(
+            requested: requested, sourceWidth: sourceWidth, sourceHeight: sourceHeight)
     }
 
     private func makeEncoder(
