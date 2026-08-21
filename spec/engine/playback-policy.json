@@ -1,0 +1,462 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_playback_policy.py",
+ "scope": "wallpaper64.exe 재생 정책(6축 + pausevram)",
+ "entries": [
+  {
+   "id": "playbackPolicy.action.enum",
+   "value": {
+    "매퍼": "0x140141880–0x14014191b",
+    "값": {
+     "run": 0,
+     "mute": 1,
+     "pause": 2,
+     "pauseall": 3,
+     "stop": 4
+    },
+    "미인식": "run",
+    "미인식 근거": "0x140141918 의 `xor eax, eax; ret` — 던지지도 실패하지도 않고 0 을 돌려준다",
+    "표기": "설정 파일에는 **문자열**로 저장된다. 정수는 로더가 접은 결과이고 전역/디스패치에서만 보인다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x140141880–0x14014191b",
+     "note": "매퍼 본문 디코드. 비교 리터럴·길이 게이트·반환 상수를 바이트 대조로 자기검증한다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_playback_policy.py"
+    }
+   ]
+  },
+  {
+   "id": "playbackPolicy.axes",
+   "value": {
+    "키 문자열 VA": {
+     "playbackaudio": "0x140476e58",
+     "playbackfocus": "0x140476df0",
+     "playbackfullscreen": "0x140476e18",
+     "playbackmaximized": "0x140476e00",
+     "playbackonbattery": "0x140476e30",
+     "playbacksleep": "0x140476e48"
+    },
+    "기본값": {
+     "playbackaudio": "run",
+     "playbackfocus": "run",
+     "playbackfullscreen": "pause",
+     "playbackmaximized": "pause",
+     "playbackonbattery": "run",
+     "playbacksleep": "stop"
+    },
+    "전역 슬롯": {
+     "playbackaudio": "0x1404e53d4",
+     "playbackfocus": "0x1404e53c0",
+     "playbackfullscreen": "0x1404e53c8",
+     "playbackmaximized": "0x1404e53c4",
+     "playbackonbattery": "0x1404e53d0",
+     "playbacksleep": "0x1404e53cc"
+    },
+    "저장 순서 주의": "전역은 focus·maximized·fullscreen 다음에 **sleep → onbattery** 순이다. 문자열 VA 순서(onbattery 가 sleep 보다 앞)와 다르므로 주소로 축을 유추하면 틀린다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x140046f20–0x1400483be",
+     "note": "기본값 설치자. 키마다 [해당 `lea rdx` , 다음 `lea rdx`) 창 안에서 액션 문자열을 가리키는 참조가 정확히 하나인지 확인한다"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x14006c280–0x14006ce9b",
+     "note": "설정 로더. `call 매퍼` 직후의 `mov [rip+d], eax` 로 전역 슬롯을 얻는다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_playback_policy.py"
+    }
+   ]
+  },
+  {
+   "id": "playbackPolicy.pauseVRAM.setting",
+   "value": {
+    "키": "pausevram",
+    "키 VA": "0x140477038",
+    "형": "bool",
+    "jsoncpp 태그": 5,
+    "기본값": false,
+    "근거": "0x140047d52 의 `cmp byte ptr [rax+8], 5`(booleanValue) 와 0x140047d71 의 `mov byte ptr [rbp-0x49], r15b` — r15 는 0x140046f53 의 `xor r15d, r15d` 로 0 이다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x140046f20–0x1400483be",
+     "note": "기본값 설치자. 키마다 [해당 `lea rdx` , 다음 `lea rdx`) 창 안에서 액션 문자열을 가리키는 참조가 정확히 하나인지 확인한다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_playback_policy.py"
+    }
+   ]
+  },
+  {
+   "id": "playbackPolicy.allowedActions",
+   "value": {
+    "축별": {
+     "playbackaudio": {
+      "multiMonitor": [
+       "run",
+       "mute",
+       "pause"
+      ],
+      "singleMonitor": [
+       "run",
+       "mute",
+       "pause"
+      ],
+      "builderArgs": "k(!1,!0,!1)"
+     },
+     "playbackfocus": {
+      "multiMonitor": [
+       "run",
+       "mute",
+       "pause",
+       "pauseall"
+      ],
+      "singleMonitor": [
+       "run",
+       "mute",
+       "pause"
+      ],
+      "builderArgs": "k(t,!0,!1)"
+     },
+     "playbackfullscreen": {
+      "multiMonitor": [
+       "run",
+       "mute",
+       "pause",
+       "pauseall",
+       "stop"
+      ],
+      "singleMonitor": [
+       "run",
+       "mute",
+       "pause",
+       "stop"
+      ],
+      "builderArgs": "k(t,!0,!0)"
+     },
+     "playbackmaximized": {
+      "multiMonitor": [
+       "run",
+       "mute",
+       "pause",
+       "pauseall",
+       "stop"
+      ],
+      "singleMonitor": [
+       "run",
+       "mute",
+       "pause",
+       "stop"
+      ],
+      "builderArgs": "k(t,!0,!0)"
+     },
+     "playbackonbattery": {
+      "multiMonitor": [
+       "run",
+       "pause",
+       "stop"
+      ],
+      "singleMonitor": [
+       "run",
+       "pause",
+       "stop"
+      ],
+      "builderArgs": "k(!1,!1,!0)"
+     },
+     "playbacksleep": {
+      "multiMonitor": [
+       "run",
+       "pause",
+       "stop"
+      ],
+      "singleMonitor": [
+       "run",
+       "pause",
+       "stop"
+      ],
+      "builderArgs": "k(!1,!1,!0)"
+     }
+    },
+    "빌더": "function k(e,t,a) — e=multimonitor, t=mute 허용, a=stop 허용",
+    "엔진과의 대응": "목록에 없는 액션은 엔진 디스패치에 분기가 없어 무동작(=run)이 된다. 단 pauseall 은 UI 가 단일 모니터에서 숨길 뿐 엔진은 처리한다 — 모니터가 하나면 pause 와 관측상 같다",
+    "빌더 첫 인자 주의": "audio·sleep·battery 는 리터럴 `!1` 이라 모니터 수와 무관하게 pauseall 을 제시하지 않는다. 셋 다 엔진에도 액션 3 분기가 없다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "wallpaper_engine/ui/dist/scripts/scripts.js",
+     "note": "옵션 빌더 `function k(e,t,a)` 본문을 글자 그대로 대조한 뒤 호출 여섯 줄의 인자를 읽는다"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x14006cea0–0x14006e0bc",
+     "note": "평가기. 축 디스패치 0x14006d0e0–0x14006d2b4 · VRAM 0x14006d2e5–0x14006d403 · 판정 적용 0x14006d403–0x14006d4a6"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_playback_policy.py"
+    }
+   ]
+  },
+  {
+   "id": "playbackPolicy.dispatch",
+   "value": {
+    "fullscreen": {
+     "범위": "0x14006d111–0x14006d176",
+     "처리": [
+      "mute",
+      "pause",
+      "pauseall",
+      "stop"
+     ]
+    },
+    "maximized": {
+     "범위": "0x14006d176–0x14006d1e4",
+     "처리": [
+      "mute",
+      "pause",
+      "pauseall",
+      "stop"
+     ]
+    },
+    "focus": {
+     "범위": "0x14006d1e4–0x14006d21f",
+     "처리": [
+      "mute",
+      "pause",
+      "pauseall"
+     ]
+    },
+    "audio": {
+     "범위": "0x14006d21f–0x14006d26c",
+     "처리": [
+      "mute",
+      "pause"
+     ]
+    },
+    "onbattery": {
+     "범위": "0x14006d28c–0x14006d2b4",
+     "처리": [
+      "pause",
+      "stop"
+     ]
+    },
+    "sleep": {
+     "범위": "0x14006ed90–0x14006edc8",
+     "처리": [
+      "pause",
+      "stop"
+     ],
+     "note": "평가기 안이 아니라 전원 이벤트 핸들러다. 액션이 pause 나 stop 일 때만 플래그 bit5 를 세우고, 그 밖에는 `ret` 으로 빠진다"
+    },
+    "run": "어느 축에도 분기가 없다 — 아무것도 하지 않는 것이 run 이다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x14006cea0–0x14006e0bc",
+     "note": "평가기. 축 디스패치 0x14006d0e0–0x14006d2b4 · VRAM 0x14006d2e5–0x14006d403 · 판정 적용 0x14006d403–0x14006d4a6"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_playback_policy.py"
+    }
+   ]
+  },
+  {
+   "id": "playbackPolicy.priority",
+   "value": {
+    "순서": [
+     "stop",
+     "displaySleep",
+     "pauseMask · mute"
+    ],
+    "정지 승격 비트": "0x408",
+    "정지 승격 근거": "0x14006d407 의 `test ecx, 0x408` + 0x14006d423 `cmovne ebx, 1` — bit3(외부 정지 요청)와 bit10(VRAM 압박)이 축 판정과 무관하게 정지를 세운다",
+    "조기 이탈": "0x14006d453 `test bl, bl / jne`(정지면 pause·mute 갱신 안 함) 와 0x14006d45b `shr eax, 5 / test / jne`(절전 래치도 같음)",
+    "절전의 결과": "적용기 0x140073a4f 의 `test bpl, 0x21`(bit0|bit5)가 인스턴스마다 참을 먹이므로 절전 래치는 곧 **전 모니터 일시정지**다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x14006cea0–0x14006e0bc",
+     "note": "평가기. 축 디스패치 0x14006d0e0–0x14006d2b4 · VRAM 0x14006d2e5–0x14006d403 · 판정 적용 0x14006d403–0x14006d4a6"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_playback_policy.py"
+    }
+   ]
+  },
+  {
+   "id": "playbackPolicy.pauseMask",
+   "value": {
+    "폭": 32,
+    "비트": "1 << monitorIndex",
+    "전체": "0xffffffff",
+    "모니터 인덱스 필드": "0x51",
+    "생성": "0x140074d40 `movzx ecx, byte ptr [rax+0x51]` → `shl r8d, cl` → `or r9d, r8d` (전역 0x1404e52ec 에 전 모니터 비트합)",
+    "소비": "0x140073a5a `movzx ecx, byte ptr [rax+0x51]` → `bt eax, ecx` (전역 0x1404e52e8 의 래치를 인스턴스마다 조회)",
+    "접힘": "x86 의 `shl`/`bt` 가 오프셋을 32로 접으므로 인덱스 32 는 0 과 같은 비트다",
+    "음소거는 마스크가 아니다": "0x140073a7b 의 `test bpl, 0xc0` — 음소거는 전역 비트 둘(bit6 외부 요청 · bit7 축 판정)이고 모니터별이 아니다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x14006cea0–0x14006e0bc",
+     "note": "평가기. 축 디스패치 0x14006d0e0–0x14006d2b4 · VRAM 0x14006d2e5–0x14006d403 · 판정 적용 0x14006d403–0x14006d4a6"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_playback_policy.py"
+    }
+   ]
+  },
+  {
+   "id": "playbackPolicy.monitorLayout",
+   "value": {
+    "설정 키": "general/wallpaperconfig/layout",
+    "전역": "0x1404e52e0",
+    "값": {
+     "per_monitor": 0,
+     "fit": 1,
+     "clone_wallpaper": 2
+    },
+    "사용처": "0x14006d103 `test r9d, r9d`(최대화 마스크가 전체화면 마스크를 흡수) · 0x14006d150·0x14006d1b3 의 `sub/cmp` 사다리(pause 가 전부 가려졌을 때만) · 0x14006d208(focus 의 pause 는 마스크가 비지 않기만 하면 전체)",
+    "정의역 주의": "엔진이 쓰는 두 술어(`!= 0` 과 `∈ {1,2}`)는 정의역 {0,1,2} 에서만 같다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "wallpaper_engine/ui/dist/scripts/scripts.js",
+     "note": "옵션 빌더 `function k(e,t,a)` 본문을 글자 그대로 대조한 뒤 호출 여섯 줄의 인자를 읽는다"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x14006cea0–0x14006e0bc",
+     "note": "평가기. 축 디스패치 0x14006d0e0–0x14006d2b4 · VRAM 0x14006d2e5–0x14006d403 · 판정 적용 0x14006d403–0x14006d4a6"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_playback_policy.py"
+    }
+   ]
+  },
+  {
+   "id": "playbackPolicy.vram.thresholds",
+   "value": {
+    "enterFraction": 0.800000011920929,
+    "releaseFraction": 0.75,
+    "immediateReleaseFraction": 0.3499999940395355,
+    "sustainSeconds": 15.0,
+    "상수 VA": {
+     "enterFraction": "0x1404926e4",
+     "immediateReleaseFraction": "0x1404926a0",
+     "releaseFraction": "0x1404926d4",
+     "sustainSeconds": "0x140492888"
+    },
+    "진입": "used >= total * enterFraction 이면 래치를 세우고 타이머를 0 으로 되돌린다",
+    "복귀": "타이머 > sustainSeconds **이고** total * releaseFraction > used 이거나, total * immediateReleaseFraction > used 이면 시간과 무관하게 즉시",
+    "타이머": "0x1404e6428 의 f32. 진입선 아래인 틱에서만 누적된다(0x14006d3b8 의 QueryPerformanceCounter 차분)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x14006cea0–0x14006e0bc",
+     "note": "평가기. 축 디스패치 0x14006d0e0–0x14006d2b4 · VRAM 0x14006d2e5–0x14006d403 · 판정 적용 0x14006d403–0x14006d4a6"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_playback_policy.py"
+    }
+   ]
+  },
+  {
+   "id": "playbackPolicy.vram.sampling",
+   "value": {
+    "카운터": "\\GPU Local Adapter Memory(*)\\Local Usage",
+    "폴 간격(초)": 1,
+    "표본 스레드": "0x140141460–0x1401417dc",
+    "최소 표본 수": 2,
+    "총량 하한(MB)": 2049,
+    "총량 상한(MB)": 131071,
+    "사용량": "표본[0] ÷ 1_000_000 (매직 0x431bde82d7b634db, `sar rdx, 0x12`) → MB",
+    "총량": "표본[마지막] 의 하위 32비트를 MB 로 읽는다. 같은 카운터의 다른 인스턴스 값이므로 단위가 사용량과 어긋난다 — 바이트가 그렇게 되어 있다",
+    "게이트": "표본이 2개 미만이거나 총량이 범위 밖이면 0x14006d403 으로 바로 뛰어 래치를 **그대로 둔다**(지우지 않는다)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x14006cea0–0x14006e0bc",
+     "note": "평가기. 축 디스패치 0x14006d0e0–0x14006d2b4 · VRAM 0x14006d2e5–0x14006d403 · 판정 적용 0x14006d403–0x14006d4a6"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_playback_policy.py"
+    }
+   ]
+  },
+  {
+   "id": "playbackPolicy.vram.escalation",
+   "value": {
+    "결과": "stop",
+    "근거": "래치는 플래그 bit10 인데 0x14006d407 의 `test ecx, 0x408` 가 bit3 와 **같은 자리에서** 보고 0x14006d423 `cmovne ebx, 1` 로 정지를 세운다",
+    "이름 주의": "설정 키가 `pausevram` 이라 일시정지로 읽히지만 실물은 렌더러를 내린다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x14006cea0–0x14006e0bc",
+     "note": "평가기. 축 디스패치 0x14006d0e0–0x14006d2b4 · VRAM 0x14006d2e5–0x14006d403 · 판정 적용 0x14006d403–0x14006d4a6"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_playback_policy.py"
+    }
+   ]
+  },
+  {
+   "id": "playbackPolicy.model",
+   "value": {
+    "구현": "Sources/WaplePolicy/PlaybackPolicy.swift",
+    "의존": "Foundation 하나. simd·CoreGraphics·AppKit 를 쓰지 않는다",
+    "검사기": "scripts/spec/check_playback_policy.py",
+    "타깃": "WaplePolicy · WaplePolicyTests (Package.swift, 다른 타깃에 의존하지 않는다)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Sources/WaplePolicy/PlaybackPolicy.swift",
+     "note": "이 정본을 그대로 옮긴 순수 모델. scripts/spec/check_playback_policy.py 가 둘을 대조한다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_playback_policy.py"
+    }
+   ]
+  }
+ ]
+}
