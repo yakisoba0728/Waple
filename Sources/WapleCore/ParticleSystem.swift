@@ -81,20 +81,61 @@ public enum Initializer: Equatable {
     case rotationRandom(min: Vec3, max: Vec3, exponent: Float = 1)          // radians
     case angularVelocityRandom(min: Vec3, max: Vec3, exponent: Float = 1)   // radians/s
     case turbulentVelocityRandom(speedMin: Float, speedMax: Float, scale: Float, offset: Float)
-    case colorList(colors: [Vec3])                     // 0..1 (실물 "r g b" 문자열 목록) — 균등 랜덤 선택
+    /// 실물 `colorlist`. `colors` 는 0..1(실물 "r g b" 문자열 목록) — 균등 랜덤 선택.
+    ///
+    /// **[2026-08-21 귀속 정정] `huenoise`/`saturationnoise`/`valuenoise` 는 `hsvcolorrandom` 이
+    /// 아니라 이 원소의 키다.** 종전에는 셋을 `hsvColorRandom` 에 달아 두고 hsv 브랜치에서 읽었는데,
+    /// 실물은 정반대다. 이 저장소에서 세 갈래로 확인했다:
+    ///   ① 세 문자열의 `lea` 참조가 **각각 3건뿐**이고(0x14048f5c0 / 0x14048f5d0 / 0x14048f5e0),
+    ///      그중 둘은 주입기(0x1401ba823·0x1401ba846 계열), 나머지 하나가 리더다.
+    ///   ② 그 리더 셋(`huenoise`@0x1401c7e1e · `saturationnoise`@0x1401c7e5d ·
+    ///      `valuenoise`@0x1401c7e92)이 전부 게이트 `stricmp` vs `"colorlist"`(0x1401c7b56)와
+    ///      다음 게이트 `"alpharandom"`(0x1401c7f37) **사이**에 있다. 같은 블록의 첫 키가 `colors`
+    ///      (0x1401c7b96)이고, 저장은 `[init+0x24]`(0x1401c7e64) · `[init+0x28]`(0x1401c7e99) ·
+    ///      `[init+0x2c]`(0x1401c7ec7) 이다.
+    ///   ③ `hsvcolorrandom` 브랜치(게이트 0x1401c783a)가 읽는 키는 `huemin`(0x1401c7872) ·
+    ///      `huemax`(0x1401c78a2) · `saturationmin`(0x1401c78d6) · `saturationmax`(0x1401c7909) ·
+    ///      `valuemin`(0x1401c793d) · `valuemax`(0x1401c7971) · `huesteps`(0x1401c79a5) **일곱뿐**이고
+    ///      노이즈 세 문자열의 `lea` 가 하나도 없다.
+    /// 부재 기본은 셋 다 **0**(실수 태그 3, `xor esi,esi`@0x1401ba762 → `mov [rax], rsi`
+    /// @0x1401ba865·0x1401ba911·0x1401ba9b9; 게이트 `find`@0x1401ba82a 계열).
+    /// 동봉 도달 0건 — 그래서 종전 오귀속이 관측으로는 드러나지 않았다.
+    ///
+    /// **파스·보존 전용**(시뮬 미배선 — 색 목록 선택에 어떻게 섞이는지는 미측정).
+    case colorList(colors: [Vec3],
+                   hueNoise: Float = 0, satNoise: Float = 0, valNoise: Float = 0)
     /// S5④: HSV 공간 색 랜덤(magic_color_sparkle 등 프리셋 — 실물 예제 huemin/huemax/saturationmin/max/
     /// valuemin/max, 전부 0..1 스케일). 종전 case 이름 불인식 → 전 initializer drop(무색 랜덤 = 백색 고정).
     /// h/s/v 는 colorRandom(공유 t, RGB 라인 보간)과 달리 서로 무관한 축이라 velocityRandom 과 같이
     /// 채널별 독립 t. [보존/추측] "huesteps"(코퍼스 실측 2/4 존재, 이산 색상환 스텝 수)는 미구현 —
     /// 연속 hue 랜덤으로 근사(전무→근사, 폴백 방향 유지). 반증 시 재검토.
     case hsvColorRandom(hueMin: Float, hueMax: Float, satMin: Float, satMax: Float, valMin: Float, valMax: Float,
-                        hueSteps: Int = 0, hueNoise: Float = 0, satNoise: Float = 0, valNoise: Float = 0)
-    // hueSteps = 실물키 huesteps(코퍼스 실측 2/4, 이산 색상환 스텝 수 — [추정] 구간 등분 인덱스 선택,
-    // 0=연속 랜덤 레거시). hueNoise/satNoise/valNoise = 실물키 huenoise/saturationnoise/valuenoise
-    // (@0x48f5c0–0x48f5e0 — [추정] 스폰 위치 값노이즈로 채널 t 산출, 0=부재 시 레거시 rng 드로
-    // — 무키 씬 비트동일).
+                        hueSteps: Int = 0)
+    // hueSteps = 실물키 huesteps(@0x48f570, 리더 0x1401c79a5 — 코퍼스 실측 6/12, 이산 색상환 스텝 수).
+    // **[2026-08-21] hueNoise/satNoise/valNoise 를 여기서 걷어냈다** — 그 셋은 `colorlist` 의 키다
+    // (근거는 `colorList` 주석). hsv 브랜치(게이트 0x1401c783a)는 그 문자열을 `lea` 하지도 않는다.
     /// 스프라이트시트 프레임 선택(스폰 시 확정). between=false: CP0 기준 각도 → 시퀀스,
     /// true: CP0→CP1 구간 투영 → 시퀀스. count=시퀀스 길이(시트 프레임 수와 다를 수 있음 — mirror 폴드).
+    ///
+    /// 실물 `arcamount` 는 이 케이스가 아니라 **def 레벨 `mapSequenceArcAmount`** 에 싣는다
+    /// (`mapSequenceAxis` 와 같은 관례 — 시뮬레이터의 `case let .mapSequence(count, _, between)`
+    /// 패턴을 흔들지 않기 위해서다). **[2026-08-21 실측]** `mapsequencebetweencontrolpoints`
+    /// **전용** 키다 — 주입기가 갈린다:
+    ///   between  : `0x1401bc080`–`0x1401bc470` — `count`·`bounds`·`limitbehavior`·
+    ///              `controlpointstart`·`controlpointend`·`flags`·**`arcamount`**·`arcdirection`·
+    ///              `sizereductionamount`. `arcamount` 는 `H_FLOAT`(0x1401d7d30) 호출 @0x1401bc3dd,
+    ///              키 `lea`@0x1401bc3d3, 기본 상수 **0.3**(`movss` @0x1401bc3cb ← 0x140492694).
+    ///   around   : `0x1401bbc90`–`0x1401bc080` — `count`·`bounds`·`speedmin`·`speedmax`·`axis`·
+    ///              `limitbehavior`·`controlpoint`·`flags`. **`arcamount` 가 없다.**
+    /// 소비도 between 분기에만 있다 — 게이트 `stricmp` vs `"mapsequencebetweencontrolpoints"`
+    /// (0x1401ca1e1) → 바인더 호출 0x1401ca214 → 리더 `lea`@0x1401ca482 → `asFloat`(0x1401ca4b0)
+    /// → `movss [init+0x20]`(0x1401ca4bc). 형제 `arcdirection` 은 바로 다음 `[init+0x24..0x2c]`.
+    ///
+    /// 동봉 도달 6건(파일 6) — 전건 `initializer[].name == "mapsequencebetweencontrolpoints"`
+    /// (thunderbolt/thunderbolt_beam_child 각 0.1 ×4, dischargearc 0.44 ×2).
+    /// around 분기는 이 키를 실을 수 없으므로 파스도 하지 않는다(0.3 이 아니라 **부재**를 뜻하는
+    /// nil 로 남긴다 — 유령 기본값을 만들지 않기 위해서다).
+    /// **파스·보존 전용**(시뮬 미배선 — 시퀀스 인덱스에 어떻게 곱해지는지는 미측정).
     case mapSequence(count: Float, mirror: Bool, between: Bool)
     /// `positionoffsetrandom` — 이름과 달리 **균일난수 오프셋이 아니라 fBm 노이즈 변위**다.
     /// 로케일도 그렇게 적는다: "Offsets the position of the particle with fractal brownian motion."
@@ -154,7 +195,25 @@ public enum Initializer: Equatable {
     /// 주입 기본은 `setcolor`(0x1401bc980 → 테이블 슬롯 0). 실물 도달 1건은 `input` 을 생략한다.
     case inheritInitialValueFromEvent(input: EventValueInput)
     /// 파스·보존 전용(이벤트 시스템 연동 보류). 실물 remapinitialvalue — 출력 리맵 스펙 미확정.
-    case remapInitialValue(output: String?, min: Vec3?, max: Vec3?)
+    ///
+    /// **[2026-08-21] `inputrangemin`/`inputrangemax` 를 실었다.** 이니셜라이저 주입기
+    /// `0x1401bc4b0`–`0x1401bc980` 이 오퍼레이터판(`0x1401bfbb0`)과 **바이트 구조까지 같고**
+    /// 부재 기본도 같다(min 0 @0x1401bc58c · max 1 @0x1401bc676). 리더는
+    /// `inputrangemin`@0x1401ca89d → `[init+0x18..0x20]`, `inputrangemax`@0x1401ca9eb →
+    /// `[init+0x24..0x2c]` 로 vec3-또는-스칼라를 담는다. 자세한 유도는 `RemapSpec.inMin` 주석.
+    /// 동봉 도달: `inputrangemax` 3건(thunderbolt_beam_child ×2 = 50, remapinitialvalue 프리뷰 = 300),
+    /// `inputrangemin` 0건.
+    ///
+    /// **반증 메모 — `min`/`max` 는 이 원소의 키가 아니다.** `remapinitialvalue` 분기가 읽는
+    /// 키는 `0x1401ca6f0`–`0x1401cad60` 구간에서 전수로 보이며 `operation`·`input`·`output`·
+    /// `inputcomponent`·`outputcomponent`·`transformfunction`·`flags`·`inputrangemin`·
+    /// `inputrangemax`·`outputrangemin`·`outputrangemax` 뿐이다 — `"min"`/`"max"` 를 `lea` 하는
+    /// 명령이 하나도 없다. 아래 `min`/`max` 는 유령 키를 읽고 있어 동봉 자산 3건 전건에서 nil 이다
+    /// (실 출력 구간은 `outputrangemin`/`outputrangemax` 다). 시뮬 미소비라 지금은 무해하지만,
+    /// 소비를 붙일 때는 **키 이름부터 갈아야 한다** — 이 라운드의 범위 밖이라 남겨 둔다.
+    case remapInitialValue(output: String?, min: Vec3?, max: Vec3?,
+                           inputMin: Vec3 = Vec3(x: 0, y: 0, z: 0),
+                           inputMax: Vec3 = Vec3(x: 1, y: 1, z: 1))
 }
 
 /// 시퀀스 인덱스(스폰 시 0..count) → 시트 프레임 인덱스. mirror=핑퐁(주기 2N-2), 아니면 순환.
@@ -191,6 +250,41 @@ public struct VortexRing: Equatable {
     public init(radius: Float, pullDistance: Float, pullForce: Float, width: Float) {
         self.radius = radius; self.pullDistance = pullDistance
         self.pullForce = pullForce; self.width = width
+    }
+}
+
+/// 충돌 오퍼레이터 6종의 형상 이름. **형상 파라미터는 아직 안 읽는다** — 아래
+/// `CollisionOperator` 주석의 "미파스" 목록 참조.
+///
+/// 게이트는 전부 `stricmp`(0x1402c10d0) 이고 파서 함수 `0x1401cc605`–`0x1401cfe16` 안에 있다:
+///   `collisionplane`  @0x1401cf1f8 · `collisionsphere` @0x1401cf410 · `collisionbox`   @0x1401cf655
+///   `collisionbounds` @0x1401cf6de · `collisionquad`   @0x1401cf737 · `collisionmodel` @0x1401cfd9f
+/// 여섯 분기 전부가 공통 리더 `0x1401c03f0` 을 부른다
+/// (0x1401cf239 · 0x1401cf451 · 0x1401cf692 · 0x1401cf71b · 0x1401cf77a · 0x1401cfde0).
+public enum CollisionShape: String, Equatable {
+    case plane, sphere, box, bounds, quad, model
+}
+
+/// `operator[].collisionbehavior` — 충돌 뒤 파티클을 어떻게 할지.
+///
+/// 리더 `0x1401c03f0` 이 `asString` 후 길이+`memcmp`(0x140420ff0)로 갈라 `[op+0x10]` 에 정수를 쓴다:
+///   `"slide"`(len 5, @0x14048fb04)  → **1**  (0x1401c0485)
+///   `"stop"` (len 4, @0x140473b34)  → **2**  (0x1401c04b4)
+///   `"delete"`(len 6, @0x14048fb0c) → **3**  (0x1401c04e3)
+///   그 외(= `"bounce"` 포함)        → **0**  (0x1401c04ec)
+/// 주입 기본은 문자열 **`"bounce"`**(@0x14048fb50, 길이 6 — `mov dword [rsi+4], eax` @0x1401c01c8 +
+/// `mov word [rsi+8], ax` @0x1401c01d5 로 6바이트를 복사; 게이트 `find`@0x1401c017f, 주입
+/// 블록 0x1401c018d–0x1401c024e). 즉 **부재 = bounce = 0** 이고, 인식 못 한 문자열도 0 으로 접힌다.
+public enum CollisionBehavior: Int, Equatable {
+    case bounce = 0, slide = 1, stop = 2, delete = 3
+    /// 원본 매퍼와 동일한 접기 — 인식 실패는 `bounce`(0)다.
+    public init(weName: String?) {
+        switch weName {
+        case "slide": self = .slide
+        case "stop": self = .stop
+        case "delete": self = .delete
+        default: self = .bounce
+        }
     }
 }
 
@@ -422,6 +516,61 @@ public enum ParticleOperator: Equatable {
     case inheritValueFromEvent(input: EventValueInput)
 }
 
+/// 충돌 오퍼레이터 6종(`collisionplane`/`sphere`/`box`/`bounds`/`quad`/`model`).
+/// **파스·보존 전용 — 시뮬 미구현.** 종전에는 여섯 이름이 전부
+/// `SP4 unsupported operator dropped` 로 사라져 def 에 흔적도 남지 않았다.
+///
+/// 여기서 읽는 것은 여섯 분기가 **공통으로** 쓰는 두 키뿐이다(공통 리더 `0x1401c03f0`,
+/// 공통 주입기 `0x1401c00a0`–`0x1401c03ec`):
+///   `collisionbehavior` — `CollisionBehavior` 주석(부재 `"bounce"` → 0)
+///   `bouncefactor`      — 아래 반사 계수 규약
+///
+/// **`bouncefactor` 변환 규약.** 리더가 `asFloat`(0x1401c0438) 한 값 `e` 를 그대로 담지 않고
+/// **`-(1.0 + e)`** 로 바꿔 4채널 브로드캐스트한다:
+///   `movss xmm1, [0x1404929b8]`(= -1.0f) @0x1401c043d
+///   `subss xmm1, xmm0`                   @0x1401c044f   → xmm1 = -1.0 - e
+///   `shufps xmm1, xmm1, 0`               @0x1401c0465
+///   `movups [op+0x00], xmm1`             @0x1401c0469
+/// 주입 기본은 **0.5**(`movabs rcx, 0x3fe0000000000000` @0x1401c0100 → `[rax]` @0x1401c010a,
+/// 게이트 `find`@0x1401c00be). 즉 부재 시 저장값은 -1.5 다.
+/// 이 저장소의 모델은 **저작값 `e` 를 그대로** 들고, 변환은 `reflectionCoefficient` 로 노출한다
+/// (원본의 부호 규약을 시뮬이 재유도하다 틀리는 것을 막으려는 것이다).
+///
+/// **미파스(의미 미측정이라 유령 필드를 만들지 않는다).** 형상 키는 분기마다 다르고
+/// 기본값 주입기(`0x1401c0860` → `0x1401c00a0`, 호출부 0x1401cf687·0x1401cf710·0x1401cfdd5)를
+/// 아직 안 읽었다. 분기별로 `lea` 가 확인된 것만 적어 둔다:
+///   plane  `plane`(0x1401cf23e) · `controlpoint`(0x1401cf342) · `distance`(0x1401cf386)
+///   sphere `origin`(0x1401cf456) · `controlpoint`(0x1401cf556) · `radius`(0x1401cf58e) ·
+///          `flags`(0x1401cf5fb)
+///   box    `controlpoint`(0x1401cf697)
+///   quad   `controlpoint`(0x1401cf77f) · `origin`(0x1401cf7b5) · `plane`(0x1401cf8c9) ·
+///          `forward`(0x1401cf9be) · `size`(0x1401cfab0) · `flags`(0x1401cfd0a)
+/// 동봉 도달: `collisionbehavior` 2건(collisionsphere · collisionquad, 둘 다 `"slide"`) ·
+/// `bouncefactor` 1건(collisionplane, 0.69999999).
+///
+/// **왜 `ParticleOperator` 케이스가 아닌가.** 케이스를 하나 늘리면 `ParticleSimulator` 의
+/// 전수 `switch` 가 전부 깨지는데, 시뮬 배선은 이 라운드의 범위가 아니다(형상 파라미터를
+/// 아직 안 읽었으니 배선할 것도 없다). 그래서 `operatorBlends` 와 같은 **병렬 보존 테이블**로
+/// 둔다 — 원본 `operator[]` 에서의 위치는 `sourceIndex` 로 남겨, 나중에 케이스로 승격할 때
+/// 순서를 복원할 수 있게 한다.
+public struct CollisionOperator: Equatable {
+    public let shape: CollisionShape
+    public let behavior: CollisionBehavior
+    /// 저작값 `e` 그대로. 실물 저장 표현은 `reflectionCoefficient` 를 쓸 것.
+    public let bounceFactor: Float
+    /// 원본 `operator[]` 배열에서 이 원소가 몇 번째 오브젝트였는지(0-기반).
+    /// `ParticleSystemDef.operators` 와는 별개 축이다 — 지원하지 않는 이름은 그쪽에서 드롭되므로
+    /// 인덱스가 어긋난다. 나중에 `ParticleOperator` 케이스로 승격할 때 원래 순서를 되찾기 위한 값이다.
+    public let sourceIndex: Int
+    /// 실물이 레코드에 담는 값 — `-(1 + bouncefactor)`(0x1401c043d–0x1401c0469).
+    public var reflectionCoefficient: Float { -(1 + bounceFactor) }
+    public init(shape: CollisionShape, behavior: CollisionBehavior,
+                bounceFactor: Float, sourceIndex: Int) {
+        self.shape = shape; self.behavior = behavior
+        self.bounceFactor = bounceFactor; self.sourceIndex = sourceIndex
+    }
+}
+
 public enum RemapOutput: Equatable {
     /// 레거시 출력 "velocity" — 엔진 어휘 setvelocity 계열로 해석(매 스텝 덮어쓰기). 동작 무회귀.
     case velocity(min: Vec3, max: Vec3)
@@ -588,6 +737,42 @@ public struct RemapSpec: Equatable {
     public let inputScale: Float              // transforminputscale (기본 1)
     public let outMin: Vec3                   // outputrangemin (스칼라 브로드캐스트)
     public let outMax: Vec3                   // outputrangemax
+    /// `inputrangemin` / `inputrangemax` — 입력 신호를 [0,1] 로 정규화하는 **구간**이다.
+    ///
+    /// **[2026-08-21 실측 — 종전 파스가 이 둘을 통째로 안 읽었다.]** 짝인 `outputrange*` 는
+    /// 읽으면서 입력 구간만 빠져 있었고, 그 결과 입력이 언제나 `[0,1]` 로 가정됐다
+    /// (`ParticleSimulator.remapEval` 2단계 `clamp(x,0,1)`). 동봉 자산이
+    /// `inputrangemin:150 / inputrangemax:200`(거리 단위)으로 좁히는 자리에서는 리맵이 통째로
+    /// 뭉개진다 — 150 이상이 전부 1 로 포화한다.
+    ///
+    /// 주입기(부재 기본):
+    ///   오퍼레이터 `0x1401bfbb0`–`0x1401c0080` — `inputrangemin` 게이트 `find`@0x1401bfc48,
+    ///     부재 시 `mov qword ptr [rax], rbp`(rbp=0) @0x1401bfc8c → **int 0**;
+    ///     `inputrangemax` 게이트 `find`@0x1401bfd3b, 부재 시
+    ///     `mov qword ptr [rax], 1` @0x1401bfd76 → **int 1**.
+    ///   이니셜라이저 `0x1401bc4b0`–`0x1401bc980` — 같은 구조·같은 상수
+    ///     (0x1401bc58c → 0 · 0x1401bc676 → 1). 두 주입기는 키 목록도 순서도 동일하다.
+    ///
+    /// 리더는 `outputrange*` 와 **완전히 같은** vec3-또는-스칼라 경로다(문자열 `"x y z"` 3성분,
+    /// 아니면 `asFloat` 1개를 3성분 브로드캐스트):
+    ///   `remapinitialvalue`(이니셜라이저) `inputrangemin`@0x1401ca89d → `[init+0x18..0x20]`,
+    ///     `inputrangemax`@0x1401ca9eb → `[init+0x24..0x2c]`
+    ///   `remapvalue`(오퍼레이터) `inputrangemin`@0x1401ce836 · `inputrangemax`@0x1401ce98c
+    ///
+    /// 런타임은 파스 시각에 **역수를 미리 굽는다**(오퍼레이터 레코드, 페이로드 기준):
+    ///   `span = inputrangemax − inputrangemin`(vec3 sub 0x14005f0a0, 호출 @0x1401ceaf0)
+    ///   성분이 **정확히 0** 이면 `0x34000000`(= 2⁻²³ ≈ 1.1920929e-07)으로 치환(0x1401cedf3)
+    ///   `rcpps` → 페이로드 `+0x50/+0x60/+0x70`(0x1401cee4a·0x1401cee5a·0x1401cee6a),
+    ///   `inputrangemin` 자체는 `+0x20/+0x30/+0x40`(0x1401cee1a·0x1401cee2a·0x1401cee3a)
+    /// VM opid 19 핸들러(`0x140244874`–`0x140246ec0`)가 그걸로
+    ///   `t = (x − inputrangemin) · rcp(span)` (`subps`@0x1402450fa · `mulps`@0x1402450fd,
+    ///    3성분 판은 0x140245096–0x1402450b2)
+    /// 을 계산하고, **`flags & 1` 일 때만** `[0,1]` 로 클램프한다
+    /// (`minps` 1.0 @0x14024510a · `maxps` 0 @0x140245117; 게이트 `and r9b,1` @0x1402449a0).
+    ///
+    /// 기본 `(0,0,0)`/`(1,1,1)` 이면 `t = x` 라 종전 동작과 같다 — **키를 안 쓰는 자산은 무회귀**다.
+    public let inMin: Vec3                    // inputrangemin (부재 int 0 → (0,0,0))
+    public let inMax: Vec3                    // inputrangemax (부재 int 1 → (1,1,1))
     /// blendinstart/end · blendoutstart/end. 실물 RVA 는 **0x48f850/0x48f860/0x48f870/0x48f880**
     /// (종전 주석의 0x48e650–0x48e680 은 어긋난 주소다). 부재 기본은 0/0/**1**/**1** 이고
     /// 유도·게이트는 `BlendWindow` 주석 참조 — 종전의 "전부 0 이면 무창" 은 기본값부터 틀렸다.
@@ -609,10 +794,13 @@ public struct RemapSpec: Equatable {
                 transform: RemapTransform?, octaves: Int, inputScale: Float,
                 outMin: Vec3, outMax: Vec3,
                 blendInStart: Float, blendInEnd: Float, blendOutStart: Float, blendOutEnd: Float,
-                inputCP0: Int, inputCP1: Int, outputCP0: Int, outputCP1: Int, component: Int) {
+                inputCP0: Int, inputCP1: Int, outputCP0: Int, outputCP1: Int, component: Int,
+                // 뒤에 붙인 이유는 순서 호환뿐이다 — 의미상으로는 outMin/outMax 의 짝이다.
+                inMin: Vec3 = Vec3(x: 0, y: 0, z: 0), inMax: Vec3 = Vec3(x: 1, y: 1, z: 1)) {
         self.verb = verb; self.input = input; self.operation = operation
         self.transform = transform; self.octaves = octaves; self.inputScale = inputScale
         self.outMin = outMin; self.outMax = outMax
+        self.inMin = inMin; self.inMax = inMax
         self.blendInStart = blendInStart; self.blendInEnd = blendInEnd
         self.blendOutStart = blendOutStart; self.blendOutEnd = blendOutEnd
         self.inputCP0 = inputCP0; self.inputCP1 = inputCP1
@@ -813,10 +1001,24 @@ public struct ChildLink: Equatable {
     public let maxInstances: Int
     public let probability: Float
     public let origin: Vec3
+    /// `children[].controlpointstartindex` — 자식 시스템이 부모 CP 배열을 볼 때의 **시작 인덱스**.
+    ///
+    /// **[2026-08-21 실측]** 주입기 `0x1401c1430`–`0x1401c179d`(children 바인더:
+    /// `origin`·`angles`·`scale`·`probability`(1.0)·`maxcount`(10)·`type`·**`controlpointstartindex`**·
+    /// `flags`)가 `xor r8d, r8d`(0x1401c1720) → `H_INT`(0x1401d7be0, 호출 @0x1401c172d)로
+    /// **기본 0** 을 심는다(키 `lea`@0x1401c1723). 리더는 `lea`@0x1401d09c4 →
+    /// `asInt`(0x140085f70 @0x1401d09d6) → 자식 디스크립터 `[+0x4f8]`(0x1401d09db).
+    ///
+    /// 동봉 도달 14건(파일 8) 중 **12건이 JSON `null`** 이다 — `asInt(null) = 0` 이라 원본에서도
+    /// 0 으로 접힌다. 여기서도 `pint(null) = nil → 0` 이라 같은 결과다(기본 0 폴백 필수).
+    /// 값이 실린 2건은 `thunderbolt_child_spawner` 의 `1`(preview 사본 포함).
+    /// **파스·보존 전용**(시뮬 미배선 — 자식 CP 오프셋 적용은 별도 라운드).
+    public let controlPointStartIndex: Int
     public init(def: ParticleSystemDef, trigger: ChildTrigger, maxInstances: Int,
-                probability: Float, origin: Vec3) {
+                probability: Float, origin: Vec3, controlPointStartIndex: Int = 0) {
         self.def = def; self.trigger = trigger; self.maxInstances = maxInstances
         self.probability = probability; self.origin = origin
+        self.controlPointStartIndex = controlPointStartIndex
     }
 }
 
@@ -961,6 +1163,55 @@ public struct PeriodicEmission: Equatable {
     }
 }
 
+/// 이미터 방출 창 — `emitter[].duration` / `emitter[].delay`(둘 다 **초**).
+///
+/// **[2026-08-21 실측]** 이 저장소에서 파서·런타임을 명령 단위로 확인했다. 두 키는
+/// min/max 쌍이 **아니다** — 각각 스칼라 하나이고, 파서가 그 하나를 레코드의 **두 칸**에
+/// 복사한다(작업용 카운트다운 + 원본 보존).
+///
+/// 파서 `0x1401c1c70`(이미터 base 파서, 페이로드 = 레코드+0x10):
+///   `rate`     → `[+0x00]` (0x1401c1ca5)
+///   `duration` → `[+0x04]`(0x1401c1cc7) **와 `[+0x0c]`**(0x1401c1cf4 — `eax = [rdi+4]` 재적재)
+///   `delay`    → `[+0x08]`(0x1401c1cfa) **와 `[+0x10]`**(0x1401c1cff, 같은 xmm0)
+/// 둘 다 `operator[](begin,end)`(0x140086de0) → `asFloat`(0x140086220) 이고 **부재 기본은 0**이다
+/// (없는 멤버는 null 로 생기고 `asFloat(null) = 0`). 별도 상수 주입기가 없다.
+///
+/// > 종전 보고서(`docs/re/bundled-key-coverage.md:273-274`)는 짝을 뒤집어 적었다 —
+/// > "`[+4]`/`[+8]` = duration, `[+0x0c]`/`[+0x10]` = delay". 실제는 (`+4`,`+0xc`)=duration ·
+/// > (`+8`,`+0x10`)=delay 다. 이 주석이 정본이다.
+///
+/// 소비(파티클 tick `0x1402378a0`–`0x14023b33d`, `r15` = 이미터 레코드, `xmm8`=0 · `xmm14`=dt):
+///   ① 방출 게이트 `0x1402379ea`: `comiss xmm8, [r15+0x18]` → `jb` — **delay > 0 이면 이번 프레임
+///      방출 없음**(`[r15+0x18]` = 페이로드 `+0x08`).
+///   ② 방출 게이트 `0x140237af1`–`0x140237afb`: `xmm0 = [r15+0x14]`(= 페이로드 `+0x04`),
+///      `comiss xmm0, xmm8` → `jb` — **duration < 0 이면 방출 없음**.
+///   ③ 레코드 꼬리 `0x140238461`–`0x140238475`: `delay > 0` 이면 `delay -= dt` 하고 **거기서 끝**
+///      (duration 은 아직 안 깎는다 — 즉 delay 는 duration 앞에 온다).
+///   ④ `0x14023ae24`–`0x14023ae46`: `delay <= 0` 이 되면 `duration > 0` 인 동안 `duration -= dt`,
+///      0 이하로 내려간 프레임에 `[r15+0x14] = -1.0f`(`0xbf800000` @0x14023ae3f)로 못 박고
+///      이미터를 은퇴시킨다(`0x14023ae67` `or dword [rcx+0x4c], 0x80000000` → 다음 프레임
+///      `0x1402379d9` `test ebx,ebx / js` 에서 영구 스킵).
+///   ⑤ `0x14023ae48`: `duration <= 0` 인데 `rate > 0`(`comiss xmm8, [rcx+0x10]` → `jb`)이면
+///      은퇴하지 않는다 — **`duration == 0` = 무한 방출**이다.
+///
+/// 즉 `duration == 0`(동봉 32건 중 30건)은 "0초 방출" 이 아니라 **무제한**이고,
+/// `duration == 1` + `delay == 0.2`(2건, thunderbolt_beam_child)는 0.2초 대기 → 1초 방출 → 은퇴다.
+/// `delay == 0`(2건)은 대기 없음.
+///
+/// 동봉 도달: `duration` 32건(파일 32) · `delay` 4건(파일 4) — 전건 `emitter[]`.
+/// **파스·보존 전용**이다(시뮬 미배선 — `ParticleSimulator` 방출 게이트 배선은 별도 라운드).
+public struct EmitterWindow: Equatable {
+    /// ON 창 길이(초). **0 = 무한**(위 ⑤). 음수는 실물에서 즉시 게이트 차단(위 ②).
+    public let duration: Float
+    /// 방출 시작 전 대기(초). 0 = 대기 없음.
+    public let delay: Float
+    public init(duration: Float, delay: Float) {
+        self.duration = duration; self.delay = delay
+    }
+    /// 키가 둘 다 부재라 실물 기본(0/0)과 완전히 같은 창 — 기존 방출 경로와 비트동일.
+    public static let unbounded = EmitterWindow(duration: 0, delay: 0)
+}
+
 // MARK: - 시스템 정의
 
 /// 오퍼레이터 → CP 인덱스 바인딩. `controlpointattract`/`vortex`/`maintaindistancetocontrolpoint`/
@@ -1017,9 +1268,16 @@ public struct ParticleSystemDef: Equatable {
     /// (직접 조립한 def 의 무회귀 경로). 대상 원소 13종은 `BlendWindow` 주석 참조 —
     /// **대상이 아닌 원소가 키를 적어도 WE 는 무시하므로** 소비 여부는 시뮬레이터가 가른다.
     public var operatorBlends: [BlendWindow] = []
+    /// 충돌 오퍼레이터 6종의 **파스·보존 테이블**(시뮬 미소비). `operators` 와는 별개 축이다 —
+    /// 유도·근거·미파스 목록은 `CollisionOperator` 주석 참조.
+    public var collisionOperators: [CollisionOperator] = []
     /// 이미터별 주기 방출(emitters 와 병렬; nil=무주기 — 기존 rate/burst 경로 비트동일).
     /// 병렬 배열 관례(emitterAudio/emitterSpeed/boxDistanceMin 동형) — Emitter 케이스 시그니처 무회귀.
     public var emitterPeriodic: [PeriodicEmission?] = []
+    /// 이미터별 방출 창(emitters 와 병렬 — `emitterAudio`/`emitterSpeed`/`emitterPeriodic` 동형).
+    /// 비어 있으면 창 없음(= 전 이미터 `.unbounded`)으로 본다 — 직접 조립한 def 의 무회귀 경로.
+    /// 유도·소비 근거는 `EmitterWindow` 주석. **현재 파스·보존 전용**(시뮬 미배선).
+    public var emitterWindow: [EmitterWindow] = []
     /// F623: 실물 def "flags" 비트(1=worldspace, 4=perspective z-원근).
     ///
     /// [정정 2026-08-01] 종전 주석은 "파스·보존 전용(렌더 소비는 후속)" 이라고 적혀 있었는데
@@ -1040,6 +1298,11 @@ public struct ParticleSystemDef: Equatable {
     public var orientation: ParticleOrientation = .screen
     /// F630: mapsequencearoundcontrolpoint "axis"(회전 평면 선택, 기본 z축=XY 평면 레거시).
     public var mapSequenceAxis: Vec3? = nil
+    /// `mapsequencebetweencontrolpoints` 의 `arcamount`(부재 주입 기본 **0.3**).
+    /// nil = 그 이니셜라이저가 없었다(= 이 시스템에 실릴 수 없는 키다). 마지막 지정이 승 —
+    /// `mapSequenceAxis` 와 같은 관례다. 유도·소비 근거는 `Initializer.mapSequence` 주석.
+    /// **파스·보존 전용**(시뮬 미배선).
+    public var mapSequenceArcAmount: Float? = nil
     /// rope/ropetrail 렌더러 확장 키(@0x48fbb0–0x48fc18) — 모델 노출 전용(렌더 소비 보류).
     public var ropeOptions: RopeRenderOptions? = nil
 
@@ -1063,9 +1326,26 @@ public struct ParticleSystemDef: Equatable {
 
     /// initializer JSON 배열 → (이니셜라이저 목록, mapSequenceAxis) 조립.
     /// F630: mapsequencearoundcontrolpoint "axis" — 마지막 지정 축이 승.
-    private static func parseInitializers(_ jsonArray: [Any]) -> (inits: [Initializer], mapSeqAxis: Vec3?) {
+    ///
+    /// **반증 기록 — `wraploop` 은 파티클 `initializer[]` 키가 아니다(2026-08-21).**
+    /// 커버리지 보고서 두 편이 소속을 놓고 엇갈렸는데(`initializer` vs `animation.options`),
+    /// 두 갈래로 확인한 결과 **`animation.options` 쪽이 맞다** — 여기서 파스하면 안 된다.
+    ///   ① 자산 — 동봉 트리의 `wraploop` 7건(파일 6)이 **전건** `…/animation/options` 경로다
+    ///      (`objects[].origin`·`instanceoverride.controlpoint1`·`controlpointangle1`·
+    ///       `effects[].passes[].constantshadervalues.multiply` 아래). `initializer[]` 도달 0건.
+    ///      값은 `null` 5 · `true` 2 라 실효 도달은 2건뿐이다.
+    ///   ② x86 — 유일한 소비 지점 `0x1401a96b0`–`0x1401a98a8` 이
+    ///      `length`(0x1401a96d2) · `fps`(0x1401a96f8) · `mode`(0x1401a9744) · `random`(0x1401a9777) ·
+    ///      `startpaused`(0x1401a979d) · **`wraploop`**(0x1401a97c3) 을 한 블록에서 `find` 하고
+    ///      각각 값 태그 5(bool)를 검사한다(`cmp byte [rdi+8], 5` @0x1401a97df 계열).
+    ///      파티클 이니셜라이저 바인더 어디에도 이 문자열 `lea` 가 없다.
+    /// 착지 자리는 `WapleCore/PropertyAnimation.swift` 의 options 파스이고 **이 파일 밖**이다.
+    private static func parseInitializers(_ jsonArray: [Any])
+        -> (inits: [Initializer], mapSeqAxis: Vec3?, mapSeqArcAmount: Float?) {
         var inits: [Initializer] = []
         var mapSeqAxis: Vec3? = nil   // F630: mapsequencearoundcontrolpoint "axis"
+        // `arcamount` 는 between 분기 전용이라 케이스 연관값이 아니라 여기서 걷어 def 에 싣는다.
+        var mapSeqArcAmount: Float? = nil
         for case let i as [String: Any] in jsonArray {
             switch i["name"] as? String {
             case "lifetimerandom":
@@ -1148,7 +1428,16 @@ public struct ParticleSystemDef: Equatable {
             case "colorlist":
                 // 실물: colors = ["r g b", ...] 0..1 스케일(colorrandom 의 0..255 와 다름 — 실측).
                 let colors = (i["colors"] as? [Any] ?? []).compactMap { pvec3($0) }
-                if !colors.isEmpty { inits.append(.colorList(colors: colors)) }
+                // **[2026-08-21 귀속 정정]** huenoise/saturationnoise/valuenoise 는 이 브랜치의
+                // 키다(리더 0x1401c7e1e · 0x1401c7e5d · 0x1401c7e92 — 게이트 `"colorlist"`
+                // @0x1401c7b56 와 다음 게이트 `"alpharandom"`@0x1401c7f37 사이). 종전엔
+                // `hsvcolorrandom` 에서 읽었다. 부재 기본은 셋 다 실수 0(0x1401ba762 → 0x1401ba865).
+                if !colors.isEmpty {
+                    inits.append(.colorList(colors: colors,
+                                            hueNoise: injected(i, "huenoise", 0),
+                                            satNoise: injected(i, "saturationnoise", 0),
+                                            valNoise: injected(i, "valuenoise", 0)))
+                }
             case "hsvcolorrandom":
                 // **[2026-08-20 정정] "데모 예제 = 기본값" 추정은 6필드 중 4필드가 틀렸다.**
                 // 주입기 0x1401ba3e0 — 귀속 사슬: `stricmp`(0x1402c10d0) 호출 @0x1401c783a 가
@@ -1170,10 +1459,9 @@ public struct ParticleSystemDef: Equatable {
                                              valMin: valMin, valMax: valMax,
                                              // huesteps 부재 기본은 0(연속)이 아니라 **6**(0x1401ba56d,
                                              // 인라인 tag=int) — 6단 색상환 양자화다.
-                                             hueSteps: max(0, injectedInt(i, "huesteps", 6)),
-                                             hueNoise: pfloat(i["huenoise"]) ?? 0,
-                                             satNoise: pfloat(i["saturationnoise"]) ?? 0,
-                                             valNoise: pfloat(i["valuenoise"]) ?? 0))
+                                             hueSteps: max(0, injectedInt(i, "huesteps", 6))))
+                                             // huenoise/saturationnoise/valuenoise 는 **여기서 읽지 않는다** —
+                                             // `colorlist` 의 키다(위 colorlist 케이스 주석 참조).
             case "mapsequencearoundcontrolpoint":
                 // count 부재 기본은 0(= 시퀀스 없음)이 아니라 **32**(주입기 0x1401bbc90, 인라인
                 // tag=int @0x1401bbcaf). 게이트: `stricmp`@0x1401c993a → 호출부 0x1401c9970.
@@ -1184,8 +1472,11 @@ public struct ParticleSystemDef: Equatable {
             case "mapsequencebetweencontrolpoints":
                 // count 부재 기본 **32**(주입기 0x1401bc080, 인라인 tag=int @0x1401bc09f).
                 // 게이트: `stricmp`@0x1401ca1e1 → 호출부 0x1401ca214.
+                // arcamount 부재 기본 **0.3**(주입기 0x1401bc080, `movss xmm2, [0x140492694]`
+                // @0x1401bc3cb → H_FLOAT @0x1401bc3dd). 리더 0x1401ca482 → [init+0x20].
                 inits.append(.mapSequence(count: injected(i, "count", 32),
                                           mirror: (i["limitbehavior"] as? String) == "mirror", between: true))
+                mapSeqArcAmount = injected(i, "arcamount", 0.3)
             case "positionoffsetrandom":
                 // `octaves` 클램프는 **부호 없는** 비교다 — `cmp eax,8 / jae → 8` 뒤 `cmp eax,1 /
                 // cmovb → 1`(0x1401c9387–0x1401c9399). 음수는 8 로 간다.
@@ -1212,14 +1503,18 @@ public struct ParticleSystemDef: Equatable {
                     input: EventValueInput(weName: i["input"] as? String) ?? .setColor))
             case "remapinitialvalue":
                 // 이벤트 시스템 연동 보류 — 파스·보존까지만(시뮬 무시).
-                inits.append(.remapInitialValue(output: i["output"] as? String,
-                                                min: pvec3OrScalar(i["min"]),
-                                                max: pvec3OrScalar(i["max"])))
+                inits.append(.remapInitialValue(
+                    output: i["output"] as? String,
+                    min: pvec3OrScalar(i["min"]),
+                    max: pvec3OrScalar(i["max"]),
+                    // 주입기 0x1401bc4b0: 부재 min = int 0(0x1401bc58c) · max = int 1(0x1401bc676).
+                    inputMin: injectedVec3OrScalar(i, "inputrangemin", Vec3(x: 0, y: 0, z: 0)),
+                    inputMax: injectedVec3OrScalar(i, "inputrangemax", Vec3(x: 1, y: 1, z: 1))))
             case let other:
                 WapleLog.warn("[Waple] SP4 unsupported initializer dropped: \(other ?? "nil")")
             }
         }
-        return (inits, mapSeqAxis)
+        return (inits, mapSeqAxis, mapSeqArcAmount)
     }
 
     /// operator JSON 배열 → (파싱된 오퍼레이터, attract CP 인덱스 쌍, vortex 오디오반응) 조립.
@@ -1245,8 +1540,12 @@ public struct ParticleSystemDef: Equatable {
     private static func parseOperators(_ jsonArray: [Any]) -> (ops: [ParticleOperator],
                                                                attractCPIds: [(op: Int, cp: Int)],
                                                                vortexAudio: [AudioProcessing?],
-                                                               blends: [BlendWindow]) {
+                                                               blends: [BlendWindow],
+                                                               collisions: [CollisionOperator]) {
         var ops: [ParticleOperator] = []
+        // 충돌 6종 — `ParticleOperator` 케이스가 아니라 병렬 보존 테이블이다(`CollisionOperator` 주석).
+        var collisions: [CollisionOperator] = []
+        var opElementIndex = -1
         var attractCPIds: [(op: Int, cp: Int)] = []
         // F624: vortex 출현 순 병렬 오디오반응(WE: vortex 오디오반응 = particle speed 를 오디오에 연결).
         var vortexAudio: [AudioProcessing?] = []
@@ -1256,6 +1555,7 @@ public struct ParticleSystemDef: Equatable {
         // 인덱스는 `ops` 와 1:1 이다(원소 하나가 ops 를 0개 또는 1개 추가하므로 아래 while 로 맞춘다).
         var blends: [BlendWindow] = []
         for case let o as [String: Any] in jsonArray {
+            opElementIndex += 1
             defer {
                 // WE 는 이 네 키를 **공용 파서 하나**(0x1401c2a40)에서만 읽는다. 대상이 아닌 원소가
                 // 키를 적어 놓아도(동봉에 실제로 있다) 무시되므로, 소비 여부는 시뮬레이터가 가른다.
@@ -1508,10 +1808,14 @@ public struct ParticleSystemDef: Equatable {
                 let outputName = (o["output"] as? String)?.lowercased()
                 // 확장 키(엔진 어휘) 존재 여부 — 전부 부재 + 레거시 출력(velocity/speed)이면
                 // 기존 .remapValue 경로(시뮬 비트동일 무회귀).
+                // `inputrangemin`/`inputrangemax` 도 확장 키다 — 레거시 경로(.remapValue)에는
+                // 입력 구간을 실을 자리가 없어서, 이 둘이 있으면 반드시 Ex 경로로 보내야 한다.
+                // (동봉 도달은 0 — `inputrange*` 를 쓰는 3+1건이 전부 output=color 라 이미 Ex 였다.)
                 let extKeys = ["input", "operation", "transformoctaves",
                                "blendinstart", "blendinend", "blendoutstart", "blendoutend",
                                "inputcontrolpoint0", "inputcontrolpoint1",
-                               "outputcontrolpoint0", "outputcontrolpoint1", "component"]
+                               "outputcontrolpoint0", "outputcontrolpoint1", "component",
+                               "inputrangemin", "inputrangemax"]
                 let hasExt = extKeys.contains { o[$0] != nil }
                 if !hasExt, outputName == "velocity" {
                     ops.append(.remapValue(output: .velocity(min: pvec3OrScalar(o["outputrangemin"]) ?? Vec3(x: 0, y: 0, z: 0),
@@ -1540,7 +1844,11 @@ public struct ParticleSystemDef: Equatable {
                         inputCP1: pint(o["inputcontrolpoint1"]) ?? 1,
                         outputCP0: pint(o["outputcontrolpoint0"]) ?? 0,
                         outputCP1: pint(o["outputcontrolpoint1"]) ?? 1,
-                        component: pcomponent(o["component"]) ?? 0)
+                        component: pcomponent(o["component"]) ?? 0,
+                        // 주입기 0x1401bfbb0: 부재 시 min=int 0(0x1401bfc8c) · max=int 1(0x1401bfd76).
+                        // 리더는 outputrange* 와 같은 vec3-또는-스칼라(0x1401ce836 / 0x1401ce98c).
+                        inMin: injectedVec3OrScalar(o, "inputrangemin", Vec3(x: 0, y: 0, z: 0)),
+                        inMax: injectedVec3OrScalar(o, "inputrangemax", Vec3(x: 1, y: 1, z: 1)))
                     ops.append(.remapValueEx(spec: spec))
                 } else {
                     WapleLog.warn("[Waple] remapvalue unsupported output dropped: \(outputName ?? "nil")")
@@ -1582,11 +1890,26 @@ public struct ParticleSystemDef: Equatable {
                 // 형제와 다르다: `setcoloropacity`(0x1401c0080 → 테이블 슬롯 4).
                 ops.append(.inheritValueFromEvent(
                     input: EventValueInput(weName: o["input"] as? String) ?? .setColorOpacity))
+            case "collisionplane", "collisionsphere", "collisionbox",
+                 "collisionbounds", "collisionquad", "collisionmodel":
+                // 파스·보존 전용(시뮬 미구현) — 형상 키는 아직 안 읽는다. 근거는 `CollisionOperator` 주석.
+                // 공통 두 키만 담는다: 주입 기본 behavior "bounce"(0x1401c018d 블록) · bouncefactor 0.5
+                // (`movabs 0x3fe0000000000000` @0x1401c0100), 리더 0x1401c0403 / 0x1401c0429.
+                let shapeName = String((o["name"] as? String ?? "").dropFirst("collision".count))
+                guard let shape = CollisionShape(rawValue: shapeName) else {
+                    WapleLog.warn("[Waple] SP4 unsupported operator dropped: \(o["name"] as? String ?? "nil")")
+                    break
+                }
+                collisions.append(CollisionOperator(
+                    shape: shape,
+                    behavior: CollisionBehavior(weName: o["collisionbehavior"] as? String),
+                    bounceFactor: injected(o, "bouncefactor", 0.5),
+                    sourceIndex: opElementIndex))
             case let other:
                 WapleLog.warn("[Waple] SP4 unsupported operator dropped: \(other ?? "nil")")
             }
         }
-        return (ops, attractCPIds, vortexAudio, blends)
+        return (ops, attractCPIds, vortexAudio, blends, collisions)
     }
 
     /// resolveChild: 자식 json 경로 → def (호출측이 pkg/머티리얼/재귀 리졸브 담당). nil 리졸브 = 링크 드롭+로그.
@@ -1604,6 +1927,15 @@ public struct ParticleSystemDef: Equatable {
         var boxDistanceMin: [Vec3?] = []
         // 주기 방출(minperiodicduration…maxtoemitperperiod @0x48f3c0–0x48f4b8)도 emitters 와 병렬.
         var emitterPeriodic: [PeriodicEmission?] = []
+        // 방출 창(duration/delay) — 세 이미터 케이스에서 emitters 와 함께 append.
+        var emitterWindow: [EmitterWindow] = []
+        /// `emitter[].duration` / `emitter[].delay`. 파서 0x1401c1c70 이 `asFloat` 로 읽고
+        /// **부재 기본은 0**(주입 상수 없음 — null 의 asFloat). 의미·소비 지점은 `EmitterWindow` 주석.
+        /// 세 이미터 이름이 같은 base 파서를 공유하므로(호출부 0x1401c61d6 · 0x1401c691e ·
+        /// 0x1401c6e28) sphererandom/boxrandom/layerimage 모두 같은 규약이다.
+        func parseWindow(_ e: [String: Any]) -> EmitterWindow {
+            EmitterWindow(duration: injected(e, "duration", 0), delay: injected(e, "delay", 0))
+        }
         /// **[2026-08-20] "[추정]" 을 뗀다 — 이미터 base 파서(0x1401c1c70)를 끝까지 읽었다.**
         ///
         /// 다섯 키의 저장 위치와 처리가 전부 확정이다:
@@ -1675,6 +2007,7 @@ public struct ParticleSystemDef: Equatable {
                 emitterSpeed.append(SIMD2(speedMin, speedMax))
                 boxDistanceMin.append(nil)
                 emitterPeriodic.append(parsePeriodic(e))
+                emitterWindow.append(parseWindow(e))
             case "boxrandom":
                 emitters.append(.box(
                     origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
@@ -1696,6 +2029,7 @@ public struct ParticleSystemDef: Equatable {
                 emitterSpeed.append(SIMD2(speedMin, speedMax))
                 boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
                 emitterPeriodic.append(parsePeriodic(e))
+                emitterWindow.append(parseWindow(e))
             case "layerimage":
                 // E1(②): layerimage(레이어 이미지 픽셀에서 방출) — 케이스 자체가 없어 무조건 드롭돼
                 // 이 이미터만 가진 시스템은 emitters=[] 로 파티클을 0개도 생성하지 못했다. 픽셀 불투명
@@ -1716,12 +2050,13 @@ public struct ParticleSystemDef: Equatable {
                 emitterSpeed.append(SIMD2(injected(e, "speedmin", 0.1), injected(e, "speedmax", 0.2)))
                 boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
                 emitterPeriodic.append(parsePeriodic(e))
+                emitterWindow.append(parseWindow(e))
             case let other:
                 WapleLog.warn("[Waple] SP4 unsupported emitter dropped: \(other ?? "nil")")
             }
         }
 
-        var (inits, mapSeqAxis) = Self.parseInitializers(json["initializer"] as? [Any] ?? [])
+        var (inits, mapSeqAxis, mapSeqArcAmount) = Self.parseInitializers(json["initializer"] as? [Any] ?? [])
 
         // 인스턴스 오버라이드(배수) 적용 — 이미터 rate/버스트, 이니셜라이저 min/max.
         // 배수 대상 이니셜라이저가 프리셋에 없으면 주입(스폰 기본 1 × 배수 = 배수 자체; m==1 은 무의미라
@@ -1760,8 +2095,9 @@ public struct ParticleSystemDef: Equatable {
                                                     scale: sc, offset: off)
                 case let .colorRandom(mn, mx, e) where ov.colorMultiplier != nil:
                     return .colorRandom(min: mul(mn, ov.colorMultiplier!), max: mul(mx, ov.colorMultiplier!), exponent: e)
-                case let .colorList(colors) where ov.colorMultiplier != nil:
-                    return .colorList(colors: colors.map { mul($0, ov.colorMultiplier!) })
+                case let .colorList(colors, hn, sn, vn) where ov.colorMultiplier != nil:
+                    return .colorList(colors: colors.map { mul($0, ov.colorMultiplier!) },
+                                      hueNoise: hn, satNoise: sn, valNoise: vn)
                 default:
                     return i
                 }
@@ -1783,7 +2119,8 @@ public struct ParticleSystemDef: Equatable {
             }
         }
 
-        var (ops, attractCPIds, vortexAudio, operatorBlends) = Self.parseOperators(json["operator"] as? [Any] ?? [])
+        var (ops, attractCPIds, vortexAudio, operatorBlends, collisionOps) =
+            Self.parseOperators(json["operator"] as? [Any] ?? [])
 
         // **[2026-08-20] `renderer` 키 부재는 "미지원" 이 아니라 sprite 다.** 파서가
         // `isArray`(0x1400888a0)에 실패하면 그 자리에서 오브젝트(태그 7)를 만들어
@@ -1908,7 +2245,10 @@ public struct ParticleSystemDef: Equatable {
                     def: childDef, trigger: trigger,
                     maxInstances: maxInstances,
                     probability: pfloat(c["probability"]) ?? 1,
-                    origin: pvec3(c["origin"]) ?? Vec3(x: 0, y: 0, z: 0)))
+                    origin: pvec3(c["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    // 주입 기본 0(`xor r8d,r8d` @0x1401c1720 → H_INT @0x1401c172d).
+                    // 동봉 14건 중 12건이 `null` — `asInt(null)=0` 과 같은 자리로 접힌다.
+                    controlPointStartIndex: injectedInt(c, "controlpointstartindex", 0)))
             }
         }
 
@@ -1961,7 +2301,8 @@ public struct ParticleSystemDef: Equatable {
             Self.bakeControlPointTargets(&childDef.operators, bindings: childDef.controlPointBindings,
                                          controlPoints: childDef.controlPoints)
             return ChildLink(def: childDef, trigger: link.trigger, maxInstances: link.maxInstances,
-                             probability: link.probability, origin: link.origin)
+                             probability: link.probability, origin: link.origin,
+                             controlPointStartIndex: link.controlPointStartIndex)
         }
 
         var def = ParticleSystemDef(
@@ -1974,14 +2315,17 @@ public struct ParticleSystemDef: Equatable {
         def.emitterSpeed = emitterSpeed
         def.boxDistanceMin = boxDistanceMin
         def.emitterPeriodic = emitterPeriodic
+        def.emitterWindow = emitterWindow
         def.vortexAudio = vortexAudio
         def.operatorBlends = operatorBlends
+        def.collisionOperators = collisionOps
         def.flags = pint(json["flags"]) ?? 0                                        // F623
         // F622: animationmode("sequence"/"randomframe")·sequencemultiplier(배속, 기본 1).
         def.animationMode = (json["animationmode"] as? String).flatMap { ParticleAnimationMode(rawValue: $0) }
         def.sequenceMultiplier = pfloat(json["sequencemultiplier"]) ?? 1
         def.orientation = orientation
         def.mapSequenceAxis = mapSeqAxis
+        def.mapSequenceArcAmount = mapSeqArcAmount
         def.ropeOptions = ropeOpts
         def.controlPointFlags = controlPointFlags
         def.controlPointParent = controlPointParent

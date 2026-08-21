@@ -682,8 +682,18 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertEqual(ps.count, 2)
     }
 
-    // MARK: - 7. hsvcolorrandom 확장
+    // MARK: - 7. hsvcolorrandom 확장 / colorlist 노이즈 키
 
+    /// **[2026-08-21 귀속 정정]** `huenoise`/`saturationnoise`/`valuenoise` 는 `hsvcolorrandom` 이
+    /// 아니라 **`colorlist`** 의 키다. 종전 이 테스트는 셋을 hsv 오브젝트에 얹어 놓고 hsv 케이스에서
+    /// 읽히는지 단언해, WE 가 절대 내보내지 않는 JSON 모양을 회귀로 고정하고 있었다.
+    /// 근거(전부 이 저장소에서 직접 확인):
+    ///   · 세 문자열의 `lea` 참조가 각각 3건뿐이고(주입기 2 + 리더 1), 리더 셋
+    ///     (0x1401c7e1e · 0x1401c7e5d · 0x1401c7e92)이 게이트 `"colorlist"`(0x1401c7b56)와
+    ///     다음 게이트 `"alpharandom"`(0x1401c7f37) 사이에 있다.
+    ///   · `hsvcolorrandom` 브랜치(게이트 0x1401c783a)가 읽는 키는 huemin/huemax/saturationmin/
+    ///     saturationmax/valuemin/valuemax/huesteps 일곱뿐이다.
+    ///   · 동봉 도달 0건(`huesteps` 만 2건) — 그래서 오귀속이 관측으로 드러나지 않았다.
     func testHsvExtendedKeysParse() {
         let def = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"boxrandom","rate":1}],
@@ -691,13 +701,43 @@ final class ParticleExtendedKeysTests: XCTestCase {
                          "huenoise":0.1,"saturationnoise":0.2,"valuenoise":0.3}],
          "renderer":[{"name":"sprite"}],"maxcount":10}
         """), material: nil)
-        guard case let .hsvColorRandom(_, _, _, _, _, _, steps, hn, sn, vn) = def.initializers.first else {
+        guard case let .hsvColorRandom(_, _, _, _, _, _, steps) = def.initializers.first else {
             return XCTFail("hsvcolorrandom 가 파스되어야 한다")
         }
-        XCTAssertEqual(steps, 4)
-        XCTAssertEqual(hn, 0.1, accuracy: 1e-6)
-        XCTAssertEqual(sn, 0.2, accuracy: 1e-6)
-        XCTAssertEqual(vn, 0.3, accuracy: 1e-6)
+        XCTAssertEqual(steps, 4, "huesteps 는 실제로 이 원소의 키다(리더 0x1401c79a5)")
+    }
+
+    /// `colorlist` 의 노이즈 세 키 — 값 있음 / 부재(주입 기본 0) / 잘못된 타입.
+    /// 주입기 0x1401ba740(호출부 0x1401c7b89, 게이트 `"colorlist"` 바로 뒤)이 `xor esi,esi`
+    /// (0x1401ba762)로 만든 0 을 실수 태그로 심는다(0x1401ba865 · 0x1401ba911 · 0x1401ba9b9).
+    func testColorListNoiseKeysParsed() {
+        func noise(_ body: String) -> (Float, Float, Float)? {
+            let def = ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":1}],
+             "initializer":[{"name":"colorlist","colors":["1 0 0","0 1 0"]\(body)}],
+             "renderer":[{"name":"sprite"}],"maxcount":10}
+            """), material: nil)
+            for i in def.initializers { if case let .colorList(_, h, s, v) = i { return (h, s, v) } }
+            return nil
+        }
+        let present = noise(#","huenoise":0.1,"saturationnoise":0.2,"valuenoise":0.3"#)
+        XCTAssertEqual(present?.0 ?? -1, 0.1, accuracy: 1e-6)
+        XCTAssertEqual(present?.1 ?? -1, 0.2, accuracy: 1e-6)
+        XCTAssertEqual(present?.2 ?? -1, 0.3, accuracy: 1e-6)
+        let absent = noise("")
+        XCTAssertEqual(absent?.0, 0, "부재 기본 0 (0x1401ba865)")
+        XCTAssertEqual(absent?.1, 0)
+        XCTAssertEqual(absent?.2, 0)
+        // 잘못된 타입 — 문자열 스칼라는 파티클 규약상 거부.
+        XCTAssertEqual(noise(#","huenoise":"0.1""#)?.0, 0)
+        // 색 목록은 그대로 살아 있어야 한다(노이즈 키가 목록을 삼키면 안 된다).
+        let def = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":1}],
+         "initializer":[{"name":"colorlist","colors":["1 0 0"],"huenoise":0.5}],
+         "renderer":[{"name":"sprite"}],"maxcount":10}
+        """), material: nil)
+        XCTAssertEqual(def.initializers.first,
+                       .colorList(colors: [Vec3(x: 1, y: 0, z: 0)], hueNoise: 0.5))
     }
 
     func testHsvHueSteps_discreteHuesOnly() {
@@ -731,8 +771,11 @@ final class ParticleExtendedKeysTests: XCTestCase {
         func run() -> [SIMD3<Float>] {
             let def = makeDef(emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0),
                                               distanceMax: Vec3(x: 100, y: 100, z: 0), rate: 0, burst: 32)],
+                              // [2026-08-21] `hueNoise` 연관값 자체를 케이스에서 걷어냈으므로
+                              // 이제는 인자로 줄 수조차 없다 — 오귀속의 구조적 재발 방지다
+                              // (그 셋은 `colorlist` 의 키다: 리더 0x1401c7e1e·0x1401c7e5d·0x1401c7e92).
                               initializers: [.hsvColorRandom(hueMin: 0, hueMax: 1, satMin: 1, satMax: 1,
-                                                             valMin: 1, valMax: 1, hueNoise: 0.05)],
+                                                             valMin: 1, valMax: 1)],
                               maxCount: 32)
             var sim = ParticleSimulator(def: def, seed: 62)
             return sim.step(0.1).map { $0.color }
@@ -741,6 +784,16 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertEqual(a, b)                                     // 결정적
         XCTAssertEqual(Set(a.map { "\($0)" }).count, 1,
                        "huenoise 는 이 원소의 키가 아니므로 huesteps 부재 규칙대로 단일 색이어야 한다")
+        // 파스 층에서도 같은 사실을 고정한다 — hsv 오브젝트에 노이즈 세 키를 얹어도 원소가 갈리면 안 된다.
+        func parsed(_ extra: String) -> [Initializer] {
+            ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":1}],
+             "initializer":[{"name":"hsvcolorrandom","huemin":0,"huemax":1\(extra)}],
+             "renderer":[{"name":"sprite"}],"maxcount":4}
+            """), material: nil).initializers
+        }
+        XCTAssertEqual(parsed(#","huenoise":0.05,"saturationnoise":0.2,"valuenoise":0.3"#), parsed(""),
+                       "hsvcolorrandom 브랜치(게이트 0x1401c783a)는 그 세 문자열을 lea 하지도 않는다")
     }
 
     // MARK: - 8. 무키 씬 무회귀(비트동일)
@@ -777,4 +830,239 @@ final class ParticleExtendedKeysTests: XCTestCase {
         }
         XCTAssertEqual(run(), run())
     }
+
+    // MARK: - 12. 커버리지 보고서가 지목한 파티클 스키마 구멍 (2026-08-21 재확인)
+    //
+    // `docs/re/bundled-key-coverage.md` · `docs/re/unimplemented-json-keys.md` 가 꼽은 여섯 건을
+    // 자산 도수와 x86 양쪽으로 다시 세고, **확인된 것만** 파스했다. 각 테스트는 세 갈래를 본다 —
+    // 값 있음 / 부재(주입 기본) / 잘못된 타입.
+    //
+    // 잘못된 타입의 규약은 원본 주입기 규약을 그대로 따른다: 주입은 **키가 없을 때만** 일어나므로,
+    // 키가 있는데 값을 못 읽으면 기본 상수가 아니라 **0**(jsoncpp `asFloat`/`asInt` 의 실패값)이다.
+    // 파티클 규약상 문자열 스칼라는 숫자로 읽지 않는다(`strictFloat`/`strictInt`).
+
+    /// ① `operator[].inputrangemin` / `inputrangemax` — 리맵 **입력 구간**.
+    /// 종전에는 짝인 `outputrange*` 만 읽고 이 둘을 통째로 버려 입력이 언제나 `[0,1]` 가정이었다.
+    /// 주입기 0x1401bfbb0: 부재 min = int 0(0x1401bfc8c) · max = int 1(0x1401bfd76).
+    /// 리더 0x1401ce836 / 0x1401ce98c 는 `outputrange*` 와 같은 vec3-또는-스칼라다.
+    /// 동봉 도달: `operator[]` 에서 min 1건(150) · max 1건(200) —
+    /// `scenes/particleelementpreviews/remapvalue/particles/new_particle_system.json`.
+    ///
+    /// **주의(범위 밖 결함).** 그 동봉 자산의 `output` 은 `"color"` 인데, Waple 의 `remapVerb`
+    /// 어휘(`setvelocity`/`multiplyspeed`/…)에 없어서 오퍼레이터가 통째로 드롭된다. 실물의
+    /// `output` 은 그 어휘가 아니라 `input` 과 **같은 21항 채널 테이블**(0x140484e80: lifetimefraction ·
+    /// maxlifetime · size · opacity · speed · rotation · angularspeed · … · **color**(13) · position ·
+    /// velocity · …)을 쓴다 — 매퍼가 둘 다 `0x140260f50` 이고 저장이 각각 `[op+0x04]`(0x1401ce71e) ·
+    /// `[op+0x08]`(0x1401ce759) 이다. 즉 동사는 `output` 이 아니라 `operation` 이 정한다.
+    /// 이 라운드의 범위 밖이라 손대지 않고, 픽스처만 현재 어휘가 받는 `"setcolor"` 로 적는다.
+    func testOperatorInputRangeParsed() {
+        func spec(_ body: String) -> RemapSpec? {
+            let def = ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
+             "operator":[{"name":"remapvalue","output":"setcolor","input":"distancetocontrolpoint",
+                          "outputrangemin":"1 0 0","outputrangemax":"0 0 1"\(body)}],
+             "maxcount":4}
+            """), material: nil)
+            for op in def.operators { if case let .remapValueEx(s) = op { return s } }
+            return nil
+        }
+        // 값 있음 — 동봉 실자산과 같은 모양(스칼라 → 3성분 브로드캐스트).
+        let present = spec(#","inputrangemin":150,"inputrangemax":200"#)
+        XCTAssertEqual(present?.inMin, Vec3(x: 150, y: 150, z: 150))
+        XCTAssertEqual(present?.inMax, Vec3(x: 200, y: 200, z: 200))
+        // 부재 — 주입 기본 0 / 1. 이 값이면 `(x − 0)·rcp(1) = x` 라 종전 동작과 같다(무회귀 근거).
+        let absent = spec("")
+        XCTAssertEqual(absent?.inMin, Vec3(x: 0, y: 0, z: 0), "부재 min 은 int 0 (0x1401bfc8c)")
+        XCTAssertEqual(absent?.inMax, Vec3(x: 1, y: 1, z: 1), "부재 max 는 int 1 (0x1401bfd76)")
+        // 문자열 3성분도 outputrange* 와 같은 경로로 받는다.
+        let vec = spec(#","inputrangemin":"1 2 3","inputrangemax":"4 5 6""#)
+        XCTAssertEqual(vec?.inMin, Vec3(x: 1, y: 2, z: 3))
+        XCTAssertEqual(vec?.inMax, Vec3(x: 4, y: 5, z: 6))
+        // 잘못된 타입 — 키가 **있으므로** 주입이 일어나지 않는다. 기본 상수가 아니라 0 벡터다.
+        // (문자열 스칼라는 파티클 규약상 숫자로 읽지 않고, 3성분이 안 되는 문자열도 벡터가 아니다.)
+        let bad = spec(#","inputrangemin":"abc","inputrangemax":"1 2""#)
+        XCTAssertEqual(bad?.inMin, Vec3(x: 0, y: 0, z: 0), "키가 있으면 주입 없음 → 0")
+        XCTAssertEqual(bad?.inMax, Vec3(x: 0, y: 0, z: 0), "키가 있으면 주입 없음 → 0")
+        // JSON 불리언은 **0 이 아니라 1/0** 이다 — jsoncpp `asFloat`(0x140086220)이
+        // booleanValue 를 1.0/0.0 으로 내므로 실물과 같은 자리다. 유령 0 으로 접으면 안 된다.
+        XCTAssertEqual(spec(#","inputrangemax":true"#)?.inMax, Vec3(x: 1, y: 1, z: 1))
+        XCTAssertEqual(spec(#","inputrangemax":false"#)?.inMax, Vec3(x: 0, y: 0, z: 0))
+    }
+
+    /// ①-b `inputrange*` 만 있어도 확장(Ex) 경로로 가야 한다 — 레거시 `.remapValue` 에는
+    /// 입력 구간을 실을 자리가 없어서, 확장 키 목록에 안 넣으면 값이 조용히 사라진다.
+    func testInputRangeForcesExtendedRemapPath() {
+        let def = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
+         "operator":[{"name":"remapvalue","output":"speed","outputrangemin":0,"outputrangemax":50,
+                      "inputrangemax":300}],
+         "maxcount":4}
+        """), material: nil)
+        var ex: RemapSpec? = nil
+        var legacy = false
+        for op in def.operators {
+            if case let .remapValueEx(s) = op { ex = s }
+            if case .remapValue = op { legacy = true }
+        }
+        XCTAssertFalse(legacy, "inputrange* 가 있으면 레거시 경로로 새면 안 된다")
+        XCTAssertEqual(ex?.inMax, Vec3(x: 300, y: 300, z: 300))
+        XCTAssertEqual(ex?.verb, .multiplySpeed)
+    }
+
+    /// ①-c `initializer[].remapinitialvalue` 쪽 쌍둥이. 주입기 0x1401bc4b0 이 오퍼레이터판과
+    /// 같은 상수를 심고(0x1401bc58c → 0 · 0x1401bc676 → 1), 리더는 0x1401ca89d / 0x1401ca9eb 다.
+    /// 동봉 도달: `inputrangemax` 3건(50 ×2 · 300), `inputrangemin` 0건.
+    func testInitializerInputRangeParsed() {
+        func ranges(_ body: String) -> (Vec3, Vec3)? {
+            let def = ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
+             "initializer":[{"name":"remapinitialvalue","output":"color",
+                             "input":"distancetocontrolpoint"\(body)}],
+             "maxcount":4}
+            """), material: nil)
+            for i in def.initializers {
+                if case let .remapInitialValue(_, _, _, lo, hi) = i { return (lo, hi) }
+            }
+            return nil
+        }
+        let present = ranges(#","inputrangemax":300"#)
+        XCTAssertEqual(present?.0, Vec3(x: 0, y: 0, z: 0), "min 생략 → 주입 int 0")
+        XCTAssertEqual(present?.1, Vec3(x: 300, y: 300, z: 300))
+        let absent = ranges("")
+        XCTAssertEqual(absent?.0, Vec3(x: 0, y: 0, z: 0))
+        XCTAssertEqual(absent?.1, Vec3(x: 1, y: 1, z: 1), "부재 max 는 int 1 (0x1401bc676)")
+        let bad = ranges(#","inputrangemin":"nope","inputrangemax":[1,2]"#)
+        XCTAssertEqual(bad?.0, Vec3(x: 0, y: 0, z: 0))
+        XCTAssertEqual(bad?.1, Vec3(x: 0, y: 0, z: 0))
+    }
+
+    /// ② `emitter[].duration` / `emitter[].delay`(초). 파서 0x1401c1c70 이
+    /// duration → `[+0x04]`·`[+0x0c]`, delay → `[+0x08]`·`[+0x10]` 에 **같은 스칼라를 두 번** 넣는다
+    /// (min/max 쌍이 아니다 — 작업용 카운트다운 + 원본). 부재 기본은 둘 다 0(주입 상수 없음).
+    /// 동봉 도달: duration 32건(0 ×30 · 1 ×2) · delay 4건(0 ×2 · 0.2 ×2) — 전건 `emitter[]`.
+    func testEmitterDurationDelayParsed() {
+        let def = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"sphererandom","rate":100,"duration":1,"delay":0.2},
+                    {"name":"boxrandom","rate":10},
+                    {"name":"sphererandom","rate":10,"duration":"1","delay":null},
+                    {"name":"layerimage","rate":5,"duration":2.5,"delay":0}],
+         "renderer":[{"name":"sprite"}],"maxcount":8}
+        """), material: nil)
+        XCTAssertEqual(def.emitterWindow.count, def.emitters.count, "emitters 와 병렬이어야 한다")
+        // 값 있음 — 동봉 `thunderbolt_beam_child` 와 같은 모양(0.2s 대기 → 1s 방출 → 은퇴).
+        XCTAssertEqual(def.emitterWindow[0], EmitterWindow(duration: 1, delay: 0.2))
+        // 부재 — 둘 다 0. 0 = 무한(0x14023ae48 에서 rate>0 이면 은퇴하지 않는다).
+        XCTAssertEqual(def.emitterWindow[1], EmitterWindow.unbounded)
+        // 잘못된 타입 — 문자열 스칼라는 파티클 규약상 거부, JSON null 은 `asFloat(null)=0` 과 같은 자리.
+        XCTAssertEqual(def.emitterWindow[2], EmitterWindow(duration: 0, delay: 0))
+        // layerimage 도 같은 base 파서(0x1401c6e28)를 공유한다.
+        XCTAssertEqual(def.emitterWindow[3], EmitterWindow(duration: 2.5, delay: 0))
+    }
+
+    /// ③ `initializer[].arcamount` — `mapsequencebetweencontrolpoints` **전용**이다.
+    /// between 바인더 0x1401bc080 만 이 키를 심고(H_FLOAT @0x1401bc3dd, 기본 0.3 ← 0x140492694),
+    /// around 바인더 0x1401bbc90 에는 아예 없다. 소비는 리더 0x1401ca482 → `[init+0x20]`.
+    /// 동봉 도달 6건 — 전건 between(0.1 ×4 · 0.44 ×2).
+    func testMapSequenceArcAmountParsed() {
+        // 반환 nil = "arcamount 를 실을 수 없는 원소였다"(around 분기).
+        // 케이스 연관값이 아니라 def 레벨 필드다 — 시뮬의 `case let .mapSequence(count, _, between)`
+        // 패턴을 흔들지 않으려고 `mapSequenceAxis` 와 같은 관례를 썼다.
+        func arc(_ name: String, _ body: String = "") -> Float? {
+            ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
+             "initializer":[{"name":"\(name)","count":8\(body)}],"maxcount":4}
+            """), material: nil).mapSequenceArcAmount
+        }
+        // 값 있음 — 동봉 dischargearc 와 같은 값.
+        XCTAssertEqual(arc("mapsequencebetweencontrolpoints", #","arcamount":0.44"#), 0.44)
+        // 부재 — 주입 기본 0.3.
+        XCTAssertEqual(arc("mapsequencebetweencontrolpoints"), 0.3, "부재 기본 0.3 (0x140492694)")
+        // 잘못된 타입 — 키가 있으므로 주입 없음 → 0.
+        XCTAssertEqual(arc("mapsequencebetweencontrolpoints", #","arcamount":"0.44""#), 0)
+        // around 분기는 이 키를 실을 수 없다 — 유령 기본값(0.3)을 만들면 안 된다.
+        XCTAssertNil(arc("mapsequencearoundcontrolpoint", #","arcamount":0.44"#),
+                     "around 바인더(0x1401bbc90)에는 arcamount 가 없다")
+    }
+
+    /// ④ `children[].controlpointstartindex`. 주입기 0x1401c1430 이 `xor r8d,r8d`(0x1401c1720) →
+    /// `H_INT`(0x1401c172d) 로 **기본 0** 을 심고, 리더는 0x1401d09c4 → `asInt`(0x1401d09d6) 다.
+    /// 동봉 도달 14건 중 **12건이 JSON `null`** — `asInt(null)=0` 이라 0 으로 접힌다.
+    func testChildControlPointStartIndexParsed() {
+        let stub = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],"maxcount":2}
+        """), material: nil)
+        let def = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],"maxcount":4,
+         "children":[{"name":"a.json","controlpointstartindex":1},
+                     {"name":"b.json"},
+                     {"name":"c.json","controlpointstartindex":null},
+                     {"name":"d.json","controlpointstartindex":"1"}]}
+        """), material: nil) { _ in stub }
+        XCTAssertEqual(def.children.count, 4)
+        XCTAssertEqual(def.children[0].controlPointStartIndex, 1, "동봉 thunderbolt_child_spawner 와 같은 값")
+        XCTAssertEqual(def.children[1].controlPointStartIndex, 0, "부재 기본 0 (0x1401c1720)")
+        XCTAssertEqual(def.children[2].controlPointStartIndex, 0, "null → asInt(null)=0 (동봉 12/14)")
+        XCTAssertEqual(def.children[3].controlPointStartIndex, 0, "문자열은 파티클 규약상 거부 → 0")
+    }
+
+    /// ⑥ 충돌 오퍼레이터 6종 — 종전엔 이름 자체가 `unsupported operator dropped` 로 사라졌다.
+    /// 공통 리더 0x1401c03f0: `collisionbehavior` → `[op+0x10]` 정수
+    /// (slide 1 @0x1401c0485 · stop 2 @0x1401c04b4 · delete 3 @0x1401c04e3 · 그 외 0 @0x1401c04ec),
+    /// `bouncefactor` → `asFloat` 뒤 **`-(1+e)`** 로 바꿔 `[op+0x00]` 에 4채널 브로드캐스트
+    /// (상수 -1.0 @0x1404929b8 적재 0x1401c043d · `subss` 0x1401c044f · `movups` 0x1401c0469).
+    /// 주입 기본: behavior `"bounce"`(0x14048fb50) → 0 · bouncefactor **0.5**(0x1401c0100).
+    /// 동봉 도달: behavior 2건(sphere·quad, 둘 다 `"slide"`) · bouncefactor 1건(plane, 0.69999999).
+    /// **파스·보존 전용이다** — 시뮬은 이 케이스를 아직 소비하지 않는다.
+    func testCollisionOperatorsParseOnly() {
+        let def = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],"maxcount":4,
+         "operator":[{"name":"collisionsphere","origin":"0 -100 0","collisionbehavior":"slide"},
+                     {"name":"collisionplane","distance":-200,"bouncefactor":0.7},
+                     {"name":"collisionquad","collisionbehavior":"stop"},
+                     {"name":"collisionbox","collisionbehavior":"delete"},
+                     {"name":"collisionbounds"},
+                     {"name":"collisionmodel","collisionbehavior":"bounce"},
+                     {"name":"collisionplane","collisionbehavior":42,"bouncefactor":"0.7"}]}
+        """), material: nil)
+        let got = def.collisionOperators
+        XCTAssertEqual(got.count, 7, "여섯 형상 전부를 받아야 한다(드롭 금지)")
+        XCTAssertTrue(def.operators.isEmpty, "충돌은 operators 축이 아니라 병렬 보존 테이블이다")
+        // 값 있음.
+        XCTAssertEqual(got[0].shape, .sphere); XCTAssertEqual(got[0].behavior, .slide)
+        XCTAssertEqual(got[1].shape, .plane);  XCTAssertEqual(got[1].bounceFactor, 0.7)
+        XCTAssertEqual(got[2].behavior, .stop)
+        XCTAssertEqual(got[3].behavior, .delete)
+        // 부재 — behavior 주입 기본 "bounce"(=0), bouncefactor 주입 기본 0.5.
+        XCTAssertEqual(got[4].shape, .bounds)
+        XCTAssertEqual(got[4].behavior, .bounce, "부재 기본은 \"bounce\" 문자열 주입 → 열거 0")
+        XCTAssertEqual(got[4].bounceFactor, 0.5, "부재 기본 0.5 (movabs 0x3fe0000000000000 @0x1401c0100)")
+        XCTAssertEqual(got[5].shape, .model); XCTAssertEqual(got[5].behavior, .bounce)
+        // 잘못된 타입 — 원본도 인식 못 한 값을 0(bounce)으로 접고, 못 읽은 실수는 0 이다.
+        XCTAssertEqual(got[6].behavior, .bounce, "문자열이 아니면 매퍼가 못 읽어 bounce(0)")
+        XCTAssertEqual(got[6].bounceFactor, 0, "키가 있으면 주입 없음 → asFloat 실패값 0")
+        // 원본 배열에서의 위치를 잃지 않아야 승격 때 순서를 되찾는다.
+        XCTAssertEqual(got.map(\.sourceIndex), [0, 1, 2, 3, 4, 5, 6])
+        // 저장 규약 — 실물은 `-(1+e)` 를 담는다. 시뮬이 부호를 재유도하다 틀리지 않게 노출한다.
+        XCTAssertEqual(got[1].reflectionCoefficient, -(1 + 0.7), accuracy: 1e-6, "저작 0.7 → -1.7")
+        XCTAssertEqual(got[4].reflectionCoefficient, -1.5, accuracy: 1e-6, "부재 0.5 → -1.5")
+        XCTAssertEqual(got[6].reflectionCoefficient, -1, accuracy: 1e-6, "읽기 실패 0 → -1")
+    }
+
+    /// ⑤ `wraploop` **반증** — 파티클 `initializer[]` 키가 아니다.
+    /// 동봉 7건이 전건 `…/animation/options` 이고, 유일한 소비 지점 0x1401a96b0 도
+    /// `length`/`fps`/`mode`/`random`/`startpaused` 와 한 블록이다. 여기서 파스하면 유령 필드가 된다.
+    /// 이 테스트는 "언젠가 누가 다시 넣는 것" 을 막는 회귀 고정이다.
+    func testWrapLoopIsNotAParticleInitializerKey() {
+        let def = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],"maxcount":4,
+         "initializer":[{"name":"wraploop"},
+                        {"name":"mapsequencebetweencontrolpoints","count":8,"wraploop":true}]}
+        """), material: nil)
+        // `wraploop` 이라는 이니셜라이저 이름은 없다 — 드롭돼야 한다.
+        XCTAssertEqual(def.initializers.count, 1)
+        // 다른 원소에 얹혀 와도 무시된다(실물도 그 분기에서 이 키를 안 읽는다).
+        XCTAssertEqual(def.initializers.first, .mapSequence(count: 8, mirror: false, between: true))
+        XCTAssertEqual(def.mapSequenceArcAmount, 0.3, "arcamount 부재 → 주입 기본 0.3(무관한 wraploop 무시)")
+    }
+
 }

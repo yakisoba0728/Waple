@@ -183,7 +183,7 @@ final class ParticleStageATests: XCTestCase {
         }
         XCTAssertEqual(rate, 0); XCTAssertEqual(burst, 7); XCTAssertEqual(sign, Vec3(x: 0, y: 1, z: 0))
         XCTAssertEqual(def.initializers.count, 1)
-        if case let .colorList(colors) = def.initializers[0] {
+        if case let .colorList(colors, _, _, _) = def.initializers[0] {
             XCTAssertEqual(colors.count, 2)
             XCTAssertEqual(colors[0].y, 0.5, accuracy: 1e-5)
         } else { XCTFail("colorlist 파스 실패") }
