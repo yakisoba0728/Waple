@@ -39,9 +39,15 @@ final class SceneScriptAPISurfaceTests: XCTestCase {
                        "ITextLayer.font(d.ts:1611)는 디스크립터 실값이어야")
     }
 
-    /// 디스크립터가 값을 안 주면 SceneDocument 의 텍스트 파스 폴백과 같은 기본값
-    /// (pointsize 16 · font "systemfont_arial" — SceneDocument.swift:1794-1795)이어야 한다.
+    /// 디스크립터가 값을 안 주면 `SceneDocument.parseText` 의 폴백과 같은 기본값
+    /// (**pointsize 32** · font "systemfont_arial")이어야 한다.
     /// undefined 가 아니어야 한다는 것이 핵심이다 — undefined 는 산술을 NaN 으로 오염시킨다.
+    ///
+    /// **[2026-08-21] 16 → 32.** 옛 기대값 16 은 Waple 의 파스 폴백이 16 이던 시절 것이고,
+    /// 그 16 자체가 WE 와 어긋나 있었다 — 텍스트 오브젝트 생성자 `0x140256bf2`
+    /// (`mov dword [rdi+0x4e0], 0x42000000`)가 **32.0** 을 심는다. 이 테스트의 취지는
+    /// "기본값이 파스 폴백과 같고 undefined 가 아니다" 이지 특정 숫자가 아니므로, 폴백을
+    /// 따라 올린다. (줄번호 인용도 낡아 있어 심볼 인용으로 바꿨다.)
     func testTextLayerPointSizeAndFontDefaultsAreNotUndefined() throws {
         let scene = try XCTUnwrap(SceneScriptContext(layers: [SceneScriptLayerDescriptor(name: "a")]))
         let engine = try XCTUnwrap(TextScriptEngine(
@@ -52,7 +58,7 @@ final class SceneScriptAPISurfaceTests: XCTestCase {
                        ? thisLayer.pointsize : -1;
             }
             """, scene: scene, currentLayerIndex: 0))
-        XCTAssertEqual(try XCTUnwrap(engine.evaluateVec(current: [0])).first ?? -1, 16, accuracy: 1e-5)
+        XCTAssertEqual(try XCTUnwrap(engine.evaluateVec(current: [0])).first ?? -1, 32, accuracy: 1e-5)
     }
 
     /// 프레임 말 갱신(__updateSceneLayers)에서도 두 값이 따라와야 한다 — 마운트 경로만 고치면

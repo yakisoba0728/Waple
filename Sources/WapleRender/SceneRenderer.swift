@@ -253,7 +253,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 origin: SIMD3<Float>(text.origin.x, text.origin.y, 0),
                 scale: SIMD3<Float>(text.scale.x, text.scale.y, 1),
                 size: SIMD2<Float>(0, 0),
-                text: text.text
+                text: text.text,
+                // G15: `ITextLayer.pointsize`/`font`(d.ts:1606·1611)는 디스크립터 실값이어야 한다.
+                // 종전엔 두 인자를 아예 안 넘겨 API 기본값(16 / "systemfont_arial")이 들어갔고,
+                // 그래서 저작값이 무엇이든 `thisLayer.pointsize` 가 16 이었다. 파스 기본값이
+                // WE 생성자대로 32 가 된 지금은 그 16 이 어느 쪽 규약도 아니다.
+                // `SceneScriptAPISurfaceTests` 는 디스크립터를 **직접** 만들어 검증하므로
+                // 이 배선 누락을 못 잡는다 — 그래서 여기 주석으로 못박아 둔다.
+                pointSize: text.pointSize, font: text.font
             )
         }
         return imageLayers + textLayers
