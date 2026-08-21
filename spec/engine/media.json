@@ -41,8 +41,8 @@
     "alsoft_get_version": "OpenAL Soft 버전 질의 — 이 DLL 이 openal-soft 임을 자증한다",
     "signatures": {
      "openAL175": "OpenAL 1.1 + ALC + *SOFT 확장의 공개 ABI 를 그대로 따른다. 시그니처는 WE 고유가 아니라 규격의 것이다 — 재구현은 ABI 를 복원할 게 아니라 동등한 오디오 스택(macOS: AVAudioEngine 등)을 놓으면 된다.",
-     "CreateMediaExtensions": "미복원. 반환형·인자 개수를 확인하지 않았다",
-     "WallpaperEngineMedaExtensionVersion": "미복원"
+     "CreateMediaExtensions": "복원 2026-08-21. `void* CreateMediaExtensions(void)` — 인자를 하나도 읽지 않는다(0x180002808 의 `mov ecx, 0x48` 이 rcx 를 즉시 덮고 rdx/r8/r9 는 끝까지 안 읽는다). 0x48바이트를 할당해 vptr = 0x1802dcc70 을 심고 나머지를 MSVC `std::unordered_map` 의 빈 상태로 채운 뒤 그 포인터를 낸다: max_load_factor 1.0f @+0x08, 리스트 센티넬 @+0x10, 버킷 벡터 @+0x20..+0x30(원소 16), _Mask=7 @+0x38, _Maxidx=8 @+0x40. 호출부도 인자를 안 싣는다 — wallpaper64.exe 0x1400c4bca 가 `call rax` 하나뿐이다.",
+     "WallpaperEngineMedaExtensionVersion": "복원 2026-08-21. **함수가 아니라 데이터 export 다.** export RVA 0x3119e0 은 .text 범위 밖 .data 이고, .reloc 에 그 RVA 의 DIR64(type 10) 항목이 있다 — 곧 재배치되는 포인터 변수다. 값은 .rdata 0x1802dcbd0 의 ASCII `WallpaperEngineMediaExtensions0002`. 곧 시그니처는 `const char* WallpaperEngineMedaExtensionVersion` 이고 호출 대상이 아니다."
     }
    },
    "status": "확정",
@@ -281,7 +281,7 @@
     },
     {
      "kind": "binary",
-     "ref": "wallpaper64.exe IAT 0x140426690/0x140426698 참조 전수 — 각각 호출 지점 1곳(0x1401200a1, 0x1400f2b8b)"
+     "ref": "wallpaper64.exe IAT 0x140426690/0x140426698 참조 전수 — 각각 호출 지점 1곳(0x14012009f, 0x1400f2b89). [VA-정정] 종전 값 0x1401200a1 · 0x1400f2b8b 은 명령 주소가 아니라 `FF 15 disp32` 의 disp32 필드 위치였다(각각 +2). xref 스캔 결과를 그대로 옮긴 것 — scripts/re/va_citations.py 가 잡는 바로 그 부류다"
     },
     {
      "kind": "script",
@@ -636,7 +636,7 @@
    "value": {
     "sceneAudio": {
      "impl": "OpenAL Soft (bin/mediaextensions64.dll 에 정적 링크)",
-     "entry": "CreateMediaExtensions (LoadLibraryW 로 동적 로드)",
+     "entry": "CreateMediaExtensions — LoadLibraryExW(L\"mediaextensions64.dll\", NULL, 0x1000) @0x1400c4b7f 뒤 GetProcAddress @0x1400c4bbf. 전문은 engine.media.mediaextensions.factory",
      "evidence": "alcOpenDevice/alSourcePlay/alBufferData 등 175개 export"
     },
     "videoAudio": {
@@ -1464,6 +1464,109 @@
    ]
   },
   {
+   "id": "engine.media.mediaextensions.factory",
+   "value": {
+    "claim": "wallpaper64.exe 는 mediaextensions64.dll 을 지연 로드해 확장 객체를 하나 만들고, 그 객체는 이름으로 참조되는 리프카운트 바이트-블롭 캐시다",
+    "vaConvention": "0x140… 은 wallpaper64.exe(imagebase 0x140000000), 0x180… 은 bin/mediaextensions64.dll(imagebase 0x180000000) 이다. 두 이미지의 베이스가 다르지만 다음 사람이 엉뚱한 이미지에서 뜨지 않도록 명시한다(함정 11).",
+    "loader": "0x1400c4a70–0x1400c4c44. 앞머리에 MSVC 매직-스태틱 짝(0x140290d80 / 0x140290ea0)이 있어 로드는 프로세스당 한 번이다",
+    "loadLibrary": "LoadLibraryExW(L\"mediaextensions64.dll\", NULL, 0x1000) @0x1400c4b7f. **LoadLibraryW 가 아니다** — 이름 문자열은 UTF-16 로만 있고(0x140486490) 플래그 0x1000 이 붙는다. 모듈 핸들은 [this+0xb00] 에 캐시된다. 실패하면 GetLastError 를 찍어 로그만 남긴다(0x1400c4b8d–0x1400c4ba4)",
+    "getProcAddress": "GetProcAddress(h, \"CreateMediaExtensions\") @0x1400c4bbf — 이름 문자열 0x140486500. NULL 이면 조용히 빠진다(0x1400c4bc8)",
+    "call": "0x1400c4bca `call rax`. 인자를 싣는 명령이 앞에 없다 — 호출부와 피호출부가 둘 다 arity 0 이다. 반환 포인터는 [this+0xb30]",
+    "afterCreate": "생성 직후 vtbl+0x08 을 this 만으로 부른다(0x1400c4bde). 64비트 판에서 그 슬롯은 0x180003484 = 명령 하나짜리 빈 함수다",
+    "forward": "래퍼는 vtbl+0x18 로 꼬리점프한다(0x1400c4c11 `jmp [rax+0x18]`) — 자기 인자 (rdx, r8, r9d) 를 그대로 넘긴다. 그 슬롯 0x1800034a0 은 이름을 키로 map 을 찾고, 없으면 {u32 refcount, void* bytes, u32 size} 0x18바이트를 만들어 (r8, r9d) 를 memcpy 해 넣는다(0x1800035b4–0x1800035f3)",
+    "release": "vtbl+0x20 = 0x180003a64. `--refcount` 가 0 이 되면 리스트를 훑어 그 항목을 지운다(0x180003aa8–0x180003b40)",
+    "nameScan": "설치본 6138파일 전수 바이트 스캔(ASCII·UTF-16LE 양쪽). CreateMediaExtensions 는 wallpaper32.exe · wallpaper64.exe · bin/wallpaperui.exe 와 두 DLL 자신의 export 이름표에만 있다. WallpaperEngineMedaExtensionVersion 은 **두 DLL 자신 말고 어디에도 없다** — 설치본 안에 소비자가 0 이다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.video.frameworkGate",
+   "value": {
+    "claim": "프레임워크 레지스트리의 플래그 워드 두 바이트가 각각 소비된다 — 하나는 MF 가용성 게이트, 하나는 창 확장스타일 요구다",
+    "registry": "전역 std::unordered_map<std::string, Record>. 매직-스태틱 가드 0x1404e9240, _Hash 본체는 max_load_factor 1.0f @0x1404e9250 · 리스트 head @0x1404e9258 · 버킷 벡터 @0x1404e9268 · _Mask=7 @0x1404e9280 · _Maxidx=8 @0x1404e9288. 노드가 {_Next,_Prev,key std::string(0x20),value} 라 value 는 노드+0x30 이다. 빌더는 0x1401014ce–0x1401017c8",
+    "flagWord": "Record+0x08 의 u16. 빌더가 mfEngine 과 mfEngine.muted 에 0x0101(0x140101527 · 0x1401015c5), mf 와 mf.muted 에 0x0001, dshow.lav.vmr9 에 0x0000 을 심는다",
+    "lowByte": "= 이 프레임워크는 Media Foundation 을 요구한다. 후보 루프가 노드+0x38(= Record+0x08 의 하위 바이트)을 읽어, [player+0x17c] bit6 이 서 있으면 그 후보를 통째로 건너뛴다 — 0x140100fed–0x140100ffe",
+    "bit6": "= mfplat.dll 이 없다. 0x1400fe13f 의 LoadLibraryW(L\"mfplat.dll\") 이 NULL 을 내면 0x1400fe15c 가 `or dword [rdi+0x17c], 0x40` 을 하고 core_msgbox_media_feature_pack_missing 메시지박스를 띄운다",
+    "highByte": "= 이 프레임워크는 창 확장스타일 비트21(0x00200000)을 요구한다. 0x140101195 가 노드+0x39 를 읽어 0x1400ff350 에 넘기고, 그 함수는 GetWindowLongW(hwnd, GWL_EXSTYLE) 의 (exstyle>>21)&1 이 요구와 다르면 DestroyWindow 로 창을 버리고 다시 만든다(0x1400ff384–0x1400ff3a6). 비트 이름 해석은 engine.media.enumInterpretation 에 있다",
+    "effect": "Media Feature Pack 이 없는 시스템에서는 폴백 사슬이 dshow.lav.vmr9 하나로 줄어든다. engine.media.video.frameworks 의 순서표가 실제로 걸러지는 자리가 여기다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.video.backendVtable",
+   "value": {
+    "claim": "설정 변경은 변경 마스크를 통해 백엔드([player+0x160])의 가상 함수로 착지한다",
+    "applyFunction": "0x140100720–0x1401008da. 두 번째 인자(edx→dil)가 변경 마스크다",
+    "mask0x02": "볼륨. [player+9] 가 서 있으면 0.0f, 아니면 [player+0x174]. 결과를 [player+0x170] 에 적고 vtbl+0x30 에 넘긴다 — 0x140100834–0x14010085f",
+    "mask0x04": "하드웨어 디코딩 게이트. ([player+0x17c]>>4)&1 을 vtbl+0x70 에 넘긴다 — 0x1401007e3–0x1401007ff. **반전 저장이라 1 이 '가속 끔' 이다**",
+    "mask0x08": "오디오 출력. ([player+0x17c]>>3)&1 을 vtbl+0x68 에 넘긴다 — 0x1401007c4–0x1401007e0",
+    "mask0x10": "루프 모드. [player+0x198] 을 vtbl+0x58 에 넘긴다 — 0x140100802–0x140100818",
+    "mask0x20": "리드 모드. [player+0x19c] 를 vtbl+0x60 에 넘긴다 — 0x14010081b–0x140100831",
+    "mask0x100": "vtbl+0x48 을 인자 없이 부른다 — 0x140100862–0x140100872",
+    "mask0xc0": "일시정지·음소거 변경. 볼륨 램프 타이머를 켠다 — engine.media.audio.volumeFade 참조",
+    "startupOrder": "플레이어를 처음 만들 때도 같은 세 슬롯을 같은 순서로 부른다 — vtbl+0x60 → vtbl+0x68 → vtbl+0x70, 0x140101252–0x140101287",
+    "note": "videohardwareacceleration 설정이 실제로 소비되는 자리다. 종전 정본은 저장 위치([player+0x17c] bit4, 반전)까지만 갖고 있었고 소비 지점이 없었다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.audio.volumeFade",
+   "value": {
+    "claim": "비디오 월페이퍼 볼륨은 즉시 바뀌지 않는다 — 25ms 타이머로 선형 램프하고, 오르내림이 비대칭이다",
+    "timer": "SetTimer(hwnd, 0x65, 25, NULL) — id 0x140100891, 주기 0x140100896(0x19 = 25ms), 호출 0x14010089c. 켜면서 [player+0x17c] |= 2 로 '램프 중' 을 표시한다(0x1401008a2). 이미 bit1 이 서 있으면 다시 켜지 않는다(0x14010087b–0x140100885)",
+    "handler": "VideoWallpaper 창 프로시저 0x140101c50–0x140102248 의 WM_TIMER 팔. 램프 산술은 0x140102092–0x140102181",
+    "goal": "muted([player+9]) 이거나 paused([player+8]) 면 0.0f, 아니면 사용자 볼륨 [player+0x174] — 0x1401020ba–0x1401020c6",
+    "fadeOutStep": "매 틱 `cur -= target*0.03f + 0.02f` — 0x1401020ed(0.03f @0x140492634) · 0x1401020f5(0.02f @0x14049262c) · 0x1401020fd",
+    "fadeInStep": "매 틱 `cur += target*0.01f + 0.01f` — 0x140102106(0.01f @0x140492620) · 0x14010210e · 0x140102112 · 0x140102116",
+    "snapCases": "사용자 볼륨이 정확히 0 이거나 오디오 출력이 꺼져 있으면(= [player+0x17c] bit3 이 0) 램프 없이 목표로 바로 간다 — 0x140102092–0x1401020b4 가 그 판정을 만들고 0x1401020de 가 분기한다",
+    "apply": "매 틱 [player+0x170] 에 현재값을 적고 백엔드 vtbl+0x30 에 넘긴다 — 목표 도달이면 0x140102129, 아니면 0x140102170",
+    "completion": "도달하면 KillTimer(hwnd, 0x65) 하고 bit1 을 지운다 — 0x140102156–0x140102164. **일시정지는 램프가 끝난 뒤에 걸린다** — [player+8] 이 서 있으면 백엔드 vtbl+0x10 을 먼저 부른다(0x14010213a–0x14010214a). 곧 정지는 소리를 끊는 게 아니라 fade-out 이다",
+    "setters": "일시정지·음소거는 둘 다 가상 함수다. setPaused 0x1400fe970 ([this+8] 에 저장 → 마스크 0x80), setMuted 0x1400fe9b0 ([this+9] 에 저장 → 마스크 0x40). 각각 IsWindow 를 확인한 뒤 0x140100720 으로 꼬리점프한다. VideoWallpaper vtable 슬롯은 .rdata 0x140488998 과 0x1404889a0 이다",
+    "derived": "target=1.0 에서 fade-out 은 틱당 0.05 → 20틱 = 500ms, fade-in 은 틱당 0.02 → 50틱 = 1250ms. **내려가는 쪽이 2.5배 빠르다**"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
    "id": "engine.media.enumInterpretation",
    "value": {
     "note": "아래 이름 대응은 Windows SDK 헤더 기준 해석이다. 이 머신에 SDK 가 없어 재현 검증하지 못했다. 수치와 분기 구조는 확정 항목에 있다.",
@@ -1477,7 +1580,8 @@
     "IMFMediaEngine vtable +0xE8/+0xF8/+0x128/+0x158/+0x160": "SetAutoPlay / SetLoop / SetVolume / TransferVideoFrame(Ex) / OnVideoStreamTick",
     "IDXGIKeyedMutex vtable +0x40/+0x48": "AcquireSync / ReleaseSync",
     "IMFClock vtable +0x20/+0x30": "GetCorrelatedTime / GetState",
-    "IMFMediaSession vtable +0x48/+0x58": "Start / Stop"
+    "IMFMediaSession vtable +0x48/+0x58": "Start / Stop",
+    "GWL_EXSTYLE bit21 (0x00200000)": "WS_EX_NOREDIRECTIONBITMAP (winuser.h) — DWM 리다이렉션 표면을 만들지 않는 창. engine.media.video.frameworkGate 의 highByte 가 요구하는 비트다. 수치(비트 21)와 분기는 확정이고 이름만 해석이다."
    },
    "status": "보고",
    "evidence": [
@@ -1499,7 +1603,8 @@
     "videoloopmode 의 syncclock/synctopo 동작": "열거값과 라벨만 확보. 코드 경로 미추적",
     "webmframework cef/native 의 분기": "열거값만 확보",
     "frommemory 모드": "MFCreateSourceReaderFromByteStream 호출 지점이 프로브 함수 0x1400f2952 한 곳뿐이라, 이 모드가 프로브에만 영향을 주는지 Media Engine 소스 로딩까지 바꾸는지 확정하지 못했다",
-    "mediaextensions64.dll 의 WE 전용 export 2개 시그니처": "CreateMediaExtensions(ordinal 1, 0x180002808) 와 WallpaperEngineMedaExtensionVersion(ordinal 2, 0x1803119e0) 의 시그니처를 복원하지 않았다. 오디오 경로라 비디오 질문에 영향이 없어 우선순위를 낮췄다.",
+    "mediaextensions64.dll 의 WE 전용 export 2개 시그니처": "**해소 2026-08-21.** 두 시그니처를 복원했다 — engine.media.mediaextensions.weExports 의 signatures 와 engine.media.mediaextensions.factory 로 옮겼다. 키는 툼스톤으로 남긴다.",
+    "이 엔트리를 확정으로 올릴 수 없는 이유": "이 엔트리는 '아직 모르는 것들' 의 목록이라 status 가 확정이 될 수 없다 — 남은 항목이 전부 해소되면 사라지는 엔트리이지, 자체가 확정될 대상이 아니다. 2026-08-21 기준 7개 중 1개(export 시그니처)만 해소됐고 videoloopmode 의 syncclock/synctopo · frommemory · webmframework 분기 · MF_MEDIA_ENGINE_EXTENSION 설치 조건 · GUID 0x14042c380 · IMFMediaEngine GUID 부재는 그대로다.",
     "IMFMediaEngine 인터페이스 GUID 부재": "IMFMediaEngineEx / IMFMediaEngineClassFactory / IMFMediaEngineNotify 는 있는데 IMFMediaEngine 은 없다. Ex 로만 QI 한다는 뜻으로 보이나 미확인"
    },
    "status": "추정",

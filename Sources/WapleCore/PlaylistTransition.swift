@@ -285,24 +285,64 @@ public enum PlaylistRandomDraw {
     ///
     /// **풀 경로는 0…26 클램프를 거치지 않는다.** 0x14006924c 의 `jmp 0x140069261` 이
     /// 클램프 블록(0x14006924e–0x14006925c)을 건너뛰고, 파스 쪽도 `atoi` 결과를 그대로
-    /// 집합에 넣는다(0x140075934 → 0x140075946). 즉 손으로 고친 config 의 `"99"` 는
+    /// 밀어 넣는다(0x140075934 → 0x140075946). 즉 손으로 고친 config 의 `"99"` 는
     /// `FADEEFFECT=99` 로 컴파일된다. UI 는 그런 값을 만들지 않는다.
     ///
-    /// 풀은 WE 에서 `std::set<int>` 라 **오름차순**이다 — 인덱스가 의미를 가지려면
-    /// 정렬 순서가 계약이다.
-    public static func effectID(pool: Set<Int>, unit: Double) -> Int {
+    /// **[2026-08-21 정정] 풀은 `std::set<int>` 가 아니라 `std::vector<int>` 다.**
+    /// 종전 주석은 "set 이라 중복이 없고 오름차순" 이라고 적었는데 셋 다 틀렸다.
+    /// 셋 중 하나라도 맞으려면 컨테이너가 트리여야 하는데, 추첨이 원소를 **연속 배열
+    /// 인덱싱**으로 읽는다:
+    ///
+    ///     0x1400691fb  sub r12, rax / sar r12, 2   ; n = (end - begin) / 4  ← 4바이트 스트라이드
+    ///     0x140069249  mov ecx, [rax + rbx*4]      ; pool[i] 를 그대로 낸다
+    ///
+    /// 그리고 파스 쪽 삽입 헬퍼 0x140077840 은 정렬도 중복 제거도 하지 않는 순수
+    /// `push_back` 이다(0x140077853–0x140077876 이 `[vec+8] == [vec+0x10]` 이 아니면
+    /// 그 자리에 쓰고 `[vec+8] += 4`, 같으면 재할당 경로로 간다). 파스 루프는 jsoncpp
+    /// 배열을 인덱스 순서로 돌며(0x14007594b `cmp byte [rax+0x19], 0` — 레드블랙 트리
+    /// 순회) 문자열 원소만(0x14007591c `cmp al, 4`) `atoi` 해서 붙인다.
+    ///
+    /// 그래서 관측되는 계약은 셋이다:
+    ///   1. **저작 순서가 인덱스다.** `["18","0"]` 의 인덱스 0 은 18 이지 0 이 아니다.
+    ///   2. **중복이 살아남는다.** `["0","0","26"]` 에서 Fade 확률은 1/2 가 아니라 2/3 다.
+    ///   3. 그래서 `n` 은 서로 다른 값의 개수가 아니라 **배열 길이**다.
+    ///
+    /// `Set<Int>` 를 받던 종전 API 는 셋 다 어겼다. 지금은 `[Int]` 만 받는다 — 호출부가
+    /// 정렬·중복제거를 하고 싶으면 그건 호출부의 선택으로 드러나야 한다.
+    public static func effectID(pool: [Int], unit: Double) -> Int {
         guard !pool.isEmpty else {
             return index(unit: unit, count: effectCount)
         }
-        let ordered = pool.sorted()
-        return ordered[index(unit: unit, count: ordered.count)]
+        return pool[index(unit: unit, count: pool.count)]
     }
 
     /// `effectID(pool:unit:)` 에 전환 시작 시점의 클램프까지 태운 결과.
     /// 풀에 범위 밖 값이 들어 있어도 Waple 쪽에서는 유효한 효과가 나오게 한다.
-    public static func kind(pool: Set<Int>, unit: Double) -> PlaylistTransitionKind {
+    public static func kind(pool: [Int], unit: Double) -> PlaylistTransitionKind {
         PlaylistTransitionKind.resolving(weConfigValue: effectID(pool: pool, unit: unit))
     }
+
+    /// `transitionpool` 배열(문자열 원소)을 엔진과 같은 순서·중복으로 정수 목록으로 만든다.
+    ///
+    ///     0x14007591c  cmp al, 4                   ; jsoncpp 태그 4 = string 인 원소만
+    ///     0x140075934  call 0x1402c82c0            ; atoi
+    ///     0x140075946  call 0x140077840            ; vector<int>::push_back
+    ///
+    /// 문자열이 아닌 원소는 **건너뛴다**(태그 검사에서 걸러진다 — 0 을 넣지 않는다).
+    public static func parsePool(_ elements: [PlaylistPoolElement]) -> [Int] {
+        elements.compactMap { element in
+            guard case .string(let text) = element else { return nil }
+            return PlaylistTransitionKind.weAtoi(text)
+        }
+    }
+}
+
+/// `transitionpool` 배열의 원소. 엔진이 **문자열만** 받는다는 것을 형으로 드러낸다.
+public enum PlaylistPoolElement: Equatable, Sendable {
+    /// jsoncpp 태그 4. 유일하게 소비되는 형이다.
+    case string(String)
+    /// 태그 4 가 아닌 모든 것(숫자·bool·객체·배열·null). 0x14007591c 의 `cmp al, 4` 가 거른다.
+    case other
 }
 
 // MARK: - 전환 타이밍 (0x14005a351–0x14005a3d1)
@@ -418,14 +458,26 @@ public enum PlaylistMode: Int, Sendable, CaseIterable {
         self == .daytime || self == .dayOfWeek || self == .never
     }
 
-    /// 타이머 틱이 이 모드에서 도는가.
+    /// **경과시간 축**(`delay`/`elapsed`)을 이 모드가 쓰는가.
     ///
     ///     0x140076d41  mov eax, [rbx+0x70]   ; mode
     ///     0x140076d44  sub eax, 2
     ///     0x140076d47  cmp eax, 1
-    ///     0x140076d4a  jbe 0x140076d92       ; mode ∈ {2,3} → 시각 기반, 타이머 안 씀
+    ///     0x140076d4a  jbe 0x140076d92       ; mode ∈ {2,3} → 경과시간 축을 건너뛴다
     ///
     /// `never` 는 여기서 걸러지지 않는다 — `delay = 0` 이 0.01분 가드에 걸려 멎는다.
+    ///
+    /// **[2026-08-21 정정] 이름이 "타이머 틱이 도는가" 였고 주석은 "타이머 안 씀" 이었는데,
+    /// 그건 절반만 맞다.** `daytime`/`dayofweek` 도 **같은 틱 함수 안에서** 전진 호출까지 간다 —
+    /// 다만 `delay`/`elapsed` 대신 세 번째 인자를 본다:
+    ///
+    ///     0x140076d92  test r15b, r15b       ; 틱 함수의 3번째 인자(0x140076bff movzx r15d, r8b)
+    ///     0x140076d95  je   0x140076dad      ; 0 이면 이번 틱은 아무것도 안 한다
+    ///     0x140076d97  …    call 0x140067a00 ; 다음 벽지 결정
+    ///
+    /// 그 인자를 누가 무엇으로 넘기는지는 특정하지 못했다(미해결 —
+    /// `docs/re/playlist-transition.md` §6.1). 이 프로퍼티가 뜻하는 것은 어디까지나
+    /// **경과시간 축을 쓰는가**다.
     public var usesTimerTick: Bool {
         self != .daytime && self != .dayOfWeek
     }
@@ -466,6 +518,24 @@ public struct PlaylistSettings: Equatable, Sendable {
     public static let defaultDelayMinutes: Float = 60.0
     /// 타이머 틱의 하한. `0.01f` @ 0x140492620, 비교 0x140076d51. 0.01분 = 0.6초.
     public static let minimumDelayMinutes: Float = 0.01
+    /// **한 틱이 더할 수 있는 최대 초.** `5.0f` @ 0x140492858, 적용 0x140076c56 `minss`.
+    ///
+    ///     0x140076c4d  cvtsi2ss xmm6, rcx        ; QPC 차분
+    ///     0x140076c52  divss    xmm6, xmm0       ; / 주파수 → 초
+    ///     0x140076c56  minss    xmm6, 5.0f       ; ← 상한
+    ///
+    /// 절전·긴 멈춤 뒤에도 `elapsed` 가 한 번에 튀지 않는다. `Date()` 차분을 그대로 더하는
+    /// 재구현은 여기서 갈린다 — 재개 직후 전환이 한꺼번에 밀려 일어난다.
+    public static let maxTickDeltaSeconds: Float = 5.0
+
+    /// 프레임 델타를 엔진과 같은 상한으로 자른다. 음수는 그대로 두지 않고 0 으로 내린다 —
+    /// WE 는 `QueryPerformanceCounter` 차분이라 음수가 나올 수 없고(단조 증가),
+    /// Waple 은 `Date()` 를 쓸 수 있어 시계 조정으로 음수가 나올 수 있기 때문이다.
+    /// **이 하한은 WE 주장이 아니다**(엔진에 대응 명령이 없다) — 재구현 쪽 방어다.
+    public static func clampedTickDelta(_ seconds: Float) -> Float {
+        if seconds.isNaN { return 0 }
+        return min(max(seconds, 0), maxTickDeltaSeconds)
+    }
     /// `transitiontime` **엔진** 기본값. 0x140075a2f `mov dword [r14+4], 0x1f4` = 500ms.
     public static let defaultTransitionTimeMillis = 500
     /// UI 가 새 재생목록에 심는 기본값. 실측 `browsetransition` 도 이 값이다.
@@ -492,9 +562,10 @@ public struct PlaylistSettings: Equatable, Sendable {
     /// `transition` 의 **원시** 저장값. 클램프 전이라 `-4` 나 `99` 도 그대로 담긴다.
     public var transitionConfigValue: Int
     public var transitionTimeMillis: Int
-    /// `transitionpool`. WE 는 `std::set<int>` 라 중복이 없고 오름차순이다.
+    /// `transitionpool`. 구조체 `+0x50..+0x60` 의 `std::vector<int>` 다 —
+    /// **저작 순서를 지키고 중복을 허용한다**(근거는 `PlaylistRandomDraw.effectID` 주석).
     /// UI 는 풀이 전체와 같아지면 키를 지운다 — 그래서 **빈 풀 = 전체 허용**이다.
-    public var transitionPool: Set<Int>
+    public var transitionPool: [Int]
 
     public init(
         delayMinutes: Float = PlaylistSettings.defaultDelayMinutes,
@@ -506,7 +577,7 @@ public struct PlaylistSettings: Equatable, Sendable {
         playIntro: Bool = false,
         transitionConfigValue: Int = -1,
         transitionTimeMillis: Int = PlaylistSettings.defaultTransitionTimeMillis,
-        transitionPool: Set<Int> = []
+        transitionPool: [Int] = []
     ) {
         self.delayMinutes = delayMinutes
         self.order = order
@@ -539,26 +610,39 @@ public struct PlaylistSettings: Equatable, Sendable {
         return out
     }
 
-    /// 타이머 틱이 지금 다음 벽지로 넘어가야 하는가(0x140076d32–0x140076d85).
+    /// 타이머 틱이 지금 다음 벽지로 넘어가야 하는가(0x140076d32–0x140076d8e).
     ///
-    /// 다섯 관문이 전부 통과해야 한다. `isPaused` 관문이 Waple 과 갈리는 자리다 —
+    /// 여섯 관문이 전부 통과해야 한다. `isPaused` 관문이 Waple 과 갈리는 자리다 —
     /// Waple 의 `shouldAdvanceNow(isPaused:)` 는 `updateOnPause` 를 **false 로 고정**한
     /// 것과 같다.
+    ///
+    /// - Parameter introShowing: 모니터 노드의 `[+0xe2]` — "지금 걸린 것이 인트로 벽지" 다.
+    ///   기본값 `false` 가 안전한 이유는 인트로가 아닌 모든 전진이 그 바이트를 0 으로 지우기
+    ///   때문이다(0x140067ff2 `mov byte [rax+0xe2], 0`). `beginfirst` 경로만 1 을 심는다
+    ///   (0x140067edc).
     public func shouldTimerAdvance(
         elapsedSeconds: Float,
         isPaused: Bool,
-        currentIsVideo: Bool
+        currentIsVideo: Bool,
+        introShowing: Bool = false
     ) -> Bool {
         // 0x140076d3b  test byte [rbx+0x74], 2 / je → 정지 중엔 updateonpause 가 있어야 진행
         if isPaused && !updateOnPause { return false }
-        // 0x140076d4a  jbe → mode ∈ {2,3} 은 시각 기반이라 타이머를 안 쓴다
+        // 0x140076d4a  jbe → mode ∈ {2,3} 은 경과시간 축을 안 쓴다
         guard mode.usesTimerTick else { return false }
         // 0x140076d51  comiss xmm7(0.01), delay / ja → delay < 0.01분이면 아무것도 안 한다
         guard delayMinutes >= Self.minimumDelayMinutes else { return false }
         // 0x140076d63  divss xmm8(60.0) / 0x140076d68 comiss delay, elapsed_min / ja
         guard elapsedSeconds / 60.0 >= delayMinutes else { return false }
-        // 0x140076d7c  cmp eax,4(동영상) / 0x140076d81 test byte [rbx+0x74],1
-        if currentIsVideo && videoSequence { return false }
+        // 0x140076d7c  cmp eax, 4(동영상) 이면 관문이 둘 더 붙는다.
+        //   0x140076d81  test byte [rbx+0x74], 1   ; videosequence → 보류
+        //   0x140076d87  cmp  byte [rbx+0xe2], 0   ; 인트로 벽지가 걸려 있다 → 보류
+        //
+        // **[2026-08-21 추가] 두 번째 관문이 종전 모델에 없었다.** 이 둘은
+        // `shouldAdvanceOnVideoEnd(introShowing:)` 의 관문
+        // `(mode == timer && videoSequence) || (playIntro && introShowing)` 과 정확한 여집합이다 —
+        // 타이머가 보류하는 경우가 곧 동영상 종료 경로가 받는 경우다.
+        if currentIsVideo && (videoSequence || introShowing) { return false }
         return true
     }
 
@@ -697,8 +781,18 @@ public struct PlaylistSortedCursor: Equatable, Sendable {
     ///     0x1400682aa  mov  [r14+0x78], 1    ; → 1 로 건너뛴다(인트로 재생 안 함)
     ///     0x1400682d0  inc  dword [r14+0x78]
     ///
-    /// `count > 1` 가드는 **Waple 이 더한 것**이다. WE 는 항목 1개 + `playintro` 에서
-    /// 인덱스 1 을 내놓는다(UI 가 그 조합을 못 만들게 막는 것으로 보이나 확인하지 못했다).
+    /// **[2026-08-21 정정] `count > 1` 가드는 WE 에도 있다.** 종전 주석은 "Waple 이 더한
+    /// 것" 이라며 "WE 는 항목 1개 + `playintro` 에서 인덱스 1 을 내놓는다" 고 적었는데,
+    /// 그 사이에 비교가 하나 더 있다:
+    ///
+    ///     0x140068298  sub r8, [r14+0x38] / sar r8, 3 / imul r8, r15   ; r8 = 항목 수
+    ///     0x1400682a4  cmp r8, 1
+    ///     0x1400682a8  jbe 0x1400682b7                                  ; 항목 ≤ 1 → 건너뛴다
+    ///     0x1400682aa  mov dword [r14+0x78], 1
+    ///
+    /// 곧 항목이 1개면 `playintro` 가 켜져 있어도 인덱스 0 이 나온다. 코드는 처음부터
+    /// 맞았고 **주석만 틀렸다** — 그 자리를 값으로 잠근다
+    /// (`testSortedCursorSingleItemIgnoresPlayIntro`).
     public mutating func next(count: Int, playIntro: Bool) -> Int? {
         guard count > 0 else { return nil }
         var index = ((cursor % count) + count) % count
