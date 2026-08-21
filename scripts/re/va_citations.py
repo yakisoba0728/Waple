@@ -96,6 +96,11 @@ SCANNER_ADDRESS_FIELDS = {
 # 같은 이유로, 이 파일들의 **맨몸 배열 원소**(`"0x…",`)도 스캐너 산출 위치다
 # (예: `sitesInFrameFn` 의 목록). 파일을 명시하므로 다른 정본에는 안 번진다.
 SCANNER_ADDRESS_BARE = {"spec/engine/render-pass.json"}
+
+# JSON 정본에서 **범위의 끝**을 담는 키 이름. `"to": "0x…"` 는 이름 자체가 끝을 말한다 —
+# 끝은 배타적이거나 마지막 명령 주소라 경계가 아닐 수 있다(산문 `A–B` 의 B 와 같은 이유).
+# 시작을 담는 키(`from`·`start`)는 **일부러 뺐다** — 시작은 반드시 경계여야 한다.
+RANGE_END_KEYS = {"to", "end", "rangeEnd", "endVA"}
 BARE_LINE = re.compile(r'^"0x[0-9a-fA-F]+",?$')
 KV_LINE = re.compile(r'^"([A-Za-z0-9_]+)":\s*"0x[0-9a-fA-F]+",?$')
 
@@ -258,6 +263,8 @@ def main(argv):
                 kv = KV_LINE.match(stripped)
                 if kv and kv.group(1) in SCANNER_ADDRESS_FIELDS.get(str(f), ()):
                     record = True
+                elif kv and kv.group(1) in RANGE_END_KEYS:
+                    ends[int(re.search(r"0x[0-9a-fA-F]+", stripped).group(0), 16)] += 1
                 elif str(f) in SCANNER_ADDRESS_BARE and BARE_LINE.match(stripped):
                     record = True
             for m in VA_RE.finditer(line):
