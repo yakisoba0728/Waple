@@ -214,6 +214,122 @@ final class PropertyConditionEvaluatorTests: XCTestCase {
         XCTAssertEqual(PropertyConditionEvaluator.evaluate("s.value !== '2'", values: values), true)
     }
 
+    // MARK: - 설치본 실물 조건 전수 (2026-08-21 클러스터 AF)
+
+    /// WE 설치본 `projects/**/project.json` 의 `general.properties.*.condition` **17건 전수**를
+    /// 그 파일의 **실제 기본값** 위에서 평가한다. 고유 11종(빈 문자열 1 포함)이고
+    /// 네 파일에서 나온다: `corsair_collection` 13 · `corsair_o_tron` 2 · `dino_run` 1 ·
+    /// `shimmering_particles` 1.
+    ///
+    /// **종전 문서가 적은 "22건 / 고유 16종" 은 두 개의 다른 키를 합산한 수였다.** 나머지 5건은
+    /// `shimmering_particles/scene.json` 의 `/objects/N/visible/user/condition`(값 `"0"`×1 ·
+    /// `"1"`×4)인데, 그건 **AngularJS 식이 아니라 콤보 값 동등비교**다 — 파스 자리도 다르고
+    /// (`wallpaper64.exe` 0x1401a4f1b `Json::Value::find("condition")`, `user` 객체 안)
+    /// 소비처도 다르다(`SceneDocument.resolveUserBindings`). 에디터 라벨이
+    /// `ui_editor_user_properties_combo_value` = *"Selected combo value for this link:"* 이고
+    /// 후보가 그 콤보의 `options[].value` 드롭리스트로 제한된다(scripts.js char@621236/@621718).
+    /// 이 평가기는 그 문법을 **다루지 않아야 맞다**.
+    func testInstalledProjectConditionCorpusEvaluatesAsAuthored() {
+        // corsair_collection — 기본값 effect="rainbowpulse" · scene="circuit" · pulseanimation="random".
+        let corsair: [String: PropertyValue] = [
+            "effect": .string("rainbowpulse"), "scene": .string("circuit"),
+            "pulseanimation": .string("random"),
+        ]
+        let corsairCases: [(String, Bool)] = [
+            ("scene.value !== 'cartoon' && scene.value !== 'ram'", true),               // logo/logox/logoy ×3
+            ("effect.value.startsWith('rainbow') === false", false),                    // maincolor/secondarycolor ×2
+            ("effect.value.endsWith('pulse') === true", true),                          // pulseanimation
+            ("effect.value.endsWith('pulse') === true && pulseanimation.value !== 'static'", true),   // pulsescale
+            ("effect.value.endsWith('pulse') === true && pulseanimation.value === 'static'", false),  // pulsesize
+            ("effect.value.endsWith('spiral') === true", false),                        // spiraldirection
+            ("effect.value.endsWith('spiral') === true && scene.value !== 'ram'", false),      // spiralposition
+            ("effect.value.endsWith('spiral') === true && scene.value === 'ram'", false),      // spiralpositionram
+            ("effect.value === 'visor'", false),                                        // visordirection
+            ("effect.value.endsWith('wave') === true", false),                          // wavedirection
+        ]
+        for (expr, want) in corsairCases {
+            XCTAssertEqual(PropertyConditionEvaluator.evaluate(expr, values: corsair), want, expr)
+            XCTAssertTrue(PropertyConditionEvaluator.canEvaluate(expr), "문법 미지원이면 안 된다: \(expr)")
+        }
+
+        // corsair_o_tron — `showbottom` 은 **슬라이더인데 값이 문자열 "150"** 이다(실물 그대로).
+        // `WallpaperProperties.parse` 가 lenient 경로로 .number(150) 을 만든다 — JS 의
+        // `"150" > 0` (ToNumber) 과 같은 답이다.
+        let oTron = WallpaperProperties.parse(generalProperties: [
+            "showbottom": ["type": "slider", "value": "150", "min": 0, "max": 300],
+            "rainbowscheme": ["type": "bool", "value": false],
+            "bottomcolor": ["type": "color", "value": "1 1 1", "condition": "showbottom.value > 0"],
+            "cyclerainbow": ["type": "bool", "value": true, "condition": "rainbowscheme.value"],
+        ])
+        let byKey = Dictionary(uniqueKeysWithValues: oTron.map { ($0.key, $0) })
+        XCTAssertEqual(byKey["showbottom"]?.value, .number(150), "슬라이더 문자열 값 관용")
+        let visibleKeys = Set(PropertyConditionEvaluator.visibleIndices(in: oTron).map { oTron[$0].key })
+        XCTAssertTrue(visibleKeys.contains("bottomcolor"), "showbottom 150 > 0 → 표시")
+        XCTAssertFalse(visibleKeys.contains("cyclerainbow"), "rainbowscheme 기본값 false → 숨김")
+
+        // dino_run — `"condition": ""`. 브라우저 템플릿은 `ng-if="!property.condition || …"` 라
+        // 빈 문자열이 falsy → **조건 자체가 없는 것과 같다**(scripts.js char@750308).
+        XCTAssertTrue(PropertyConditionEvaluator.isVisible(
+            WallpaperProperty(key: "god_rays", type: "bool", value: .bool(true), order: 0, condition: ""),
+            in: []))
+
+        // shimmering_particles — style 콤보 기본값 "0".
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("style.value=='1'",
+                                                           values: ["style": .string("0")]), false)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("style.value=='1'",
+                                                           values: ["style": .string("1")]), true)
+    }
+
+    /// **엔진이 직접 저작하는 조건**도 코퍼스다. `wallpaper64.exe` 의 프로퍼티 주입기
+    /// `0x140104b60–0x140108c17` 이 브라우저 패널에 얹는 내장 프로퍼티(volume · rate ·
+    /// cameraparallax · alignment · alignment{position,x,y,z} · alignmentfliph · wcc_v · wcc_amt ·
+    /// wec_e · wec_{brs,con,sa,hue})에 `condition` 을 **10자리**에서 쓴다(고유 5종).
+    /// 이미지 전체 disp32 스캔으로 `"condition"`(0x140474a60) xref **16자리** 중 10 이 이 함수다
+    /// (나머지: 씬 `user` 바인딩 파서 0x1401a4f1b · 0x14017512c · TEXB 변형 0x14015cc13/0x14015cd74 ·
+    ///  0x14001f39b · 0x140134c81). **이 바이너리 어디에도 이 식을 평가하는 자리는 없다** —
+    /// `checkPositionVisibility()` 는 브라우저 스코프 함수이기 때문이다(scripts.js char@106119).
+    ///
+    /// 그래서 이 다섯은 우리 파서가 **닿을 일이 없다**(project.json 도달 0). 다만 문법 커버리지의
+    /// 상한을 보여준다: `<` · `&&` · `||` · `==` 는 되고 **함수 호출은 안 된다**.
+    func testEngineInjectedConditionsShowGrammarCeiling() {
+        let v: [String: PropertyValue] = ["alignment": .number(4), "wcc_v": .string("none"), "wec_e": .bool(true)]
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("alignment.value==3||alignment.value==4", values: v), true)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("alignment.value==4", values: v), true)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("wcc_v.value", values: v), true)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("wec_e.value", values: v), true)
+        // 함수 호출은 미지원 — 부분 평가 대신 **전체 파스 실패**로 흘러 관용적으로 표시된다.
+        let call = "alignment.value<2&&checkPositionVisibility()"
+        XCTAssertNil(PropertyConditionEvaluator.evaluate(call, values: v),
+                     "함수 호출 토큰이 남아 isAtEnd 가 거짓 → 파스 실패")
+        XCTAssertFalse(PropertyConditionEvaluator.canEvaluate(call))
+        XCTAssertTrue(PropertyConditionEvaluator.isVisible(
+            WallpaperProperty(key: "alignmentposition", type: "slider", value: .number(0),
+                              order: 0, condition: call),
+            in: []), "파스 실패는 표시로 폴백")
+    }
+
+    /// **없는 프로퍼티 참조는 `undefined` 이고 falsy 다** — 그리고 우리 규약과 일치한다.
+    /// 브라우저는 `ta.$eval(expr, currentSelection.properties[location])` 로 평가한다
+    /// (scripts.js char@106464) — 즉 **locals = 프로퍼티 맵**이다. AngularJS 1.6 의 컴파일된
+    /// 게터는 멤버 접근이 null-safe 라(`a === undefined ? undefined : a.value`) 없는 키를
+    /// 던지지 않고 `undefined` 를 낸다. 그래서:
+    ///   `missing.value` → undefined(falsy) · `== 'x'` → false · `> 0` → false ·
+    ///   `!missing.value` → true · `missing.value == other.value`(둘 다 부재) → true.
+    /// 우리 `ConditionValue.none` 이 정확히 이 다섯을 낸다.
+    func testMissingPropertyReferenceIsUndefinedLikeAngular() {
+        let v: [String: PropertyValue] = ["known": .number(1)]
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("missing.value", values: v), false)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("missing.value == 'x'", values: v), false)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("missing.value > 0", values: v), false)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("missing.value < 0", values: v), false,
+                       "JS 도 undefined 비교는 양방향 false 다(NaN)")
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("!missing.value", values: v), true)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("missing.value == alsoMissing.value", values: v), true,
+                       "undefined == undefined → true")
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("known.value && missing.value", values: v), false)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("known.value || missing.value", values: v), true)
+    }
+
     /// `!` 는 Angular 와 **같이** 비교보다 강하게 묶인다(`unary` 레벨 @vendor.js byte 168262 —
     /// `unary → ("+"|"-"|"!") unary | primary`). 여기가 갈리지 **않는다**는 것을 못박는다.
     ///

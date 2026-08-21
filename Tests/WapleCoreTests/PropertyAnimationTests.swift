@@ -3,11 +3,18 @@ import XCTest
 
 final class PropertyAnimationTests: XCTestCase {
     /// 양쪽 핸들 disabled = 선형 — 중점에서 평균값.
+    ///
+    /// **`enabled: false` 는 좌표까지 0 으로 만든다**(2026-08-21 클러스터 AF). 실물 파서가
+    /// disabled 핸들의 `x`/`y` 를 아예 읽지 않아 0 으로 남기고(0x1401a8fd1 `xorps` +
+    /// 0x1401a8ffb/0x1401a907f 의 건너뛰기), 평가기는 `enabled` 비트를 **안 본다**
+    /// (제어점 조립 0x1401a9d6d/0x1401a9d74/0x1401a9e58/0x1401a9e8f 가 무조건 실행).
+    /// 종전 헬퍼는 `enabled: false` 인데도 `fx: 1`/`bx: -1` 을 그대로 넘겨, "실물 파서가
+    /// 절대 만들지 않는 키프레임" 으로 선형성을 시험하고 있었다.
     private func kf(_ frame: Float, _ value: Float, enabled: Bool = true,
                     fx: Float = 1, fy: Float = 0, bx: Float = -1, by: Float = 0) -> PropertyKeyframe {
         PropertyKeyframe(frame: frame, value: value,
-                         frontEnabled: enabled, frontX: fx, frontY: fy,
-                         backEnabled: enabled, backX: bx, backY: by)
+                         frontEnabled: enabled, frontX: enabled ? fx : 0, frontY: enabled ? fy : 0,
+                         backEnabled: enabled, backX: enabled ? bx : 0, backY: enabled ? by : 0)
     }
 
     func testLinearMidpointAndClamp() {
