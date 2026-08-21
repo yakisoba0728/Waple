@@ -736,8 +736,10 @@ SHA-1 초기화 `0x14016c9ae`–`0x14016c9ef`, 블록 압축 `0x1400802f0`. 입�
 `uniform lowp vec3 color; // {"material":"tint","default":"0.315, 0.135, 0.1125"}` 를 가리킨다.
 파스 자리는 `0x140154fd3`(같은 머티리얼 패스 파서 안). 동봉 도달 **1건**.
 
-같은 파서가 읽는 형제 키: `constantshadervalues` `0x140154651` ·
-`usertextures` `0x140154688` · `usertextures[].keepaspect` `0x140154874` ·
+같은 파서가 읽는 형제 키(**VA 는 `lea` 의 명령 시작 주소다** — 종전엔 `usertextures`/
+`keepaspect` 두 건만 disp32 필드 주소를 적어 관례가 어긋나 있었다. 2026-08-21 통일):
+`constantshadervalues` `0x140154651` ·
+`usertextures` `0x140154685` · `usertextures[].keepaspect` `0x140154871` ·
 `textures`/`usertexturereference`(`0x1401556e0` 계열) · `shader` `0x140154cea`.
 `keepaspect` 규약(태그 5 boolean 만, 부재 시 false, 레코드 `+0x30`)과 동봉 도달 1건
 (`assets/scenes/videoplayer/materials/background.json`)은

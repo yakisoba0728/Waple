@@ -231,7 +231,7 @@ UTF-16 문자열은 Win32 경로·UI·로케일 전용이다. 즉 UTF-16 스캔�
 | 16 | `cone` | `0x1401B9100`–`0x1401B992C` (이미터 지오메트리: `flags/origin/directions/sign/distancemin/distancemax/speedmin/speedmax/controlpoint/cone`) · 팩토리 `0x1401C5490`–`0x1401D152C` | `0x1401B94AE` (`H_FLOAT`, 기본 0), `0x1401C6146` | 이미터 원뿔 각 | **소비** (동봉 전건 `0` 이라 실효 도달 0) |
 | 17 | `lightconfig` | `0x140186C90`–`0x140188816` | `0x1401876A2` (SSO — `lea` 아님, `mov eax,[rip+…+7]` + `movsd`) | 하위 카운트를 `[scene+0x121C]` 에 니블 패킹: `point`→bit0‑3, `spot`→4‑7, `tube`→8‑11, `directional`→12‑15, 이하 2비트 필드 (`0x140187B7A`–`0x140187C2C`) | **소비** — 라이트 종류별 최대 개수 = 셰이더 퍼뮤테이션 힌트 |
 | 18 | `collisionbehavior` | 주입기 `0x1401C00A0`–`0x1401C03EC` · 리더 `0x1401C03F0`–`0x1401C0536` | 주입 `0x1401C0175/0x1401C01C1`, 리드 `0x1401C0403` | `asString` → `[op+0x10]` 에 열거값: `"slide"`(`0x14048FB04`)→1, `"stop"`(`0x140473B34`)→2, `"delete"`(`0x14048FB0C`)→3, 그 외→0 (`0x1401C0475`–`0x1401C04EC`) | **주입 + 소비** |
-| 19 | `keepaspect` | `0x140154480`–`0x140155668` (material pass `usertextures`: `name/type/system/usershortcut/keepaspect/value/user`) | `0x140154871` | `find` → bool → `cmovne r12d, 1` (`0x1401548A0`) | **소비** |
+| 19 | `keepaspect` | `0x140154480`–`0x140155668` (material pass `usertextures`: `name/type/system/usershortcut/keepaspect/value/user`) | `0x140154871` | `find` → 태그5(`0x140154887`) → `asBool`(`0x140154890`) → `cmovne r12d, 1` (`0x1401548A0`) → 0x38바이트 레코드 `+0x30`(`0x140154a09`). **소비처**(2026-08-21 확정): `merged()` 로 `0x1401556e0`–`0x140155fbb`(6조각) — `0x140155d23` 이 로드 종횡비 강제를 해제하고 `0x140155daf` 가 `pass+0x2b0/+0x2b2` 를 실제 텍스처 치수로 덮는다 → `0x140209433`/`0x140209449` → `g_TextureNResolution.zw` | **소비** |
 | 20 | `inputrangemin` | 10 번과 동일 (기본 **0** 삽입 `0x1401BC589`) | 주입 `0x1401BC541/0x1401BC56B`, `0x1401BFC41/0x1401BFC6B`; 리드 `0x1401CA89D`, `0x1401CE836` | `movss [rax], xmm6` (`0x1401CA925`) | **주입 + 소비** |
 | 21 | `bouncefactor` | 주입기 `0x1401C00A0`–`0x1401C03EC` (기본 **0.5**, `movabs 0x3FE0000000000000` @`0x1401C0100`) · 리더 `0x1401C03F0`–`0x1401C0536` | 주입 `0x1401C00B7/0x1401C00DD`, 리드 `0x1401C0429` | `asFloat` → **`-1.0 - v`**(상수 −1.0 @`0x1404929B8` 적재 `0x1401C043D`, `subss` `0x1401C044F`) 후 `[op]` 에 4채널 브로드캐스트(`0x1401C0469`) — 반사 계수 −(1+e) | **주입 + 소비** — `-(1+e)` 변환 규약에 주의 |
 | 22 | `pointshadow` | `0x140186C90`–`0x140188816` (`lightconfig` 하위) | `0x140187AF3` (SSO 적재) | `[scene+0x121C]` 니블 필드 | **소비** |
@@ -266,7 +266,12 @@ UTF-16 문자열은 Win32 경로·UI·로케일 전용이다. 즉 UTF-16 스캔�
 슬롯 상한 8 을 종류별 카운트로 대체 — 코드 주석 :211 이 이미 이 필요를 적어 뒀다),
 `collisionbehavior`+`bouncefactor`(`ParticleSystem.parseOperators` 의 collision 계열,
 `bouncefactor` 는 원본이 `-(1+v)` 로 변환 저장, `collisionbehavior` 는 slide=1/stop=2/delete=3/기타=0), `inputrangemin`(10번과 동일),
-`keepaspect`(`SceneDocument` usertextures 슬롯 정규화).
+`keepaspect` — **[2026-08-21 정정] `SceneDocument` 쪽 슬롯 정규화는 이미 완료**이고 남은 갭은
+렌더 배선인데 **현재 도달 0** 이다: `materialUserTextureKeepAspect` 는 렌더러 소비처가 0건이고,
+유일 도달 자산 `scenes/videoplayer/materials/background.json` 을 Waple 이 마운트하지 않으며
+(비디오는 `SceneVideoLayer` 경로), WE 에서도 엔진이 런타임에 `wproperties.videotex.value` 를
+써 넣어야 켜진다(`0x140120050`). `usertexturereference` 는 동봉+설치본 JSON 3655건에 0건.
+전문은 `docs/re/material-blend.md` §2.5.
 
 ---
 

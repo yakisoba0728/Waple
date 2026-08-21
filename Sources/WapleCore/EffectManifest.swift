@@ -314,6 +314,23 @@ public struct EffectManifest: Equatable {
         /// 종전 `max(1, dst/scale)` 까지 같이 움직여야 하는데(무회귀 규약 위반), 두 값이 갈리는
         /// 구간은 "한 축이 1 이하로 떨어지는 dst" 뿐이고 동봉·설치 코퍼스 도달이 0이다.
         /// 0/음수가 Metal 텍스처 생성에 가지 않는다는 목적은 1 로도 똑같이 달성된다.
+        ///
+        /// **2026-08-21 도달 재확인(전수).** 갈리는 필요충분조건은 *그 축의 결과가 0 또는 1* 이다.
+        ///   · 긴 변은 `min(fit, major)` 이라 `fit == 1` 이라야 갈리는데 코퍼스 `fit` 값은
+        ///     256(`fluidsimulation` 6장) · 512(`cursorripple` 2장) 두 가지뿐이다.
+        ///   · 짧은 변은 `trunc(minor/major × min(fit, major)) ≤ 1`, 즉 종횡비가 **`fit/2 : 1`
+        ///     보다 극단**일 때다 — fit 256 이면 128:1, fit 512 면 256:1.
+        ///   · `fit` FBO 는 코퍼스 전건이 `scale` 미선언(=1)이라(FBO 선언 112건 중 `fit` 28건,
+        ///     `fit`+`scale` 동시 0건) 나눗셈이 다시 1 이하로 끌어내리는 경로도 없다.
+        ///   · 그 두 이펙트를 **쓰는 자리**는 씬 전수(`objects[].effects[].file`) **4건**뿐이고
+        ///     (동봉 `effects/{fluidsimulation,cursorripple}/preview/scene.json` + 설치본 사본 2)
+        ///     전부 `size:"256 256"` · `scale:"1 1 1"` · `orthogonalprojection 256×256` 의
+        ///     **정사각** 레이어라 짧은 변 = 긴 변 = 256 이다. 하한까지 **128배** 여유다.
+        ///   · `fit` 미선언 갈래(`max(1, dst/scale)`, `SceneRendererFrameEncoder`)도 같이 쟀다 —
+        ///     `scale > 1` 인 FBO 를 쓰는 씬 자리 12건의 최악값이 `min(축)/scale = 64` 다
+        ///     (`blur`/`cursorripple` scale 4 · 256×256 레이어).
+        /// 잠금은 `EffectFboFitTests.testLowerBoundDeviationBoundaryIsTheDerivedShortSide` 와
+        /// `…HasNoCorpusReach` 두 개다.
         public func fittedBox(baseWidth: Int, baseHeight: Int) -> (width: Int, height: Int)? {
             guard let fit = fit else { return nil }
             return Self.fittedBox(fit: fit, declaredWidth: declaredWidth, declaredHeight: declaredHeight,
