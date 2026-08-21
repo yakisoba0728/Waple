@@ -153,10 +153,18 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(p.angularVel.z, 0.77372026, accuracy: 1e-6)
     }
 
+    /// **[2026-08-21 정정] 불리언은 여기서 "무효" 가 아니다.**
+    ///
+    /// 종전 이 테스트는 `bridgedFalse` 를 무효 목록에 넣어 exponent 1(부재 기본)을 기대했다.
+    /// 그 전제는 바이너리로 확인된 적이 없었고, 확인해 보니 **틀렸다** — 초기화자 일곱의
+    /// `exponent` 리더는 전부 `operator[]`(`0x140087640`) 직후 `mov rcx,rax; call asFloat`
+    /// (`0x1401c720f`·`0x1401c73e6`·`0x1401c7798`·`0x1401c8011`·`0x1401c82df`·`0x1401c901b`·
+    /// `0x1401c967f`)이고 앞에 `isNumeric`(`0x140088880`) 호출이 **없다**.
+    /// 게이트가 없으면 `asFloat` 가 태그 5 를 1.0/0.0 으로 내므로 `false` → **0.0** 이다.
+    /// 문자열(태그 4)·비유한은 그대로 무효다(실물은 태그 4 에서 abort — Waple 은 기본값으로 접는다).
+    /// 자세한 전수는 `docs/re/json-number-tags.md`.
     func testRandomInitializerExponentRejectsNonnumericAndNonfiniteValues() {
-        // JSONSerialization의 false는 __NSCFBoolean이며 `as? Double`로도 0.0에 브리지된다.
-        let bridgedFalse = json(#"{"value":false}"#)["value"]!
-        let invalidExponents: [Any] = [bridgedFalse, "2", Double.nan, Double.infinity]
+        let invalidExponents: [Any] = ["2", Double.nan, Double.infinity]
         let expected: [Initializer] = [
             .lifetimeRandom(min: 1, max: 2, exponent: 1),
             .sizeRandom(min: 0, max: 1, exponent: 1),
@@ -180,6 +188,18 @@ final class ParticleSystemTests: XCTestCase {
             let def = ParticleSystemDef.parse(["initializer": initializers], material: nil)
 
             XCTAssertEqual(def.initializers, expected, "invalid exponent: \(invalid)")
+        }
+
+        // JSONSerialization 의 false 는 `__NSCFBoolean` 이라 `as? Double` 이 **0.0 으로 성공**한다.
+        // 게이트가 없는 자리이므로 그 0.0 이 실물과 같은 값이다 — 부재 기본 1 로 접으면 안 된다.
+        let bridgedFalse = json(#"{"value":false}"#)["value"]!
+        let bridgedTrue = json(#"{"value":true}"#)["value"]!
+        for (raw, want) in [(bridgedFalse, Float(0)), (bridgedTrue, Float(1))] {
+            let def = ParticleSystemDef.parse(
+                ["initializer": [["name": "sizerandom", "min": 0, "max": 1, "exponent": raw]]],
+                material: nil)
+            XCTAssertEqual(def.initializers, [.sizeRandom(min: 0, max: 1, exponent: want)],
+                           "asFloat 태그 5 → 1.0/0.0 (0x140086243–0x140086248)")
         }
     }
 

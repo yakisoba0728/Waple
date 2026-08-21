@@ -3,7 +3,12 @@ import Foundation
 // WapleCore JSON 숫자 파싱 공용 헬퍼(자유함수). 종전 ParticleSystem / SceneDocument /
 // PropertyAnimation 이 각자 들고 있던 3벌 중복을 통합 — 유한성 검사는 여기서 단일화하되,
 // "관용 폭"(문자열 허용 여부·바인딩 언랩 여부)은 호출부 규약별 별개 함수로 보존한다.
+//   - numeric*: jsoncpp `isNumeric()`(태그 1/2/3) 게이트 — **불리언도 거부**. 실물이 값 접근 전에
+//     `0x140088880`(또는 그 인라인 전개)을 부르는 자리 전용 — 파티클 def `starttime`/`flags`/
+//     `sequencemultiplier`/`maxcount` 와 `rotationrandom.min/max`. (프로퍼티 애니 키프레임도
+//     같은 부류지만 그쪽은 `EffectManifest.isJSONBool` 게이트로 이미 닫혀 있다.)
 //   - strict*: Double/Int 만(문자열 거부) — 파티클·애니 키프레임 규약.
+//     **불리언은 통과시킨다** — 게이트 없는 자리에서 실물 `asFloat`/`asInt` 가 1/0 을 내기 때문이다.
 //   - lenient*: 문자열 숫자도 허용 — 씬 규약(실물 씬에 "35" 같은 문자열 타입 존재).
 //   - {value} 바인딩 언랩은 unwrapValue 로 분리 — 씬 쪽만 경유한다(파티클·애니는 언랩 없음).
 
@@ -69,6 +74,47 @@ func lenientInt(_ v: Any?) -> Int? {
     if let s = v as? String { return Int(s) }
     return nil
 }
+
+// MARK: 타입 태그 게이트(jsoncpp `isNumeric`)
+
+/// jsoncpp `Json::Value::isNumeric()` — **`0x140088880`**:
+/// `mov eax,[rcx+8]; movzx eax,al; dec eax; cmp eax,2; setbe al; ret`.
+/// 즉 타입 태그 **1/2/3(int/uint/real)만** 참이고 0(null)·4(string)·**5(boolean)**·6/7(array/object)
+/// 은 거짓이다. 호출부가 이 술어를 먼저 부르는 자리에서만 불리언이 숫자로 승격되지 **않는다**.
+///
+/// **왜 `strict*` 를 그냥 고치지 않았나** — 실물의 값 접근자 자체는 불리언을 받는다:
+///   · `asFloat`(`0x140086220`) 는 태그 5 에서 `cmp byte [rcx],0` → 0 이면 0.0f, 아니면
+///     `movss xmm0, [0x140492704]`(**1.0f**) 로 내려온다(`0x140086243`–`0x140086248`).
+///   · `asInt`(`0x140085f70`) 도 태그 5 에서 `cmp byte [rcx],al; setne al`(`0x140085f95`) → **0/1**.
+///     `asUInt`(`0x140085ee0`)·`asInt64`(`0x140086000`)도 같다 — 숫자 접근자 **전부** 태그 5 를 받는다.
+///   · 태그 4(string)·6·7 만 "Value is not convertible to float."(`0x140478868`) 로 abort 한다.
+/// 그러니 게이트가 **없는** 자리에서는 `{"k":true}` 가 1.0 인 것이 실물 동작이고,
+/// `strictFloat` 의 관용은 버그가 아니라 정합이다. 게이트는 자리마다 다르므로 자리별로 고른다.
+///
+/// 전수(wallpaper64.exe `.text`): `asFloat` 호출 **243** · `asInt` **79** 인데
+/// 게이트는 `call isNumeric` **12** + 인라인 전개(`[reg+8]` 태그 적재 후 `dec;cmp 2`) **78** = **90**
+/// 뿐이고, 그 90 에는 float/int 가 아닌 자리(`asUInt`/`asInt64`)도 섞여 있다.
+/// 즉 숫자 자리의 대다수는 게이트가 없다. 자리별 실측은 `docs/re/json-number-tags.md`.
+///
+/// **판정 방식** — `NSNumber` 면 `objCType`("c" = boolean)이 정본이다.
+/// `JSONSerialization` 은 JSON `true` 를 `__NSCFBoolean` 으로 주는데 그 값은
+/// `as? Int`/`as? Double` 이 **성공**한다(리눅스 실측: `strictFloat(json true) == 1.0`).
+/// 반대로 Swift 리터럴 `true` 는 `Bool` 로 남아 `as? Double` 이 nil 이다 —
+/// **이 경로를 테스트로 재현하려면 반드시 `JSONSerialization` 을 거쳐야 한다**.
+/// `NSNumber` 브리지가 없는 값(순수 Swift `Bool`)까지 덮으려고 뒤의 두 줄을 둔다.
+/// (`EffectManifest.isJSONBool` 이 같은 판정을 `objCType` 으로 이미 하고 있다 — 같은 규약이다.)
+func isJSONNumeric(_ v: Any?) -> Bool {
+    guard let v else { return false }
+    if let n = v as? NSNumber { return n.objCType.pointee != 0x63 }
+    if v is Bool { return false }
+    return v is Int || v is Double
+}
+
+/// `isNumeric` 게이트를 통과한 값만 `strictFloat` 로 읽는다 — **태그 게이트가 실재하는 자리 전용**.
+/// 관용 폭 순서: `numericFloat` ⊂ `strictFloat` ⊂ `lenientFloat`.
+func numericFloat(_ v: Any?) -> Float? { isJSONNumeric(v) ? strictFloat(v) : nil }
+/// `numericFloat` 의 Int 판.
+func numericInt(_ v: Any?) -> Int? { isJSONNumeric(v) ? strictInt(v) : nil }
 
 // MARK: 벡터/리스트
 
