@@ -1,4 +1,4 @@
-# RE 방법론 — 실제로 당한 함정 26개와 검증 규율
+# RE 방법론 — 실제로 당한 함정 27개와 검증 규율
 
 Waple 은 Wallpaper Engine(WE)의 동작을 **실측으로** 재현하는 리포다. 사실의 출처는 셋뿐이다:
 
@@ -42,7 +42,8 @@ Waple 은 Wallpaper Engine(WE)의 동작을 **실측으로** 재현하는 리포
 파서가 기본값을 DOM 에 심는 것(`Json::Value::find` `0x140087490`)과, 그 값이 실제로 멤버에
 착지하는 것은 **다른 사건**이다. 착지는 리플렉션 바인더
 (`H_FLOAT 0x1401d7d30` / `H_INT 0x1401d7be0` / `H_STRING 0x1401d7e80` / `H_BOOL 0x1401d8120`)
-나 직독(`asFloat 0x140086220` / `asInt 0x140085f70` / `asBool 0x140086300` / `asString 0x140085cc0`)
+나 직독(`asFloat 0x140086220` / `asInt 0x140085ee0` / `asUInt 0x140085f70` / `asBool 0x140086300` /
+`asString 0x140085cc0`)
 으로 일어난다. **후자만 소비다.** 주입만 보고 "이 키가 쓰인다" 고 적으면 틀린다.
 
 ### 4. 호출 사이트가 아니라 **상수 적재 횟수**를 세라
@@ -130,9 +131,11 @@ false 가 아니다. 태그 검사 게이트를 무지성으로 붙이면 **기�
    이고, 원문 주장(`"condition"` 로드)과 맞는 것은 `0x14015cc10` 의 `lea r8, [rip+…]` 다.
 
 ### 17. **불리언은 숫자다**
-jsoncpp `asFloat`(`0x140086220`) · `asInt`(`0x140085f70`) · `asUInt` · `asInt64` 는
+jsoncpp `asFloat`(`0x140086220`) · `asInt`(`0x140085ee0`) · `asUInt`(`0x140085f70`) ·
+`asInt64`(`0x1400860c0`) · `asUInt64`(`0x140086000`) 는
 **태그 5(boolean)를 1/0 으로 받는다.** 좁히는 것은 호출부의 `isNumeric`(`0x140088880`) 게이트뿐이고,
-그런 자리는 전체 90곳이다(`asFloat` 호출 243 · `asInt` 79 중). 파티클 디스패처는 229곳 중 6곳만
+그런 자리는 전체 90곳이다(`asFloat` 호출 243 · `asUInt` 79 중 — 옛 문면의 "asInt 79" 는
+**이름이 바뀐 값**이었다, 아래 함정 27). 파티클 디스패처는 229곳 중 6곳만
 게이트한다. **전역 엄격화 금지** — 223자리가 회귀한다.
 관용도 사다리는 `numeric* ⊂ strict* ⊂ lenient*`(`Sources/WapleCore/JSONNumerics.swift`).
 
@@ -170,6 +173,35 @@ jsoncpp `asFloat`(`0x140086220`) · `asInt`(`0x140085f70`) · `asUInt` · `asInt
 `check_spec_shrink_guard.py` 의 `RAW_DUMP_ALLOWED` 가 `(파일, 줄번호)` 였다가 실제로 그 사고를
 냈다(`94045ac` 에서 **전문 일치**로 교체). 마찬가지로 주석·문서에서 **다른 파일의 줄 번호를
 인용하지 마라** — 한 줄만 밀려도 엉뚱한 곳을 가리킨다. 그 줄의 **코드를 적어라.**
+
+### 27. **함수에 붙인 이름은 근거가 아니다 — 이름을 바꿔 달면 온 리포가 같이 틀린다**
+
+이 리포는 jsoncpp 접근자 두 쌍의 이름을 **서로 바꿔** 달고 있었고, 그 오기가 18자리로 번져
+있었다(`Sources` 7 · `Tests` 3 · `docs` 8). VA 는 전부 맞았다 — **틀린 것은 라벨뿐**이다.
+
+판정은 추측이 아니라 실패 경로의 `_wassert` 인자다. 각 함수는 실패할 때
+`_wassert(식, L"D:\dev\we\windows\src\json\src\json_value.cpp"(`0x140478640`), 줄)` 을
+부르는데, 그 **문자열과 줄 번호가 원본 jsoncpp 의 함수 순서와 정확히 맞는다**:
+
+| VA | 실패 문자열 | 줄 | 이름 |
+| --- | --- | ---: | --- |
+| `0x140085cc0` | "Type is not convertible to string" | 696 | `asString` |
+| `0x140085ee0` | "Value is not convertible to Int." | 719 | **`asInt`** |
+| `0x140085f70` | "Value is not convertible to UInt." | 741 | **`asUInt`** |
+| `0x1400860c0` | "Value is not convertible to Int64." | 769 | **`asInt64`** |
+| `0x140086000` | "Value is not convertible to UInt64." | 790 | **`asUInt64`** |
+| `0x140086150` | "Value is not convertible to double." | 829 | `asDouble` |
+| `0x140086220` | "Value is not convertible to float." | 852 | `asFloat` |
+| `0x140086300` | "Value is not convertible to bool." | 873 | `asBool` |
+
+변환 관용구도 같은 방향으로 갈린다 — `0x140085ee0` 의 태그 3 은 `cvttsd2si eax`(**32비트**,
+`0x140085f12`)이고 `0x140085f70` 의 태그 3 은 `cvttsd2si rax`(**64비트**, `0x140085fa2`) 뒤
+`eax` 반환이다. MSVC 가 `int(double)` 과 `unsigned(double)` 를 내리는 방식 그대로다.
+
+**그래서 규칙**: 함수 이름을 문서에 적을 때는 **그 이름을 어떻게 알았는지**를 같이 적어라
+(문자열·어서션·export·RTTI·호출 규약 중 무엇인가). 이름만 적힌 인용은 다음 사람이 검증할
+수 없고, 틀렸을 때 **VA 가 맞아서 아무 검사기도 못 잡는다** — `va_citations.py` 는 주소가
+경계인지만 본다. 산문이 이름에 기대 결론을 내렸으면(부호 유무·폭) 그 결론까지 같이 무너진다.
 
 ---
 
@@ -211,6 +243,15 @@ CRLF 가 섞인 입력에서 `split(separator: "\n")` 이 조용히 다르게 �
   같은 파일의 표와 모순이었다. 생성자를 직접 떠서 `mov dword ptr [rdi+0x2ec], 0x40000000` = 2.0f
   를 확인하고 되돌렸다).
 - 남의 편집 때문에 난 빌드 실패를 "내 것이 아니다" 로 **증명**할 수 있게 했다.
+
+**그런데 `--filter` 를 걸면 이 그물이 새 나간다.** `--filter 'GLSL|Shader'` 로 초록을 받고
+푸시했는데 macOS CI 가 붉었다 — 뒤집은 규약(`#if` 소수 리터럴)의 **옛 단정을 들고 있던 세
+번째 파일**이 `TranslationEvalFixRegressionTests` 라 필터에 안 걸렸다. 같은 사실을 잠그는
+테스트가 어디에 더 있는지는 **파일 이름으로 짐작할 수 없다.**
+→ 규약을 **뒤집는** 변경(옛 단정이 어딘가에 있을 수밖에 없는 변경)이면 **필터 없이 전 스위트**를
+   한 번 돌리고 푸시해라. 필터는 반복 중의 빠른 되먹임용이지 **푸시 전 관문이 아니다.**
+→ 값싼 사전 점검: 뒤집기 전 동작을 나타내는 **문자열**로 `Tests/` 를 통째로 grep 해라
+   (예: `grep -rn "1\.5" Tests/`). 그게 세 번째 파일을 찾아 줬을 것이다.
 
 ### 4.2 빌드 락 — 동시 빌드 2개면 OOM 이다
 4코어/16GB 컨테이너에서 `swift build` 두 개가 겹치면 컨테이너가 통째로 재시작한다(실제로 당했다).

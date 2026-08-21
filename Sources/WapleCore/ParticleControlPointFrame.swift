@@ -233,7 +233,7 @@ public struct CPMatrix4: Equatable {
 /// @`0x1401d05c5` · `0x1401d06da`) 저장되므로 `"offset": null` 은 `(0,0,0)` 이 된다 —
 /// 동봉 `thunderbolt_fizzle.json` 이 실제로 그렇게 저작돼 있다.
 public struct ParticleControlPointDescriptor: Equatable {
-    /// `flags` — 주입기 `0x1401d8280`(기본 0) 뒤 `asInt`(`0x140085f70`) → `[rdi + r13 + 0xa4]`.
+    /// `flags` — 주입기 `0x1401d8280`(기본 0) 뒤 `asUInt`(`0x140085f70`) → `[rdi + r13 + 0xa4]`.
     public var flags: Int
     /// `parentcontrolpoint` — 주입기 `0x1401d8280`(기본 0) 뒤 `asInt` → `[rdi + r13 + 0xa8]`
     /// (`0x1401d07ff`).

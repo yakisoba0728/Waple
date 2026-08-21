@@ -103,7 +103,7 @@ final class ParticleRemapFlagsWiringTests: XCTestCase {
     }
 
     /// **불리언은 숫자다**(브리프 함정 18). 리더는 `operator[]`(`0x140087640` @`0x1401ce829`) 뒤의
-    /// `asInt`(`0x140085f70`) **직독**이고 `isNumeric`(`0x140088880`) 게이트가 앞에 **없다** —
+    /// `asUInt`(`0x140085f70`) **직독**이고 `isNumeric`(`0x140088880`) 게이트가 앞에 **없다** —
     /// `asInt` 는 태그 5 를 `cmp byte [rcx],al; setne al`(`0x140085f95`)로 1/0 을 낸다.
     /// 그 경로를 재현하려면 **반드시 `JSONSerialization` 을 거쳐야 한다**(순수 Swift `Bool` 은
     /// `NSNumber` 브리지가 없다 — `JSONNumerics.isJSONNumeric` 주석의 같은 함정).

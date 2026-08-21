@@ -986,7 +986,7 @@ public struct RemapSpec: Equatable {
     ///
     /// **[2026-08-21 실측 — 종전에는 이 필드가 아예 없었다.]** 직접 다시 뜬 근거:
     ///   · 파스 — `remapvalue` 분기에서 `operator[]`(`0x140087640` @`0x1401ce829`) →
-    ///     **`asInt`(`0x140085f70`) 직독** @`0x1401ce831` → `mov dword ptr [rsi+0x1c], eax`
+    ///     **`asUInt`(`0x140085f70`) 직독** @`0x1401ce831` → `mov dword ptr [rsi+0x1c], eax`
     ///     @`0x1401ce83d`. **`isNumeric`(`0x140088880`) 게이트가 없다** — 브리프 함정 18 그대로
     ///     `{"flags": true}` 는 1 로 들어온다.
     ///     (함정 16: `lea rdx,"flags"` 는 `0x1401ce803` 인데 그 **바로 뒤**의
@@ -1394,7 +1394,7 @@ public struct ChildLink: Equatable {
     /// `origin`·`angles`·`scale`·`probability`(1.0)·`maxcount`(10)·`type`·**`controlpointstartindex`**·
     /// `flags`)가 `xor r8d, r8d`(0x1401c1720) → `H_INT`(0x1401d7be0, 호출 @0x1401c172d)로
     /// **기본 0** 을 심는다(키 `lea`@0x1401c1723). 리더는 `lea`@0x1401d09c4 →
-    /// `asInt`(0x140085f70 @0x1401d09d6) → 자식 디스크립터 `[+0x4f8]`(0x1401d09db).
+    /// `asUInt`(0x140085f70 @0x1401d09d6) → 자식 디스크립터 `[+0x4f8]`(0x1401d09db).
     ///
     /// 동봉 도달 14건(파일 8) 중 **12건이 JSON `null`** 이다 — `asInt(null) = 0` 이라 원본에서도
     /// 0 으로 접힌다. 여기서도 `pint(null) = nil → 0` 이라 같은 결과다(기본 0 폴백 필수).
@@ -1405,7 +1405,7 @@ public struct ChildLink: Equatable {
     ///
     /// **[2026-08-21 실측]** 파스는 `controlpointstartindex` **바로 앞** 자리다 — 같은 children
     /// 리더 안에서 키 `lea "flags"`@`0x1401d09a3` → `find`(`0x140086de0` @`0x1401d09aa`) →
-    /// `asInt`(`0x140085f70` @`0x1401d09b2`) → 자식 디스크립터 `[rbp+0x4f4]`(= 링크 `+0x64`,
+    /// `asUInt`(`0x140085f70` @`0x1401d09b2`) → 자식 디스크립터 `[rbp+0x4f4]`(= 링크 `+0x64`,
     /// 스토어 `0x1401d09be`). 형제 `controlpointstartindex` 는 `+0x68`(`0x1401d09db`)이다.
     /// 주입 기본은 **0**(`xor r8d,r8d`@`0x1401c1732` → `H_INT`@`0x1401c173f`, 키 `lea`@`0x1401c1735`).
     /// **함정 16 자리다** — 인접 `lea` 로 귀속하면 `controlpointstartindex` 의 `xor`@`0x1401c1720`
@@ -2638,7 +2638,7 @@ public struct ParticleSystemDef: Equatable {
                         octaves: max(1, pint(o["transformoctaves"]) ?? 3),
                         inputScale: scale,
                         // 부재만 주입(int 1) — 공유 꼬리 `0x1401d8040` 이 `find` 로 게이트한다.
-                        // 리더는 `asInt`(`0x140085f70` @`0x1401ce831`) **직독**이고 `isNumeric`
+                        // 리더는 `asUInt`(`0x140085f70` @`0x1401ce831`) **직독**이고 `isNumeric`
                         // 게이트가 없다 → JSON 불리언은 1/0 으로 들어온다(함정 18).
                         // `strictInt` 가 `NSNumber`(=`__NSCFBoolean`) 를 그대로 받아 그 규약을 만족한다.
                         flags: injectedInt(o, "flags", RemapValueMath.InjectedDefault.flags),
@@ -3337,7 +3337,7 @@ private func mapSeqBoundsPair(_ v: Any?) -> Vec2 {
 
 /// `mapsequence*` 의 CP 인덱스 클램프 — `cmp r,7` + `cmovb`(**부호 없는** below)다
 /// (between `0x1401ca435`–`0x1401ca456`, around `0x1401c9b64`–`0x1401c9b75`).
-/// 즉 음수는 거대한 부호 없는 수가 되어 **7 로 접힌다**. 값은 `asInt`(`0x140085f70`) 로 읽으므로
+/// 즉 음수는 거대한 부호 없는 수가 되어 **7 로 접힌다**. 값은 `asUInt`(`0x140085f70`) 로 읽으므로
 /// 불리언도 1/0 으로 받는다(함정 18) — `injectedInt` 가 그 규약이다.
 private func mapSeqClampCP(_ v: Any?, injected constant: Int) -> Int {
     let raw = v == nil ? constant : (pint(v) ?? 0)
