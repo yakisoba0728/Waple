@@ -55,6 +55,18 @@ public enum Model3DPose {
     }
 
     /// 본별 스킨 행렬. animation 인덱스 범위 밖 → 전부 항등(바인드 포즈 = 정지). rate 는 재생 배속.
+    ///
+    /// **`rate` 가 음수면 `time * rate` 가 음수로 들어온다.** WE 는 그것을 역방향 비트
+    /// (`0x1401a9fc5` 의 `xorps` 로 `dt` 부호 반전)로 표현하고 모드별로 되돌린다 — loop 는
+    /// `T += D` 후 `fmodf`(`0x1401aa064`), mirror 는 0 에서 반사(`0x1401aa140`). 그 되돌림은
+    /// `PuppetPose.frame` 단일 소스에 있고 이 함수는 그것을 그대로 경유한다(2026-08-21 4차 수정 —
+    /// 종전에는 음수 프레임이 그대로 나와 아래 `sampledTRS` 의 `max(0, …)` 가 프레임 0 으로
+    /// 뭉갰다: 역방향 재생이 클립 **끝**이 아니라 **시작**에 붙어 버렸다).
+    ///
+    /// 트랙 키 수 = `frameCount + 1` 이 엔진 불변식이라(`0x140263c85` → `int 0x29`
+    /// `0x140263c8c`, 서술은 docs/re/skeleton-animation.md §6.1) `frame()` 의 상한 `lengthFrames`
+    /// 와 `sampledTRS` 의 상한 `keys.count-1` 이 같은 값이 된다 — 정상 데이터에서는 클램프가
+    /// 무동작이다. 회귀 핀: `PuppetMDLAFramingTests.testKeyCountIsFrameCountPlusOne…`.
     public static func skinMatrices(model: Model3D, animation: Int, time: Float, rate: Float = 1) -> [simd_float4x4] {
         let n = model.bones.count
         guard n > 0 else { return [] }

@@ -8,11 +8,15 @@ import simd
 /// u32 정점블롭크기 | 정점×N (stride 52 = pos 3f, 본인덱스 4×u32, 웨이트 4f, uv 2f)
 /// u32 인덱스블롭크기 | u16 인덱스(트라이앵글 리스트)
 /// "MDLS0001" | u8 0 | u32 다음섹션오프셋(=MDLA 위치, 실측 일치 검증) | u32 본수 |
-///   본별: cstring 이름 | u32 flags | i32 부모(-1=루트) | u32 행렬크기(64) | float4x4 바인드 | u8 0
-/// "MDLA0001" | u8 0 | u32 다음오프셋(=EOF-1, 실측 일치) | u32 애니수 | u32 id | u32 0 |
-///   애니별: cstring 이름 | cstring 모드(loop/mirror/single) | f32 fps | u32 길이(프레임) | u32 0 |
-///   u32 본수 | u32 0 | 본별: u32 트랙크기 | 키×36B(pos 3f, 각 3f, 스케일 3f — 프레임당 1키, 0..길이 포함) |
-///   u32 블롭2크기(관측 0) | 블롭2
+///   본별: cstring 이름 | u32 flags | i32 부모(-1=루트) | u32 행렬크기(64) | float4x4 로컬 레스트 |
+///        cstring 본제약config(실물 전건 빈 문자열 = 1바이트 NUL)
+/// "MDLA0001" | u8 0 | u32 다음오프셋(=EOF-1, 실측 일치) | u32 애니수 |
+///   애니별: **u64 id** | cstring 이름 | cstring 모드(loop/mirror/single) | f32 fps |
+///   u32 frameCount | u32 flags | u32 본수 |
+///   본별: u32 trackFlags | u32 트랙크기 | 키×36B(pos 3f, 각 3f, 스케일 3f — 프레임당 1키, 키수=frameCount+1)
+/// (MDLA 프레이밍은 2026-08-21 에 엔진 0x140263968–0x140263cb2 선형 디스어셈으로 정정했다.
+///  종전 모델의 "u32 id | u32 0" 은 클립0 의 u64 id 였고 "u32 블롭2크기" 는 다음 본의 trackFlags 였다 —
+///  자세한 근거와 v≥2..v≥6 게이트 블록은 docs/re/skeleton-animation.md §6.)
 ///
 /// 미상 필드는 관용 처리: 정점 블롭은 cstring 이후 16바이트 내에서 `%52==0 && 잔여 이내` u32 를 탐색.
 public struct PuppetModel: Equatable {
@@ -66,8 +70,12 @@ public struct PuppetModel: Equatable {
         /// 이벤트 마커(MDLV0023 컨테이너 퍼펫의 MDLA0006 트레일러 — Model3D.Animation.events 이식).
         /// 네이티브 MDLV0013(MDLA0001)은 코퍼스 이벤트 실측 0 — 항상 빈 배열.
         public var events: [AnimationMarker] = []
-        /// C③: 클립 고유 id — MDLV0023 등 컨테이너 퍼펫은 Model3D.Animation.id 이식(있으면), 네이티브
-        /// MDLV0013(MDLA0001)은 클립별 id 필드가 없어 항상 nil(이름 휴리스틱 폴백 유지).
+        /// C③: 클립 고유 id — MDLV0023 등 컨테이너 퍼펫은 Model3D.Animation.id 이식(있으면).
+        /// **[2026-08-21 정정]** 네이티브 MDLV0013(MDLA0001)에도 클립별 id 는 있다 — 클립 레코드
+        /// **선두의 u64**다(리더 0x1402616b0 = readU64, 호출 0x1402639de, 저장 위치 = 클립 오브젝트 +0x00).
+        /// 종전 주석은 "id 필드가 없어 항상 nil" 이라고 적고 있었는데, 실제로는 그 u64 의 하위 32비트를
+        /// **섹션 헤더의 필드로 오인**해 읽고 버리고 있었다(§6). 이제 채운다 — `clipIndex(clipId:)` 가
+        /// 이름 휴리스틱보다 먼저 이 값을 본다. u64 가 Int 범위를 넘으면 nil(이름 폴백 유지).
         public var id: Int? = nil
     }
 
@@ -240,19 +248,48 @@ public struct PuppetModel: Equatable {
                       o + 12 + 64 + 1 <= bytes.count else { return model }
                 o += 12
                 guard let bindMat = readFloat4x4(bytes, at: o) else { return model }
-                o += 64 + 1  // matrix + pad
+                o += 64
+                // 행렬 뒤 1바이트는 패딩이 아니라 **본 제약 config cstring** 이다 — 엔진은 행렬 블롭
+                // (0x140262573 r8d=0x40 → 크기접두 리더 0x1400d3ef0)을 읽은 직후 0x140262588 에서
+                // cstring 을 하나 더 읽어 제약 파서 0x140265c30 에 넘긴다(키 블록 .rdata
+                // 0x140492140–0x1404921f1: `gd m tf ik … blendtime`). 실물 2D 퍼펫은 이 문자열이 비어
+                // 있어 종전의 "u8 0 패드" 와 바이트가 같았을 뿐이고, 비어 있지 않은 본이 하나라도 있으면
+                // 종전 코드는 그 길이만큼 이후 전 오프셋이 밀렸다.
+                guard let cfg = readCString(bytes, at: o) else { return model }
+                o = cfg.next
                 bones.append(Bone(name: name, parent: Int32(bitPattern: parentRaw), bind: bindMat))
             }
             model.bones = bones
         }
 
         // 애니메이션(있으면): "MDLA0001". 섹션 헤더 실패는 애니 없이 반환(정지 포즈 렌더 가능).
-        // 개별 애니 파스 실패는 그 애니만 버리고(break) 누적 완료분은 유지 — Model3D.swift:407,435 의
-        // 부분 실패 정책과 정합(감사 V06: 종전 return model 은 파스 완료분까지 전량 폐기했다).
+        // 개별 애니 파스 실패는 그 애니만 버리고(break) 누적 완료분은 유지 — Model3D.swift 의
+        // parseAnimations 부분 실패 정책과 정합(감사 V06: 종전 return model 은 파스 완료분까지 전량 폐기했다).
+        //
+        // **프레이밍 정정(2026-08-21, docs/re/skeleton-animation.md §6).** 종전 모델은
+        // "섹션 헤더에 u32 id | u32 0" 이 있고 본마다 "u32 트랙크기 | 트랙 | u32 블롭2크기 | 블롭2" 라고
+        // 적고 있었다. 엔진(0x140263968–0x140263cb2 선형 디스어셈)은 그렇게 읽지 않는다:
+        //   · 섹션 헤더는 `u32 nextOff | u32 animCount` 뿐이고(nextOff 리더 0x140261770 이 u32 하나,
+        //     animCount 리더 0x14009c560 이 u32 하나),
+        //   · **클립마다 선두에 u64 id** 가 온다(0x1402639de → 0x1402616b0 = readU64, 결과가
+        //     클립 오브젝트 +0x00 에 저장된다. 생성자 0x140265a90 이 +0x08/+0x28 을 std::string 두 개로
+        //     초기화하고 파서가 거기에 이름·모드를 쓴다),
+        //   · 클립 헤더는 `f32 fps | u32 frameCount | u32 flags | u32 boneCount` **넷**이고
+        //     (0x140263a1b/0x140263a2d/0x140263a3d/0x140263a4d),
+        //   · 본 레코드는 `u32 trackFlags | u32 trackBytes | trackBytes` 다
+        //     (0x140263aa7 이 첫 u32 를 r15d 로, 0x140263acb 이 둘째 u32 를 트랙 크기로 읽고
+        //      0x140263afe 가 그만큼 커서를 민다).
+        // 종전 모델이 실물에서 통했던 이유: 헤더의 마지막 "u32 0" 이 실은 **본0의 trackFlags** 였고,
+        // 본마다 읽던 "블롭2크기" 가 실은 **다음 본의 trackFlags** 였다 — 그 값이 0 이면 위치가 우연히
+        // 맞는다. 어긋나는 자리는 둘: (a) trackFlags ≠ 0 이면 그 값만큼 커서를 더 밀어 desync,
+        // (b) 클립이 둘 이상이면 다음 클립의 u64 id 를 건너뛰지 않아 **두 번째 클립부터 전부 유실**된다.
+        // trackFlags 비트0 은 엔진에서 클립 flags 에 0x80000000 을 세우는 데만 쓰이고(0x140263c9d)
+        // 키 해석을 바꾸지 않으므로 여기서는 읽고 버린다.
+        // MDLA0001 은 버전 1 이라 v≥2..v≥6 게이트 블록이 전부 꺼져 있다(§6) — 본 트랙 뒤가 곧 다음 클립이다.
         if o + 8 <= bytes.count, String(bytes: bytes[o..<o+8], encoding: .utf8) == "MDLA0001" {
             o += 8 + 1  // magic + u8(0)
             guard let _ = u32(o), let animCount = u32(o + 4) else { return model }
-            o += 16  // nextOff, count, id, 0
+            o += 8  // nextOff, animCount
             var anims: [Animation] = []
             for _ in 0..<animCount {
                 func cstr() -> String? {
@@ -260,14 +297,18 @@ public struct PuppetModel: Equatable {
                     o = c.next
                     return c.value
                 }
+                // 클립 선두 u64 id. Int 로 안 들어가는 값(> Int.max)은 nil 로 떨어뜨린다(이름 폴백 유지).
+                guard let idLo = u32(o), let idHi = u32(o + 4) else { break }
+                o += 8
+                let clipId = Int(exactly: UInt64(idHi) << 32 | UInt64(idLo))
                 guard let name = cstr(), let mode = cstr(),
                       let fps = f32(o), let length = u32(o + 4), let boneCount = u32(o + 12) else { break }
-                o += 20  // fps, length, 0, boneCount, 0
+                o += 16  // fps, frameCount, flags, boneCount
                 var tracks: [[Key]] = []
                 var ok = true
                 for _ in 0..<boneCount {
-                    guard let tSizeRaw = u32(o) else { ok = false; break }
-                    o += 4
+                    guard let _ = u32(o), let tSizeRaw = u32(o + 4) else { ok = false; break }
+                    o += 8  // trackFlags(읽고 버림), trackBytes
                     let tSize = Int(tSizeRaw)
                     guard tSize % 36 == 0, o + tSize <= bytes.count else { ok = false; break }
                     var keys: [Key] = []
@@ -282,13 +323,12 @@ public struct PuppetModel: Equatable {
                     }
                     if !ok { break }
                     o += tSize
-                    guard let blob2Raw = u32(o) else { ok = false; break }
-                    o += 4 + Int(blob2Raw)
                     tracks.append(keys)
                 }
                 guard ok, tracks.count == Int(boneCount) else { break }  // 부분 애니는 드롭, 누적분 유지
                 anims.append(Animation(name: name, mode: mode, fps: fps,
-                                       lengthFrames: Int(length), tracks: tracks))
+                                       lengthFrames: Int(length), tracks: tracks,
+                                       events: [], id: clipId))
             }
             model.animations = anims
         }

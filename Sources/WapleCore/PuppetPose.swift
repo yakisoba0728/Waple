@@ -231,6 +231,24 @@ public enum PuppetPose {
     ///
     /// **반증**: 종전 Waple 은 `"clamp"` 를 single 의 별칭으로 취급했지만 WE 에는 그런 분기가 없다 —
     /// `"clamp"` 모드 클립은 WE 에서 **loop** 로 돈다. 또 비교가 `stricmp` 라 대소문자를 가리지 않는다.
+    ///
+    /// **음수 시간(2026-08-21 정정).** `rate` 가 음수인 레이어는 `time·rate < 0` 으로 여기 들어온다.
+    /// WE 의 역방향은 `dt` 의 부호를 뒤집는 비트 0x80000000 로 표현되고(0x1401a9fc0 `test r12b,r12b` →
+    /// 0x1401a9fc5 `xorps xmm0, [0x140492ff0]`), 그렇게 T 가 0 아래로 내려가면 **모드별로 되돌린다**:
+    ///   · loop  : `if (0 > T) { T += D; T = fmodf(T, D); }`
+    ///             — 0x1401aa05f `comiss xmm7,xmm6` / 0x1401aa064 `movss xmm1,[rbx+8]` /
+    ///               0x1401aa069 `addss xmm6,xmm1` / 0x1401aa070 `call fmodf`.
+    ///             한 주기 안의 언더플로만 되돌린다(증분 전진이라 `|dt| < D`).
+    ///   · mirror: 역방향 비트가 서 있고 `T ≤ 0` 이면 `T = −fmodf(T, D)` 로 **0 에서 반사**하고 비트를
+    ///             지운다 — 0x1401aa129 `test r12b,r12b` / 0x1401aa13b `call fmodf` /
+    ///             0x1401aa140 `xorps xmm0,[0x140492ff0]` / 0x1401aa147 `and [rbx+0xc],0x7fffffff`.
+    ///             즉 삼각파는 **우함수**다: `mirror(−f) == mirror(f)`.
+    ///   · single: 음수 쪽 분기가 없다(0x1401aa177 은 `T ≥ D` 만 본다). T 는 음수인 채로 남고
+    ///             `Playback::sample` 의 `i = clamp(trunc(T/fd), 0, …)`(0x1401705c8)이 0 으로 물린다 —
+    ///             `sampledTRS` 의 `max(0, …)` 클램프와 값이 같으므로 여기선 손대지 않는다.
+    /// 종전 구현은 세 갈래 모두 `truncatingRemainder` 를 그대로 써서 **음수 프레임**을 돌려줬고
+    /// (Swift 의 나머지는 피제수 부호를 따른다), 소비처의 `max(0, …)` 가 그걸 프레임 0 으로 뭉갰다 —
+    /// loop 는 `L + f mod L`, mirror 는 `mirror(|f|)` 여야 한다. f ≥ 0 에서는 값이 종전과 동일하다.
     static func frame(time: Float, fps: Float, length: Int, mode: String) -> Float {
         guard length > 0, fps > 0 else { return 0 }
         let f = time * fps
@@ -238,12 +256,14 @@ public enum PuppetPose {
         // stricmp 동치 — "Mirror"/"SINGLE" 도 WE 는 잡는다.
         switch mode.lowercased() {
         case "mirror":
-            let cycle = f.truncatingRemainder(dividingBy: 2 * L)
+            // 0 에서 반사하므로 우함수 — 부호를 먼저 떨어뜨린다(0x1401aa140 의 `−fmodf(T,D)`).
+            let cycle = abs(f).truncatingRemainder(dividingBy: 2 * L)
             return cycle <= L ? cycle : 2 * L - cycle
         case "single":
             return min(f, L)
         default:  // loop — "clamp" 를 포함해 그 밖의 모든 문자열
-            return f.truncatingRemainder(dividingBy: L)
+            let r = f.truncatingRemainder(dividingBy: L)
+            return r < 0 ? r + L : r   // 0x1401aa064 의 `T += D` 를 닫힌 형태로
         }
     }
 

@@ -19,6 +19,10 @@ final class PuppetHostileInputTests: XCTestCase {
         var fps: Float = 10
         var length: UInt32 = 1
         var boneCountField: UInt32? = nil        // nil = tracks.count
+        /// `blob2` 는 역사적 이름이다 — 이 자리에 실제로 오는 것은 **다음 본 레코드의 trackFlags**
+        /// (엔진 0x140263aa7). 바이트 위치는 같아서 빌더는 그대로 두고 이름만 남겨 둔다.
+        /// 클립 헤더 마지막의 `u32 0` 도 마찬가지로 **본 0 의 trackFlags** 다.
+        /// 정본 프레이밍은 docs/re/skeleton-animation.md §6.
         var tracks: [(size: UInt32?, keys: [[Float]], blob2: UInt32)] = []
     }
 
@@ -156,6 +160,7 @@ final class PuppetHostileInputTests: XCTestCase {
                         bones: [("root", -1, 0, 0)], anims: [a])
         let m = try XCTUnwrap(PuppetModel.parse(d))
         XCTAssertEqual(m.animations.count, 1)
+        guard m.animations.count == 1 else { return }   // 인덱싱이 크래시가 아니라 단언으로 끝나게
         XCTAssertEqual(m.animations[0].lengthFrames, 1000, "헤더 값은 그대로 보존")
         XCTAssertEqual(m.animations[0].tracks[0].count, 2, "실제 키는 2개")
         let mats = PuppetPose.skinMatrices(model: m, animation: 0, time: 99)
@@ -194,8 +199,13 @@ final class PuppetHostileInputTests: XCTestCase {
         XCTAssertEqual(m.vertices.count, 1)
     }
 
-    /// 트랙 꼬리 blob2 크기가 4GB 여도 오프셋이 64비트라 감싸지 않고, 다음 읽기가 nil 로 끝난다.
-    func testHugeTrailingBlobSizeDoesNotWrapOffset() throws {
+    /// **[2026-08-21 재작성]** 트랙 사이의 u32 는 "블롭2 크기" 가 아니라 **다음 본의 trackFlags** 다
+    /// (엔진 `0x140263aa7` 이 이 워드를 r15d 로 읽고, 크기는 그 **다음** u32 다 — `0x140263acb`).
+    /// 종전 이 테스트는 그 워드에 4GB 를 넣고 "부분 트랙 애니는 드롭(0개)" 을 단언했는데, 그건
+    /// Waple 이 크기로 오독하던 시절의 동작을 고정한 것이었다. 엔진은 이 값을 플래그로 읽고 버린다 —
+    /// 트랙 둘 다 살아야 맞는다. (오프셋 산술이 64비트라 감싸지 않는다는 원래 취지는
+    /// `testTrackSizeBeyondEOFDropsAnimation`(진짜 크기 필드) 이 그대로 덮는다.)
+    func testHugeTrackFlagsWordIsIgnoredNotTreatedAsALength() throws {
         var a = Anim()
         a.tracks = [(size: nil, keys: [Self.restKey], blob2: 0xFFFF_FFFF),
                     (size: nil, keys: [Self.restKey], blob2: 0)]
@@ -203,7 +213,8 @@ final class PuppetHostileInputTests: XCTestCase {
         let d = makeMDL(vertices: oneVertex(), indices: [0, 0, 0],
                         bones: [("root", -1, 0, 0), ("arm", 0, 0, 0)], anims: [a])
         let m = try XCTUnwrap(PuppetModel.parse(d))
-        XCTAssertEqual(m.animations.count, 0, "부분 트랙 애니는 드롭")
+        XCTAssertEqual(m.animations.count, 1, "trackFlags 는 길이가 아니다 — 애니가 살아야 한다")
+        XCTAssertEqual(m.animations[0].tracks.count, 2)
         XCTAssertEqual(m.bones.count, 2)
     }
 
@@ -215,7 +226,7 @@ final class PuppetHostileInputTests: XCTestCase {
                         bones: [("root", -1, 0, 0)], anims: [a], animCountField: 0xFFFF_FFFF)
         let m = try XCTUnwrap(PuppetModel.parse(d))
         XCTAssertEqual(m.animations.count, 1, "완료된 1개는 유지, 나머지는 EOF 로 종료")
-        XCTAssertEqual(m.animations[0].name, "real")
+        XCTAssertEqual(m.animations.first?.name, "real")
     }
 
     // MARK: - 범위 밖 인덱스
