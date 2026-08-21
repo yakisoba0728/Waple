@@ -33,6 +33,7 @@
 | 12 | `preset.json` `variants` | **엔진이 안 읽는다** — 에디터 전용(문자열 자체가 없음) | 안 읽음 — 일치 | §7 |
 | 13 | `text.spacing` | 디스크립터 타입 1 = **vec2** | `float(obj["spacing"])` 로 스칼라 파스 | §2 · §12 |
 | 14 | `effects[]` 드롭 | 엔진은 `visible:false` 여도 **붙이고** 렌더에서 게이트 | 파스에서 드롭(스크립트 있는 것만 보존) | §10 |
+| 15 | `objects[].config` | **엔진이 안 읽는다**(`"config"` 조회 사이트 0). `passthrough`/`autosize`/`solidlayer`/`projectlayer`/`instanced` 는 `objects[].image` 가 가리키는 **모델 JSON 루트**의 키다 | `obj["config"]` 를 읽어 같은 플래그를 채운다 — 동봉 4건은 결과가 같지만 **경로가 다르다** | §2.1 정정 |
 
 ---
 
@@ -85,32 +86,109 @@
 
 ### 2.1 공통(모든 타입) 및 팩토리 키
 
+> **[2026-08-21 정정] `npF`/`npO` 열 13개가 틀려 있었다 — 분모가 §1 선언과 달랐다.**
+> `F`/`O` 열은 §1 이 정의한 **186 씬 전수**로 맞게 세어져 있었는데(40행 전건 재현),
+> `npF`/`npO` 열은 **`projects/**` 14개 파일로만** 세어져 있었다. §1 이 선언한 non-preview 는
+> **19개**(= `projects/**` 14 + `assets/scenes/**` 5)다. 빠져 있던 `assets/scenes/**` 중
+> 오브젝트를 가진 것은 `gifs/gifscene.json`(1) · `modeleditor/scene.json`(2) ·
+> `videoplayer/scene.json`(1) 세 파일 4오브젝트고(`particleeditor`·`particleeditor3dscale` 는
+> `objects` 가 비어 있다), 그 4오브젝트가 `origin`·`scale`·`angles`·`id`·`name`·`image`·
+> `visible`·`color`·`light`·`intensity`·`radius`·`locktransforms`·`parallaxDepth` 13개 열을
+> 각각 모자라게 만들고 있었다. **13행 전부 §1 규약대로 다시 세어 고쳤다.**
+>
+> 재현(이 스니펫이 지금 40행 전건과 일치한다 — 하나라도 어긋나면 표가 낡은 것이다):
+>
+> ```python
+> import json, os, collections
+> ROOT = "/home/user/Waple-wallpaper-source/wallpaper_engine"
+> files = sorted(os.path.join(dp, f) for dp, _, fn in os.walk(ROOT) for f in fn
+>                if f in ("scene.json", "gifscene.json"))          # 186개
+> prev = lambda p: any("preview" in s for s in os.path.relpath(p, ROOT).split(os.sep))
+> kf = ko = npf = npo = None
+> kf, ko, npf, npo = (collections.Counter() for _ in range(4))
+> for p in files:                                                   # preview 167 / non-preview 19
+>     d = json.loads(open(p, "rb").read().decode("utf-8-sig")); seen = set(); pv = prev(p)
+>     for o in d.get("objects") or []:
+>         for k in o:
+>             ko[k] += 1; seen.add(k)
+>             if not pv: npo[k] += 1
+>     for k in seen:
+>         kf[k] += 1
+>         if not pv: npf[k] += 1
+> ```
+
 | 키 | F | O | npF | npO | 타입(관측) | 엔진 | Waple |
 |---|---:|---:|---:|---:|---|---|---|
-| `origin` | 184 | 293 | 14 | 90 | str(291) · dict(2) | 디스크립터 `+0x128` vec3 — 등록 `0x1401e05e3` | `SceneDocument.swift:1529`·`1674` 외 |
-| `id` | 182 | 292 | 14 | 91 | int | 직접 `0x14022b01e` | `SceneDocument.swift:1521`·`1526` |
-| `name` | 181 | 291 | 13 | 90 | str | 디스크립터 `+0x1d8` string — `0x1401e11e1` | `SceneDocument.swift:1807` 외 |
-| `scale` | 173 | 254 | 14 | 70 | str | 디스크립터 `+0x134` vec3 — `0x1401e06b4` | `:1531`·`1676` 외 |
-| `angles` | 110 | 174 | 13 | 55 | str(173) · dict(1) | 디스크립터 `+0x140` vec3 — `0x1401e076a`, 전용 주입기 `0x1401df2f0` | `:1530`·`1673`·`2160` 외 |
-| `parallaxDepth` | 88 | 131 | 5 | 32 | str(2성분) | 디스크립터 `+0x170` **vec2** — `0x1401e0840` | `:1801`·`1965`·`2073`·`2790` |
-| `visible` | 46 | 113 | 5 | 58 | bool(104) · dict(9) | 디스크립터 `+0x120` **bit0** — 타입별 등록(§8) | `:1509`·`1510` (`parse` 본문) |
+| `origin` | 184 | 293 | 17 | 94 | str(291) · dict(2) | 디스크립터 `+0x128` vec3 — 등록 `0x1401e05e3` | `SceneDocument.swift:1529`·`1674` 외 |
+| `id` | 182 | 292 | 15 | 93 | int | 직접 `0x14022b01e` | `SceneDocument.swift:1521`·`1526` |
+| `name` | 181 | 291 | 14 | 92 | str | 디스크립터 `+0x1d8` string — `0x1401e11e1` | `SceneDocument.swift:1807` 외 |
+| `scale` | 173 | 254 | 17 | 74 | str | 디스크립터 `+0x134` vec3 — `0x1401e06b4` | `:1531`·`1676` 외 |
+| `angles` | 110 | 174 | 16 | 59 | str(173) · dict(1) | 디스크립터 `+0x140` vec3 — `0x1401e076a`, 전용 주입기 `0x1401df2f0` | `:1530`·`1673`·`2160` 외 |
+| `parallaxDepth` | 88 | 131 | 6 | 34 | str(2성분) | 디스크립터 `+0x170` **vec2** — `0x1401e0840` | `:1801`·`1965`·`2073`·`2790` |
+| `visible` | 46 | 113 | 6 | 60 | bool(104) · dict(9) | 디스크립터 `+0x120` **bit0** — 타입별 등록(§8) | `:1509`·`1510` (`parse` 본문) |
 | `parent` | 1 | 2 | 0 | 0 | int | 직접 `0x1401de4b1`(함수 `0x1401de470`–`0x1401de741`) | `:1532`·`1846` 외 |
 | `dependencies` | 9 | 10 | 0 | 0 | list | 직접 `0x14022afae` · `0x1401ddd8e` | `:1852`·`2247`(보존) |
 | `effects` | 55 | 103 | 4 | 41 | list | 직접 `0x1401e7004`(파서 `0x1401e6f50`–`0x1401e716c`) | `:1802`·`2014`·`2074`·`2191`·`2239` |
 | `instanceoverride` | 91 | 94 | 2 | 5 | dict(61) · null(33) | 직접 `0x14022b42c` | `:2771` → `particleInstanceOverride` `:2851` |
 | `sprite` | 1 | 2 | 1 | 2 | null(2) | 직접 — 팩토리 키 순서 `0x140190304` | `:1953` `parseSprite` |
-| `image` | 118 | 193 | 11 | 67 | str(142) · null(51) | 팩토리 콘텐츠 키 `0x14019029f` | `:1544` |
+| `image` | 118 | 193 | 13 | 69 | str(142) · null(51) | 팩토리 콘텐츠 키 `0x14019029f` | `:1544` |
 | `particle` | 124 | 128 | 5 | 9 | str(123) · null(5) | 팩토리 콘텐츠 키 `0x1401901e9` | `:1554` |
 | `model` | 57 | 66 | 5 | 14 | str(12) · null(54) | 팩토리 콘텐츠 키 `0x14019013c` | `:1573` |
-| `light` | 4 | 6 | 2 | 3 | str | 디스크립터 `+0x2c0` enum — `0x14025e4d7`, 팩토리 키 `0x1401903ba` | `:1576` |
+| `light` | 4 | 6 | 3 | 5 | str | 디스크립터 `+0x2c0` enum — `0x14025e4d7`, 팩토리 키 `0x1401903ba` | `:1576` |
 | `text` | 4 | 5 | 1 | 2 | dict(3) · str(2) | 디스크립터 `+0x450` string — `0x14025a10c`, 팩토리 키 `0x14019034d` | `:1569`·`2137` |
 | `sound` | 1 | 2 | 1 | 2 | list | 직접(팩토리) | `:1499` → `parseSound` `:1910` |
 | `shape` | 3 | 3 | 0 | 0 | str(`"quad"`) | 팩토리 콘텐츠 키 | `:2014` `isEffectQuad` |
-| `config` | 3 | 4 | 0 | 0 | dict | 서브노드 획득 `0x1401fd330` · `passthrough` 판독 `0x1401fae95`(→ `[obj+0x304]` bit5) | `:1862`(보존) |
+| `config` | 3 | 4 | 0 | 0 | dict | **없음 — 유령 키**(아래 정정) | `SceneDocument.parseLayer` 의 `obj["config"]`(보존) |
 | `depth` | 48 | 52 | 0 | 0 | int(51) · float(1) | **없음** | 안 읽음 |
-| `locktransforms` | 24 | 53 | 6 | 33 | bool | **없음** | `:1859`·`2121`·`2198`·`2804` 파스만(소비처 0) |
+| `locktransforms` | 24 | 53 | 7 | 35 | bool | **없음** | `:1859`·`2121`·`2198`·`2804` 파스만(소비처 0) |
 | `particlesrc` | 21 | 21 | 0 | 0 | null(21) | **없음** | 안 읽음 |
 | `solid` | 17 | 37 | 3 | 22 | bool(전건 true) | 디스크립터 `+0x120` bit — `0x1401e1283` | `:1860`·`2122`·`2199`·`2805` |
+
+> **[2026-08-21 정정] `objects[].config` 는 리더 0 인 유령 키다 — 이전 판이 남의 파서를 갖다 붙였다.**
+>
+> 이전 판은 `config` 를 "서브노드 획득 `0x1401fd330` · `passthrough` 판독 `0x1401fae95`" 라고
+> 적었다. **둘 다 `objects[].config` 를 보는 코드가 아니다.**
+>
+> * `0x1401fd330`(=`0x1401fd330`–`0x1401fd3f0`, `primary()`)은 `[this+0x1b0]` 의 JSON 에서
+>   **키 `"image"`**(`0x14048e390`, `lea rdx` @`0x1401fd347`, `operator[]` `0x140086de0`
+>   @`0x1401fd355`)를 찾아 태그 4(string)이면 그 문자열을 `[[this+0xc8]+0x1898]` 서브시스템에
+>   넘겨(`0x1400d3f80` @`0x1401fd390`) 받아 온 텍스트를
+>   **jsoncpp 리더 `0x140017840`**(@`0x1401fd3a0`)로 파싱해 출력 `Json::Value`(`rdx`)에 담는다.
+>   `0x140017840` 이 jsoncpp 인 근거: 그 함수 안에 `collectComments` · `allowComments` ·
+>   `allowTrailingCommas` · `strictRoot` · `allowDroppedNullPlaceholders` · `allowNumericKeys` ·
+>   `allowSingleQuotes` · `stackLimit` · `failIfExtra` · `rejectDupKeys` · `allowSpecialFloats` ·
+>   `skipBom` — `CharReaderBuilder::setDefaults` 의 설정 키가 통째로 들어 있다.
+>   즉 **모델 JSON 로더**지 `config` 서브노드 획득이 아니다.
+>   ([추정] `0x1400d3f80` 자체는 문자열이 0건이라 "파일 읽기" 라고 못 박지는 못한다 —
+>   확정된 것은 **`"image"` 값을 넘겨 받은 텍스트를 JSON 으로 파싱한다**는 데까지다.
+>   그 텍스트가 모델 파일 내용이라는 것은 아래 실물 대조로 뒷받침된다.)
+> * 그 결과를 받는 `0x1401fac50`–`0x1401fb498` 이 `material` · `width` · `height` ·
+>   `fullscreen`(bit1) · `nopadding`(bit2) · `autosize`(bit3) · `passthrough`(bit5) ·
+>   `solidlayer`(bit9) · `projectlayer`(bit10) · `instanced`(bit11) 을 읽어
+>   `[obj+0x304]` 에 OR 한다(`passthrough` 는 `0x1401faeb8` `or dword [rdi+0x304], 0x20`).
+>   **이 키들은 전부 모델 JSON 루트의 키다** — 실물로 `assets/models/util/composelayer.json`
+>   이 `{"material": …, "passthrough": true}` 이다. 설치본 `.json` **2,143개 전수** 중
+>   `passthrough` 를 **키로**(값이 아니라 — `materials/util/passthrough.json` 의
+>   `"shader": "passthrough"` 는 값이다) 가진 파일은 **7개**뿐이고, 그중 4개가
+>   `assets/models/util/{composelayer, composelayer_depthtest, fullscreenlayer, projectlayer}.json`,
+>   나머지 3개가 아래 씬이다.
+> * `objects[].config` 를 이름으로 찾는 코드는 **없다**. `"config\0"` C 문자열은 바이너리
+>   전체에 4곳뿐이고(`0x1404748c9`·`0x140474c14`·`0x140477f47`·`0x14048e4e5`), 그중 셋은
+>   각각 `wallpaperconfig`·`monitorconfig`·`lightconfig` 의 **접미사**다. 독립 문자열
+>   `0x140474c14` 의 begin/end 쌍(`0x140474c14`/`0x140474c1a`)을 쓰는 조회는 `0x140020ee6`
+>   **한 곳**이고, 거기는 `title`/`config`/`selectedwallpapers` 를 읽는 **트레이 재생목록**
+>   코드다(씬 파서 아님). `.text` 안에 `config` 를 만드는 SSO 즉치(`mov` 리터럴)도 **0바이트**다
+>   (함정 10 대비 — 이미지 전체 바이트 스캔으로 확인). UTF-16LE 도 0건.
+>
+> **그래서 무엇이 참인가.** 동봉 4건은 전부 `{"passthrough": true}` 이고, 그 오브젝트는
+> **동시에** `"image": "models/util/composelayer.json"` 을 갖는다 — 그 모델 파일 자체가
+> `passthrough: true` 다. 즉 `objects[].config` 는 에디터가 남긴 **중복 미러**고, 엔진은
+> 모델 파일 쪽만 읽는다. Waple 이 `obj["config"]` 를 읽어 같은 결론에 도달하는 것은 동봉
+> 코퍼스에서는 **결과가 우연히 같지만 경로가 다르다** — 모델 파일에만 `passthrough` 가 있고
+> `objects[].config` 가 없는 워크샵 자산에서 갈린다. Waple 은 모델 루트 파스도 이미 갖고 있다
+> (`SceneDocument.swift` 의 `noPadding = weBool(mj["nopadding"])` 계열, 선언부 주석이 이
+> 함수 범위를 정확히 인용한다). **`config` 는 `depth`·`particlesrc`·`locktransforms` 와 같은
+> 부류(엔진 리더 0)로 옮겨 읽어야 한다.**
 
 ### 2.2 타입별 키 — 등록부 대조
 
@@ -130,14 +208,40 @@
 | 파티클 `instance`(=`instanceoverride`) | `0x14024d940`–`0x14024e96e` | **24** (§5) |
 | 이펙트 | `0x1401efca0`–`0x1401f05fc` | 6 = `visible`·`name` + 메서드 4 |
 | 애니메이션 레이어 | `0x14026c980`–`0x14026d5de` | 18 = 프로퍼티 11 + 메서드 7 |
-| 씬 `general` | `0x140199780`–`0x14019b4d6` | 42 |
+| 씬 `general` | `0x140199780`–`0x14019b4d6` | **47** (전건 프로퍼티 · 아래 정정 참조) |
+
+> **[2026-08-21 정정] 씬 `general` 은 42 가 아니라 47 이다.** 이전 판의 42 는 부록 A.2 덤프
+> 스크립트가 이름 대입을 **`call 0x14000f880` 하나로만** 잡았기 때문이다. 이 함수의 **마지막
+> 5개 항목은 다른 `std::string::assign` 오버로드 `0x14000ddd0` 을 쓴다** — 그래서 통째로
+> 빠졌다. 빠진 5개는 전부 실재하고 **동봉 186 씬 중 69 씬(37%)이 쓴다**:
+>
+> | 키 | 타입 | 멤버 | 이름 대입 VA | 동봉 도달 |
+> |---|---|---|---|---:|
+> | `gravitydirection` | 2 = vec3 | `+0x3e4` | `0x14019b2f3` | 69 |
+> | `gravitystrength` | 4 = float | `+0x3f0` | `0x14019b35c` | 69 |
+> | `windenabled` | 6 = 접근자(bit) | `+0xe0` | `0x14019b3b7` | 69 |
+> | `winddirection` | 2 = vec3 | `+0x3f4` | `0x14019b436` | 69 |
+> | `windstrength` | 4 = float | `+0x400` | `0x14019b498` | 69 |
+>
+> 오프셋이 `0x3e4`(vec3) → `0x3f0` → `0x3f4`(vec3) → `0x400` 으로 **빈틈 없이 이어진다**는 것이
+> 5개가 같은 등록부 소속임을 자체로 증명한다. 형제 문서
+> [`scene-postprocessing.md`](scene-postprocessing.md) 가 같은 5개를 같은 VA 로 독립 확인했고
+> ("키 47개 … 전건 일치"), Waple 도 `SceneDocument.swift:3497`–`3501` 에서 이미 읽는다.
+>
+> **세는 방법(이게 정본이다).** 항목 경계를 이름 대입 호출로 잡으면 오버로드를 놓친다.
+> **프로퍼티 등록 호출 `call 0x14015a000`(= `table[key]` 슬롯 생성) 의 횟수**를 세라 —
+> 범위 `0x140199780`–`0x14019b4d6`(`primary()`/`merged()` 둘 다 이 값, `.pdata` 단편 1개)에서
+> **47회**다. 이 규약은 다른 등록부와도 맞아떨어진다: `IObject` 19개 중 REG 8 = "프로퍼티 8",
+> image 15개 중 REG 12 = "프로퍼티 12", sound 13개 중 REG 9 = "프로퍼티 9",
+> model 9개 중 REG 4, 애니메이션 레이어 18개 중 REG 11 — 전부 위 표의 "프로퍼티 N" 과 같다.
+> `general` 만 REG 47 = 항목 47 이라 **메서드가 하나도 없다**. 검증 스크립트는 부록 A.2.
 
 **image**(`0x1401ee520`)
 
 | 키 | F | O | npF | npO | 관측 타입 | 멤버/타입 | Waple |
 |---|---:|---:|---:|---:|---|---|---|
 | `size` | 57 | 121 | 5 | 57 | str(2성분) | `+0x2f0` vec2 | `:1675` |
-| `color` | 27 | 48 | 5 | 24 | str(47) · dict(1) | `+0x330` vec3 | `:1799` |
+| `color` | 27 | 48 | 6 | 26 | str(47) · dict(1) | `+0x330` vec3 | `:1799` |
 | `alpha` | 15 | 33 | 2 | 19 | float | `+0x33c` float | `:1798` |
 | `brightness` | 11 | 29 | 2 | 19 | float | `+0x340` float | `:1800` |
 | `perspective` | 17 | 37 | 3 | 22 | bool | `+0x120` bit | `:1851` |
@@ -147,7 +251,22 @@
 | `clampuvs` | 6 | 6 | 0 | 0 | bool | `+0x304` bit | `:1856` |
 | `ledsource` | 14 | 34 | 3 | 22 | bool | `+0x304` bit | `:1861` |
 | `colorBlendMode` | 35 | 65 | 4 | 24 | int | `+0x32c` int | `:1842`·`2205` |
-| `alignment` | 12 | 30 | 2 | 19 | str(전건 `"center"`) | `+0x4b1` enum(`0x14021114b`) | `:1849` |
+| `visible` | — | — | — | — | bool/바인딩 | `+0x120` bit(접근자, 타입 6) | 〃 |
+| `alignment`※ | 12 | 30 | 2 | 19 | str(전건 `"center"`) | `+0x4b1` enum(`0x14021114b`) | `:1849` |
+
+> ※ `alignment` 는 **`0x1401ee520` 이 아니라 스크립트 확장 등록부 `0x140211070` 소속**이다
+> (그 등록부의 유일한 프로퍼티 — REG 1). 이전 판은 이 표에 `alignment` 를 넣으면서
+> **`0x1401ee520` 이 실제로 등록하는 `visible` 을 빠뜨렸다**. `0x1401ee520` 의 프로퍼티 12개는
+> `size` `color` `alpha` `brightness` **`visible`** `perspective` `castshadow` `copybackground`
+> `nointerpolation` `clampuvs` `ledsource` `colorBlendMode` 이고, 나머지 3개 항목은 메서드
+> (`getEffect` `getEffectCount` `transformAttachmentToTexture`)다. 부록 A.2 로 재현된다.
+>
+> **이미지 레이어에 `spacing` 은 없다(유령 키).** `"spacing"` C 문자열은 이미지 전체에
+> `0x140491878` **한 곳**뿐이고(UTF-16LE 0건 · `.text` SSO 즉치 0바이트), 그 disp32 참조는
+> **정확히 2건**(`0x140259458` 의 SSO 복사 · `0x1402594e6` 의 `lea rdx`)이며 **둘 다 텍스트
+> 등록부 `0x140258ca0`–`0x14025a713` 안**이다. 텍스트 쪽 등록은 `0x1402594f4`(이름 대입),
+> 타입 1 = vec2, `+0x4f8` — §12 표 5번이 말하는 그것이다. 이미지 레이어 파스는 보존일 뿐
+> 소비처가 0 이다(`SceneDocument.swift` 의 `layer.spacing` 선언부 주석이 같은 근거를 든다).
 
 **text**(`0x140258ca0`) — 동봉 도달이 있는 것만 표에 싣고, 도달 0 인 등록 키는 아래 목록으로 대신한다.
 
@@ -178,8 +297,8 @@
 | 키 | F | O | npF | npO | 관측 | 멤버/타입 | Waple |
 |---|---:|---:|---:|---:|---|---|---|
 | `color` | (공유) | 6 | | 3 | str | `+0x2cc` vec3 | `:2269` |
-| `intensity` | 4 | 6 | 2 | 3 | float | `+0x2e4` float | `:2271` |
-| `radius` | 4 | 6 | 2 | 3 | int(2) · float(4) | `+0x2e8` float | `:2270` |
+| `intensity` | 4 | 6 | 3 | 5 | float | `+0x2e4` float | `:2271` |
+| `radius` | 4 | 6 | 3 | 5 | int(2) · float(4) | `+0x2e8` float | `:2270` |
 | `exponent` | 1 | 1 | 0 | 0 | float | `+0x2ec` float | `:2272` |
 | `density` | 1 | 1 | 0 | 0 | float | `+0x2f8` float | `:2281` |
 | `volumetricsexponent` | 1 | 1 | 0 | 0 | float | `+0x2fc` float | `:2280` |
@@ -892,15 +1011,18 @@ Waple 이 안 읽는 것이 맞다. `instanceoverride.id` 무시도 맞다(§5.3
   (`docs/re/particle-operator-vm.md` 의 `opid 10 controlpointattract` 절). 회전을 쓰는 경로가
   이미터의 방향 기저인지,
   `directiontocontrolpoint` remap 인지 확정 못 했다.
-* **[미해결] `objects[].config` 서브노드의 이름 해석.** `passthrough` 판독(`0x1401fae95`)과
-  그 결과(`[obj+0x304] |= 0x20`)는 확정했으나, 그 노드를 만들어 주는
-  `0x1401fd330` 이 `"config"` 라는 이름을 어디서 얻는지(SSO 리터럴 위치)를 못 찾았다.
-  동봉 도달은 `{"passthrough": true}` 4건뿐이다.
+* **[해소 2026-08-21] `objects[].config` 서브노드의 이름 해석.** 못 찾은 게 아니라 **없었다.**
+  `0x1401fd330` 은 `"config"` 를 안 쓴다 — `"image"` 로 모델 파일을 로드하는 함수다.
+  `passthrough` 판독(`0x1401fae95` → `[obj+0x304] |= 0x20`)은 그 **모델 파일**의 루트 키를
+  읽는 것이다. `objects[].config` 는 엔진 리더 0 인 유령 키다(§2.1 정정 상자에 근거 전부).
 * **[미해결] `sortorder` 정렬의 안정성.** 비교자는 확정했지만
   `0x14019fde0`(≤32 원소) / `0x14018ab91`(대형) 두 경로가 stable sort 인지 확인하지 않았다.
   동봉 도달이 0 이라 실측 대조도 불가능하다.
-* **[미해결] `general` 42개 디스크립터 전수 대조.** 이 문서의 범위는 `objects[]` 라
-  `general` 은 정렬 관련 4개(`transparentsorting`·`customsortorder`·ortho·`spritesheetrefreshsync`)만 다뤘다.
+* **[해소 2026-08-21] `general` 디스크립터 전수 대조.** 개수는 **47**로 확정했다(§2.2 정정 상자 ·
+  부록 A.2). 항목별 타입·오프셋·기본값 전수는 형제 문서
+  [`scene-postprocessing.md`](scene-postprocessing.md) 가 독립적으로 47개 전건 대조해 두었으므로
+  여기서 되풀이하지 않는다. 이 문서의 범위는 여전히 `objects[]` 라
+  `general` 은 정렬 관련 4개(`transparentsorting`·`customsortorder`·ortho·`spritesheetrefreshsync`)만 다룬다.
 * **동봉 코퍼스의 한계.** 계층 깊이 최대 2 · `parent` 2건 · `sortorder` 0건 · `customsortorder` 0건이라
   **계층 합성과 정렬은 실측 대조가 사실상 불가능하다.** §4.4 · §9 의 결론은 바이너리 단독 근거다.
 
@@ -939,18 +1061,29 @@ PY
 
 **A.2 디스크립터 등록부 덤프**
 
-규약: `call 0x14000f880`(디스크립터 이름 문자열 대입)을 **항목 경계**로 잡고,
-그 직전 마지막 `lea rdx,[rip+…]` 를 이름으로, 그 뒤의
-`[rbx+0x30]`(타입) · `[rbx+0x34]`(멤버 오프셋) · `[rbx+0x38/0x48/0x50/0x58]`(접근자)을 필드로 읽는다.
+규약: **이름 문자열 대입 호출**을 항목 경계로 잡고, 그 직전 마지막 `lea rdx,[rip+…]` 를
+이름으로, 그 뒤의 `[rbx+0x30]`(타입) · `[rbx+0x34]`(멤버 오프셋) ·
+`[rbx+0x38/0x48/0x50/0x58]`(접근자)을 필드로 읽는다.
 **`mov rbx,[rbp-0x30]` 을 경계로 삼으면 안 된다** — §5.2 에서 설명한 이름 `lea` 선-적재 때문에
 한 칸 밀린다.
 
+> **[2026-08-21 정정 — 이전 판이 씬 `general` 을 5개 놓친 원인]**
+> 이름 대입 오버로드는 **둘**이다: `0x14000f880` 과 `0x14000ddd0`. 이전 판 스크립트는 앞의
+> 하나만 `ASSIGN` 으로 잡아서, `0x14000ddd0` 을 쓰는 항목을 **경계로 인식하지 못하고 직전
+> 항목에 흡수**시켰다. 그 결과 (a) 항목 수가 5 모자라고(42 vs 47), (b) 마지막으로 남은 항목
+> `cameraparallaxmouseinfluence` 의 멤버 오프셋이 뒤 항목들의 스토어에 오염돼
+> `+0x33c` 대신 `+0x400` 으로 찍혔다. 아래 판은 두 오버로드를 다 잡고, 각 필드는 **블록 안
+> 첫 스토어만** 채택한다(오염 방지). **개수 판정은 등록 호출 `0x14015a000` 을 세는 쪽이
+> 더 튼튼하다** — 이름 대입 오버로드가 또 늘어도 흔들리지 않고, 프로퍼티만 세므로
+> "프로퍼티 N + 메서드 M" 의 N 을 직접 준다.
+
 ```python
-import sys, re; sys.path.insert(0, "<scratchpad>")
+import sys, re, collections; sys.path.insert(0, "<scratchpad>")
 from wpe import pe, DATA, merged
 import capstone
 md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
-ASSIGN = 0x14000f880
+ASSIGN = (0x14000f880, 0x14000ddd0)   # std::string::assign 오버로드 둘 다
+REG    = 0x14015a000                  # 프로퍼티 등록(= table[key] 슬롯 생성)
 
 def strat(va, n=64):
     o = pe.va2off(va)
@@ -961,31 +1094,56 @@ def strat(va, n=64):
 def dump(fva):
     lo, hi = merged(fva)[:2]
     code = DATA[pe.va2off(lo):pe.va2off(lo)+(hi-lo)]
-    cur = None; lastlea = None; regs = {}
+    cur = None; lastlea = None; regs = {}; out = []; nreg = 0
     for ins in md.disasm(code, lo):
         m = re.match(r"(\w+), \[rip ([+-]) (0x[0-9a-f]+)\]$", ins.op_str)
         if ins.mnemonic == "lea" and m:
             t = ins.address + ins.size + int(m.group(3), 16) * (1 if m.group(2) == "+" else -1)
             regs[m.group(1)] = t
             if m.group(1) == "rdx" and strat(t): lastlea = strat(t)
-        if ins.mnemonic == "call" and ins.op_str.startswith("0x") and int(ins.op_str, 16) == ASSIGN:
-            if cur: print(cur)
-            cur = {"name": lastlea}; continue
+        if ins.mnemonic == "call" and ins.op_str.startswith("0x"):
+            t = int(ins.op_str, 16)
+            if t in ASSIGN:
+                if cur: out.append(cur)
+                cur = {"name": lastlea, "at": hex(ins.address)}; continue
+            if t == REG: nreg += 1
         if cur is None: continue
         m = re.match(r"dword ptr \[rbx \+ (0x[0-9a-f]+)\], (0x[0-9a-f]+|\d+)$", ins.op_str)
-        if ins.mnemonic == "mov" and m:
-            cur["f%s" % m.group(1)] = int(m.group(2), 0)
+        if ins.mnemonic == "mov" and m and ("f%s" % m.group(1)) not in cur:
+            cur["f%s" % m.group(1)] = int(m.group(2), 0)          # 블록 안 첫 스토어만
         m = re.match(r"qword ptr \[rbx \+ (0x[0-9a-f]+)\], (\w+)$", ins.op_str)
-        if ins.mnemonic == "mov" and m:
+        if ins.mnemonic == "mov" and m and ("p%s" % m.group(1)) not in cur:
             cur["p%s" % m.group(1)] = hex(regs.get(m.group(2), 0))
-    if cur: print(cur)
+    if cur: out.append(cur)
+    print("  범위 %#x-%#x  항목 %d  프로퍼티(REG) %d" % (lo, hi, len(out), nreg))
+    for e in out: print("   ", e)
 
 for f in (0x14024d940, 0x1401e0530, 0x140199780, 0x1401ee520,
           0x140258ca0, 0x14025da80, 0x1401f7090, 0x140227470,
           0x1401f3460, 0x14024cb00, 0x1401efca0, 0x14026c980, 0x140211070):
     print("=====", hex(f)); dump(f)
 ```
-→ `0x14024d940` 24개 · `0x1401e0530` 19개 · `0x140199780` 42개 (§2.2 표).
+
+기대 출력(항목 / REG):
+
+| 등록부 | 항목 | REG(=프로퍼티) |
+|---|---:|---:|
+| `0x14024d940` instance | 24 | 24 |
+| `0x1401e0530` IObject | 19 | 8 |
+| `0x140199780` **general** | **47** | **47** |
+| `0x1401ee520` image | 15 | 12 |
+| `0x140258ca0` text | 29 | 29 |
+| `0x14025da80` light | 18 | 18 |
+| `0x1401f7090` sound | 13 | 9 |
+| `0x140227470` model | 9 | 4 |
+| `0x1401f3460` camera | 4 | 4 |
+| `0x14024cb00` particle | 7 | 2 |
+| `0x1401efca0` effect | 6 | 2 |
+| `0x14026c980` anim layer | 18 | 11 |
+| `0x140211070` image 스크립트확장 | 24 | 1 |
+
+REG 열이 §2.2 표의 "프로퍼티 N" 과 **13개 등록부 전건 일치**한다 — 이게 이 규약이 맞다는
+자체 검증이다.
 
 **A.3 회전 규약 확인**
 

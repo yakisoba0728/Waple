@@ -121,8 +121,23 @@ void main() {
 
 **`"sprite"` 는 에디터 UI 에 노출되지 않는다.** `locale/ui_en-us.json` 의
 `ui_editor_properties_sprite` 는 "sprite **sheet**" 체크박스이고(`ui/dist/scripts/scripts.js`),
-동봉 씬 JSON 1,698건 중 `sprite` **오브젝트**를 쓰는 것은 0건이다. 즉 저작 도구가 안 만드는
-내부/레거시 타입이다.
+동봉 씬 JSON **172건**(`Sources/WapleRender/Resources/WEAssets/**/{scene,gifscene}.json`) 중
+`sprite` **오브젝트**를 쓰는 것은 0건이다.
+
+> **[2026-08-21 정정] 두 가지를 고친다.**
+> 1. **분모가 틀렸다.** 이전 판은 "동봉 씬 JSON **1,698건**" 이라 적었는데, 1,698 은
+>    `WEAssets` 아래 **`.json` 전체** 수(머티리얼·이펙트·프리셋 포함)다. 그중 씬 문서
+>    (`scene.json`+`gifscene.json`)는 **172건**이다. 빈도수에는 반드시 맞는 범위 라벨을 붙여야
+>    한다 — 분모가 10배 부풀면 "0건" 의 무게가 실제보다 커 보인다.
+> 2. **"저작 도구가 안 만든다" 는 과했다.** 동봉 트리는 설치본 `assets/` 만 비추는데,
+>    **설치본 전체 씬 186건**으로 넓히면 `projects/defaultprojects/arsenal/scene.json` 이
+>    `sprite` 오브젝트를 **2개** 갖고 있다(둘 다 `name: ""`). 즉 WE 가 **출하하는 기본
+>    프로젝트에 실제로 들어 있다.** 형제 문서
+>    [`scene-object-model.md`](scene-object-model.md) §2.1 의 `sprite` 행(F=1 · O=2)이 같은 값이다.
+>
+> 그래서 정확한 문장은 이것이다: **동봉(`assets/`) 도달 0 · 설치본 도달 1파일 2오브젝트.**
+> 에디터 UI 에 노출되지 않는다는 결론 자체는 유지된다(로케일·UI 스크립트 근거는 그대로).
+> 다만 "레거시라 무시해도 된다" 로 읽지 마라 — 출하 프로젝트가 쓴다.
 
 ---
 
