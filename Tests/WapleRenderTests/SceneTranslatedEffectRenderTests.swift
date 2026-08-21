@@ -234,12 +234,23 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
     /// 규약 전문은 `EffectManifest.FBO.fittedBox`). 이 테스트는 종전에 **정사각을 못 박고 있었고**
     /// 그게 옛(틀린) 규약이었다.
     ///
-    /// dst 는 64×36(테스트 캡처 해상도)이므로 `fit:32` 는
+    /// **base 는 캡처 해상도가 아니라 레이어 텍스처 크기다.** 이펙트 체인의 dst 는
+    /// `pooledOffscreen(layer.texWidth, layer.texHeight)`(FrameEncoder:1935)이고
+    /// `baseW/baseH = dst.width/height`(FrameEncoder:2006)다. `layer.texWidth` 는
+    /// `effW`(= 프레임버퍼 레이어면 프로젝션, 아니면 **자산 텍스처 폭**)라
+    /// `solidTex` 의 기본값 8×8 을 그대로 쓰면 `fit:32` 가 **확대 금지**에 걸려 8×8 이 된다
+    /// (그래서 이 테스트는 텍스처를 64×36 으로 만든다 — 첫 수정에서 이걸 놓쳐 한 번 더 빨갰다).
+    ///
+    /// base 64×36 에서 `fit:32` 는
     ///   w0,h0 = (64, 36) · 긴 변 = w · fittedMajor = min(32, 64) = 32
-    ///   fittedMinor = trunc(36/64 × 32) = trunc(18.0) = 18
+    ///   fittedMinor = trunc(Float(36)/Float(64) × Float(32)) = trunc(18.0) = 18
     /// 즉 **32×18** 이다. 프로브는 x·y 를 따로 본다 — y 까지 32 를 요구하면 정사각 규약으로
     /// 되돌아간 것이고, 반대로 (64,36)이 나오면 `fit` 이 통째로 무시돼 scale 기본값 1 로
-    /// 낙하한 것이다(옛 회귀). 두 실패를 메시지로 갈라 놓았다.
+    /// 낙하한 것이다(옛 회귀). 둘 다 8 이면 base 가 다시 자산 텍스처 기본값으로 돌아간 것이다.
+    ///
+    /// **[미해결]** Waple 의 base(레이어 텍스처/프로젝션)가 원본의 "이펙트 dst 서피스"
+    /// (`[vtable+0x128]` @`0x1401ea5b1`)와 같은 값인지는 `990aa2a` 가 미해결로 남긴 별건이다.
+    /// 이 테스트는 **Waple 의 base 정의를 못 박을 뿐** 그 동치성을 주장하지 않는다.
     ///
     /// 프레임 시점의 `g_Texture0Resolution` 은 `runtimeTexRes`(FrameEncoder:69)가 **실제 할당된
     /// 텍스처 치수**로 덮으므로, 이 프로브는 빌드 시점 `texRes` 가 아니라 **진짜 FBO 크기**를 본다.
@@ -285,7 +296,8 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
             ("scene.json", scene.data(using: .utf8)!),
             ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
             ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
-            ("materials/w.tex", solidTex(255, 255, 255)),
+            // 64×36 — base 가 이 텍스처 크기다(위 주석). 기본값 8×8 이면 확대 금지로 8×8 이 된다.
+            ("materials/w.tex", solidTex(255, 255, 255, w: 64, h: 36)),
             ("effects/fittest/effect.json", effectJSON.data(using: .utf8)!),
             ("materials/effects/fit_fill.json", #"{"passes":[{"shader":"effects/fit_fill"}]}"#.data(using: .utf8)!),
             ("materials/effects/fit_probe.json", #"{"passes":[{"shader":"effects/fit_probe"}]}"#.data(using: .utf8)!),
@@ -308,7 +320,8 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertGreaterThan(c.redComponent, 0.9,
                              "긴 변이 32 가 아니다 — fit 이 무시돼 scale 폴백(dst 64)으로 떨어졌을 때 나는 모양")
         XCTAssertGreaterThan(c.greenComponent, 0.9,
-                             "짧은 변이 18 이 아니다 — 정사각(32×32) 옛 규약으로 되돌아갔거나 dst(36)가 그대로 실렸다")
+                             "짧은 변이 18 이 아니다 — 정사각(32×32) 옛 규약으로 되돌아갔거나 dst(36)가 그대로 실렸다. "
+                             + "둘 다 0 이면 base 가 레이어 텍스처가 아닌 값으로 바뀐 것이다(8×8 자산 기본값 등)")
     }
 
     /// X-⑦: constantshadervalues 의 {animation:{...}} 키프레임(55씬/287건) — 종전엔 파스 자체가
