@@ -1259,7 +1259,10 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertTrue(layer.copyBackground)
         XCTAssertTrue(layer.clampUVs)
         XCTAssertTrue(layer.noInterpolation)
-        XCTAssertEqual(try XCTUnwrap(layer.spacing), Float(2.5), accuracy: Float(1e-4))
+        // spacing 은 vec2 다(WE 텍스트 디스크립터 0x1402594f4, 타입 1 `+0x4f8`). 숫자 저작은
+        // 실물 vec2 주입기 0x1401a3fc0 가 **두 성분에 브로드캐스트**한다(0x1401a40a4–0x1401a40aa).
+        XCTAssertEqual(try XCTUnwrap(layer.spacing).x, Float(2.5), accuracy: Float(1e-4))
+        XCTAssertEqual(try XCTUnwrap(layer.spacing).y, Float(2.5), accuracy: Float(1e-4))
         XCTAssertTrue(layer.lockTransforms)
         XCTAssertTrue(layer.isSolid)
         XCTAssertTrue(layer.ledSource)
@@ -1299,7 +1302,8 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertTrue(t.copyBackground)
         XCTAssertTrue(t.clampUVs)
         XCTAssertTrue(t.noInterpolation)
-        XCTAssertEqual(try XCTUnwrap(t.spacing), Float(1.5), accuracy: Float(1e-4))
+        XCTAssertEqual(try XCTUnwrap(t.spacing).x, Float(1.5), accuracy: Float(1e-4))
+        XCTAssertEqual(try XCTUnwrap(t.spacing).y, Float(1.5), accuracy: Float(1e-4))   // 숫자 → 브로드캐스트
         XCTAssertTrue(t.lockTransforms)
         XCTAssertTrue(t.isSolid)
     }
