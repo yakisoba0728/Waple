@@ -251,6 +251,50 @@
     "0x1401e7590": {
      "bytes": "83e00e",
      "meaning": "`and eax, 0xe` — HDR 이면 enum 14(rgba16161616f), 아니면 0"
+    },
+    "0x1400c0ca0": {
+     "bytes": "488bf9",
+     "meaning": "`mov rdi, rcx` — 이 뒤 `[rdi+…]` 오프셋이 곧 객체 오프셋이다"
+    },
+    "0x1400c0d59": {
+     "bytes": "c787ec0000000000803e",
+     "meaning": "`mov [rdi+0xEC], 0x3E800000` — exponent 0.25"
+    },
+    "0x1400c0d63": {
+     "bytes": "c787f00000008941003f",
+     "meaning": "`mov [rdi+0xF0], 0x3F004189` — tiltC 0.50099999"
+    },
+    "0x1400c0d6d": {
+     "bytes": "c787f40000000000f041",
+     "meaning": "`mov [rdi+0xF4], 0x41F00000` — fftLengthFactor 30.0"
+    },
+    "0x1400c0d77": {
+     "bytes": "48c787f800000000002041",
+     "meaning": "`mov [rdi+0xF8], 0x41200000` — binCountFactor 10.0"
+    },
+    "0x1400d1491": {
+     "bytes": "f3450f5ed4",
+     "meaning": "`divss xmm10, xmm12` — binCountFactor / fftLengthFactor = 10/30"
+    },
+    "0x1400d1496": {
+     "bytes": "f3450f59d3",
+     "meaning": "`mulss xmm10, xmm11` — (10/30) × N"
+    },
+    "0x1400d149b": {
+     "bytes": "f3450f5cda",
+     "meaning": "`subss xmm11, xmm10` — N − (10/30)×N, **부동소수 뺄셈이 먼저**"
+    },
+    "0x1400d14a0": {
+     "bytes": "f3410f2cfb",
+     "meaning": "`cvttss2si edi, xmm11` — 절삭은 **차**에 걸린다: W = int(N − (10/30)N)"
+    },
+    "0x1400d141d": {
+     "bytes": "41c704970000fe42",
+     "meaning": "`mov [r15+rdx*4], 0x42FE0000` — 패딩 실수부 **127.0**"
+    },
+    "0x1400d1425": {
+     "bytes": "41c7448f040402013c",
+     "meaning": "`mov [r15+rcx*4+4], 0x3C010204` — 패딩 허수부 **1/127**"
     }
    },
    "status": "확정",
@@ -271,22 +315,22 @@
     "exponent": {
      "value": 0.25,
      "site": "0x1400c0d59",
-     "why": "AudioProcessor+0xE4 — 밴드 매핑 지수"
+     "why": "AudioProcessor+0xEC — 밴드 매핑 지수"
     },
     "tiltC": {
      "value": 0.5009999871253967,
      "site": "0x1400c0d63",
-     "why": "AudioProcessor+0xE8 — 스펙트럴 틸트 상수"
+     "why": "AudioProcessor+0xF0 — 스펙트럴 틸트 상수"
     },
     "fftLengthFactor": {
      "value": 30.0,
      "site": "0x1400c0d6d",
-     "why": "AudioProcessor+0xEC — FFT 길이 계수"
+     "why": "AudioProcessor+0xF4 — FFT 길이 계수"
     },
     "binCountFactor": {
      "value": 10.0,
      "site": "0x1400c0d77",
-     "why": "AudioProcessor+0xF0 — 사용 빈 개수 계수"
+     "why": "AudioProcessor+0xF8 — 사용 빈 개수 계수"
     }
    },
    "status": "확정",
@@ -308,10 +352,11 @@
   {
    "id": "engine.audio.pipeline",
    "value": {
-    "fftLength": "N = int(max(rate/44100, 1) × 64 × 30)  — 44.1kHz 에서 1920",
+    "fftLength": "N = int(max(rate/44100, 1) × 64 × 30)  — 44.1kHz 에서 1920, 48kHz 에서 2089. 실무 레이트에서 **2의 거듭제곱이 아니다**",
     "binCount": "B = int(64 × 10) = 640, 샘플레이트 무관 고정",
-    "window": "N − int(N × 10/30), 오버랩 없음, 나머지는 제로패딩 — 1920 → 1280",
-    "design": "N 을 레이트에 비례시키고 B 를 고정해 **빈 폭 ≈22.97 Hz · 상한 ≈14677 Hz** 를 고정한다",
+    "window": "W = int(N − (10/30)×N) — **절삭이 차에 걸린다**(몫을 절삭하는 게 아니다). 오버랩 없음. 1920 → 1280(두 해석이 같음), 2089 → 1392(다름: 몫 절삭이면 1393). [정정 2026-08-21] 종전 표기 `N − int(N × 10/30)` 은 44.1kHz 에서만 우연히 맞았다",
+    "padding": "**제로패딩이 아니다.** 창 밖 [W,N) 을 실수부 127.0 · 허수부 1/127 로 채운다 (0x1400D141D / 0x1400D1425). 상수항은 bin 0 에만 떨어지므로 소비 빈에서는 0 패딩과 등가다. [정정 2026-08-21] 종전 표기 `나머지는 제로패딩` 은 틀렸다",
+    "design": "N 을 레이트에 비례시키고 B 를 고정해 **44.1kHz 이상에서** 빈 폭 ≈22.97 Hz · 상한 ≈14677 Hz 를 고정한다. **44.1kHz 미만에서는 고정되지 않는다** — `max(rate/44100, 1)` 이 1 로 잘려 N=1920 이 되므로 상한이 639 × rate/1920 로 레이트를 따라 내려간다(32kHz → ≈10650 Hz). [정정 2026-08-21] 종전 표기는 상한이 무조건 고정인 것처럼 읽혔다",
     "timeWindow": "없음(사각창). 샘플별 곱셈은 상수 127 하나뿐",
     "bandMapping": "band(i) = min(int(powf((i−1)/(B−1), 0.25) × 64) % 64, prev+1), i = 1..B−1",
     "oneToOneBands": "하위 29밴드가 빈 1:1 — 별도 선형 구간이 아니라 prev+1 클램프의 결과",
@@ -332,8 +377,12 @@
      "ref": "밴드 매핑 0x1400d1c7a-0x1400d1cc7 · 틸트 0x1400d1cb0-0x1400d1cee · 게인 0x1400d1d2c-0x1400d1d70"
     },
     {
+     "kind": "binary",
+     "ref": "창 길이 0x1400d1491-0x1400d14a0(divss/mulss/subss/cvttss2si) · 패딩 0x1400d141d/0x1400d1425 — 둘 다 위 instructionAnchors 에서 원시 바이트로 확정 재현한다"
+    },
+    {
      "kind": "doc",
-     "ref": "상수 넷과 `maxss` 는 위 두 항목에서 확정으로 재현했다. 수식 자체는 명령 흐름 해석이라 이 스크립트가 재현하지 않으므로 보고로 둔다."
+     "ref": "상수 넷과 `maxss`, 그리고 창 길이·패딩 명령은 위 두 항목에서 확정으로 재현했다. 밴드 매핑·틸트·게인 수식은 명령 흐름 해석이라 이 스크립트가 재현하지 않으므로 항목 전체는 보고로 둔다."
     }
    ]
   },
