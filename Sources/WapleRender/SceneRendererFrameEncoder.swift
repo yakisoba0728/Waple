@@ -1143,7 +1143,7 @@ extension SceneRenderer {
                 origin: v3(l.origin), scale: v3(l.scale), angles: v3(l.angles) });
         })(\(index))
         """), v.isString, let data = v.toString().data(using: .utf8),
-              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+              let dict = AssetJSON.dictionary(data) else { return nil }
         var rb = ScriptLayerReadBack()
         rb.visible = dict["visible"] as? Bool
         rb.alpha = (dict["alpha"] as? NSNumber)?.floatValue

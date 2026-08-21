@@ -133,7 +133,7 @@ public enum WallpaperProperties {
     public static func parse(folderURL: URL) throws -> [WallpaperProperty] {
         let url = folderURL.appendingPathComponent("project.json")
         guard let data = try? Data(contentsOf: url) else { throw ProjectParseError.fileNotFound }
-        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+        guard let obj = AssetJSON.dictionary(data) else {
             throw ProjectParseError.invalidJSON
         }
         let generalObject = obj["general"] as? [String: Any]

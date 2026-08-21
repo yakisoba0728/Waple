@@ -248,46 +248,7 @@ public struct EffectManifest: Equatable {
     /// 경로 그대로라 무회귀이고, 관용은 딱 두 가지(줄 주석 · 트레일링 콤마)로 제한한다.
     /// 스캐너는 문자열 리터럴 안을 절대 건드리지 않는다(이스케이프 처리 포함) — `{"a":"x,]"}`
     /// 같은 값이 깨지면 안 된다.
-    static func relaxedJSON(_ data: Data) -> Data? {
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
-        var out = String(); out.reserveCapacity(text.count)
-        var inString = false
-        var i = text.startIndex
-        while i < text.endIndex {
-            let c = text[i]
-            if inString {
-                out.append(c)
-                if c == "\\" {
-                    let next = text.index(after: i)
-                    if next < text.endIndex { out.append(text[next]); i = text.index(after: next); continue }
-                } else if c == "\"" {
-                    inString = false
-                }
-                i = text.index(after: i); continue
-            }
-            if c == "\"" { inString = true; out.append(c); i = text.index(after: i); continue }
-            // 줄 주석: `//` 부터 개행 전까지 버린다(개행은 남긴다 — 줄 번호 보존).
-            if c == "/" {
-                let next = text.index(after: i)
-                if next < text.endIndex, text[next] == "/" {
-                    while i < text.endIndex, text[i] != "\n" { i = text.index(after: i) }
-                    continue
-                }
-            }
-            // 트레일링 콤마: `,` 뒤 공백만 지나 `]`/`}` 가 오면 그 콤마를 버린다.
-            if c == "," {
-                var j = text.index(after: i)
-                while j < text.endIndex, text[j] == " " || text[j] == "\t" || text[j] == "\r" || text[j] == "\n" {
-                    j = text.index(after: j)
-                }
-                if j < text.endIndex, text[j] == "]" || text[j] == "}" {
-                    i = text.index(after: i); continue
-                }
-            }
-            out.append(c); i = text.index(after: i)
-        }
-        return out.data(using: .utf8)
-    }
+    static func relaxedJSON(_ data: Data) -> Data? { AssetJSON.relaxed(data) }
 
     public static func parse(_ data: Data) -> EffectManifest? {
         if let strict = parseStrict(data) { return strict }

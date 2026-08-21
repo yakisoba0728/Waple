@@ -971,7 +971,7 @@ extension SceneDocument {
         // 호출자가 이름을 주지 않으면 종전 관례 순서로 폴백한다(무회귀).
         let sceneCandidates: [String] = [sceneFileName, "scene.json", "gifscene.json"].compactMap { $0 }
         guard let sceneData = sceneCandidates.compactMap({ package.data(for: $0) }).first,
-              var scene = (try? JSONSerialization.jsonObject(with: sceneData)) as? [String: Any] else {
+              var scene = AssetJSON.dictionary(sceneData) else {
             throw SceneDocumentError.noScene
         }
         if !userProps.isEmpty {
@@ -1263,12 +1263,12 @@ extension SceneDocument {
             return assets?(name)
         }
         if let md = layerJSONData(imagePath),
-           let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
+           let mj = AssetJSON.dictionary(md) {
             puppetPath = mj["puppet"] as? String
             cropOffset = vec2(mj["cropoffset"])
             if let matPath = mj["material"] as? String {
                 if let matD = layerJSONData(matPath),
-                   let matJ = (try? JSONSerialization.jsonObject(with: matD)) as? [String: Any],
+                   let matJ = AssetJSON.dictionary(matD),
                    let p0 = (matJ["passes"] as? [Any])?.first as? [String: Any] {
                     let matResult: MaterialPassResult = parseMaterialPassProperties(p0, userProps: userProps)
                     blendMode = matResult.blendMode
@@ -2153,10 +2153,10 @@ extension SceneDocument {
         }
 
         guard let modelData = requiredData(imagePath),
-              let model = (try? JSONSerialization.jsonObject(with: modelData)) as? [String: Any],
+              let model = AssetJSON.dictionary(modelData),
               let materialPath = model["material"] as? String,
               let materialData = requiredData(materialPath),
-              let material = (try? JSONSerialization.jsonObject(with: materialData)) as? [String: Any],
+              let material = AssetJSON.dictionary(materialData),
               let passes = material["passes"] as? [Any],
               let pass0 = passes.first as? [String: Any] else {
             WapleLog.warn("[Waple] image layer texture resolve failed: \(imagePath)")
@@ -2271,12 +2271,12 @@ extension SceneDocument {
         // base-assets 에만 있는 파티클 json/머티리얼은 씬에서 통째 드롭됐다.
         func assetData(_ name: String) -> Data? { package.data(for: name) ?? assets?(name) }
         guard let pData = assetData(path),
-              let pjson = (try? JSONSerialization.jsonObject(with: pData)) as? [String: Any] else {
+              let pjson = AssetJSON.dictionary(pData) else {
             return nil
         }
         var material: ParticleMaterial? = nil
         if let matPath = pjson["material"] as? String, let mData = assetData(matPath),
-           let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any] {
+           let mjson = AssetJSON.dictionary(mData) {
             material = ParticleMaterial.parse(mjson, userProps: userProps)
         }
         return ParticleSystemDef.parse(pjson, material: material, instanceOverride: instanceOverride) { childPath in

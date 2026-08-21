@@ -15,7 +15,7 @@ public enum ProjectJSONParser {
     }
 
     public static func parse(data: Data, folderURL: URL) throws -> WallpaperProject {
-        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+        guard let obj = AssetJSON.dictionary(data) else {
             throw ProjectParseError.invalidJSON
         }
         return parse(json: obj, folderURL: folderURL)

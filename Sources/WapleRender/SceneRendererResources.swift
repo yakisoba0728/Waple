@@ -840,7 +840,7 @@ extension SceneRenderer {
         var matTextures: [String?] = []
         if shaderName == nil, let matPath = mp.material,
            let mData = effectScopedData(matPath, root: root, package: package),
-           let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any],
+           let mjson = AssetJSON.dictionary(mData),
            let mp0 = (mjson["passes"] as? [Any])?.first as? [String: Any] {
             shaderName = mp0["shader"] as? String
             for (k, v) in (mp0["combos"] as? [String: Any]) ?? [:] {
@@ -923,7 +923,7 @@ extension SceneRenderer {
         for c in texCandidates where effectScopedData(c, root: root, package: package) != nil { return nil }
         for c in texCandidates {
             guard let d = effectScopedData(String(c.dropLast(4)) + ".tex-json", root: root, package: package),
-                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  let obj = AssetJSON.dictionary(d),
                   let fmt = obj["format"] as? String else { continue }
             return Self.texJSONFormatCodes[fmt.lowercased()]
         }
@@ -1231,7 +1231,7 @@ extension SceneRenderer {
         guard textureEntryName.hasSuffix(".tex") else { return .none }
         let jsonName = String(textureEntryName.dropLast(4)) + ".json"
         guard let d = quietAssetData(jsonName, package: package),
-              let m = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+              let m = AssetJSON.dictionary(d),
               let passes = m["passes"] as? [Any],
               let p0 = passes.first as? [String: Any],
               let userTextures = p0["usertextures"] as? [Any] else { return .none }
