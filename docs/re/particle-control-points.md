@@ -96,6 +96,22 @@
 **실효 0** 일 가능성이 높지만 전수 반증은 못 했다. (씬 쪽 `controlpointangleN` 은 §2.2 로
 **확실히 살아 있다** — 그쪽은 다른 함수가 `+0x80..0xaf` 를 직접 쓴다.)
 
+> **[해소 2026-08-21 · 레인 BJ — 부분]** 그물을 좁혔다(전수 반증은 여전히 못 했다).
+> ① **생성자를 다시 떠서 재확인했다.** `0x14022c3c0`–`0x14022cf93` 의 CP 루프
+> (`0x14022cdc0`–`0x14022cf55`)가 디스크립터에서 읽는 명령은 **다섯 개뿐**이다 —
+> `+0xbc`(`0x14022cddc`) · `+0xc0`(`0x14022cdec`) · `+0xc4/0xc8/0xcc`
+> (`0x14022cea9`/`0x14022ceb9`/`0x14022cec9`). `angles` 자리(생성자 공간 `+0xd0+32i`)는 없다.
+> ② **디스크립터를 읽으려면 스트라이드 `0x20` 인덱싱이 필요하다.** 이미지 전체를 바이트로
+> 훑어 `REX.W shl reg, 5`(`48/49 C1 E0..E7 05`) **424자리 / 139함수**, `imul reg, reg, 0x20`
+> **0자리**를 뽑았고, 그중 CP 디스크립터 베이스를 쓰는 함수는 **셋뿐**이다 —
+> 파서(`0x1401d0593` · `0x1401d0868`)와 생성자(`0x14022cdd8`). 파서의 두 번째 자리는
+> `angles` 가 아니라 **bit16 표시**다(§12.3).
+> ③ **남은 구멍**: 8슬롯을 언롤한 상수 오프셋 접근(`[X+0xd0]`, `[X+0xf0]`, …)은 이 그물에
+> 안 걸린다. 그래서 `[미해결]` 을 지우지 않는다.
+> ④ **정정**: 위 본문은 생성자가 `+0x80/+0x90/+0xa0` **세 행**에 항등을 넣는다고 적었는데,
+> 실제로는 **네 행**이다 — `0x14022ce42`(+0x80) · `0x14022ce59`(+0x90) · `0x14022ce68`(+0xa0) ·
+> `0x14022ce82`(**+0xb0**). 그래서 base 의 `+0xbc` 는 항등에서 온 `1.0` 이다.
+
 ### 2.2 씬 `instanceoverride.controlpointN` / `controlpointangleN` — `0x14022bd40`
 
 **[확정] 등록부.** 정적 초기화자 `0x14024d940`–`0x14024e96e` 가 **24개** 프로퍼티를
@@ -537,6 +553,27 @@ bit4 는 위처럼 걸린다 — 두 `flags` 는 다른 필드다.
 (`0x14022a765` → `0x14022a81d` 는 `ecx` 만 증가). 즉 막힌 슬롯에서 배정이 **정체**한다.
 의도인지 버그인지 판단 못 했다(동봉 도달 0 — §8).
 
+> **[해소 2026-08-21 · 레인 BJ — 도달 정정 + 동작 확정. 의도는 여전히 미상]**
+> **"동봉 도달 0" 이 틀렸다. 실제 도달은 동봉 2파일 / 설치본 2파일이다.**
+> 자식 링크 `flags & 1` 이 선 4링크를 전부 펼쳐 자식 파티클의 CP `flags` 를 대조했다:
+>
+> | 부모 | 자식 | `controlpointstartindex` | 자식 CP flags | 결과 |
+> | --- | --- | ---: | --- | --- |
+> | `presets/lightning/.../thunderbolt.json` | `thunderbolt_child_spawner.json` | 부재 → **0** | CP1 = **4**(bit2) | **슬롯 1 에서 정체** — 슬롯 0 하나만 채워진다 |
+> | `presets/lightning/previewthunderbolt/.../thunderbolt.json` | 〃 | 부재 → 0 | 〃 | 〃 |
+> | `.../thunderbolt_child_spawner.json` | `thunderbolt_beam_child.json` | **1** | 전부 0 | 정상(슬롯 1..7) |
+> | `previewthunderbolt/.../thunderbolt_child_spawner.json` | 〃 | 1 | 전부 0 | 정상 |
+>
+> 그리고 **정체는 "한 칸 밀림" 이 아니라 "그 뒤로 아무것도 안 채워짐" 이다.** 두 건너뛰기
+> (죽은 파티클 `0x14022a74c`, 막힌 슬롯 `0x14022a771`)가 **같은** 자리 `0x14022a81d` 로 가고
+> 거기서는 `inc ecx` 만 한다. 루프 종료 조건이 `ecx >= [rbx+0xe8]`(부모 파티클 수) 이므로
+> 남은 부모 파티클이 전부 같은 슬롯에서 튕기고 끝난다.
+> **부수로 확정**: 죽은 판정은 `ucomiss xmm0, xmm7(0)` + `jp`/`je` 라 **NaN 수명은 살아 있는
+> 것으로 친다**(`0x14022a749`–`0x14022a74e`).
+> 산술은 `ParticleControlPointMath.childControlPointFeed` 로 옮겼고
+> `ParticleControlPointFrameTests.testChildFeedBlockedSlotStallsForever` 가 값으로 잠갔다.
+> **의도인지 버그인지는 여전히 판단 못 했다 — 그건 [미해결] 로 남는다.**
+
 ---
 
 ## 7. `relative` base 규약 [확정]
@@ -687,6 +724,18 @@ bit4 는 위처럼 걸린다 — 두 `flags` 는 다른 필드다.
 
 **[확정]** 값 `16` 은 **bit4**(0x10)이지 bit16 이 아니다. 런타임이 읽는 비트는
 bit0·bit2·bit3·bit16 뿐이므로 이 10건은 **아무 데도 안 걸린다**.
+
+> **[정정 2026-08-21 · 레인 BJ] 이 문장은 `bit1` 을 빠뜨렸다 — 문서가 자기 자신과 모순이었다.**
+> `bit1`(값 2)은 런타임이 **두 자리에서** 읽는다:
+> `and r9d, 2` @`0x14022a08c`(기본 갱신 — 공간 변환 갈림, §12.2)와
+> `test byte [rbx+0xc0], 2` @`0x14023bc9c`(이니셜라이저 opid 8 — 오브젝트 보정 게이트).
+> 같은 문서의 §1 과 §2.3 은 bit1 을 제대로 적고 있다. 읽히는 비트는 **다섯**이다 —
+> bit0·**bit1**·bit2·bit3·bit16. (값 `16` 이 bit4 라 아무 데도 안 걸린다는 결론 자체는 맞다.)
+> **bit1 저작 도달 10 원소 / 동봉 1,816**(설치본도 10 / 1,856) — 전건 `idx == 1`.
+>
+> **[신설] `parentcontrolpoint` 저작의 94%는 죽은 값이다.** 동봉 1,816 원소 중
+> `parentcontrolpoint` 키를 가진 것이 **108**(`0`×77 · `1`×17 · `2`×14, 설치본 동일)인데,
+> 그 값을 실제로 쓰는 게이트인 bit2 가 서는 원소는 **7**뿐이다 → **101 원소가 무의미**하다.
 **[확정]** `children[].flags` 에 bit0 이 선 링크가 **4건**이고, `controlpointstartindex` 가
 실린 것이 **2건**이다 — §6 의 자식 CP 피드가 실제로 도달하는 자산이 있다.
 
@@ -1032,6 +1081,8 @@ print({hex(k):sorted(set(v)) for k,v in hits.items()})"
 
 1. 파티클 `.json` `controlpoint[].angles`(디스크립터 `+0xd0+32i`)를 **읽는** 지점.
    생성자 `0x14022c3c0` 은 안 읽는다. 전수 반증은 못 했다 — 동봉 도달 0 이라 실효는 0.
+   **[해소 2026-08-21 · 부분]** §2.1 덧붙임 — 스트라이드 `0x20` 인덱서를 이미지 전수로
+   **3함수**(파서 2자리 · 생성자 1자리)까지 좁혔다. 언롤 상수 접근만 남았다.
 2. `mapsequencebetweencontrolpoints` 의 `[sys+0x20] & 1` 게이트(`0x14023cb55`)가 왜
    수직 성분 기준점을 바꾸는지(월드/로컬 구분으로 보이나 확증 없음).
 3. ~~`mapsequencearoundcontrolpoint`(opid 13)의 **페이로드 전수**~~ — **[2026-08-21 절반 닫음, §5.3]**
@@ -1046,6 +1097,9 @@ print({hex(k):sorted(set(v)) for k,v in hits.items()})"
    효과가 미확정이다. `between` 의 게이트는 **자기 `flags` bit4** 이고 동봉 도달 2선언이다.
    오퍼레이터 VM 썽크(`0x1401d8a50`/`0x1401d8b30`)와 다른 계열이라 그 문서로도 안 닫힌다.
 4. §6 의 슬롯 정체(막힌 CP 에서 `edx` 미전진)가 의도인지.
+   **[해소 2026-08-21 · 부분]** §6 덧붙임 — **동작**은 확정했고(정체가 아니라 "그 뒤로 아무것도
+   안 채워짐"), **도달 정정**: 종전 "동봉 도달 0" 은 오측이고 실제로는 **동봉 2파일 / 설치 2파일**
+   (`thunderbolt.json` → `thunderbolt_child_spawner.json`)이 걸린다. **의도인지는 여전히 미상.**
 5. 이미터 레코드의 파스↔런타임 오프셋 차이 `0x10` 의 복사 지점.
 6. 브리프의 "JSON 3,655개" 분모 출처(이 저장소 두 코퍼스 합은 3,841, JSONC 63 은 일치).
 7. `arcdirection` 이 **어느 공간**의 벡터인지(시스템 로컬로 보이나 변환 지점 없음 —
@@ -1053,3 +1107,391 @@ print({hex(k):sorted(set(v)) for k,v in hits.items()})"
    오브젝트 회전과의 관계는 확인 못 했다).
 8. `[sys+0x3f7]` 바이트(`0x14022be77`, `0x14023641b`, `0x1402364bc`)의 의미 —
    자식 CP 피드와 같은 경로에서 전파되는데 소비처를 못 짚었다.
+
+> **[2026-08-21 · 레인 BJ] 위 8건 밖에서 새로 확정한 것은 §12 에 있다** — CP 슬롯 상한 8,
+> `flags` bit1 의 의미(월드 저작), bit16 을 파서가 세우는 규칙, 마우스 역투영 전문,
+> `locktopointer` 가 죽은 키라는 것, 그리고 §8.3 이 bit1 을 빠뜨린 자기모순.
+> 소유 밖 패치안은 §13.
+
+---
+
+## 12. [2026-08-21 · 레인 BJ] 갭 도달표와 새로 확정한 것
+
+> 이 절의 VA 는 **전부 이 레인에서 `.pdata` 함수 시작부터 선형으로 다시 떴다**
+> (함정 14·15). 코퍼스 수치는 관용 파서(`scripts/spec/measure_misc_assets.lenient_json`)로
+> 동봉 1,698 `.json` · 설치본 2,143 `.json` 을 전수 재측정한 것이다.
+> **워크샵 코퍼스는 이 컨테이너에 없다 — 워크샵 도달은 0 이 아니라 미측정이다**(함정 19).
+
+### 12.0 문서가 남긴 갭 15건 — 도달 순
+
+도달은 "이 사실이 틀리면 몇 개의 실물 자산이 달라지나" 다. 범위는 **동봉 `WEAssets`**
+(파티클류 `.json` 289 · CP 원소 1,816) / **설치본**(296 · 1,856) 두 코퍼스다.
+
+| # | 갭(문서 위치) | 도달(동봉 / 설치) | 이 라운드 |
+| ---: | --- | --- | --- |
+| 1 | §11-2 `mapsequencebetween` 의 `[sys+0x20]&1` 게이트 의미 | **12 선언 / 12** (between 전건) | **간접 해소** — 같은 비트의 의미를 §12.2 에서 확정했다(시스템 worldspace). 이 핸들러에서 왜 `p −= A` 를 그 비트로 가르는지는 여전히 미상 |
+| 2 | §11-1 파티클 `.json` `controlpoint[].angles` 를 읽는 지점 | `angles` 저작 **0 / 0** (실효 0) | **부분 해소** — 스트라이드 `0x20` 인덱서를 이미지 전수로 3함수까지 좁혔다(§2.1 덧붙임) |
+| 3 | §11-4 자식 CP 피드 슬롯 정체가 의도인가 | **2 파일 / 2** ← 종전 "0" 은 **오측** | **도달 정정 + 동작 확정**(§6 덧붙임). 의도는 미상 |
+| 4 | §11-3b `[rsp+0x30]` 스트림의 VM | between bit4 **2 선언 / 2**, around 게이트 미상 | 손대지 않음 |
+| 5 | §5.4 around 쪽 두 번째 스트림 게이트의 도달 | 미상(§11-3b′ 에 종속) | 손대지 않음 |
+| 6 | §11-3a `speedmin`/`speedmax` 혼합 대수식 | **2 선언 / 2** (`magic_trinity`) | 손대지 않음 |
+| 7 | §11-3b(신규) around 파스가 `flags` 를 안 읽는데 `0x1401ca184` 가 `+0x54` 를 읽는 모순 | **7 선언 / 7** | 손대지 않음 |
+| 8 | §11-5 이미터 레코드 파스↔런타임 오프셋 `0x10` | `emitter[].controlpoint` **6 선언 / 6** | 손대지 않음 |
+| 9 | §11-7 `arcdirection` 이 어느 공간인가 | between `flags & 8` **4 선언 / 4** | 손대지 않음 |
+| 10 | §11-8 `[sys+0x3f7]` 바이트의 의미 | 자식 CP 피드 링크 **4 / 4** | 손대지 않음 |
+| 11 | §9 P1-④ 위치 대입 배선 미적용 | between **12 선언 / 12** | 손대지 않음(A/B 캡처 불가 — Metal 없음) |
+| 12 | §9 P1-⑤ `p.frame` 대입 삭제 | **0**(도달 0 이 이미 증명됨) | 손대지 않음(소유 밖 테스트) |
+| 13 | §9 P2 자식 CP 피드 **소비** 배선 | **4 링크 / 4** | 손대지 않음(`bakeControlPointTargets` 구조 변경이 먼저) |
+| 14 | §11-6 브리프 분모 3,655 의 출처 | 코드 도달 0(장부 문제) | 손대지 않음 |
+| 15 | §9 P1 의 around 런타임 산술 미이식 | **7 선언 / 7** | 손대지 않음 |
+
+**이 라운드가 실제로 닫은 것은 위 표보다 위쪽에 있다.** 15건 중 도달이 두 자리를 넘는 것은
+1·11(12 선언) 뿐인데, 둘 다 **화면이 바뀌는 배선**이라 이 컨테이너에서는 A/B 를 못 뜬다.
+그래서 도달 기준을 "CP 사실 전체"로 넓혀 다시 세고, 아래 넷을 확정했다 — 각각
+**245 파일 / 28 원소 / 10 원소 / 16 원소**에 걸린다.
+
+### 12.1 [확정] CP 슬롯 상한은 **8** — 근거 셋이 같은 수를 준다
+
+1. **파서가 디스크립터 배열을 `0x100` 바이트로 0-메모리셋한다.**
+   ```
+   0x1401d04d8  lea  rcx, [r13 + 0xa4]
+   0x1401d04df  xor  edx, edx
+   0x1401d04e1  mov  r8d, 0x100
+   0x1401d04e7  call 0x1404217a0            ; memset
+   ```
+   `0x100 / 0x20`(슬롯 스트라이드, `shl rdi, 5` @`0x1401d0593`) = **8**.
+2. **파스 루프가 고정 8회다.** `inc r14d` / `cmp r14d, 8` / `jl 0x1401d0530`
+   (`0x1401d0807`–`0x1401d080e`). 배열 **길이를 읽지 않고** `operator[](i)`(`0x140086540`)를
+   8번 부른 뒤 태그 7(object)이 아니면 그 자리를 건너뛴다(`cmp byte [rax+8], 7` @`0x1401d053e`).
+   → **9번째 이후 원소는 파스조차 안 된다.**
+3. **씬 프로퍼티백 등록부가 정확히 8+8 개다** — 문자열 전수:
+   `controlpoint0`(`0x140491408`) … `controlpoint7`(`0x1404914f8`),
+   `controlpointangle0`(`0x140491490`) … `controlpointangle7`(`0x140491508`).
+   `controlpoint8` 도 `controlpointangle8` 도 이미지에 **없다**.
+
+그리고 자식 CP 피드가 켜지면 개수가 **강제로 8** 이 된다(`mov dword [r12+0x44], 8` @`0x14022ccda`).
+
+**도달**: `controlpoint[]` 를 가진 파일 **동봉 245 / 설치 250**. 길이 분포는
+동봉 `8`×220 · `2`×19 · `3`×6, 설치 `8`×225 · `2`×19 · `3`×6 — **최댓값이 8**이라
+상한을 넘는 저작은 두 코퍼스에 **0건**이다(워크샵은 미측정).
+
+**부수 [확정]**: 파스 루프는 `"id"` 를 **한 번도 읽지 않는다**. 슬롯은 배열 위치다.
+읽는 키는 넷뿐 — `offset`(`0x1401d05b6`) · `flags`(`0x1401d058c`) ·
+`angles`(`0x1401d06ce`) · `parentcontrolpoint`(`0x1401d07eb`).
+
+### 12.2 [확정 — 신규] CP 의 좌표계: `flags` bit1 은 **"이 CP 의 `offset` 은 월드 좌표"** 다
+
+기본 갱신 `0x14022a070`–`0x14022a117` 을 전수로 뜨면 네 갈래다:
+
+```
+0x14022a08c  mov  r9d, [rbx + 0xc0] ; and r9d, 2      ; CP flags bit1
+0x14022a097  je   A
+0x14022a099  test edx, edx ; je A                     ; idx == 0 이면 A (예외)
+             jmp  B
+A: 0x14022a0a3  test byte [rcx + 0x20], 1             ; 시스템 flags bit0 = worldspace
+   0x14022a0ab  je   C
+   0x14022a0bc  call 0x14024f0e0(dst, rdx = 오브젝트 월드 4×4, r8 = CP+0x80)
+   0x14022a0c4  CP+0x00..0x3f = dst ; return true      ; cur = base × objectWorld
+C: 0x14022a0ea  test r9d, r9d ; je 0x14022a10d(return false)
+B: 0x14022a0ef  test byte [rax], 1 ; jne 0x14022a10d(return false)
+   0x14022a0fc  call 0x1402290d0(rcx = 오브젝트 월드, rdx = out)   ; 4×4 역행렬
+   0x14022a10b  jmp  0x14022a0b5                       ; cur = base × inverse(objectWorld)
+```
+
+| 시스템 worldspace(`[sys+0x20]&1`) | CP bit1 | 결과 |
+| --- | --- | --- |
+| 예 | 아니오 | `cur = base × objectWorld` (로컬 → 월드) |
+| 예 | 예 | **갱신 없음** (둘 다 월드) |
+| 아니오 | 예 | `cur = base × inverse(objectWorld)` (월드 → 로컬) |
+| 아니오 | 아니오 | **갱신 없음** (둘 다 로컬) |
+
+즉 **공간이 어긋날 때만 변환한다**. 갱신을 건너뛰면 `cur` 은 생성자가 넣은 base 사본 그대로다
+(`0x14022ced9`–`0x14022cf4a`) — 함정 13 그대로, 실패 분기가 `false` 가 아니라 **생성자 기본값**을 남긴다.
+
+`0x1402290d0` 이 역행렬인 근거: `0x1402290e2`부터 `[rcx]`/`[rcx+0x10]`/`[rcx+0x20]`/`[rcx+0x30]`
+네 행을 `shufps` 로 섞어 여인수를 만드는 고전 SSE 4×4 역행렬이다(`primary` = `0x1402290d0`–`0x140229318`).
+`[obj+0x30]` 이 변환 스택 top(= 부모 체인이 다 곱해진 월드행렬)인 것은 `docs/re/particle-world-basis.md` §2 에 이미 재 있다.
+
+**그래서 CP 좌표는 정규화 좌표가 아니다 — 씬/오브젝트 단위다.**
+저작값이 그대로 증거다: `"450 0 0"`(discharge) · `"0 -450 0"`(thunderbolt) · `"512 512 0"`(previewdischarge).
+
+**예외 하나**: `idx == 0` 이면 bit1 이 서 있어도 A 로 간다(`test edx, edx` @`0x14022a099`).
+**동봉·설치 도달 0** — bit1 저작 10건이 전부 `idx == 1` 이다.
+
+**도달 10 CP 원소 / 1,816**(설치본 10 / 1,856):
+`discharge` · `dischargearc`(×3) · `thunderbolt`(×2) — 시스템 `flags: 0` 이라 **역행렬 경로** ·
+`water_faucet`(×2) · `water_faucet_large`(×2) — 시스템 `flags: 1` 이라 **갱신 없음**.
+
+### 12.3 [확정 — 신규] bit16 은 저작 키가 아니라 **파서가 세운다**
+
+```
+0x1401d0860  mov  ecx, [rbx + 0x10]                  ; 수집된 출력 CP id
+0x1401d0863  cmp  ecx, 8 ; jae 0x1401d0878           ; 8 이상은 무시
+0x1401d0868  shl  rcx, 5
+0x1401d086c  or   dword [rcx + r13 + 0xa4], 0x10000  ; = cp[id].flags |= bit16
+0x1401d0878  mov  rbx, [rbx] ; cmp rbx, rax ; jne 0x1401d0860
+```
+수집 자리는 둘이다 — `remapvalue` `0x1401cf05d`–`0x1401cf07e`,
+`remapinitialvalue` `0x1401cafc2`–`0x1401cafe0`. 게이트는 **`0x1401bc470`**:
+```
+0x1401bc470  cmp ecx, 0x10 ; sete al ; ret
+```
+즉 **출력 채널이 `controlpoint`(표 인덱스 16)일 때만** 넣고, 넣는 값은 둘 다
+**`outputcontrolpoint0`**(≤7 클램프)다 — `remapvalue` 는 `[rsi+0xe4]`(`lea r8` @`0x1401cf069`),
+`remapinitialvalue` 는 `[rdi+0x4c]`(`lea r8` @`0x1401cafce`).
+두 레코드의 네 슬롯은 각각 `remapvalue` `0xe0/0xe4/0xe8/0xec` ·
+`remapinitialvalue` `0x48/0x4c/0x50/0x54` 이고 순서는 in0 · out0 · in1 · out1 이다
+(클램프 자리 `0x1401caeb5`–`0x1401caecf` · `0x1401caf6d`–`0x1401caf87`).
+
+> 형제 술어 `0x1401bc480` 은 `{7,8} ∪ {16,17,18}` 을 참으로 준다 —
+> `distancetocontrolpoint`·`positionbetweentwocontrolpoints`·`controlpoint`·
+> `deltatocontrolpoint`·`directiontocontrolpoint`. 그쪽은 **CP 개수 상향**용이다
+> (`[r13+0x2c] = max(현재, in+1, out+1)`, `0x1401cef6d`–`0x1401cef8f`).
+> **함정 16 자리**: `[rsi+0xe0]` 은 인접 `lea "outputcontrolpoint0"`(`0x1401ceef9`)의 것이
+> 아니라 **직전** 키 `inputcontrolpoint0` 의 값이다. 순서는 `0xe0`=in0 · `0xe4`=out0 ·
+> `0xe8`=in1 · `0xec`=out1.
+
+**도달 0 / 0**: 두 코퍼스에서 `remapvalue`/`remapinitialvalue` 의 `output` 값은
+`color`·`opacity`·`velocity`·`speed` 뿐이고 `"controlpoint"` 는 **0건**,
+`outputcontrolpoint0/1` 키 저작도 **0건**이다. → **Waple 이 bit16 을 안 세워도 지금 그림은 안 바뀐다**
+(`ParticleSystem.swift` 의 `[미해결] bit16 은 Waple 이 아직 세지 않는다` 는 규칙이 확정됐으니
+ 이 근거로 닫을 수 있다 — 패치안은 §13).
+
+### 12.4 [확정] 마우스가 들어오는 자리 — bit0 슬롯, **평행이동 행만**
+
+`0x14022e472`(`test dl, 1`) 갈래 전문:
+
+```
+0x14022e47b..0x14022e4ae  base(+0x80..0xbf) → cur(+0x00..0x3f)         ; 네 행 통째 복사
+0x14022e4ba  xmm8 = [ctx + 0x8c]            ; 포인터 x (정규화 0..1)
+0x14022e4c3  xmm7 = 1.0 - [ctx + 0x90]      ; 포인터 y (뒤집는다)
+0x14022e514/0x14022e51f  ×2   0x14022e535/0x14022e53f  −1.0
+                                            ; ndc = (2x−1, 1−2y)
+0x14022e4d3  call 0x14005ecb0([ctx+0x38], [ctx+0x40])   ; view·proj
+0x14022e4e0  call 0x14005f730([rsp+0x20], rax)          ; 역행렬
+0x14022e54f..0x14022e59c  (ndc.x, ndc.y, 0, 1)·M 뒤 x/w, y/w          ; **z 는 계산 안 한다**
+0x14022e4e5  test byte [r14 + 0x20], 1 → 0x14022e5a1 jne 0x14022e64a
+   서면   0x14022e64a  (x, y, z) = (u, v, 0)                          ; 시스템이 이미 월드
+   안 서면 0x14022e5a7  M2 = inverse([ctx+0x30]) ; (u, v, 0, 1)·M2     ; 오브젝트 로컬로 내림
+0x14022e656..0x14022e662  CP +0x30/+0x34/+0x38 = 그 점
+```
+
+**회전 3행은 이 경로에서 한 번도 안 건드린다** — base 복사분(= `controlpointangleN` 이 만든 회전)이
+그대로 남는다. 그래서 마우스 CP 도 `controlpointangleN` 의 회전을 유지한다.
+
+**[확정] CP 로 들어오는 외부 입력은 마우스뿐이다.** 마스터 갱신 `0x14022e3e0`–`0x14022ebde`
+전문에서 `call` 대상은 **다섯**뿐이다 — `0x14005ecb0`(4×4 곱) · `0x14005f730`(역행렬) ·
+`0x1402290d0`(역행렬) · `0x14022a070`(기본 갱신) · `0x14024f0e0`(4×4 곱).
+**오디오·시간·난수 호출이 0건**이다. 오디오는 `remapvalue` 입력 채널로 파티클에 닿지,
+CP 슬롯으로 들어오지 않는다.
+
+> **정확히 하자.** 위 문장은 **CP 레코드(`+0x00..0x3f`)에 매 프레임 값을 넣는 경로** 이야기다.
+> **base(`+0x80..0xbf`)에는 입력이 하나 더 있다** — 씬 스크립트다.
+> `spec/engine/script-api.json` 의 `0x14024d940` 등록부는 `IParticleSystemInstance` 로
+> `alpha` · `colorn` · **`controlpoint0..7`** · `count` · `lifetime` · `rate` · `size` · `speed`
+> **15개**를 노출한다. 스크립트가 쓰면 §7.2 의 런타임 세터(`+0x48` = `0x1401a4530`)를 거쳐
+> 프로퍼티백에 절대 대입되고 더티 비트(`0x14022ab30` → `obj+0x928`)가 서서
+> `0x14022bd40`(§2.2)이 다시 돈다. 애니메이션 `{animation}` 바인딩과 **같은 통로**다.
+> **`controlpointangle*` 는 스크립트 API 에 없다** — 씬 json 저작으로만 들어온다.
+
+**도달 28 CP 원소 / 1,816**(설치본 28 / 1,856) — `examplecursorfollow` · `examplecursoravoid` ·
+`interactive/trail_0..2` · `fireflies` · `bubbles1` · `vapor0`/`vapor1`/`vapor1_child` ·
+`powerup` · `dust_motes_0` · `dna` · `magic_vortex_orb` · `exampleturbolence` 등.
+
+### 12.5 [확정 — 신규] `controlpoint[].locktopointer` 는 **죽은 키**다
+
+WE 설치본 트리의 **`.json` 이 아닌 파일 3,995개**를 ASCII · UTF-16LE · 대소문자 무시로
+전수 스캔해 `locktopointer` 히트 **0건**(함정 8·11 — 바이너리 하나로 판단하지 않았다).
+문자열은 오직 자산 `.json` **2파일**에만 있다 —
+`particles/exampleturbolence.json` · `particles/exampleturbolence3d.json`(합 **16 원소**).
+
+**그래서 관측 가능한 갈림이 하나 생긴다**:
+`exampleturbolence3d.json` 의 CP 1 은 `locktopointer: true` 인데 `flags: 0` 이라
+**실물은 마우스를 안 따라간다**. 형제 `exampleturbolence.json` 의 CP 1 은 `flags: 1` 이라 따라간다.
+`locktopointer` 를 읽는 구현은 그 두 파일에서 실물과 갈린다.
+
+### 12.6 [확정] 디스크립터 기본값은 전부 **0** — 실패 분기가 남기는 것도 0이다
+
+파서는 `memset(def + 0xa4, 0, 0x100)`(§12.1)으로 시작한다. 그 위에:
+
+| 키 | 주입기 | 소비 | 저장 | 태그 게이트 |
+| --- | --- | --- | --- | --- |
+| `offset` | `H_STRING`(`0x1401d7e80`) 기본 `"0 0 0"`(`0x14048f4d4`) | `strtod`×3 | `+0xac/0xb0/0xb4` | **문자열(태그 4)일 때만** `0x1401d05c5` |
+| `flags` | `0x1401d8280` 기본 0 | `asInt`(`0x140085f70`) | `+0xa4` | 없음(불리언도 1/0 — 함정 17) |
+| `parentcontrolpoint` | `0x1401d8280` 기본 0 | `asInt` | `+0xa8` | 없음 |
+| `angles` | **없다** | `strtod`×3 | `+0xb8/0xbc/0xc0` | **문자열일 때만** `0x1401d06da` |
+
+**함정 13 실사례가 코퍼스에 있다**: 동봉 `presets/lightning/.../thunderbolt_fizzle.json` 의 CP 1 은
+`"offset": null` 이다 → 태그 4 검사에 걸려 저장이 **안 되고** 메모리셋 0 이 남는다 → `(0,0,0)`.
+`offset` 부재는 동봉 **59 원소**(1,816 − 1,757), `flags` 부재 **36**, `parentcontrolpoint` 부재 **1,708**.
+
+### 12.7 [확정] 규약은 **행 우선 · 행벡터** — 값으로 판정했다
+
+함정 12 대로 레이아웃이 아니라 **쪼개는 지점**을 봤다. 두 자리가 같은 답을 준다:
+- 마우스 점 변환 `0x14022e5b8`–`0x14022e643` 이 `out = u·row0 + v·row1 + 0·row2 + row3` 을
+  성분별로 펼친다(`[rsp+0x20]`=row0.x, `[rsp+0x30]`=row1.x, `[rsp+0x40]`=row2.x, `[rsp+0x50]`=row3.x).
+- 곱셈기 `0x14024f0e0`(`0x14024f191`–`0x14024f210`)이
+  `dst.row0 = A[0][0]·B.row0 + A[0][1]·B.row1 + A[0][2]·B.row2 + A[0][3]·B.row3` 다.
+  호출 규약은 `0x14024f0e0(rcx = dst, rdx = B, r8 = A)` → **`dst = A × B`**.
+  그래서 `0x14022a0bc` 의 `r8 = CP+0x80`, `rdx = 오브젝트 월드` 는 `cur = base × objectWorld` 다.
+
+씬 `controlpointangleN` 이 만드는 3×3(스토어 순서까지 그대로, `0x14022bf53`–`0x14022c069`):
+```
++0x80 = cos(y)cos(z)                     +0x84 = cos(y)sin(z)                     +0x88 = -sin(y)
++0x90 = sin(x)sin(y)cos(z)-cos(x)sin(z)  +0x94 = sin(x)sin(y)sin(z)+cos(x)cos(z)  +0x98 = sin(x)cos(y)
++0xa0 = cos(x)sin(y)cos(z)+sin(x)sin(z)  +0xa4 = cos(x)sin(y)sin(z)-sin(x)cos(z)  +0xa8 = cos(x)cos(y)
+```
+= 행벡터 규약의 `Rx·Ry·Rz`(열벡터로 읽으면 `Rz·Ry·Rx` — 같은 행렬). 라디안이고 파일 순서는 `(x,y,z)`.
+부호 반전은 `xorps xmm1, xmm14` @`0x14022bfe1`(`xmm14 = -0.0`, 적재 `0x14022bed8` ← `0x140492ff0`),
+센티널은 `xmm12 = FLT_MAX`(적재 `0x14022bec6` ← `0x14049297c`).
+
+### 12.8 이식물
+
+위 산술은 전부 `Sources/WapleCore/ParticleControlPointFrame.swift` 로 뽑았다
+(Foundation 만 — `import simd` 없음). 회귀는
+`Tests/WapleCoreTests/ParticleControlPointFrameTests.swift` 가 값으로 잠근다.
+**배선(파스·시뮬·렌더)은 이 레인의 소유가 아니라 §13 에 패치안으로 넘긴다.**
+
+### 12.9 재현
+
+```bash
+SC=<scratchpad>
+python3 - <<'PY'
+import sys; sys.path.insert(0, "$SC")
+from vdis2 import dis
+dis(0x14022a070, 0x14022a118)     # ① 기본 갱신 네 갈래(§12.2)
+dis(0x14022e3e0, 0x14022ebde)     # ② 마스터 갱신 전문(§12.4) — call 대상 다섯 확인
+dis(0x14022c3c0, 0x14022cf93)     # ③ 생성자: 디스크립터 다섯 읽기 + 항등 네 행
+dis(0x1401d04d8, 0x1401d0880)     # ④ CP 파스 루프(§12.1) + bit16 표시(§12.3)
+PY
+```
+
+스트라이드 `0x20` 인덱서 전수(§2.1 덧붙임의 근거):
+```bash
+python3 -c "
+import sys; sys.path.insert(0,'$SC')
+from wpe import pe, DATA, primary
+h=[pe.off2va(i) for i in range(len(DATA)-4)
+   if DATA[i] in (0x48,0x49) and DATA[i+1]==0xC1 and 0xE0<=DATA[i+2]<=0xE7 and DATA[i+3]==0x05]
+f={}
+for va in h:
+    p=primary(va)
+    if p: f.setdefault(p[0],[]).append(va)
+print(len(h),'자리 /',len(f),'함수')
+for k in (0x1401c5490, 0x14022c3c0): print(hex(k), [hex(v) for v in f.get(k,[])])"
+# → 424 자리 / 139 함수, 0x1401c5490 = [0x1401d0593, 0x1401d0868], 0x14022c3c0 = [0x14022cdd8]
+```
+
+코퍼스 재측정:
+```bash
+python3 - <<'PY'
+import os, sys, collections
+sys.path.insert(0, "/home/user/Waple/scripts/spec")
+from measure_misc_assets import lenient_json
+for root in ["Sources/WapleRender/Resources/WEAssets",
+             "/home/user/Waple-wallpaper-source/wallpaper_engine"]:
+    lens, flags, keys = collections.Counter(), collections.Counter(), collections.Counter()
+    for dp, dn, fn in os.walk(root):
+        for f in fn:
+            if not f.endswith(".json"): continue
+            d = lenient_json(open(os.path.join(dp, f), "rb").read())
+            if not isinstance(d, dict): continue
+            cps = d.get("controlpoint")
+            if not isinstance(cps, list): continue
+            lens[len(cps)] += 1
+            for e in cps:
+                if isinstance(e, dict):
+                    flags[repr(e.get("flags"))] += 1
+                    for k in e: keys[k] += 1
+    print(root, dict(sorted(lens.items())), dict(flags.most_common()), dict(keys.most_common()))
+PY
+```
+
+---
+
+## 13. [2026-08-21 · 레인 BJ] 넘길 것 — 소유 밖 패치안
+
+아래는 전부 **이 레인의 소유가 아니다**(`ParticleSystem.swift` / `ParticleSimulator.swift` 는
+같은 시각 다른 레인이 고치고 있었다). 고치지 않았다.
+
+### 13.1 `ParticleSystem.swift` — bit16 `[미해결]` 을 닫는다
+
+현재 주석: `**[미해결]** bit16 은 Waple 이 아직 세지 않는다(remap 출력 CP 표시 미구현).`
+
+규칙이 §12.3 으로 확정됐다. 파스에서 `remapvalue`/`remapinitialvalue` 의 출력 채널이
+`.controlPoint`(표 인덱스 16)일 때 `controlPointFlags[clampControlPoint(outputCP0)] |= 0x10000`
+을 OR 하면 된다. **도달 0** 이라 그림은 안 바뀐다 — 주석을 규칙으로 갈아 끼우는 것이 요점이다.
+
+`RemapSpec` 이 이미 `outputChannel: RemapChannel` 과 `outputCP0: Int` 를 들고 있으므로
+파스 꼬리(`controlPointFlags` 확정 직전, 씬 오버라이드 블록 **앞**)에 이것만 넣으면 된다:
+
+```swift
+for op in ops {
+    guard case let .remapValueEx(spec) = op,
+          spec.outputChannel == .controlPoint else { continue }
+    let slot = ParticleControlPointLimits.clampIndex(spec.outputCP0)
+    controlPointFlags[slot] |= ParticleControlPointFlag.remapOutput   // 0x1401d086c
+}
+```
+> 실물은 `remapinitialvalue`(이니셜라이저) 쪽도 같은 집합에 넣는다(`0x1401cafce`). Waple 의
+> `.remapInitialValue(output: String?, …)` 는 아직 `RemapChannel` 로 파스하지 않으므로
+> 그쪽은 문자열 `"controlpoint"` 비교가 필요하다 — **도달 0 이라 급하지 않다.**
+> 순서 주의: 실물은 CP `flags` 를 세운 **뒤** 씬 오버라이드 게이트(`0x14022bf26`)가 돈다.
+> Waple 에서도 `cpOverrideBlocked` 보다 앞에 두지 않으면 bit16 이 게이트에 안 걸린다.
+
+### 13.2 `ParticleSystem.swift` — `clampControlPoint` 를 공용 상수로
+
+`private static func clampControlPoint(_:)` 가 지금 파일 안에 갇혀 있다. 규약이 같으므로
+`ParticleControlPointLimits.clampIndex` 로 위임하면 **부호 없는 클램프**(음수 → 7)가
+한 자리에서 잠긴다. 지금 두 구현이 갈리면 아무 테스트도 안 잡는다.
+
+### 13.3 `ParticleSystem.swift` — CP 슬롯 상한을 상수로
+
+`Array(repeating: …, count: 8)` 이 네 자리(`controlPoints` · `controlPointAngles` ·
+`controlPointFlags` · `controlPointParent`)에 리터럴 `8` 로 박혀 있다.
+`ParticleControlPointLimits.slotCount` 로 바꾸면 §12.1 의 근거가 코드에 붙는다.
+
+### 13.4 `ParticleSystem.swift` — `controlPointAngles` 소비 (지금은 저장만 한다)
+
+`def.controlPointAngles` 는 파스만 되고 아무도 안 읽는다. 실물은 그 각도가
+**base 4×4 의 3×3** 이 되고, 그 base 가 §12.2 의 네 갈래로 `cur` 이 된다.
+최소 침습 패치는 CP 를 `Vec3` 대신 4×4 로 굽는 것이다:
+
+```swift
+// 지금:  var controlPoints = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
+// 뒤:
+var controlPointBases = Array(repeating: CPMatrix4.identity,
+                              count: ParticleControlPointLimits.slotCount)
+…
+controlPointBases[slot] = ParticleControlPointMath.authoredBase(offset: off)   // angles 는 실효 0 (§2.1)
+…
+// 씬 오버라이드(절대 대체 · 센티널 · 0x10005 게이트)를 한 줄로:
+let r = ParticleControlPointMath.applyInstanceOverride(
+    base: controlPointBases[id], flags: controlPointFlags[id],
+    overrideAngles: ov.controlPointAngles[id] ?? Vec3(x: .greatestFiniteMagnitude, y: 0, z: 0),
+    overrideTranslation: ov.controlPoints[id] ?? Vec3(x: .greatestFiniteMagnitude, y: 0, z: 0))
+if !r.skipped { controlPointBases[id] = r.base }
+```
+`bakeControlPointTargets` 는 `controlPointBases[cp].translation` 을 쓰면 지금과 동치다.
+**그림 변화**: `controlpointangleN` 저작 씬(동봉 `objects[]` 기준 7 오브젝트)에서만 회전이 붙는다.
+회전을 실제로 소비하는 것은 이미터(`0x140237c42` 계열)와 `mapsequencearoundcontrolpoint`
+(`0x14023c537`)이므로, 그 둘을 배선하기 전에는 `translation` 만 쓰이고 **그림은 안 바뀐다**.
+
+### 13.5 `ParticleSimulator.swift` — 자식 CP 피드 소비 (§6 · §12.0-3)
+
+`ChildLink.flags` / `controlPointStartIndex` 는 파스만 돼 있다. 배정 자체는
+`ParticleControlPointMath.childControlPointFeed(startIndex:parentLifetimes:childControlPointFlags:)`
+가 이미 실물과 같은 정체 동작까지 포함해 계산한다. 남은 것은
+① CP 정적 베이크를 걷어내 매 프레임 CP 를 읽게 하는 구조 변경과
+② 부모→자식 스페이스 변환(`0x14022a5f7`–`0x14022a6a9`)이다. 둘 다 별도 라운드가 맞다.
+
+**주의**: 실물은 **막힌 슬롯에서 슬롯을 전진시키지 않는다**(§6 덧붙임).
+`continue` 로 넘어가게 구현하면 동봉 `thunderbolt.json` 2파일에서 실물과 갈린다.
+
+### 13.6 마우스 CP (미배선)
+
+Waple 에는 마우스 구동 CP 가 아예 없다 — 동봉 **28 CP 원소**가 정적 CP 로 처리된다.
+산술은 `ParticleControlPointMath.pointerControlPointTranslation` 에 있고, 필요한 입력은
+① 정규화 포인터 `(x, y)`, ② `inverse(viewProjection)`, ③ `inverse(objectWorld)`,
+④ 시스템 worldspace 비트다. 셋 다 `WapleRender` 쪽에 이미 있는 값이라 배선은 얇지만
+**화면이 바뀌므로 A/B 캡처가 필요하다**(이 컨테이너에 Metal 이 없다).
