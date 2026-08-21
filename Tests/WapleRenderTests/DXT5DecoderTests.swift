@@ -51,10 +51,36 @@ final class DXT5DecoderTests: XCTestCase {
         block[10] = 0xFF; block[11] = 0xFF      // color1 = white (color index 0 → 흰색)
         let out = try XCTUnwrap(DXT5Decoder.decode(Data(block), width: 4, height: 4))
         let px = [UInt8](out)
-        // alpha[2..7] = 218,182,145,109,72,36 (정수 나눗셈)
-        XCTAssertEqual([px[3], px[7], px[11], px[15], px[19], px[23]], [218, 182, 145, 109, 72, 36])
+        // alpha[2..7] = ((7-i)*255 + i*0 + 3) / 7 — **반올림**이 정본이다.
+        // [2026-08-21 정정] 종전 기댓값은 floor 결과 [218,182,145,109,72,36] 이었고, 그게
+        // `DXT5Decoder` 의 floor 보간을 **못박아** 수정을 막고 있었다. 정본 근거는 두 개다:
+        //   · `spec/formats/tex-deep.json` `format.tex.bcDecodeRounding.we.bc3AlphaLerp8`
+        //     = `((7-i)*a0 + i*a1 + 3) / 7` (확정 — 12/12 표본이 WE 트랜스코더와 바이트 동일)
+        //   · S3TC/BC3 규격의 알파 보간식이 같은 `+3)/7` 이라 **하드웨어 디코드도 이 값**이다
+        //     (= Waple 자신의 `TexDecoder.nativeBC` GPU 경로).
+        // 두 규칙이 갈리는 슬롯은 i=1,3,5 셋이다(218→219 · 145→146 · 72→73).
+        XCTAssertEqual([px[3], px[7], px[11], px[15], px[19], px[23]], [219, 182, 146, 109, 73, 36])
         // 색은 모두 흰색
         XCTAssertEqual([px[0], px[1], px[2]], [255, 255, 255])
+    }
+
+    /// 6단 램프(a0 <= a1) — `((5-i)*a0 + i*a1 + 2) / 5` + 슬롯 6/7 = 0/255.
+    /// 8단만 테스트하면 6단 분기의 반올림 항(`+2`)이 통째로 미검증으로 남는다.
+    func testDecodesSixValueAlphaRampAndSentinels() throws {
+        var block = [UInt8](repeating: 0, count: 16)
+        block[0] = 0; block[1] = 255            // a0 <= a1 → 6단 램프 + 0/255 센티널
+        // 알파 인덱스 3bit×16: 픽셀0..7 = 0,1,2,3,4,5,6,7
+        var abits: UInt64 = 0
+        for i in 0..<8 { abits |= UInt64(i) << (3 * i) }
+        for i in 0..<6 { block[2 + i] = UInt8((abits >> (8 * i)) & 0xff) }
+        block[8] = 0xFF; block[9] = 0xFF        // color0 = white
+        block[10] = 0xFF; block[11] = 0xFF      // color1 = white
+        let out = try XCTUnwrap(DXT5Decoder.decode(Data(block), width: 4, height: 4))
+        let px = [UInt8](out)
+        // i=1..4 → ((5-i)*0 + i*255 + 2)/5 = 51, 102, 153, 204 (여기선 floor 와 값이 같다 —
+        // 판별력은 8단 램프 쪽이 갖는다). 슬롯 6/7 은 규격상 0/255 고정.
+        let alphas = (0..<8).map { Int(px[$0 * 4 + 3]) }
+        XCTAssertEqual(alphas, [0, 255, 51, 102, 153, 204, 0, 255])
     }
 }
 
