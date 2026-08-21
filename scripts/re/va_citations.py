@@ -89,6 +89,35 @@ DATA_TABLE_MARKER = "[VA-데이터표]"
 # **바이트 스캐너가 산출한 "필드 위치"** — 명령 주소가 아니다. 정본 JSON 은 줄에 마커를 넣을 수
 # 없으므로 (파일, 키) 로 좁혀 면제한다. 그 뜻은 정본 자신이 `engine.renderPass.addressSemantics`
 # 에 적고 있다. 키 이름만으로 면제하면 다른 정본의 진짜 명령 주소까지 덮으므로 **파일까지** 묶는다.
+# **어느 이미지로 재야 하는 파일인가.** WE 는 여러 실행 이미지로 나뉘고 전부 imagebase 가
+# 같아서(`bin/mediaextensions64.dll` 만 예외), 기준 이미지를 잘못 고르면 그 파일의 인용이
+# **통째로 오탐**이 된다. 종전엔 그걸 `--binary` 로 사람이 매번 지정해야 했고, 그래서 맨몸으로
+# 돌린 전수 스캔이 늘 붉게 나왔다(실측: 아래 여섯 파일이 기본 이미지에서 이탈 51건인데
+# `bin/webwallpaper64.exe` 로 재면 **0건**이고 경계 OK 는 18 → 79 로 늘었다).
+#
+# 판정은 "이탈이 적은 쪽" 이 **아니다** — 그건 `.pdata` 가 작은 이미지를 고르면 모든 주소가
+# "데이터/리프" 로 빠져 그물이 공허해지는 함정이다(`--also-data` 주석과 같은 이유). 기준은
+# **경계 OK 가 압도적으로 많은 쪽**이다. 위 여섯 파일은 그 기준으로 전건 결정적이었다.
+# **한 이미지로 못 가르는 파일**은 `--also` 로 판정한다. `--also` 는 "그 이미지에서 명령
+# 경계면 면제" 라는 **강한** 신호다(`.pdata` 밖까지 봐 주는 `--also-data` 와 다르다).
+# `spec/assets/misc-schema.json` 과 그 생성기가 그 경우다 — 이름 그대로 잡동사니라 한 자산의
+# 근거가 본체·웹·UI 세 이미지에 흩어져 있다. 실측: 둘 다 기본 이미지로만 재면 이탈 26건인데
+# 아래 둘을 함께 보면 15건이 "다른 이미지에서 경계" 로 설명되고 **8건**만 남는다.
+BINARY_ALSO = {
+    "spec/assets/misc-schema.json": ("bin/webwallpaper64.exe", "bin/wallpaperui.exe"),
+    "scripts/spec/measure_misc_assets.py": ("bin/webwallpaper64.exe", "bin/wallpaperui.exe"),
+}
+
+BINARY_ROUTING = {
+    "docs/re/web-wallpaper-bridge.md": "bin/webwallpaper64.exe",
+    "Tests/WapleRenderTests/WebWallpaperInjectedAPITests.swift": "bin/webwallpaper64.exe",
+    "Sources/WapleRender/WallpaperBridgeJS.swift": "bin/webwallpaper64.exe",
+    "Sources/WapleCore/WebCompatPatch.swift": "bin/webwallpaper64.exe",
+    "Tests/WapleCoreTests/WebCompatPatchTests.swift": "bin/webwallpaper64.exe",
+    "Sources/WapleRender/WallpaperSchemeHandler.swift": "bin/webwallpaper64.exe",
+    "Tests/WapleCoreTests/WallpaperPathSecurityTests.swift": "bin/webwallpaper64.exe",
+}
+
 SCANNER_ADDRESS_FIELDS = {
     "spec/engine/render-pass.json": {
         "at", "combineLastUseAt", "ccsimpleFirstUseAt", "fadeFirstUseAt",
@@ -212,18 +241,31 @@ def main(argv):
             if i + 1 >= len(args):
                 print(f"{flag} 다음에 경로가 필요하다")
                 return 1
-            also.append(args[i + 1])
+            # `--binary` 와 같은 규칙: 준 경로가 없으면 **WE_ROOT 기준 상대경로**로 한 번 더 본다.
+            path = args[i + 1]
+            if not os.path.exists(path) and os.environ.get("WE_ROOT"):
+                cand = os.path.join(os.environ["WE_ROOT"], path)
+                if os.path.exists(cand):
+                    path = cand
+            also.append(path)
             if weak:
-                also_data.add(args[i + 1])
+                also_data.add(path)
             del args[i:i + 2]
     # `--binary <경로>` 로 **다른 WE 바이너리**를 재게 한다(함정 11). WE 는 여러 이미지로 나뉘고
     # 전부 imagebase 가 같아서, 한 이미지로만 재면 다른 이미지의 인용이 통째로 오탐이 된다.
-    if args and args[0] == "--binary":
+    explicit_binary = bool(args) and args[0] == "--binary"
+    if explicit_binary:
         if len(args) < 2:
             print("--binary 다음에 경로가 필요하다")
             return 1
         disasm.BIN = args[1]
         args = args[2:]
+        # 준 경로가 그대로 없으면 **WE_ROOT 기준 상대경로**로 한 번 더 본다. `--binary
+        # bin/webwallpaper64.exe` 처럼 쓰는 것이 자연스러운데 종전엔 절대경로만 받았다.
+        if not os.path.exists(disasm.BIN):
+            cand = os.path.join(os.environ.get("WE_ROOT", ""), disasm.BIN)
+            if os.environ.get("WE_ROOT") and os.path.exists(cand):
+                disasm.BIN = cand
         if not os.path.exists(disasm.BIN):
             print(f"[va-citations] 바이너리가 없다: {disasm.BIN}")
             return 1
@@ -244,6 +286,38 @@ def main(argv):
     if not files:
         print("[va-citations] 검사할 파일이 없다 — 경로를 확인해라")
         return 1
+
+    # `--binary` 를 안 줬으면 **라우팅 표대로 그룹을 갈라** 각자의 이미지로 잰다. 이렇게 해야
+    # 맨몸 `python3 scripts/re/va_citations.py` 한 줄이 정직한 답을 낸다 — 종전엔 사람이
+    # `--binary` 를 기억해서 줘야만 웹 경로가 오탐을 벗었고, 안 주면 51건이 그냥 붉었다.
+    # 재귀는 `disasm.BIN` 만 건드리므로 이 호출의 `data`/`secs`/`funcs` 지역값은 그대로다.
+    routed_rc = 0
+    if not explicit_binary:
+        default_bin = disasm.BIN
+        routed = collections.defaultdict(list)
+        for f in files:
+            routed[(BINARY_ROUTING.get(str(f)), BINARY_ALSO.get(str(f), ()))].append(f)
+        # 기본 이미지 · `--also` 없음 그룹만 이 호출이 직접 잰다. 나머지는 각자의 인자로 재귀한다
+        # (재귀는 `--binary` 를 반드시 주므로 `explicit_binary` 가 참이 되어 다시 갈리지 않는다).
+        plain = (None, ())
+        if len(routed) > 1 or plain not in routed:
+            for key in sorted(routed, key=lambda k: ((k[0] or ""), k[1])):
+                if key == plain:
+                    continue
+                prim, alsos = key
+                extra = (" + also " + ", ".join(alsos)) if alsos else ""
+                print(f"[va-citations] ── 기준 이미지: {prim or os.path.basename(default_bin)}"
+                      f"{extra} ({len(routed[key])}파일) ──")
+                sub = [argv[0], "--binary", prim or default_bin]
+                for a in alsos:
+                    sub += ["--also", a]
+                routed_rc |= main(sub + [str(q) for q in routed[key]])
+                print()
+            disasm.BIN = default_bin
+            files = routed.get(plain, [])
+            if not files:
+                return routed_rc
+            print(f"[va-citations] ── 기준 이미지: {os.path.basename(disasm.BIN)} ({len(files)}파일) ──")
 
     cited = collections.defaultdict(set)          # va -> {파일}
     corrections = collections.Counter()           # 정정 기록에만 나오는 va
@@ -453,7 +527,7 @@ def main(argv):
         for line in sorted(stale):
             print(f"      | {line}")
     if not off:
-        return 1 if stale else 0
+        return routed_rc | (1 if stale else 0)
     per_file = collections.defaultdict(list)
     for va, kind, hint, fs in off:
         for f in fs:
