@@ -143,6 +143,20 @@ vec3 blur3(vec2 u, vec2 d) {
 콤보로 들어간다(`0x140198273`). 이웃 `[ctx+0x1ac]` 는 셰도우맵 품질이고
 `LIGHTS_SHADOW_MAPPING_QUALITY` 콤보로 간다(`0x1401983af`).
 
+**셰이더 콤보 넷 — 무엇이 세우나 (2026-08-21 실측).** 콤보 이름은 전부 ≤15바이트라 MSVC SSO 로
+오고, `lea` 가 아니라 데이터 블롭의 `mov`/`movzx`/`movsd` 로 실린다(선형 `lea` 스캔은 0건을 준다).
+
+| 콤보 | 세우는 조건 | 판정 VA | 이름 문자열 적재 |
+| --- | --- | --- | --- |
+| `SHADOW` | `[light+0x2c4]` **bit0**(`castshadow`) **그리고** `[mat+0x1ac] != 0`(셰도우맵 품질) | `0x1401981ea`·`0x1401981fa` | `0x140491a80` (`"SHADOW\0"`) |
+| `COOKIE` | `[light+0x2c4]` **bit1**(`usecookie`) | `0x14019817e`–`0x140198188` | `0x140491b18` (`"COOKIE\0"`) |
+| `QUALITY` | `[mat+0x1ad]` 바이트 **그대로** | `0x140198273` → `0x1401982bc` | `0x140491a88` (`"QUALITY\0"`) |
+| `POINTLIGHT` | `[light+0x2c0] == 0` (= 씬 `"light":"lpoint"`) | `0x1401982fa` / `jne 0x140198445` | `0x140491a90`+`0x140491a98` (`"POINTLIGHT\0"`) |
+
+즉 **POINTLIGHT ⟺ `light == "lpoint"`** 다(종 표는 `docs/re/scene-lighting.md` §1.1). Waple 은
+호출부가 종을 안 넘겨 콘 코사인 퇴화(`outer ≤ −0.999`)로 근사한다 — 코퍼스에서는 일치하지만
+`ldirectional`(종 3, 콘 미저작)은 원리상 잘못 잡는다(도달 0건, §3).
+
 ### 2.2 렌더 타깃 4장 — 포맷과 **FBO 스케일**
 
 전부 `sub_1401aadb0(rtManager, width, height, divisor, name, colorFormat, depthFormat, flags, flags2)`
@@ -166,23 +180,56 @@ vec3 blur3(vec2 u, vec2 d) {
 ### 2.3 라이트 유니폼 팩 — `g_RenderVar0..4`
 
 한 라이트를 그리기 직전 `[scene+0xc8]` 상수 블록의 `+0xa8`부터 5개 `float4` 를 채운다
-(`0x140198716`–`0x1401987f5`). 셰이더 `#define` 과 1:1 로 맞는다.
+(`0x140198679`–`0x1401987f5`). 상수 블록은 `+0xa8`부터 **stride 0x10** 이므로
+`+0xa8/+0xb8/+0xc8/+0xd8/+0xe8` = `g_RenderVar0..4` 다. 셰이더 `#define` 과 1:1 로 맞는다.
 
 | 유니폼 | 오프셋 | 값 | VA | 씬 키 |
 | --- | --- | --- | --- | --- |
-| `g_RenderVar0` (`VAR_SHADOWMAP_TRANSFORMS`) | `+0xa8` | `[light+0x310]` float4 | `0x140198716` | — |
+| `g_RenderVar0` (`VAR_SHADOWMAP_TRANSFORMS`) | `+0xa8` | `[light+0x310]` float4 | `0x140198716`(load)/`0x14019871d`(store) | — |
 | `g_RenderVar1.x` (`..._RADIUS`) | `+0xb8` | `radius × 0.99` | `0x140198760` (f32=0.99) | `radius` |
 | `g_RenderVar1.y` (`..._INNER`) | `+0xbc` | `cos(innercone × π/180)` | `0x1401986ac`(f32=0.0174532924) → `0x140198770` | `innercone` |
 | `g_RenderVar1.z` (`..._OUTER`) | `+0xc0` | `cos(outercone × π/180)` | `0x140198778` | `outercone` |
 | `g_RenderVar1.w` (`..._INTENSITY`) | `+0xc4` | `[light+0x2e4]` | `0x140198780` | `intensity` |
 | `g_RenderVar2.xyz` (`VAR_LIGHT_ORIGIN`) | `+0xc8` | 월드 원점 | `0x140198797`–`0x1401987a9` | `origin` |
 | `g_RenderVar2.w` (`VAR_DENSITY`) | `+0xd4` | `[light+0x2f8]` | `0x1401987b2` | **`density`** |
-| `g_RenderVar3.xyz` (`VAR_SPOT_FORWARD`) | `+0xd8` | `[light+0x320]` float4 | `0x14019871d` | (angles 유래) |
+| `g_RenderVar3.xyz` (`VAR_SPOT_FORWARD`) | `+0xd8` | `[light+0x320]` float4 | `0x140198680`(load)/`0x140198687`(store) | (angles 유래) |
 | `g_RenderVar4.xyz` (`VAR_COLOR`) | `+0xe8` | `[light+0x2cc..0x2d4]` | `0x1401987df`–`0x1401987ed` | `color` |
 | `g_RenderVar4.w` (`VAR_EXPONENT`) | `+0xf4` | `[light+0x2fc]` | `0x1401987f5` | **`volumetricsexponent`** |
 
-**콘 각은 저작 단위가 도(度)** 이고 셰이더가 받는 건 코사인이다. Waple 은
-`SceneLight3D.forwardSpotConeCosines`(`SceneDocument.swift:733`)가 같은 변환을 이미 한다.
+> **[2026-08-21 정정] 위 두 행은 종전 표에서 한 칸 밀려 있었다.** 종전 표는 `g_RenderVar0` 에
+> load VA(`0x140198716`)를, `g_RenderVar3` 에 **같은 명령쌍의 store VA**(`0x14019871d`)를 적어
+> 두 행이 한 명령쌍을 나눠 가졌다. 실제로 `0x140198716`/`0x14019871d` 는 `[light+0x310] → +0xa8`
+> 한 쌍이고, `g_RenderVar3`(`+0xd8`)를 채우는 것은 `0x140198680`/`0x140198687`
+> (`[light+0x320] → +0xd8`)이다. 디스크립터·언롤 코드에서 반복되는 오프바이원이다(공통 브리프 함정 #16).
+
+**콘 각은 저작 단위가 도(度)** 이고 셰이더가 받는 건 코사인이다. 변환은 **deg2rad 만**이다:
+
+```
+0x140198724  movss xmm0, [rsi+0x2f0]      ; innercone (도)
+0x14019872c  mulss xmm0, xmm6             ; xmm6 = [0x140492628] f32 = 0.0174532924 (= π/180)
+0x140198730  call 0x14041a2e0             ; cosf
+0x140198770  movss [rax+0xbc], xmm7       ; → g_RenderVar1.y = VAR_SPOT_PARAMS_INNER
+0x140198738  movss xmm0, [rsi+0x2f4]      ; outercone (도)
+0x140198740  mulss xmm0, xmm6
+0x140198744  call 0x14041a2e0
+0x140198778  movss [rax+0xc0], xmm0       ; → g_RenderVar1.z = VAR_SPOT_PARAMS_OUTER
+```
+
+`0x14041a2e0` 이 `cosf` 라는 근거: 소인수 경로가 `1.0 − x²·0.5`(`0x14041a340`–`0x14041a348`,
+상수 `0x140471bb0`=1.0 · `0x140471bc0`=0.5)이고 극소 |x| 에서 `1.0`(`0x140471cb8`)을 돌려준다.
+`xmm6`/`xmm7` 은 Win64 비휘발성이라 `cosf` 호출을 넘어 살아남는다.
+
+**⚠️ 그래서 `innercone`/`outercone` 은 광축에서 잰 반각(도)이고 `× 0.5` 가 붙지 않는다.**
+V1 PBR 패커도 똑같다(`0x140192e64`–`0x140192e86` inner → `g_LSpot_Origin[i].w`,
+`0x140192eaa`–`0x140192ebf` outer → `g_LSpot_Direction[i].w`; 같은 `xmm7` deg2rad,
+적재 `0x1401910bf`). 즉 **볼류메트릭과 PBR 두 레인이 같은 규약**이다.
+
+**Waple 은 지금 이 자리에서 갈린다.** 호출부 `SceneRenderer3D.swift:1918` 이
+`SceneLight3D.forwardSpotConeCosines`(`SceneDocument.swift:960`)를 쓰는데 그 함수는 아직
+`toHalfRadians = π/180 * 0.5`(`:962`)를 곱한다 — 저작 `innercone 10 / outercone 30` 이
+`cos5°/cos15°` 가 되어 **콘이 WE 절반 폭**으로 그려진다. 같은 모듈(WapleRender)에 정본
+`Scene3DLighting.spotConeCosines`(`* 0.5` 없음)가 이미 있으므로 호출부 한 줄 교체로 닫힌다.
+이번 담당 파일 밖이라 §4.4 에 패치안으로 남긴다.
 
 ### 2.4 패스 구성표 — 실물
 
@@ -228,6 +275,46 @@ vec3 blur3(vec2 u, vec2 d) {
 | **`density`** | `+0x2f8` | **`2.0`** | `0x1401904bc` |
 | **`volumetricsexponent`** | `+0x2fc` | **`1.0`** | `0x1401904c6` |
 | `cascadedistance0/1` | `+0x300`/`+0x304` | `3.0` / `10.0` | `0x1401904d0`/`0x1401904da` |
+
+**이 표는 부분집합이다 — 전수 18키는 `docs/re/scene-lighting.md` §1.3** 에 있고, 2026-08-21 에
+등록 테이블을 다시 떠서 **행 단위로 재확인했다**(항목당 `lea rdx,<이름>` → `mov [reg+0x34],<오프셋>`
+→ `mov [reg+0x30],<타입>`; 타입 2=vec3 4=float 5=enum 6=bool). 이 표에 빠진 것은
+`controlpoint`(`+0x2d8`, vec3, `2 0 0`, `0x14025e412`/`0x140190474`) ·
+`cascadedistance2`(`+0x308`, `100.0`, `0x14025e29c`/`0x1401904e4`) ·
+`lightsourcesize`(`+0x30c`, `0`, `0x14025e35e`) · `visible`(`+0x120`, 공통 오브젝트 필드,
+`0x14025e587`) 넷이다.
+
+**`+0x2c4` 비트 배정(볼류메트릭이 실제로 읽는 자리) — 세터에서 배타적으로 확정.**
+
+| 키 | 비트 | 세터 VA | 게터 VA | 확정 근거 |
+| --- | --- | --- | --- | --- |
+| `castshadow` | bit0 | 공통 `0x1401e1a90` | 공통 `0x1401e1b60` | 남는 비트 + `SHADOW` 콤보 게이트 `0x1401981ea` `test byte [light+0x2c4], 1` · V1 point 패커 `0x14019326b`–`0x1401932ae` |
+| `usecookie` | bit1 | `0x14019b4e0` (`or ecx, 2` @`0x14019b51a`) | `0x14019b5b0` (`test byte [rcx], 2`) | 직접 |
+| `castvolumetrics` | **bit2** | `0x14019bfa0` (`or ecx, 4` @`0x14019bfda`) | `0x14019c070` (`test byte [rcx], 4`) | 직접 |
+
+**`castvolumetrics` 라이트의 저작 키 전수.** 볼류메트릭 **전용** 키는 없다 — 라이트 오브젝트가
+가질 수 있는 키는 위 18개(라이트 고유) + 공통 오브젝트 키(`id`/`name`/`origin`/`angles`/`scale`/
+`parent`/`visible`/…)뿐이고, 볼류메트릭 패스는 그중 일부만 읽는다. §2.3 의 유니폼 팩이 실제로
+읽는 라이트 필드는 **여덟 개**다:
+
+| 소비되는 필드 | 오프셋 | 어디로 |
+| --- | --- | --- |
+| `light`(종) | `+0x2c0` | `POINTLIGHT` 콤보 (`0x1401982fa`) |
+| `castshadow`/`usecookie` | `+0x2c4` bit0/bit1 | `SHADOW`/`COOKIE` 콤보 |
+| `color` | `+0x2cc`,`+0x2d0`,`+0x2d4` | `VAR_COLOR` |
+| `intensity` | `+0x2e4` | `VAR_SPOT_PARAMS_INTENSITY` |
+| `radius` | `+0x2e8` | `VAR_SPOT_PARAMS_RADIUS` (`× 0.99`) |
+| `innercone`/`outercone` | `+0x2f0`/`+0x2f4` | `..._INNER`/`..._OUTER` (`cosf(deg·π/180)`) |
+| `density` | `+0x2f8` | `VAR_DENSITY` |
+| `volumetricsexponent` | `+0x2fc` | `VAR_EXPONENT` |
+
+여기에 파생 필드 둘(`[light+0x310]` 셰도우맵 변환 · `[light+0x320]` 스팟 forward — 후자가
+`angles` 유래)이 더해진다. 게이트는 `castvolumetrics`(`+0x2c4` bit2).
+
+⚠️ **`exponent`(`+0x2ec`)는 볼류메트릭에 안 쓰인다.** 그건 일반 PBR 라이팅의 감쇠 지수고
+(`ComputePBRLightShadow` 의 `exponent`), 볼류메트릭은 `volumetricsexponent`(`+0x2fc`)를 쓴다.
+§2.3 유니폼 팩 전 구간에 `[rsi+0x2ec]` 적재가 **한 번도 없다**. 형제 키에 속기 쉬운 자리다
+(공통 브리프 함정 #8).
 
 Waple 의 파스 기본값(`SceneDocument.swift:1918`–`1921`)은 `density 2` · `volumetricsexponent 1` ·
 `castvolumetrics false` 로 **일치**한다. `radius` 만 `?? 0` 이라 WE(1.0)와 다르다 — 다만
@@ -330,7 +417,27 @@ grep -rl castvolumetrics Sources/WapleRender/Resources/WEAssets/ \
 2. **씬 뎁스 클립(W-17 잔여).** `SceneRenderer3D.swift:1466` 의 `pooledDepth` 는
    `usage=[.renderTarget]` · `storeAction=.dontCare` 라 샘플할 수 없다. `.shaderRead` 를 주고
    저장한 뒤 `encode` 에 넘기면 `_rt_volumetricsSingle` 과 같은 역할을 해서 샤프트가
-   지오메트리에 가려진다. 그전까지는 통과한다.
+   지오메트리에 가려진다. 그전까지는 통과한다. 설계 전문은 **§7.2**.
+
+3. 🔴 **콘 코사인이 반으로 좁다 — 한 줄 패치.** `SceneRenderer3D.swift:1918` 이
+
+   ```swift
+   let cone = SceneLight3D.forwardSpotConeCosines(inner: light.innerCone, outer: light.outerCone)
+   ```
+
+   를 쓰는데 그 2D 포트는 아직 `toHalfRadians = π/180 * 0.5`(`SceneDocument.swift:962`)를 곱한다.
+   WE 는 deg2rad 만 곱한다(§2.3 실측: 볼류메트릭 `0x14019872c`/`0x140198740`, V1 PBR
+   `0x140192e6d`/`0x140192eb3`). 같은 모듈에 정본이 있으므로 **호출부 한 줄**이면 닫힌다:
+
+   ```swift
+   let cone = Scene3DLighting.spotConeCosines(inner: light.innerCone, outer: light.outerCone)
+   ```
+
+   더 근본적인 수선은 `SceneDocument.forwardSpotConeCosines:962` 의 `* 0.5` 제거인데, 그건 2D
+   포워드 라이팅 전체를 함께 바꾸므로 그 레인이 판단할 일이다(그 경우
+   `SceneForwardLightKindTests.testSpotConeHalfAngleCosines` 와
+   `VolumetricLightTests` 의 `cos5°/cos15°` 기대값 두 곳이 `cos10°/cos30°` 로 함께 간다).
+   **두 파일 다 이번 담당 밖이라 손대지 않았다.**
 
 또한 `Tests/WapleRenderTests/VolumetricLightTests.swift` 의
 `testVolumetricLightDirectionUsesForwardConverterNotRawEulerAngles` 는 종전에 **`density: 0` ·
@@ -355,7 +462,26 @@ grep -rl castvolumetrics Sources/WapleRender/Resources/WEAssets/ \
 | W-18 콘 | `smoothstep(outer, inner, cos)` — **맞음** | 인자 `cos` 가 **뷰 레이가 아니라 `normalize(샘플-라이트)`** 라는 점이 핵심 |
 | W-19 반경 | `pow(saturate(1-d/r), exp)` — **맞음** | `r` 은 `radius × 0.99` (`0x140198760`) |
 | (신규) FBO 스케일 | 없음 | 라이트버퍼/Single `Q≥3 ? 1/4 : 1/8`, Back 은 풀해상도 |
-| (신규) QUALITY 출처 | 없음 | 앱 설정 바이트 `[ctx+0x1ad]` — 씬 키 아님 |
+| (신규) QUALITY 출처 | 없음 | 앱 설정 바이트 `[ctx+0x1ad]` — 씬 키 아님. **샘플 수 저작 키는 존재하지 않는다**(§7.4) |
+| (신규) POINTLIGHT 조건 | 없음 | `[light+0x2c0] == 0` ⟺ `light == "lpoint"` (`0x1401982fa`) |
+
+### 5.1 `scene-postprocessing.md` §7 의 W-18·W-19 행은 **이미 낡았다** `[인계]`
+
+그 문서 `:598`–`:600` 의 "Waple" 열은 `VolumetricLightPass.swift:162,169,177` 에서
+`exp(−density·dist·0.001)` · 선형 콘 램프를 인용한다. 그건 **`7c66d46` 이전**의 코드다.
+현행 트리에서 두 수식은 이미 실물이고(`VolumetricLightPass.swift` 의 `metalSource`
+`pow(saturate(1.0 - dist * u.lightCone.z), u.lightParams.y)` ·
+`smoothstep(u.lightCone.x, u.lightParams.w, cosAngle)`), 인용된 줄 번호에는 그 코드가 없다.
+그 문서는 이번 담당 밖이라 고치지 않았다 — 제안하는 정정:
+
+| 행 | 지금 | 이렇게 |
+| --- | --- | --- |
+| W-18 | **확정**(갭) | ~~확정~~ → **해소 `7c66d46`** · Waple 열을 `smoothstep(outer, inner, cos)` 로 |
+| W-19 | **확정**(갭) | ~~확정~~ → **해소 `7c66d46`** · Waple 열을 `pow(saturate(1−d/(radius·0.99)), volumetricsexponent)` 로 |
+| W-17 | **확정**(구조 차이) | 유지하되 Waple 열을 "8샘플 레이마치 1패스 + 구 교차 해석해, 씬 뎁스 클립 없음" 으로. "12~64샘플" 은 셰도우/쿠키 가지 전용(`:78-86`), 그 외는 2~8(`:88-96`) |
+
+**남은 진짜 갭은 W-17 셋 중 씬 뎁스 클립 하나**이고, 거기에 이 문서가 새로 더하는 것이
+🔴 콘 반각(§4.4-3)이다 — 그건 §7 표에 아직 없는 항목이다.
 
 ---
 
@@ -506,7 +632,101 @@ macOS CI 가 아래를 보고했다.
 
 ---
 
-## 7. 남은 미확정
+## 7. W-17 (깊이 기반 5패스) — 설계안과 A/B 절차 `[미구현·검증 불가]`
+
+**이 컨테이너에서는 구현하지 않는다.** 리눅스에 Metal 이 없어 파이프라인·RT·컬링을 한 줄도
+실행 검증할 수 없고, W-17 은 RT 세 장 + 파이프라인 넷을 새로 짓는 구조 변경이다. 검증 없는
+구조 변경은 이 리포가 이미 두 번 당한 실패형(macOS CI 파손)이라 설계안만 남긴다.
+
+### 7.1 지금 무엇이 실제로 비어 있나
+
+§4.2 표에서 "동일" 이 아닌 행은 셋뿐이고, **화면에 보이는 결함은 하나**다.
+
+| 구멍 | 화면 증상 | 난이도 |
+| --- | --- | --- |
+| **씬 뎁스 클립 없음** (`min(backDepth, limitDepth)`) | 샤프트가 오브젝트를 **통과해** 비친다 | 작다 — 기존 뎁스 텍스처 재사용 |
+| 라이트버퍼 다운스케일 + blur3 h/v 없음 | 없음(WE 도 Q≥3 에선 안 한다, `0x140198d21`) | 중간 |
+| 헐 뎁스 2패스 → 구 교차 해석해 | 스팟 콘 헐을 구로 감싼 만큼 **콘 밖 샘플을 헛돈다**(값은 0) | 크다 |
+
+### 7.2 단계 1 — 씬 뎁스 클립 (권장, 유일하게 화면을 고친다)
+
+WE 대응: `volumetricsfront.frag:64` `limitDepth = texLoad2D(g_Texture3, ...)` +
+`:71` `backDepth = min(backDepth, limitDepth)`(비-REVERSEDEPTH 레인).
+
+Waple 이식 형태 — **패스를 늘리지 않는다.** 구 교차의 `tExit` 을 씬 뎁스로 한 번 더 자른다.
+
+1. `SceneRenderer3D` 의 3D 뎁스 텍스처를 샘플 가능하게 만든다.
+   현재 `SceneRenderer3D.swift:1466` 의 pooled depth 는 `usage=[.renderTarget]` ·
+   `storeAction=.dontCare` 다. `usage=[.renderTarget, .shaderRead]` · `storeAction=.store` 로
+   바꾸고 `encode3D` 가 그 텍스처를 `VolumetricLightPass.encode` 에 넘긴다.
+   (포맷은 현행 그대로. `depth32Float` 이면 `texture2d<float>` 로 읽는다.)
+2. `metalSource` 의 프래그먼트에 슬롯을 하나 더 준다 —
+   `texture2d<float> sceneDepth [[texture(0)]]`, `constant` 유니폼에 `invProj`(또는
+   near/far 두 값)를 실어 **깊이 → 뷰 공간 거리**로 되돌린다. 그 값이 `limitDepth` 다.
+3. `tExit = min(tExit, sceneDepthDistance)` 한 줄. `tExit <= tEnter` 면 종전대로 0 반환.
+4. CPU 미러 `VolumetricMath.PixelInput` 에 `sceneDepth: Float?` 를 더하고
+   `hullSpan` 의 `exit` 에 같은 `min` 을 건다 — 두 벌이 갈리지 않게(§6.2 규약).
+
+**주의 셋.**
+- 뎁스 텍스처는 `SceneRenderer3D.swift` 소관이라 이 레인이 못 만든다 — 인계 항목이다(§4.4).
+- MSL 은 `stage_in`·정점 반환 구조체에 **행렬 멤버를 금지한다**. `invProj` 를 정점 출력으로
+  흘리지 말고 프래그먼트 `constant` 버퍼로만 넘겨라(이 리포가 실제로 당했다).
+- 뎁스를 `.store` 로 바꾸면 타일 메모리 절약이 사라진다. 볼류메트릭 씬(코퍼스 도달 0건)에서만
+  켜지도록 `volumetricLightPass != nil` 로 게이트하는 것이 맞다.
+
+### 7.3 단계 2 — 라이트버퍼 + blur3 + combine (구조 패리티, 화면 이득 없음)
+
+| 패스 | 목적지 | 포맷 | 해상도 | 게이트 |
+| --- | --- | --- | --- | --- |
+| march | `lightBuffer` | HDR 씬 `rgba16Float`, 아니면 `bgra8Unorm` | `1/divisor` | 항상 |
+| `blur_k3` h | `lightBufferB` | 같음 | 같음 | `QUALITY < 3` |
+| `blur_k3` v | `lightBuffer` | 같음 | 같음 | `QUALITY < 3` |
+| combine(additive) | 씬 컬러 | — | 풀 | 항상 |
+
+- `divisor` = `VolumetricMath.lightBufferDivisor(quality:)` (Q≥3 → 4, else 8) — 실측 `0x140196d79`.
+- `blur` 여부 = `VolumetricMath.blursLightBuffer(quality:)` (Q<3) — 실측 `0x140196ea0`·`0x140198d21`.
+- 커널 = `VolumetricMath.blur3Weights` `[0.25, 0.5, 0.25]`.
+- 라이트버퍼는 **프레임당 한 번만 클리어**하고 라이트마다 additive 누적(`0x14019791b`).
+  현행 Waple 은 목적지에 직접 additive 라 이 클리어 규약이 이미 등가다.
+- `Back` 만 풀해상도인 것은 뎁스 정합 때문(§2.2). 단계 2 에는 뎁스 RT 가 없으므로 무관.
+
+**Waple 의 `qualityTier` 는 4 고정**(`VolumetricLightPass.qualityTier`)이라 단계 2 를 넣어도
+blur 가지는 죽은 코드가 된다. 넣을 이유는 "저해상도 옵션이 생겼을 때" 뿐이다.
+
+### 7.4 샘플 수의 **저작 키 대응 — 없다**
+
+브리프 질문에 대한 확정 답이다. `QUALITY` 는 **앱 설정 바이트** `[mat+0x1ad]`(`0x140198273`)이고
+scene.json 키가 아니다. 저작자가 볼류메트릭 샘플 수를 지정하는 키는 WE 에 **존재하지 않는다** —
+등록 테이블 18키(§2.5) 어디에도 없다. `LIGHTS_SHADOW_MAPPING_QUALITY` 는 이웃 바이트
+`[mat+0x1ac]`(`0x1401983af`)로 역시 앱 설정이다.
+
+| Waple `qualityTier` | 셰도우 미바인딩 샘플 수 | 셰도우/쿠키 가지 |
+| ---: | ---: | ---: |
+| 1 | 2 | 12 |
+| 2 | 3 | 24 |
+| 3 | 5 | 32 |
+| **4 (현행 고정)** | **8** | 64 |
+
+### 7.5 A/B 절차 (macOS 세션에서만 가능)
+
+1. **한 세션 안에서** before/after 캡처를 둘 다 뜬다 — 세션 간 캡처 비결정 29종
+   (`spec/golden/nondeterminism.json`)이 판독을 막는다. BACKLOG 의 반복 실패형이다.
+2. 픽스처: `Tests/WapleRenderTests/VolumetricLightTests.swift` 의
+   `testVolumetricLightDirectionUsesForwardConverterNotRawEulerAngles` 씬에 **불투명 메시 하나**를
+   라이트와 카메라 사이에 놓는다(현행 픽스처는 `models/missing.mdl` 이라 가려질 것이 없다).
+   단계 1 이 붙기 전에는 그 메시 뒤에서도 샤프트가 보이고, 붙은 뒤에는 사라져야 한다.
+3. 수치 대조는 CPU 미러로 한다 — `VolumetricMath.pixelValue` 에 `sceneDepth` 를 먹인 값과
+   실렌더 픽셀을 `accuracy: 0.02`(≈5/255)로 맞댄다. 대비 단언만으로는 몇 배 발산이 통과한다(§6.1).
+4. 골든: `castvolumetrics` 도달이 동봉 172 · 설치본 186 에서 **0건**이라(§3.1)
+   `spec/golden/snapshot` 170종은 **한 장도 안 바뀐다**. 그래도 `golden-gate.sh` 를 돌려
+   "0종 상이" 를 확인하는 것이 A/B 의 마지막 칸이다 — 안 바뀌어야 하는데 바뀌면 게이트가
+   아니라 이식이 틀린 것이다.
+5. 되돌리기: 단계 1 은 `tExit` 한 줄 + 텍스처 usage 두 플래그라 되돌리기가 싸다.
+   단계 2 는 RT 두 장 + 파이프라인 셋이라 별도 커밋으로 분리한다.
+
+---
+
+## 8. 남은 미확정
 
 - `_rt_volumetricsSingle` 을 **무엇이 채우는지**는 셰이더 쪽 용법(`texLoad2D` 로 `limitDepth`,
   `min(backDepth, limitDepth)`)과 할당 스펙(뎁스 전용 · 라이트버퍼와 같은 해상도)까지가 확정이고,

@@ -438,10 +438,17 @@ enum Scene3DLighting {
     /// 무관하다. 셰이딩 유니폼으로 실제로 실리는 경로는 위 0x140192e64/0x140192eaa 하나뿐이다.
     ///
     /// ⚠️ **동기 필요(이번 레인 밖)**: 같은 변환의 2D 포트
-    /// `SceneDocument.forwardSpotConeCosines`(Sources/WapleCore/SceneDocument.swift)는 아직 `* 0.5`
-    /// 를 곱한다. 그 파일은 다른 레인 소관이라 여기서 건드리지 않았다 — 그쪽에서 `toHalfRadians`
-    /// 를 `Float.pi / 180` 으로 바꾸면 두 레인이 다시 맞는다. 그때 `SceneForwardLightKindTests`
-    /// (`testSpotConeHalfAngleCosines`, `testPackCarriesKindAxisConePerSlot`)의 기대값도 함께 간다.
+    /// `SceneDocument.forwardSpotConeCosines`(`Sources/WapleCore/SceneDocument.swift:960`)는 아직
+    /// `* 0.5` 를 곱한다(`:962` `toHalfRadians`). 그 파일은 다른 레인 소관이라 여기서 건드리지
+    /// 않았다 — 그쪽에서 `toHalfRadians` 를 `Float.pi / 180` 으로 바꾸면 두 레인이 다시 맞는다.
+    /// 그때 `SceneForwardLightKindTests`(`testSpotConeHalfAngleCosines`,
+    /// `testPackCarriesKindAxisConePerSlot`)의 기대값도 함께 간다.
+    ///
+    /// **[2026-08-21 추가] 그 2D 포트를 쓰는 곳이 2D 레인만이 아니다.** 볼류메트릭 패스 호출부
+    /// `SceneRenderer3D.swift:1918` 이 `SceneLight3D.forwardSpotConeCosines` 를 쓴다 — 즉 갓레이
+    /// 콘도 지금 WE 의 **절반 폭**이다. 그 한 줄을 아래 `spotConeCosines` 로 바꾸면(같은 모듈,
+    /// 같은 시그니처) 소유 밖 파일을 하나만 건드리고 닫힌다. 근거는
+    /// `docs/re/volumetric-light.md` §2.3 · `VolumetricLightPass.swift` 의 `innerCone` 주석.
     static func spotConeCosines(inner: Float, outer: Float) -> (inner: Float, outer: Float) {
         guard outer.isFinite, outer > 0 else { return (1, -1) }  // 콘 데이터 없음 → 반구 그라디언트(셰이더 (cosAngle+1)/2 → 축상 1·수직 0.5·후방 0). 전방향 통과 아님.
         // WE 는 `outercone` 이 90 을 넘어도 그대로 cos 를 취한다(콘이 반구를 넘는다). 클램프하지 않는다.
