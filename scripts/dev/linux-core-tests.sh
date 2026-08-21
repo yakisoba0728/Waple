@@ -17,6 +17,12 @@
 #   · 렌더 계층(`WapleRender`·Metal)은 리눅스에서 빌드 자체가 안 되므로 이 스크립트 범위 밖이다.
 #   · 부동소수 결과가 macOS `simd` 와 비트동일하지는 않다(시임은 의미만 맞춘다).
 #   · 골든 스냅샷 게이트는 macOS + 로컬 코퍼스가 필요하다.
+#   · **Foundation 구현이 달라 답이 갈리는 축이 있다.** 여기는 swift-corelibs-foundation 이고
+#     macOS 는 Apple Foundation 이다. 2026-08-21 실측 사례: `JSONSerialization` 의 **중복 키
+#     승자**가 갈린다 — `{"a":1,"a":2}` 가 리눅스에서는 `2`(뒤가 이긴다, WE 와 같다), macOS 에서는
+#     `1`(앞이 이긴다)이다. 이 스크립트가 초록인 채로 macOS CI 가 붉었다
+#     (run 32492467832 · `AssetJSONLenientTests`). `AssetJSON` 처럼 Foundation 파스에 직접
+#     기대는 코드를 고칠 때는 **여기 초록을 근거로 삼지 마라.**
 # 그래도 **커밋 전에 논리 회귀를 잡는 용도로는 충분하다** — CI 가 잡아 준 실패들이 전부 이
 # 범위 안에 있었다.
 #
