@@ -394,9 +394,20 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
                 inFlightDirectoryWalks += 1
                 // F573: 디렉터리 재귀 열거+stat 은 파일 수만큼 I/O — 메인 프리즈 방지를 위해
                 // 백그라운드에서 해석. 응답은 requestId 매칭이라 비동기 전달이 안전하다.
+                // 안쪽 클로저도 **자기 캡처 목록으로** self 를 다시 약참조한다. 바깥
+                // `[weak self]` 가 만드는 것은 `weak var self` 라, 안쪽 @Sendable 클로저가 그것을
+                // 그대로 참조하면 "reference to captured var 'self' in concurrently-executing
+                // code"(Swift 6 언어 모드에서 **에러**)가 된다. 재캡처는 동치다 — 바깥 약참조를
+                // 읽어 새 약참조를 만드는 시점이 안쪽 클로저 **생성 시점**(백그라운드 워크 완료
+                // 직후)일 뿐, 어느 쪽이든 메인 홉에서 읽는 값은 "그때 살아 있으면 객체, 죽었으면
+                // nil" 로 같다. self 는 재대입되지 않으므로 상자를 공유할 이유가 없다.
+                // 강참조 승격(`guard let strong = self` 후 캡처)은 쓰지 않는다 — 그건 수명을
+                // 메인 홉 하나만큼 늘려 deinit/teardown 시점을 바꾸는 **동작 변경**이다.
+                // inFlightDirectoryWalks 정합: 두 형태 모두 self 가 살아 있을 때만 감소하고,
+                // 죽었으면 카운터를 가진 객체 자체가 사라지므로 관측 차이가 없다.
                 DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                     let path = self?.randomFilePath(in: directoryURL) ?? ""
-                    DispatchQueue.main.async {
+                    DispatchQueue.main.async { [weak self] in
                         guard let self else { return }
                         self.inFlightDirectoryWalks -= 1
                         self.deliverRandomFileResponse(requestID: requestID, propertyName: name,
@@ -486,7 +497,8 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
                     .map { $0.resolvingSymlinksInPath().path } ?? []
                 return (target.key, files)
             }
-            DispatchQueue.main.async {
+            // 위 randomFile 경로와 같은 이유로 안쪽에서 재캡처한다(근거는 그 주석 참조).
+            DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.inFlightDirectoryWalks -= 1
                 for (key, files) in resolved {
