@@ -1014,8 +1014,8 @@ python3 scripts/spec/check_js_shim_baseclasses.py
 | 디스크립터 필드 | d.ts | 문서 | 종전 | 도달(워크샵) |
 |---|---|---|---|---|
 | `name` `visible` `alpha` `origin`(xyz) `size` `id` `parentId` `animationLayerCount` | ✓ | ✓ | **실값** | — |
-| `scale` | :2034 | `Vec2` 뿐 | z 를 **1 로 고정** | `scale` 3,055 (성분 분해는 [미해결]) |
-| `angles` | :2029 | `angleZ` 뿐 | x·y 를 **0 으로 고정** | `angles` 3,264 (동봉 171씬 중 x·y≠0 이 1건, 설치본 184씬 중 7건) |
+| `scale` | :2034 | ~~`Vec2` 뿐~~ → `scaleZ` 보존(W-V①) | z 를 **1 로 고정** → **실값**(U) | `scale` 3,055 (성분 분해는 [미해결]) |
+| `angles` | :2029 | ~~`angleZ` 뿐~~ → `angleX`/`angleY` 보존(W-V①) | x·y 를 **0 으로 고정** → **실값**(U) | `angles` 3,264 (동봉 171씬 중 x·y≠0 이 1건, 설치본 184씬 중 7건) |
 | `solid` | :2054 | `isSolid`(bit13, ctor 기본 **true**) | `textureEntryName.isEmpty` — **다른 값** | `solid` 149 (그 밖 4,564 는 ctor 기본 true) |
 | **`color`** | :1785 | ✓ | **항상 (1,1,1)** | **1,372 / 110씬** |
 | **`parallaxDepth`** | :2039 | ✓ | **`undefined`**(심에 프로퍼티 자체가 없었다; 등록 `0x1401e0840` 태그 1 = vec2 `+0x170`) | **1,573 / 121씬** |
@@ -1042,7 +1042,7 @@ python3 scripts/spec/check_js_shim_baseclasses.py
 | **`backgroundcolor`** | :1601 | ✓ | 항상 (0,0,0) | **1,426 / 110씬** |
 | **`limitrows`/`maxrows`** | :1637 :1642 | `maxRows: Int?` | 항상 false / 1 | **1,594 / 121씬** |
 | **`limitwidth`/`maxwidth`** | :1647 :1652 | `maxWidth: Float?` | 항상 false / 500 | **1,594 / 121씬** |
-| `parallaxDepth` | :2039 | **파스 없음** | `undefined` | 956 — `spec/corpus/scene-schema.json` `waple.gapImpact` 가 이미 아는 갭 |
+| `parallaxDepth` | :2039 | ~~**파스 없음**~~ → `SceneTextLayer.parallaxDepth`(W-V②) | `undefined` → **실값**(U) | 956 |
 | `size` | :1560 | 없음 | `(0,0)` 고정 | 실물은 래스터된 텍스트의 픽셀 크기 — **[미해결]** |
 
 굵은 줄이 이번에 확인한 G15 부류다. **이미지 4개 + 텍스트 14개.**
@@ -1143,84 +1143,82 @@ id 2·3·5·7 은 동봉 6 · 설치본 15 · 공식 스니펫 15 어디에도 *
 두 건은 §9.1 (b) 의 `id` 미배선과 **겹쳐서** 나쁘다: 문자열 비교를 고쳐도 텍스트 레이어는
 디스크립터가 `id` 를 안 실어 여전히 못 찾는다. 둘 다 필요하다.
 
-### 9.5 넘길 것 — `SceneRenderer.sceneScriptLayers(from:)` (다른 레인 소유)
+### 9.5 배선 완료 — `SceneRenderer.sceneScriptLayers(from:)` (2026-08-21, 클러스터 U)
 
-`Sources/WapleRender/SceneRenderer.swift:230-266`. 위 자리를 실값으로 채우는 패치다.
-**이 패치 없이는 §9.3 의 새 필드가 전부 기본값 그대로다**(그래서 무회귀이고, 그래서 미완이다).
+`fdc21e8` 이 디스크립터에 **자리만** 만들어 놓은 것을 U 가 **실값으로 채웠다**. 그래서 §9.3 의
+새 필드가 이제 저작값을 싣는다(그전까지는 전부 기본값 그대로였고, 그래서 무회귀였고, 그래서
+미완이었다). 착지 지점은 `Sources/WapleRender/SceneRenderer.swift` 의 같은 함수다.
 
-```swift
-        let imageLayers = doc.layers.map { layer -> SceneScriptLayerDescriptor in
-            var d = SceneScriptLayerDescriptor(
-                name: layer.name,
-                visible: layer.initialVisible,
-                alpha: layer.alpha,
-                origin: SIMD3<Float>(layer.origin.x, layer.origin.y, layer.originZ),
-                scale: SIMD3<Float>(layer.scale.x, layer.scale.y, 1),
-                angles: SIMD3<Float>(0, 0, layer.angleZ),
-                size: SIMD2<Float>(layer.size.x, layer.size.y),
-                solid: layer.textureEntryName.isEmpty,
-                id: layer.id, parentId: layer.parent,
-                animationLayerCount: layer.animationLayers.count
-            )
-            // T-G15: 종전엔 자리가 없어 JS 가 심 기본값(흰색 / (1,1) / "center" / false)을 봤다.
-            d.color = SIMD3<Float>(layer.color.x, layer.color.y, layer.color.z)
-            d.parallaxDepth = SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y)
-            d.alignment = layer.alignment
-            d.perspective = layer.perspective
-            return d
-        }
-        let textLayers = doc.texts.map { text -> SceneScriptLayerDescriptor in
-            var d = SceneScriptLayerDescriptor(
-                name: text.name,
-                visible: text.initialVisible,
-                alpha: text.alpha,
-                // T-G15: originZ/angleZ/id/parent 는 텍스트에도 파스돼 있는데 종전엔 안 넘겨
-                // JS 가 0 / 0 / 0 / 루트를 봤다. id 누락은 getLayerByID 와 부모 배선을 동시에 막는다.
-                origin: SIMD3<Float>(text.origin.x, text.origin.y, text.originZ),
-                scale: SIMD3<Float>(text.scale.x, text.scale.y, 1),
-                angles: SIMD3<Float>(0, 0, text.angleZ),
-                size: SIMD2<Float>(0, 0),
-                text: text.text,
-                id: text.id, parentId: text.parent,
-                pointSize: text.pointSize, font: text.font
-            )
-            d.color = SIMD3<Float>(text.color.x, text.color.y, text.color.z)
-            d.horizontalAlign = text.horizontalAlign
-            d.verticalAlign = text.verticalAlign
-            d.anchor = text.anchor
-            d.padding = SIMD2<Float>(text.padding.x, text.padding.y)
-            d.opaqueBackground = text.opaqueBackground
-            d.backgroundColor = SIMD3<Float>(text.backgroundColor.x, text.backgroundColor.y,
-                                             text.backgroundColor.z)
-            // maxRows/maxWidth 는 nil=무제한이라 게이트와 값으로 갈라 싣는다(WE 도 따로 등록한다 —
-            // limitrows 0x140258ff7 · maxrows 0x14025966d).
-            d.limitRows = text.maxRows != nil
-            d.maxRows = text.maxRows ?? 1
-            d.limitWidth = text.maxWidth != nil
-            d.maxWidth = text.maxWidth ?? 500
-            return d
-        }
-```
+**옛 패치안을 그대로 쓰지 않았다** — 그 사이에 파스가 닫혀서 두 자리가 낡아 있었다:
 
-**따로 판단할 것 — `solid`.** d.ts:2054 의 `ILayer.solid` 는 실물에서 등록 `0x1401e1283`
-(타입 6 = 플래그 비트, 멤버 `+0x120`)이고 `SceneDocument` 는 그것을 `isSolid`(bit13, ctor 기본
-**true**)로 파스한다. 그런데 디스크립터는 이미지 분기에서 `layer.textureEntryName.isEmpty`
-(= "텍스처가 없다")를 싣고 텍스트 분기에서는 아예 안 싣는다. 셋이 서로 다른 값이다.
-`layer.isSolid` / `text.isSolid` 로 바꾸는 것이 실물 규약이지만, **스크립트 도달이 세 코퍼스
-전건 0** 이라 그림이 바뀌는 씬은 확인되지 않는다. 바꾸면 텍스트 1,545개 + 이미지 다수의
-`thisLayer.solid` 가 false→true 로 뒤집히므로, 이 레인에서 단독으로 밀어 넣지 않고 넘긴다.
+| 자리 | 옛 패치안 | 실제로 넣은 것 | 근거 |
+|---|---|---|---|
+| 이미지·텍스트 `scale.z` | `1` 하드코딩 | `layer.scaleZ` / `text.scaleZ` | §9.6 이 "파스 없음" 으로 넘겼는데 W-V① 이 이미 닫았다 |
+| 이미지·텍스트 `angles.x/.y` | `0, 0` 하드코딩 | `layer.angleX/angleY` / `text.angleX/angleY` | 〃(세 성분 모두 **라디안** — 파스가 이미 변환한다) |
+| 텍스트 `parallaxDepth` | 없음(§9.1 이 "파스 없음") | `text.parallaxDepth` | W-V② 가 공통 오브젝트 디스크립터 `+0x170`(태그 1) 근거로 파스를 넣었다 |
+
+**`limitrows`/`maxrows` 쌍은 실물 규약을 직접 다시 떴다**(브리프대로 `?? 1` 로 때우지 않았다):
+
+| 키 | 등록 VA | 타입 태그 | 멤버 | 생성자 기본값 |
+|---|---|---|---|---|
+| `limitwidth` | `0x140258f1e` | 6(플래그 비트) | `+0x594` bit2 | false(`0x140256cf2` `mov dword [rdi+0x594], 1` → bit0 만) |
+| `limitrows` | `0x140258ff7` | 6 | `+0x594` bit3 | false(같은 리터럴) |
+| `maxwidth` | `0x14025959e` | **4**(float) | `+0x508` | **500.0**(`0x140256c1a` `mov dword [rdi+0x508], 0x43fa0000`) |
+| `maxrows` | `0x14025966d` | **0**(int — 주입기 `0x1401a4930` 의 `mov [r14+rbp], eax`) | `+0x510` | **1**(`0x140256c2e` `mov dword [rdi+0x510], 1`) |
+
+즉 게이트와 값은 **서로 다른 멤버**이고, 미체크 시 싣는 1 / 500 은 임의값이 아니라 **WE 생성자의
+멤버 기본값**이다. (같은 ctor 덤프가 §9.3 의 `padding` (32,32) `0x140256bbf`/`0x140256bc9` ·
+`pointsize` 32 `0x140256bf2` · `outlinethickness` 4 `0x140256c43` · `anchor` 0 `0x140256c99` 를
+한 화면에서 다시 확인해 준다 — 한 칸 밀림 대조.)
+
+**[미해결] 남는 것**: 실물은 `limitrows: false` 라도 저작된 `maxrows` 를 멤버에 **그대로 싣는다**
+(주입기가 게이트와 무관하게 키마다 따로 돈다). `SceneTextLayer` 는 둘을 `Int?` 하나로 접어 두므로
+미체크 시의 저작값은 복원할 수 없다. `SceneDocument` 쪽 패치가 선행돼야 한다 — §9.6 (신).
+
+**`solid` 는 이 라운드 전에 이미 닫혔다.** 옛 §9.5 가 "따로 판단할 것" 으로 남겨 둔
+`layer.textureEntryName.isEmpty` 는 `aebf586`(O-W5)이 `layer.isSolid`/`text.isSolid` 로 바꿨다.
 
 ### 9.6 넘길 것 — `SceneDocument` (다른 레인 소유)
 
-디스크립터가 아니라 **파스**에서 값이 사라지는 것들이라 여기서는 못 고친다.
+**[2026-08-21 정정 — U]** 이 절의 앞 세 항목은 **낡았다**. 그 사이에 다른 레인(W-V①/W-V②)이
+파스를 닫았고, U 가 디스크립터 배선까지 붙였다(§9.5). 툼스톤으로 남긴다:
 
-- `SceneLayer.scale` 이 `Vec2` 라 씬 JSON 의 `scale.z` 가 소실된다(동봉 171씬 중 71 오브젝트,
-  설치본 184씬 중 92 — 전건 균일 3성분 `"s s s"`). JS 는 `thisLayer.scale.z` 를 늘 1 로 본다.
-- `SceneLayer.angleZ`/`SceneTextLayer.angleZ` 뿐이라 `angles.x`/`.y` 가 소실된다(동봉 1 · 설치본 7
-  오브젝트가 x·y≠0). 2D 렌더에는 무영향이지만 JS 표면은 틀린다.
-- `SceneTextLayer` 에 `parallaxDepth` 필드가 없다(워크샵 텍스트 1,597 중 956). 이미
-  `spec/corpus/scene-schema.json` 의 `waple.gapImpact` 가 렌더 갭으로 적어 둔 항목이고,
-  스크립트 표면 갭이기도 하다.
+- ~~`SceneLayer.scale` 이 `Vec2` 라 `scale.z` 가 소실된다~~ → `SceneLayer.scaleZ` / `SceneTextLayer.scaleZ` 로 보존됨. **배선 완료.**
+- ~~`angleZ` 뿐이라 `angles.x`/`.y` 가 소실된다~~ → `angleX`/`angleY` 로 보존됨(양쪽 타입 모두). **배선 완료.**
+- ~~`SceneTextLayer` 에 `parallaxDepth` 필드가 없다~~ → 있음(공통 오브젝트 디스크립터 `+0x170`, 태그 1). **배선 완료.**
+
+**아직 열려 있는 것**:
+
+- **`limitrows`/`limitwidth` 미체크 시의 저작값 소실.** `SceneTextLayer.maxRows: Int?` /
+  `maxWidth: Float?` 가 게이트와 값을 하나로 접는다(`SceneDocument.swift` 의 `parseText`,
+  `if weBool(obj["limitwidth"]), … { t.maxWidth = mw }`). 실물은 두 멤버가 독립이고
+  (`+0x594` bit2/bit3 vs `+0x508`/`+0x510`) 주입기가 게이트와 무관하게 돌므로,
+  `limitrows: false, maxrows: 7` 인 오브젝트의 `thisLayer.maxrows` 는 실물에서 **7** 이지만
+  Waple 은 생성자 기본값 1 을 본다. 정확한 패치안:
+
+  ```swift
+  // 현재(값이 소실된다)
+  if weBool(obj["limitwidth"]), case let mw = float(obj["maxwidth"]) ?? 500, mw > 0 { t.maxWidth = mw }
+  if weBool(obj["limitrows"]), case let mr = intVal(obj["maxrows"]) ?? 1, mr > 0 { t.maxRows = mr }
+
+  // 제안(게이트와 값을 분리 — 실물 멤버 구조와 동형)
+  //   var limitWidth: Bool = false          // +0x594 bit2, 등록 0x140258f1e (타입 6)
+  //   var maxWidthValue: Float = 500        // +0x508,      등록 0x14025959e (타입 4), ctor 0x140256c1a
+  //   var limitRows: Bool = false           // +0x594 bit3, 등록 0x140258ff7 (타입 6)
+  //   var maxRowsValue: Int = 1             // +0x510,      등록 0x14025966d (타입 0), ctor 0x140256c2e
+  //   var maxWidth: Float? { limitWidth && maxWidthValue > 0 ? maxWidthValue : nil }   // 기존 소비부 무수정
+  //   var maxRows: Int?   { limitRows  && maxRowsValue  > 0 ? maxRowsValue  : nil }
+  t.limitWidth = weBool(obj["limitwidth"])
+  t.maxWidthValue = float(obj["maxwidth"]) ?? 500
+  t.limitRows = weBool(obj["limitrows"])
+  t.maxRowsValue = intVal(obj["maxrows"]) ?? 1
+  ```
+  `maxWidth`/`maxRows` 를 계산 프로퍼티로 남기면 래스터 경로(워드랩)는 한 글자도 안 바뀐다.
+  그 뒤 `SceneRenderer.sceneScriptLayers(from:)` 의 4줄을 `d.limitRows = text.limitRows` /
+  `d.maxRows = text.maxRowsValue` 식으로 바꾸면 된다.
+- **텍스트 오브젝트의 `size`**(§9.1 (b))는 여전히 [미해결] — 실물은 래스터된 픽셀 크기다.
+  이건 파스가 아니라 렌더 경로가 아는 값이라 `SceneDocument` 로는 못 닫는다.
+  `docs/re/pointer-interaction.md` §7.4 의 우선순위 2와 같은 항목이다(히트 기하가 여기 걸려 있다).
 - `spec/corpus/scene-schema.json` 의 `waple.valueShapeMismatch` 가 아직
   "`SceneTextLayer.spacing` 은 `Float?`" 라고 적고 있는데 현재 코드는 `Vec2?` 다 — 스펙 덤프가
   낡았다(재측정 대상).
@@ -1228,6 +1226,15 @@ id 2·3·5·7 은 동봉 6 · 설치본 15 · 공식 스니펫 15 어디에도 *
 ### 9.7 검증
 
 리눅스 레인에서 끝낼 수 있는 것은 다 끝냈다. macOS 전용은 그렇다고 명시한다.
+
+**U 라운드(2026-08-21) 추가 검증** — 배선을 실제로 돌려서 확인했다:
+
+| 무엇 | 어떻게 | 결과 |
+|---|---|---|
+| `sceneScriptLayers(from:)` 실값 배선 | 소스에서 디스크립터 구조체 + 함수 + `layersJSONArray` **원문을 그대로 뽑아** 실 `WapleCore`(진짜 `SceneDocument.parse`) 와 함께 리눅스 `swift test` | 4테스트 / 단언 40+ 전건 통과 |
+| 〃 돌연변이 대조 | padding 성분 뒤집기 · maxRows 폴백 1→2 · 텍스트 parallaxDepth 배선 제거 · 텍스트 id 배선 제거 · scale.z 하드코딩 복원 | **5/5 잡힘** |
+| `Sources/WapleRender/**` 타입체크 | `scripts/dev/linux-render-typecheck.sh` | 커버 **55/55** rc=0 |
+
 
 | 무엇 | 어떻게 | 결과 |
 |---|---|---|

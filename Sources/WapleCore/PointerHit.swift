@@ -102,6 +102,78 @@ public enum PointerHit {
         guard let uv = localUV(quad, point) else { return nil }
         return SIMD2(uv.x * size.x, (1 - uv.y) * size.y)
     }
+
+    /// 커서 훅 **배달 범위** — 실물 배달 루프 `0x14018a709`–`0x14018a723`(커서 훅 5종 전건 동형)의
+    /// 첫 관문을 순수 값으로 옮긴 것. 커서 훅은 **브로드캐스트가 아니다**:
+    ///
+    /// ```
+    /// if (inst[0x48] != hitObject && inst[8] != 0) continue;   // 소유 오브젝트 일치 또는 무바인딩
+    /// if (!(inst[0x40] & (1 << hookIdx)))          continue;   // 훅 보유 비트마스크
+    /// if (inst[0x44] != 2)                         continue;   // 인스턴스 상태 = 초기화 완료
+    /// ```
+    ///
+    /// 둘째·셋째 관문은 Waple 에 이미 있다(`TextScriptEngine.hookNames` / "엔진이 생성됐다").
+    /// 남는 첫 관문이 이 타입이다. 그 앞단(어떤 오브젝트가 히트인가)은 히트 순회 쪽 관문 —
+    /// `solid`(플래그워드 `+0x120` bit13, ctor 기본 **true**, `0x14018a00b` `mov r8d,0x2000` →
+    /// `0x14018a02d`)가 첫 게이트다.
+    public enum DeliveryScope: Equatable {
+        /// 오브젝트에 바인딩되지 않은 스크립트 — 실물 `inst[8] == 0`. 어느 오브젝트가 맞았든 받는다.
+        case unbound
+        /// 소유 오브젝트의 히트 쿼드(씬 픽셀 · 시차 보정까지 끝난 것).
+        case object(Quad)
+        /// 소유 오브젝트가 히트 순회에 **아예 들어가지 않는다** — `solid` 가 꺼져 있다.
+        case unhittable
+        /// **Waple 한정 폴백**: 소유 오브젝트는 있는데 히트 기하가 미확정이다. 실물 텍스트 오브젝트의
+        /// 크기는 래스터된 픽셀 크기인데(`docs/re/scene-script-api.md` §9.1 (b) 의 `size` [미해결])
+        /// 우리는 그 값을 모른다. **추측한 상자로 막기보다 종전 브로드캐스트를 유지한다** —
+        /// 틀린 방향으로 좁히면 스크립트가 통째로 죽고, 넓은 채로 두면 종전과 같다.
+        case geometryUnknown
+    }
+
+    /// 이 대상이 포인터 `point` 에 대해 커서 훅을 받는가. `point == nil`(창 밖)이면 실물은 히트
+    /// 오브젝트가 없어 루프 자체가 돌지 않으므로 `.object` 는 거짓이다.
+    /// `.unbound`/`.geometryUnknown` 은 히트와 무관하게 참(각각 실물 예외와 우리 폴백).
+    public static func delivers(_ scope: DeliveryScope, to point: SIMD2<Float>?) -> Bool {
+        switch scope {
+        case .unbound, .geometryUnknown: return true
+        case .unhittable: return false
+        case .object(let quad): return point.map { contains(quad, $0) } ?? false
+        }
+    }
+}
+
+/// `cursorClick` 타이밍 — 실물은 **뗄 때** 발화하고, **누를 때 잡아 둔 오브젝트에서 떼었을 때만**이다.
+///
+/// - 누름(`dl != 0`): `0x14018a78b`–`0x14018a7a0` 이 히트 오브젝트를 `scene+0x2c0` 해시맵에 넣는다
+///   (`0x14018a79b` `mov [rsp+0x50], r15` 로 오브젝트 포인터를 넘긴다).
+/// - 뗌(`0x14018a787` `test dl,dl` → `je 0x14018a7aa`): 같은 맵을 `find` 하고
+///   **end 면 스킵**한다(`0x14018a7aa`–`0x14018a7b2`. 버킷 탐색 `0x14018a1d2`–`0x14018a20c` 의
+///   `cmove rbx, r9` 가 미발견 시 end 를 대입하는 짝이다). 통과해야 `cursorClick` 배달 루프
+///   (`0x14018a833` `mov r9d, 0xb` = 훅 인덱스 11)로 들어간다.
+///
+/// 종전 Waple 은 **누를 때** `cursorDown` 과 함께 쐈다(W-9). 키는 실물이 오브젝트 포인터,
+/// 여기서는 배달 대상 인덱스다 — 같은 동치관계라 판정이 같다.
+public struct PointerClickLatch: Equatable {
+    private var held: Set<Int>
+
+    public init(held: Set<Int> = []) { self.held = held }
+
+    /// 지금 "누른 채 잡고 있는" 대상들(진단·테스트용).
+    public var heldTargets: Set<Int> { held }
+
+    /// 누름 — 이번에 히트한 대상을 잡는다(실물 맵 삽입). 직전 눌림은 덮어쓴다.
+    public mutating func press(_ hit: [Int]) { held = Set(hit) }
+
+    /// 뗌 — 지금 히트한 대상 중 **누를 때도 잡고 있던** 것만 클릭이다. 호출 후 맵은 비운다.
+    /// 순서는 입력 순서를 유지한다(z-순서 역순 순회 결과를 그대로 쓰기 위함).
+    public mutating func release(_ hit: [Int]) -> [Int] {
+        let clicked = hit.filter { held.contains($0) }
+        held.removeAll()
+        return clicked
+    }
+
+    /// 눌림 무효화(창 밖에서 뗌 · 마운트 해제). 실물도 맵을 비운다(`0x14018a468`).
+    public mutating func cancel() { held.removeAll() }
 }
 
 /// `g_PointerState`(유니폼 id 106) 합성용 버튼 상태 — 실물 renderState `+0xa4` 의 **비트 2개**.

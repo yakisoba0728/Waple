@@ -125,6 +125,87 @@ final class PointerHitTests: XCTestCase {
         XCTAssertEqual(shifted.axisX, q.axisX)
         XCTAssertEqual(shifted.axisY, q.axisY)
     }
+
+    // MARK: - 배달 범위(U-W5b) — `0x14018a709`–`0x14018a723`
+
+    /// 바인딩된 오브젝트를 덮을 때만 받는다. 이게 종전 브로드캐스트와 갈리는 지점이다.
+    func testBoundTargetOnlyReceivesInsideItsQuad() {
+        let q = layerQuad(center: SIMD2(4, 4), size: SIMD2(2, 2))
+        XCTAssertTrue(PointerHit.delivers(.object(q), to: SIMD2(4, 4)))
+        XCTAssertTrue(PointerHit.delivers(.object(q), to: SIMD2(3, 5)))   // 경계 포함
+        XCTAssertFalse(PointerHit.delivers(.object(q), to: SIMD2(960, 540)),
+                       "종전 e2e 가 굳혀 둔 계약 — 실물이라면 발화하지 않는다")
+    }
+
+    /// 무바인딩(`inst[8] == 0`)은 어디를 찍든 받는다 — 실물의 유일한 예외.
+    func testUnboundReceivesAnywhere() {
+        XCTAssertTrue(PointerHit.delivers(.unbound, to: SIMD2(960, 540)))
+        XCTAssertTrue(PointerHit.delivers(.unbound, to: SIMD2(-9999, -9999)))
+        XCTAssertTrue(PointerHit.delivers(.unbound, to: nil))
+    }
+
+    /// `solid`(bit13) 가 꺼진 오브젝트는 히트 순회의 첫 관문(`0x14018a02d`)을 못 지난다.
+    func testUnhittableNeverReceives() {
+        XCTAssertFalse(PointerHit.delivers(.unhittable, to: SIMD2(4, 4)))
+        XCTAssertFalse(PointerHit.delivers(.unhittable, to: nil))
+    }
+
+    /// 기하 미확정(텍스트 래스터 크기 [미해결])은 **좁히지 않는다** — 종전 배달을 유지한다.
+    func testGeometryUnknownKeepsLegacyBroadcast() {
+        XCTAssertTrue(PointerHit.delivers(.geometryUnknown, to: SIMD2(1, 1)))
+        XCTAssertTrue(PointerHit.delivers(.geometryUnknown, to: nil))
+    }
+
+    /// 창 밖(p == nil)이면 히트 오브젝트가 없다 — 바인딩된 대상은 아무도 못 받는다.
+    func testBoundTargetGetsNothingWhenPointerIsOutsideWindow() {
+        XCTAssertFalse(PointerHit.delivers(.object(layerQuad(center: .zero, size: SIMD2(100, 100))), to: nil))
+    }
+
+    /// 회전/시차가 붙어도 판정은 같은 `contains` 다 — 쿼드를 옮긴 뒤에 물어야 한다.
+    func testDeliveryFollowsTranslatedQuad() {
+        let q = layerQuad(center: SIMD2(100, 100), size: SIMD2(20, 20))
+        XCTAssertFalse(PointerHit.delivers(.object(q), to: SIMD2(140, 100)))
+        XCTAssertTrue(PointerHit.delivers(.object(q.translated(by: SIMD2(40, 0))), to: SIMD2(140, 100)))
+    }
+
+    // MARK: - cursorClick 홀드 맵(U-W9) — `0x14018a787` · `0x14018a7aa`
+
+    /// 같은 대상에서 눌렀다 떼야 클릭이다.
+    func testClickRequiresPressAndReleaseOnSameTarget() {
+        var latch = PointerClickLatch()
+        latch.press([2])
+        XCTAssertEqual(latch.heldTargets, [2])
+        XCTAssertEqual(latch.release([2]), [2])
+        XCTAssertTrue(latch.heldTargets.isEmpty, "뗀 뒤에는 맵이 비어야 한다")
+    }
+
+    /// 눌렀다가 **다른** 오브젝트 위에서 떼면 클릭이 아니다(맵 find 가 end).
+    func testReleaseOnDifferentTargetIsNotAClick() {
+        var latch = PointerClickLatch()
+        latch.press([2])
+        XCTAssertEqual(latch.release([7]), [])
+    }
+
+    /// 누르지 않고 뗌(창 밖에서 누르고 들어와서 뗌)도 클릭이 아니다.
+    func testReleaseWithoutPressIsNotAClick() {
+        var latch = PointerClickLatch()
+        XCTAssertEqual(latch.release([1, 2, 3]), [])
+    }
+
+    /// 겹친 오브젝트: 누를 때·뗄 때 **둘 다** 덮은 것만 클릭이고, 순서는 입력 순서를 유지한다.
+    func testOverlappingTargetsIntersectAndKeepOrder() {
+        var latch = PointerClickLatch()
+        latch.press([5, 1, 3])
+        XCTAssertEqual(latch.release([3, 9, 1]), [3, 1])
+    }
+
+    /// 창 밖에서 떼면 눌림이 무효가 되고, 그 뒤 같은 자리에서 떼도 클릭이 아니다.
+    func testCancelDropsTheHeldSet() {
+        var latch = PointerClickLatch()
+        latch.press([4])
+        latch.cancel()
+        XCTAssertEqual(latch.release([4]), [])
+    }
 }
 
 /// `g_PointerState` 비트 2개 — `.z` 는 **엣지**(누른 첫 프레임만), `.x/.y` 는 유지.

@@ -45,6 +45,27 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
 
     /// 합성 토글 씬(실물 3394601417 축소판): 컨트롤러 visible 스크립트가 cursorClick 으로 shared.a 토글,
     /// 소비자 alpha 스크립트가 shared.a 로 빨강 오버레이 on/off. simulateCursorClick 전후 캡처 픽셀 검증.
+    ///
+    /// **U-W5b(2026-08-21) 계약 정정.** 이 테스트는 2026-08-21 이전까지 컨트롤 오브젝트를
+    /// `origin "4 4 0" size "2 2"` 로 둔 채 `simulateCursorClick(x: 960, y: 540)` 을 불렀다.
+    /// **실물이라면 그건 발화하지 않는다** — 커서 훅은 브로드캐스트가 아니라 히트한 오브젝트에
+    /// 바인딩된 스크립트에만 간다:
+    /// ```
+    /// if (inst[0x48] != hitObject && inst[8] != 0) continue;   // 0x14018a709–0x14018a714
+    /// if (!(inst[0x40] & (1 << hookIdx)))          continue;   // 0x14018a716–0x14018a71d
+    /// if (inst[0x44] != 2)                         continue;   // 0x14018a71f
+    /// ```
+    /// (커서 훅 5종 전건 동형. 히트 순회 자체의 첫 관문은 `solid` bit13 — `0x14018a00b` `mov r8d,0x2000`
+    ///  → `0x14018a02d`.) 즉 옛 계약("좌표와 무관하게 배달된다")은 **틀렸고**, 그 테스트가 그것을
+    /// 굳혀 두고 있었다. 배달을 실물대로 좁히면서 여기도 같이 고친다.
+    ///
+    /// 검증 의도는 그대로다 — "cursorClick 배달 → shared 토글 → 픽셀 변화". 달라진 것은 좌표가
+    /// **의미를 갖는다**는 점이라, 컨트롤 오브젝트를 키우지 않고 **클릭을 그 위로 옮긴 뒤**
+    /// 빗나간 클릭이 아무 일도 하지 않는다는 음성 대조를 추가했다. 컨트롤 오브젝트를 전면화하면
+    /// 그 음성 대조를 만들 자리가 없어진다(전면이면 어디를 찍든 히트다).
+    ///
+    /// 컨트롤 오브젝트에 `name` 이 **없는 것도 그대로 둔다** — 배달 대상을 이름이 아니라 디스크립터
+    /// 인덱스로 잡는다는 것(`SceneRenderer.pointerEngineOwners`)의 회귀 가드다.
     func testSimulatedClickTogglesSyntheticScene() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let scene = """
@@ -82,16 +103,36 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
         XCTAssertGreaterThan(before.r, 0.8, "초기 shared.a=1 → 빨강 오버레이 on: \(before)")
         XCTAssertLessThan(before.g, 0.2)
 
+        // 배달 대상 해석이 컨트롤 오브젝트(origin 4 4 · size 2 2)에 실제로 걸렸는지부터 확인한다.
+        // nil 이면 무바인딩/기하 미확정으로 떨어진 것이고, 그러면 아래 음성 대조가 의미를 잃는다.
+        let target = try XCTUnwrap(r.pointerHookTargetCenter(hook: "cursorClick"),
+                                   "cursorClick 스크립트가 소유 오브젝트에 묶이지 않았다(무바인딩 폴백)")
+        XCTAssertEqual(target.x, 4, accuracy: 1e-3)
+        XCTAssertEqual(target.y, 4, accuracy: 1e-3)
+
+        // 음성 대조: 컨트롤 오브젝트를 **빗나간** 클릭은 발화하지 않는다(옛 계약이 굳혀 뒀던 좌표).
         r.simulateCursorClick(x: 960, y: 540)
+        let missed = try capture("after_missed_click")
+        XCTAssertGreaterThan(missed.r, 0.8,
+                             "빗나간 클릭이 토글을 일으켰다 — 배달이 아직 브로드캐스트다: \(missed)")
+        XCTAssertLessThan(missed.g, 0.2)
+
+        r.simulateCursorClick(x: target.x, y: target.y)
         let after = try capture("after_click")
         XCTAssertGreaterThan(after.g, 0.8, "클릭 → shared.a=0 → 오버레이 off(흰 bg): \(after)")
 
-        r.simulateCursorClick(x: 960, y: 540)
+        r.simulateCursorClick(x: target.x, y: target.y)
         let again = try capture("after_second_click")
         XCTAssertLessThan(again.g, 0.2, "재클릭 → 오버레이 복귀: \(again)")
     }
 
     /// 실물 3394601417: visible 스크립트의 cursorClick 이 주야(shared.a) 토글 — 클릭 전후 luma 변화.
+    ///
+    /// U-W5b: 종전의 하드코딩 `(960, 540)` 은 "컨트롤러 `bt` 오브젝트가 화면 중앙을 덮는다"는
+    /// **검증되지 않은 가정**이었다(배달이 브로드캐스트라 좌표가 아무 의미가 없어서 아무도 안 봤다).
+    /// 배달이 히트 오브젝트 스코프로 좁혀진 지금은 좌표가 load-bearing 이므로 **씬에서 되읽는다**.
+    /// 소유 오브젝트가 없으면(무바인딩 = 실물 `inst[8] == 0`, 또는 텍스트라 기하 미확정) 배달은
+    /// 좌표와 무관하니 종전 좌표를 그대로 쓴다.
     func testRealDayNightToggle3394601417() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let r = SceneRenderer()
@@ -109,13 +150,15 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
             let c = try meanRGB(dst)
             return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b
         }
+        let hit = r.pointerHookTargetCenter(hook: "cursorClick") ?? SIMD2<Float>(960, 540)
+        NSLog("%@", "[WapleE2E] 3394601417 cursorClick 대상 중심 = \(hit)")
         let day = try luma("3394601417_before")
-        r.simulateCursorClick(x: 960, y: 540)
+        r.simulateCursorClick(x: hit.x, y: hit.y)
         let night = try luma("3394601417_after")
         NSLog("%@", "[WapleE2E] 3394601417 luma day=\(day) night=\(night) delta=\(abs(day - night))")
         XCTAssertGreaterThan(abs(day - night), 0.02,
                              "클릭(주야 토글) 전후 luma 무변화: \(day) → \(night)")
-        r.simulateCursorClick(x: 960, y: 540)
+        r.simulateCursorClick(x: hit.x, y: hit.y)
         let day2 = try luma("3394601417_again")
         XCTAssertLessThan(abs(day - day2), 0.02, "재클릭 → 원상 복귀: \(day) → \(day2)")
     }
@@ -155,6 +198,9 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
         r.sceneScript?.soundTransport = audio
 
         XCTAssertFalse(audio.isPlaying(name: "dial.wav"), "클릭 전 startsilent 무음")
+        // U-W5b: 좌표가 load-bearing 이다. 여기 (960,540) 은 **의도적으로 맞는** 좌표다 —
+        // cursorClick 스크립트가 붙은 오브젝트 id=1 이 `origin "960 540 0" size "1920 1080"` 전면이라
+        // 화면 중앙이 그 히트 쿼드 안이다. 씬을 고치면 이 좌표도 같이 고쳐야 한다.
         r.simulateCursorClick(x: 960, y: 540)
         XCTAssertTrue(audio.isPlaying(name: "dial.wav"),
                       "cursorClick → getLayer('dial.wav').play() → 트랜스포트 재생 전이 실패")

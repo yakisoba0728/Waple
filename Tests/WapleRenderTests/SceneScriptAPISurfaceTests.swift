@@ -419,4 +419,106 @@ final class SceneScriptAPISurfaceTests: XCTestCase {
         XCTAssertTrue(TextScriptEngine.eventHookNames.contains("animationEvent"),
                       "id 6 은 d.ts 에 없지만 실물이 발화한다")
     }
+
+    // MARK: T-G15 배선 — 씬 문서 → 디스크립터 (`SceneRenderer.sceneScriptLayers(from:)`)
+
+    /// **위 `testStaticLayerSurfaceFollowsDescriptor` 가 못 잡는 자리다.** 그 테스트는 디스크립터를
+    /// 손으로 만들어 심 표면만 본다 — `fdc21e8` 이 디스크립터에 자리를 만들고도 실값을 안 채우던
+    /// 동안 그 테스트는 초록이었다(`docs/re/scene-script-api.md` §9 이 "잡히는 유일한 지점" 이라고
+    /// 적어 둔 표가 이것이다). 여기서는 **실 `SceneDocument.parse` 를 통과시켜** 저작값이 끝까지
+    /// 가는지 본다. `sceneScriptLayers(from:)` 는 순수 static 이라 Metal/마운트가 필요 없다.
+    private func parsedDoc(_ sceneJSON: String, extra: [(String, Data)] = []) throws -> SceneDocument {
+        try SceneDocument.parse(package: ScenePackage.assemble(
+            [(name: "scene.json", data: Data(sceneJSON.utf8))] + extra.map { (name: $0.0, data: $0.1) }))
+    }
+
+    func testAuthoredSceneValuesReachTheScriptDescriptor() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[
+           {"id":7,"name":"img","image":"models/a.json","origin":"100 200 30","size":"64 32",
+            "scale":"2 3 4","angles":"10 20 90","color":"0.25 0.5 0.75","parallaxDepth":"0.3 0.4",
+            "alignment":"topleft","perspective":true,"parent":3,"solid":false},
+           {"id":9,"name":"txt","text":"hi","font":"fonts/X.ttf","pointsize":48,"parent":7,
+            "origin":"11 22 33","scale":"1 1 5","angles":"0 0 45","parallaxDepth":"0.6 0.7",
+            "color":"0.1 0.2 0.3","horizontalalign":"right","verticalalign":"top",
+            "anchor":"topcenter","padding":"7 9","opaquebackground":true,
+            "backgroundcolor":"0.9 0.8 0.7","limitrows":true,"maxrows":4,
+            "limitwidth":true,"maxwidth":123}
+         ]}
+        """
+        let d = SceneRenderer.sceneScriptLayers(from: try parsedDoc(scene, extra: [
+            ("models/a.json", Data(#"{"material":"materials/a.json"}"#.utf8)),
+            ("materials/a.json", Data(#"{"passes":[{"textures":["a"]}]}"#.utf8)),
+        ]))
+        XCTAssertEqual(d.count, 2, "이미지 1 + 텍스트 1(이미지 먼저 — layersJSONArray 인덱스 규약)")
+
+        let img = d[0]
+        XCTAssertEqual(img.id, 7); XCTAssertEqual(img.parentId, 3)
+        XCTAssertEqual(img.color, SIMD3<Float>(0.25, 0.5, 0.75))
+        XCTAssertEqual(img.parallaxDepth, SIMD2<Float>(0.3, 0.4))
+        XCTAssertEqual(img.alignment, "topleft")
+        XCTAssertTrue(img.perspective)
+        XCTAssertFalse(img.solid, "ILayer.solid = 플래그워드 +0x120 bit13(ctor 기본 true)")
+        XCTAssertEqual(img.origin.z, 30)
+        XCTAssertEqual(img.scale.z, 4, "종전엔 1 로 하드코딩됐다")
+        XCTAssertNotEqual(img.angles.x, 0, "종전엔 (0,0,angleZ) 였다")
+        XCTAssertNotEqual(img.angles.y, 0)
+
+        let t = d[1]
+        XCTAssertEqual(t.id, 9, "텍스트 id 미배선이면 getLayerByID 와 부모 배선이 동시에 막힌다")
+        XCTAssertEqual(t.parentId, 7, "미배선이면 getParent() 가 언제나 루트")
+        XCTAssertEqual(t.origin.z, 33)
+        XCTAssertEqual(t.scale.z, 5)
+        XCTAssertNotEqual(t.angles.z, 0)
+        XCTAssertEqual(t.parallaxDepth, SIMD2<Float>(0.6, 0.7))
+        XCTAssertEqual(t.color, SIMD3<Float>(0.1, 0.2, 0.3))
+        XCTAssertEqual(t.horizontalAlign, "right")
+        XCTAssertEqual(t.verticalAlign, "top")
+        XCTAssertEqual(t.anchor, "topcenter")
+        XCTAssertEqual(t.padding, SIMD2<Float>(7, 9))
+        XCTAssertTrue(t.opaqueBackground)
+        XCTAssertEqual(t.backgroundColor, SIMD3<Float>(0.9, 0.8, 0.7))
+        XCTAssertTrue(t.limitRows);  XCTAssertEqual(t.maxRows, 4)
+        XCTAssertTrue(t.limitWidth); XCTAssertEqual(t.maxWidth, 123)
+        XCTAssertEqual(t.pointSize, 48); XCTAssertEqual(t.font, "fonts/X.ttf")
+    }
+
+    /// `limit*` 미체크 시 싣는 값은 임의값이 아니라 **WE 텍스트 오브젝트 생성자의 멤버 기본값**이다 —
+    /// `maxrows` 는 `0x140256c2e` `mov dword [rdi+0x510], 1`, `maxwidth` 는 `0x140256c1a`
+    /// `mov dword [rdi+0x508], 0x43fa0000`(= 500.0f). 게이트는 별개 멤버(`+0x594` bit2/bit3,
+    /// 등록 `0x140258f1e`/`0x140258ff7`, 타입 태그 6)라 두 값으로 갈라 싣는다.
+    func testUncheckedRowAndWidthLimitsUseRealCtorDefaults() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[{"id":1,"name":"t","text":"x","font":"systemfont_arial","pointsize":32,
+                     "origin":"0 0 0","scale":"1 1","limitrows":false,"maxrows":9,
+                     "limitwidth":false,"maxwidth":999}]}
+        """
+        let t = SceneRenderer.sceneScriptLayers(from: try parsedDoc(scene))[0]
+        XCTAssertFalse(t.limitRows);  XCTAssertEqual(t.maxRows, 1)
+        XCTAssertFalse(t.limitWidth); XCTAssertEqual(t.maxWidth, 500)
+        // [미해결] 실물은 게이트가 꺼져 있어도 저작값(9 / 999)을 멤버에 그대로 싣는다 —
+        // `SceneTextLayer` 가 게이트와 값을 `Int?`/`Float?` 하나로 접어서 복원할 수 없다.
+        // 패치안은 `docs/re/scene-script-api.md` §9.6.
+    }
+
+    /// 저작이 없으면 파스 폴백 == 디스크립터 기본값 == 심 하드코딩값이어야 한다(무회귀 가드).
+    func testUnauthoredSceneKeepsShimDefaults() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[{"id":1,"name":"t","text":"x","font":"systemfont_arial","pointsize":32,
+                     "origin":"0 0 0","scale":"1 1"}]}
+        """
+        let t = SceneRenderer.sceneScriptLayers(from: try parsedDoc(scene))[0]
+        XCTAssertEqual(t.color, SIMD3<Float>(1, 1, 1))
+        XCTAssertEqual(t.horizontalAlign, "center")
+        XCTAssertEqual(t.verticalAlign, "center")
+        XCTAssertEqual(t.anchor, "none")
+        XCTAssertEqual(t.padding, SIMD2<Float>(32, 32), "ctor 0x140256bbf/0x140256bc9 = 32.0")
+        XCTAssertFalse(t.opaqueBackground)
+        XCTAssertEqual(t.backgroundColor, SIMD3<Float>(0, 0, 0))
+        XCTAssertTrue(t.solid, "solid ctor 기본 true(bit13, 0x1401ddc72 리터럴 0x2001)")
+        XCTAssertEqual(t.parallaxDepth, SIMD2<Float>(1, 1))
+    }
 }
