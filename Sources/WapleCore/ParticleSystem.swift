@@ -1752,12 +1752,26 @@ public struct ParticleSystemDef: Equatable {
                                              max: injectedVec3(i, "max", Vec3(x: 32, y: 32, z: 0)),
                                              exponent: pexponent(i["exponent"]) ?? 1))
             case "rotationrandom":
-                inits.append(.rotationRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
+                // **min/max 는 파티클 디스패처의 초기화자 쪽 유일한 태그 게이트다**
+                // (`call isNumeric` 0x1401c8d67 · 0x1401c8e90). 세 갈래로 갈린다:
+                //   · 태그 1..3 → `asFloat`(0x1401c8d73 · 0x1401c8e9c) 결과를 **z 성분에만** 쓴다
+                //     (`movss [rbp+0xe8]` 0x1401c8d78 · `movss [rbp+0x3d8]` 0x1401c8ea1).
+                //   · 태그 4 → "x y z" 를 임시 버퍼에 풀고 통째로 복사한다
+                //     (`movsd [rbp+0xe0] ← [rbp+0x278]` + `mov [rbp+0xe8] ← [rbp+0x280]`,
+                //      0x1401c8e71–0x1401c8e87) — 그래서 목적지 레이아웃이 x/y/z 이고
+                //     숫자 분기의 `+0xe8` 이 **z** 임이 확정된다. x·y 는 진입부 0-초기화
+                //     (0x1401c8cf9 · 0x1401c8d09) 그대로 0 이다.
+                //   · 그 외(불리언·배열·객체) → 아무것도 저장하지 않는다 → 0 벡터.
+                // 종전 Waple 은 문자열만 읽어 **숫자 저작을 통째로 버렸다**. 동봉 도달 2건
+                // (`presets/lightshafts/particles/presets/light_shafts_1.json` 과 그 프리뷰 사본,
+                // 둘 다 `min:-0.4 · max:-0.3`) — 좁은 z 밴드 대신 부재 기본 2π 풀턴으로 돌고 있었다.
+                // 전수: `rotationrandom` 189개 중 min 문자열 24·숫자 4, max 문자열 53·숫자 4.
+                inits.append(.rotationRandom(min: injectedVec3ZScalar(i, "min", Vec3(x: 0, y: 0, z: 0)),
                                              // 부재 기본 max (0,0,2π) — **키 귀속 확정**(2026-08-20).
                                              // 주입기 0x1401bb390 이 min="0 0 0"(0x1401bb3ee),
                                              // max="0 0 6.28318530717"(0x1401bb4c0) 를 심는다.
-                                             // 종전 "인접 추정" 은 이제 실측이다.
-                                             max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 6.28318530717),
+                                             // 키가 **있는데** 못 읽히면 주입이 안 일어나 0 벡터다.
+                                             max: injectedVec3ZScalar(i, "max", Vec3(x: 0, y: 0, z: 6.28318530717)),
                                              exponent: pexponent(i["exponent"]) ?? 1))
             case "angularvelocityrandom":
             // 주입기 0x1401bb9c0: min = "0 0 -5"(0x1401bba1e, 길이 6) · max = "0 0 5"(0x1401bbafe,
@@ -2578,7 +2592,11 @@ public struct ParticleSystemDef: Equatable {
         // 0 하한과 65536 상한은 그대로 둔다 — 실물엔 없는 **Waple 의 의도된 가드**다
         // (음수가 시뮬 버스트 Range 상한으로 흘러 트랩, 감사 V02 / 코퍼스 100000 설정 씬의
         // CPU 시뮬 과부하, 감사 D-corpus G7).
-        var maxCount = max(0, pint(json["maxcount"]) ?? 0)
+        //
+        // **불리언도 여기서 걸린다**(2026-08-21 태그 전수). `isNumeric` 은 태그 1/2/3 만 참이므로
+        // `{"maxcount":true}` 는 실물에서 **0** 이다 — `strictInt` 만 쓰면 `__NSCFBoolean` 이
+        // `as? Int` 로 1 이 되어 파티클 1개짜리 시스템이 된다. `numericInt` 가 그 자리를 막는다.
+        var maxCount = max(0, numericInt(json["maxcount"]) ?? 0)
         if let m = instanceOverride?.count {
             maxCount = saturatedCount(Float(maxCount) * m)  // 감사 V06: Int 범위 밖 곱 트랩 — 포화 클램프
         }
@@ -2707,7 +2725,9 @@ public struct ParticleSystemDef: Equatable {
 
         var def = ParticleSystemDef(
             emitters: emitters, initializers: inits, operators: ops, renderer: renderer,
-            maxCount: maxCount, startTime: pfloat(json["starttime"]) ?? 0, material: material,
+            // `starttime` 도 태그 게이트다 — `call isNumeric`(0x1401c56b5) → 참이면
+            // `asFloat`(0x1401c56c5), 거짓이면 `xorps xmm0,xmm0`(0x1401c56cc) → **0.0**.
+            maxCount: maxCount, startTime: numericFloat(json["starttime"]) ?? 0, material: material,
             children: children)
         def.controlPoints = controlPoints
         def.controlPointAngles = controlPointAngles
@@ -2722,10 +2742,16 @@ public struct ParticleSystemDef: Equatable {
         def.vortexAudio = vortexAudio
         def.operatorBlends = operatorBlends
         def.collisionOperators = collisionOps
-        def.flags = pint(json["flags"]) ?? 0                                        // F623
+        // F623. **def 최상위 `flags` 는 태그 게이트**다 — `call isNumeric`(0x1401c56d8) → 거짓이면
+        // `xor ecx,ecx`(0x1401c56ee). 오퍼레이터/컨트롤포인트의 동명 `flags` 는 게이트가 없어
+        // (`pint` 유지) 불리언을 1/0 으로 받는다 — 같은 키 이름이라도 자리마다 규약이 다르다.
+        def.flags = numericInt(json["flags"]) ?? 0
         // F622: animationmode("sequence"/"randomframe")·sequencemultiplier(배속, 기본 1).
         def.animationMode = (json["animationmode"] as? String).flatMap { ParticleAnimationMode(rawValue: $0) }
-        def.sequenceMultiplier = pfloat(json["sequencemultiplier"]) ?? 1
+        // `sequencemultiplier` 도 태그 게이트다(`call isNumeric` 0x1401c574d). 실패 분기는 0 이
+        // 아니라 **1.0**(0x1401c5769 `movss xmm10,[0x140492704]`)이다 — 함정 15 그대로,
+        // 게이트 실패는 "저장 안 함" 이지 "0" 이 아니다. `?? 1` 이 그 자리를 그대로 재현한다.
+        def.sequenceMultiplier = numericFloat(json["sequencemultiplier"]) ?? 1
         def.orientation = orientation
         def.mapSequenceAxis = mapSeqAxis
         def.mapSequenceArcAmount = mapSeqArcAmount
@@ -2825,11 +2851,16 @@ private func injectedVec3OrScalar(_ d: [String: Any], _ key: String, _ constant:
 /// 이 사실은 종전 `oscillateposition.scalemax` 판단(“JSON `flags` 에 bit10 이 없으니 0.5”)을
 /// 뒤집는다 — 그 bit10 은 JSON `flags` 키가 아니라 C++ 오브젝트 플래그였다.
 private enum OrthogonalProjectionBranch {}
-/// JSON false/true는 NSNumber로도 브리지되므로 exponent 숫자 경로에서 명시적으로 배제한다.
-private func pexponent(_ v: Any?) -> Float? {
-    if let number = v as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }
-    return pfloat(v)
-}
+/// **[2026-08-21 정정] `exponent` 에는 태그 게이트가 없다** — 종전 이 헬퍼는 JSON 불리언을
+/// 배제했는데, 그건 실물과 반대다. 초기화자 7종의 `exponent` 리더를 전수로 떴다:
+/// `0x1401c720f`(lifetimerandom) · `0x1401c73e6`(sizerandom) · `0x1401c7798`(colorrandom) ·
+/// `0x1401c8011`(alpharandom) · `0x1401c82df`(velocityrandom) · `0x1401c901b`(rotationrandom) ·
+/// `0x1401c967f`(angularvelocityrandom). **일곱 전부** `operator[]`(0x140087640) 직후
+/// `mov rcx,rax; call asFloat`(0x140086220) 이고 `isNumeric`(0x140088880) 호출이 앞에 없다.
+/// `asFloat` 는 태그 5 를 1.0/0.0 으로 내므로 `{"exponent":false}` 는 실물에서 **0.0** 이다
+/// (종전 Waple 은 nil → `?? 1` 로 1.0 이었다 — 반대 방향의 divergence).
+/// 동봉·설치본 JSON 3,655개에 불리언 `exponent` 는 **0건**이라 도달은 없다. 워크샵 대비 정합이다.
+private func pexponent(_ v: Any?) -> Float? { pfloat(v) }
 private func pint(_ v: Any?) -> Int? { strictInt(v) }
 /// jsoncpp `asBool`(0x140086300) 대응 — `movzx eax, byte [rcx]` 로 **태그와 무관하게** 값
 /// 워드의 하위 바이트를 본다. 즉 실물은 JSON `true`/`false` 뿐 아니라 숫자 0/비0 도 받는다.
@@ -2851,6 +2882,18 @@ private func saturatedCount(_ v: Float) -> Int {
     return p <= 0 ? 0 : (p >= Float(Int.max) ? Int.max : Int(p))
 }
 private func pvec3(_ v: Any?) -> Vec3? { stringVec3(v) }
+/// `rotationrandom` 전용 — "x y z" 문자열, 또는 **숫자 스칼라를 z 성분에만**(x·y = 0).
+/// 이 자리는 태그 게이트가 실재하므로 숫자 분기는 `numericFloat`(불리언 거부)를 쓴다.
+/// 위 `pvec3OrScalar`(3축 브로드캐스트)와는 **다른 규약**이다 — 그쪽은 게이트가 없고 여기는 있다.
+private func pvec3OrZScalar(_ v: Any?) -> Vec3? {
+    if let vec = pvec3(v) { return vec }
+    if let z = numericFloat(v) { return Vec3(x: 0, y: 0, z: z) }
+    return nil
+}
+/// `pvec3OrZScalar` 의 주입기 규약 판 — 부재에만 상수를 심고, 있는데 못 읽히면 0 벡터.
+private func injectedVec3ZScalar(_ d: [String: Any], _ key: String, _ constant: Vec3) -> Vec3 {
+    d[key] == nil ? constant : (pvec3OrZScalar(d[key]) ?? Vec3(x: 0, y: 0, z: 0))
+}
 /// "x y z" 벡터 또는 단일 스칼라(브로드캐스트).
 private func pvec3OrScalar(_ v: Any?) -> Vec3? {
     if let vec = pvec3(v) { return vec }
