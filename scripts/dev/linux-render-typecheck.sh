@@ -42,9 +42,34 @@
 # **모듈로 emit** 한 뒤 테스트 152파일을 한 번에 `-typecheck` 한다. `@testable import` 가
 # 실제로 동작한다(그래서 internal 심볼 오타·시그니처 변경도 잡힌다).
 #
+# [2026-08-21] `--lib` 로 **`WapleLibrary`·`WaplePolicy` 와 그 테스트**까지
+# ------------------------------------------------------------------------------
+# 둘 다 종전에 **어떤 리눅스 검증도 못 받았다**. 이유는 렌더와 정반대다 — 애플 프레임워크를
+# 안 써서가 아니라, 이 하네스가 `WapleRender` 만 보게 만들어져 있었기 때문이다.
+# `Sources/WapleLibrary/**`(7파일)는 `Foundation`+`WapleCore`, `Sources/WaplePolicy/**`(1파일)는
+# `Foundation` 하나뿐이라 **심이 거의 필요 없다**. 실제로 모자랐던 것은 하나다:
+# 리눅스 Foundation 에 `URL` 의 보안 스코프 북마크 API 가 **아예 없다**
+# (`linux-shim/zz-linux-url-bookmark.swift` 머리말에 실측 오류 문구를 적어 뒀다).
+#
+# [2026-08-21] `--app` 으로 **앱 계층(`Sources/Waple`·`Tests/WapleAppTests`)**까지
+# ------------------------------------------------------------------------------
+# 이 리포의 마지막 큰 사각지대였다. 48파일 8,842줄이 `SwiftUI`·`Combine`·`Security`·
+# `ServiceManagement` 를 쓰는데 그 심이 없어 **어떤 리눅스 검증도 못 받고 있었다**.
+# 새 심 넷(`swiftui.swift`·`combine.swift`·`security.swift`·`servicemanagement.swift`)과
+# `appkit-app.swift`·`coregraphics.swift` 보강으로 **46/48 + 34/36** 을 덮는다.
+# 못 덮는 넷은 전부 **심으로 메울 수 없는 컴파일러/툴체인 제약**이다(`APP_EXCLUDED` 참조).
+#
+# ⚠️ **SwiftUI 심은 다른 심들보다 훨씬 관대하다.** 결과 빌더와 수식어 반환 타입을 전부
+# `AnyView` 로 접기 때문에 "이 수식어를 이 뷰에 붙일 수 있는가" 는 검증되지 않는다.
+# 검증되는 것은 식별자 존재·인자 라벨·인자 타입·프로퍼티 래퍼 결합이다
+# (`linux-shim/swiftui.swift` 머리말에 무엇이 되고 무엇이 안 되는지 적어 뒀다).
+#
 # 사용:
 #   scripts/dev/linux-render-typecheck.sh
 #   scripts/dev/linux-render-typecheck.sh --tests    소스 + 테스트 152파일까지 타입체크
+#   scripts/dev/linux-render-typecheck.sh --lib      + WapleLibrary·WaplePolicy 소스와 그 테스트
+#   scripts/dev/linux-render-typecheck.sh --app      + Sources/Waple 46/48 + Tests/WapleAppTests 34/36
+#       └ `--tests` 와 `--lib` 를 포함한다(WapleRender·WapleLibrary 모듈이 필요하다).
 #   scripts/dev/linux-render-typecheck.sh --replace SceneRendererResources.swift=/tmp/old.swift
 #       └ 커버 목록의 한 파일을 다른 경로의 파일로 갈아끼운다(양성 대조·회귀 재현용).
 #   scripts/dev/linux-render-typecheck.sh --list       커버/제외 목록만 출력하고 끝낸다
@@ -136,6 +161,21 @@ COVERED=(
 EXCLUDED=(
 )
 
+# ── `--app` 제외 ────────────────────────────────────────────────────────────
+# `Sources/Waple/**`(48) 와 `Tests/WapleAppTests/**`(36)는 **제외 목록 방식**이다(커버 목록이
+# 아니라). 새 파일이 조용히 새는 방향이 반대이기 때문이다 — 새 파일은 자동으로 커버되고,
+# 여기 적힌 것만 빠진다. 대신 **목록의 파일이 트리에 없으면 실패**시켜 스테일 제외를 막는다.
+#
+# 네 파일 전부 **심으로 메울 수 없는** 사유다(자세한 진단은 `docs/dev/linux-typecheck.md`).
+APP_EXCLUDED=(
+    "AppDelegate.swift:@objc/#selector 24곳. 리눅스는 objc-interop 이 꺼져 있어 오류이고, 켜면 (1) 리눅스 NSObject 가 interop 없이 빌드돼 어떤 클래스 타입도 ObjC 표현 불가라 :1381 @objc func applyRecent(_ sender: NSMenuItem) 이 막히고 (2) 모든 inout→포인터 변환이 broken standard library 로 깨진다"
+    "main.swift:#selector(NSText.cut(_:)) 4곳 + AppDelegate 참조. 위와 같은 사유"
+)
+APP_TEST_EXCLUDED=(
+    "AppUIV06RegressionTests.swift:AppDelegate.swift:11 의 ScreenCountBaseline 을 쓴다 — 그 파일이 커버 밖이라 따라 나간다"
+    "WorkshopPagingTests.swift:@MainActor 테스트 클래스가 override func tearDown() 에서 격리 상태를 만진다. 리눅스 swift-corelibs-xctest 의 tearDown 은 스위프트 메서드라 오버라이드가 nonisolated 로 고정된다(애플 XCTest 는 ObjC 메서드라 클래스의 @MainActor 가 살아 있다). 툴체인 쪽이라 심으로 못 고친다"
+)
+
 # ── 인자 ────────────────────────────────────────────────────────────────────
 # **원본 인자를 먼저 보관한다.** 아래 파싱이 `shift` 로 `$@` 를 소모하는데, 그 뒤의 락 재실행
 # (`exec flock ... "$0" "$@"`)이 빈 인자를 넘겨 `--replace` 가 조용히 사라진 적이 있다
@@ -144,12 +184,16 @@ ORIG_ARGS=("$@")
 LIST_ONLY=0
 WITH_TESTS=0
 WITH_COMPAT=0
+WITH_LIB=0
+WITH_APP=0
 declare -a REPLACE_FROM=() REPLACE_TO=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --list) LIST_ONLY=1; shift ;;
         --tests) WITH_TESTS=1; shift ;;
         --compat) WITH_TESTS=1; WITH_COMPAT=1; shift ;;
+        --lib) WITH_LIB=1; shift ;;
+        --app) WITH_TESTS=1; WITH_LIB=1; WITH_APP=1; shift ;;
         --replace)
             [ $# -ge 2 ] || { echo "!! --replace 는 <파일명>=<경로> 를 요구한다" >&2; exit 2; }
             REPLACE_FROM+=("${2%%=*}"); REPLACE_TO+=("${2#*=}"); shift 2 ;;
@@ -159,6 +203,8 @@ done
 
 if [ "$LIST_ONLY" = 1 ]; then
     echo "== 커버(${#COVERED[@]}) =="; printf '  %s\n' "${COVERED[@]}"
+    echo "== --app 제외 · Sources/Waple(${#APP_EXCLUDED[@]}) =="; printf '  %s\n' "${APP_EXCLUDED[@]}"
+    echo "== --app 제외 · Tests/WapleAppTests(${#APP_TEST_EXCLUDED[@]}) =="; printf '  %s\n' "${APP_TEST_EXCLUDED[@]}"
     echo "== 제외(${#EXCLUDED[@]}) =="
     # 빈 배열에 `printf` 를 그대로 걸면 빈 줄 하나가 찍힌다(제외가 0건인 현 상태).
     [ "${#EXCLUDED[@]}" -gt 0 ] && printf '  %s\n' "${EXCLUDED[@]}"
@@ -211,6 +257,22 @@ for b in "${!KNOWN[@]}"; do
 done
 [ "$fail_membership" = 0 ] || exit 1
 
+# `--app` 의 제외 목록도 같은 시점에 검사한다 — **심 빌드 전에** 실패해야 2분 뒤가 아니라
+# 즉시 드러난다(렌더 목록 검사와 같은 이유).
+if [ "$WITH_APP" = 1 ]; then
+    for e in "${APP_EXCLUDED[@]}"; do
+        [ -f "$REPO/Sources/Waple/${e%%:*}" ] || {
+            echo "!! APP_EXCLUDED 에 있는데 트리에 없다: Sources/Waple/${e%%:*}" >&2
+            echo "   → 파일이 지워졌거나 이름이 바뀌었다. 목록과 docs/dev/linux-typecheck.md 를 함께 고쳐라." >&2
+            exit 1; }
+    done
+    for e in "${APP_TEST_EXCLUDED[@]}"; do
+        [ -f "$REPO/Tests/WapleAppTests/${e%%:*}" ] || {
+            echo "!! APP_TEST_EXCLUDED 에 있는데 트리에 없다: Tests/WapleAppTests/${e%%:*}" >&2
+            exit 1; }
+    done
+fi
+
 # ── 대역 모듈 빌드 ──────────────────────────────────────────────────────────
 build_module() {
     local name="$1"; shift
@@ -223,11 +285,34 @@ build_module() {
     return 0
 }
 
+# `-enable-testing` 모듈 emit. `@testable import` 가 실제로 동작해야 internal 표면의 오타·
+# 시그니처 변경까지 잡히기 때문에 `-typecheck` 가 아니라 emit 이다.
+#
+# ⚠️ **swiftc 는 진단이 나도 `.swiftmodule` 파일을 남긴다**(2026-08-21 실측: `WapleLibrary` emit 이
+#    `URL.bookmarkData` 부재로 rc=1 인데 83KB 짜리 모듈이 기록됐고, 그 뒤 테스트 타입체크가
+#    rc=0 을 줬다). 그러니 **rc 를 반드시 보고 즉시 멈춰야 한다** — 호출부는 전부 `|| exit 1` 이다.
+#    스테일 모듈로 다음 단계가 조용히 통과하는 것이 이 하네스가 죽는 가장 조용한 방식이다.
+emit_testing() {   # <모듈명> <파일...>
+    local name="$1"; shift
+    if ! "$SWIFTC" -emit-module -module-name "$name" -I "$MODS" -enable-testing \
+            -emit-module-path "$MODS/$name.swiftmodule" "$@" 2>"$WORK/$name-testing.log"; then
+        echo "!! -enable-testing 모듈 emit 실패: $name" >&2
+        grep -E "error:" "$WORK/$name-testing.log" | head -30 >&2
+        return 1
+    fi
+    return 0
+}
+
 # 의존 순서: CoreGraphics(+CF) → QuartzCore → Metal → AppKit → MetalKit → 나머지
 build_module CoreGraphics    "$SHIM/coregraphics.swift"       || exit 1
 build_module QuartzCore      "$SHIM/quartzcore.swift"         || exit 1
 build_module Metal           "$SHIM/metal.swift"              || exit 1
-build_module AppKit          "$SHIM/appkit.swift"             || exit 1
+# `UniformTypeIdentifiers` 가 `AppKit` 보다 앞에 온다 — `appkit-app.swift` 의
+# `NSOpenPanel.allowedContentTypes` 가 `UTType` 을 쓴다(애플에서도 AppKit 이 UTI 를 끌고 온다).
+build_module UniformTypeIdentifiers "$SHIM/uniformtypeidentifiers.swift" || exit 1
+# AppKit 은 **두 파일**이다. `appkit-app.swift` 는 앱 계층(`Sources/Waple/**`)이 쓰는 표면
+# (패널·워크스페이스·뷰컨트롤러)이고, 종전 `appkit.swift` 는 렌더가 쓰는 창·뷰다.
+build_module AppKit          "$SHIM/appkit.swift" "$SHIM/appkit-app.swift" || exit 1
 build_module MetalKit        "$SHIM/metalkit.swift"           || exit 1
 build_module CoreVideo       "$SHIM/corevideo.swift"          || exit 1
 build_module AVFoundation    "$SHIM/avfoundation.swift"       || exit 1
@@ -239,8 +324,14 @@ build_module JavaScriptCore  "$SHIM/javascriptcore.swift"     || exit 1
 build_module CryptoKit       "$SHIM/cryptokit.swift"          || exit 1
 build_module Compression     "$SHIM/compression.swift"        || exit 1
 build_module WebKit          "$SHIM/webkit.swift"             || exit 1
-build_module UniformTypeIdentifiers "$SHIM/uniformtypeidentifiers.swift" || exit 1
 build_module simd            "$SHIM/simd.swift" "$SHIM/simd-extra.swift" || exit 1
+# 아래 넷은 `--app`(앱 계층) 전용이지만 **항상 만든다** — 합쳐 2초 남짓이고, 심이 깨지면
+# 기본 실행에서 바로 드러나는 편이 낫다(`Darwin` 을 항상 만드는 것과 같은 판단).
+# 의존: Security → CoreGraphics(CF 타입) · SwiftUI → AppKit·Combine·UTI·CoreGraphics.
+build_module Combine         "$SHIM/combine.swift"            || exit 1
+build_module Security        "$SHIM/security.swift"           || exit 1
+build_module ServiceManagement "$SHIM/servicemanagement.swift" || exit 1
+build_module SwiftUI         "$SHIM/swiftui.swift"            || exit 1
 # `Darwin` 은 `Sources/WapleCompatCore/ProfilePipeline.swift` 의 mach VM 질의 전용이다.
 # WapleRender 는 안 쓰지만 심 빌드는 싸므로(0.2초) 항상 만들어 둔다 — `--compat` 에서만 쓰인다.
 build_module Darwin          "$SHIM/darwin.swift"             || exit 1
@@ -315,6 +406,45 @@ else
     exit $rc
 fi
 
+# ── `--lib`: WapleLibrary·WaplePolicy 소스 + 그 테스트 ───────────────────────
+# 렌더와 무관한 축이다(둘 다 `WapleRender` 에 의존하지 않는다). 그런데도 여기 붙이는 이유는
+# 심 모듈과 `WapleCore` 스냅샷이 이미 서 있기 때문이다 — 별도 하네스를 하나 더 만들면
+# 락·작업 디렉터리·재시도 규약이 두 벌로 갈린다(이 리포의 상습 결함).
+#
+# **`--tests` 의 서곡(`zz-test-implicit-imports.swift`)을 여기에는 넣지 않는다.** 서곡은 애플의
+# Clang 모듈 전이 노출을 흉내 내는 것인데, macOS 에서 `@testable import WapleLibrary` 가 흘리는
+# 것은 `WapleLibrary` 가 실제로 임포트한 것(`Foundation`·`WapleCore`→`simd`)뿐이다. 서곡을 넣으면
+# AppKit·Metal 까지 흘러 **모델이 실물보다 관대해진다**. 실측으로 서곡 없이 rc=0 이므로 넣지 않는다
+# (`docs/dev/linux-typecheck.md` 서곡 절의 "목록을 줄이는 것이 맞다" 와 같은 판단).
+if [ "$WITH_LIB" = 1 ]; then
+    echo "== WapleLibrary·WaplePolicy: 모듈 emit + 테스트 타입체크 =="
+    l0=$SECONDS
+    declare -a LIBSRC=() POLSRC=()
+    while IFS= read -r p; do LIBSRC+=("$p"); done \
+        < <(find "$REPO/Sources/WapleLibrary" -name '*.swift' | sort)
+    while IFS= read -r p; do POLSRC+=("$p"); done \
+        < <(find "$REPO/Sources/WaplePolicy" -name '*.swift' | sort)
+    [ "${#LIBSRC[@]}" -gt 0 ] || { echo "!! Sources/WapleLibrary 에 .swift 가 없다" >&2; exit 2; }
+    [ "${#POLSRC[@]}" -gt 0 ] || { echo "!! Sources/WaplePolicy 에 .swift 가 없다" >&2; exit 2; }
+    # `zz-linux-url-bookmark.swift` 는 **모듈이 아니라 파일**로 함께 넣는다 — `URL` 확장이라
+    # 대상 모듈 안에 있어야 보인다(리눅스 Foundation 결손, 그 파일 머리말 참조).
+    emit_testing WapleLibrary "${LIBSRC[@]}" "$SHIM/zz-linux-url-bookmark.swift" || exit 1
+    emit_testing WaplePolicy  "${POLSRC[@]}" || exit 1
+    declare -a LTEST=()
+    while IFS= read -r p; do LTEST+=("$p"); done \
+        < <(find "$REPO/Tests/WapleLibraryTests" "$REPO/Tests/WaplePolicyTests" \
+                 -name '*.swift' 2>/dev/null | sort)
+    [ "${#LTEST[@]}" -gt 0 ] || { echo "!! library/policy 테스트 파일을 못 찾았다" >&2; exit 2; }
+    "$SWIFTC" -typecheck -I "$MODS" "${LTEST[@]}" 2>&1 | tee "$WORK/lib-typecheck.log"
+    lrc=${PIPESTATUS[0]}
+    if [ $lrc -eq 0 ]; then
+        echo "== OK — WapleLibrary ${#LIBSRC[@]} + WaplePolicy ${#POLSRC[@]} 소스, 테스트 ${#LTEST[@]} 파일 통과 (rc=0, $((SECONDS - l0))초)"
+    else
+        echo "== FAIL (lib, rc=$lrc) — 심 공백 판별법은 아래 --tests 실패 경로와 같다." >&2
+        exit $lrc
+    fi
+fi
+
 [ "$WITH_TESTS" = 1 ] || exit 0
 
 # ── `--tests`: Tests/WapleRenderTests/** 타입체크 ───────────────────────────
@@ -324,16 +454,6 @@ fi
 # 있어야 하고, 그래야 internal 표면의 오타·시그니처 변경까지 잡힌다.
 echo "== 테스트 타입체크: 모듈 emit(-enable-testing) =="
 te0=$SECONDS
-emit_testing() {   # <모듈명> <파일...>
-    local name="$1"; shift
-    if ! "$SWIFTC" -emit-module -module-name "$name" -I "$MODS" -enable-testing \
-            -emit-module-path "$MODS/$name.swiftmodule" "$@" 2>"$WORK/$name-testing.log"; then
-        echo "!! -enable-testing 모듈 emit 실패: $name" >&2
-        grep -E "error:" "$WORK/$name-testing.log" | head -30 >&2
-        return 1
-    fi
-    return 0
-}
 # 순서: WapleCore(이미 $WORK/core 에 스냅샷이 있다) → WapleSnapshot → WapleRender.
 emit_testing WapleCore "$WORK/core"/*.swift || exit 1
 if compgen -G "$REPO/Sources/WapleSnapshot/*.swift" >/dev/null; then
@@ -388,11 +508,80 @@ if [ $trc -eq 0 ]; then
         CTEST+=("$SHIM/zz-test-implicit-imports.swift")
         "$SWIFTC" -typecheck -I "$MODS" "${CTEST[@]}" 2>&1 | tee "$WORK/compat-typecheck.log"
         crc=${PIPESTATUS[0]}
+        # [2026-08-21] 실행파일 타깃 `Sources/WapleCompat/**`(main.swift 하나)도 여기서 본다.
+        # `WapleCompatCore` 모듈이 방금 섰으니 공짜다(실측 1초 미만). **따로 부른다** —
+        # `main.swift` 는 최상위 코드라 테스트 파일들과 한 번에 넘기면 안 된다.
         if [ $crc -eq 0 ]; then
-            echo "== OK — WapleCompatCore 소스 ${#CSRC[@]} + 테스트 ${#CTEST[@]} 파일 통과 (rc=0, $((SECONDS - ct0))초)"
+            declare -a XSRC=()
+            while IFS= read -r p; do XSRC+=("$p"); done \
+                < <(find "$REPO/Sources/WapleCompat" -name '*.swift' | sort)
+            if [ "${#XSRC[@]}" -eq 0 ]; then
+                echo "!! Sources/WapleCompat 에 .swift 가 없다" >&2; exit 2
+            fi
+            "$SWIFTC" -typecheck -I "$MODS" "${XSRC[@]}" 2>&1 | tee "$WORK/compatexe-typecheck.log"
+            crc=${PIPESTATUS[0]}
+            [ $crc -eq 0 ] || echo "== FAIL (WapleCompat 실행파일, rc=$crc)" >&2
+        fi
+        if [ $crc -eq 0 ]; then
+            echo "== OK — WapleCompatCore 소스 ${#CSRC[@]} + 실행파일 ${#XSRC[@]} + 테스트 ${#CTEST[@]} 파일 통과 (rc=0, $((SECONDS - ct0))초)"
         else
             echo "== FAIL (compat, rc=$crc) — 위 판별법으로 심 공백부터 의심해라." >&2
             exit $crc
+        fi
+    fi
+
+    # ── `--app`: Sources/Waple + Tests/WapleAppTests ─────────────────────────
+    # 이 리포에서 **마지막으로 남아 있던 큰 사각지대**다. `Sources/Waple/**`(48파일 8,842줄)와
+    # `Tests/WapleAppTests/**`(36파일)는 `SwiftUI`·`Combine`·`Security`·`ServiceManagement`
+    # 심이 없어 종전에 **어떤 리눅스 검증도 못 받았다**.
+    #
+    # 순서: ① 소스 타입체크 → ② `Waple` 모듈 emit(`-enable-testing`) → ③ 테스트 타입체크.
+    #
+    # ①을 따로 두는 이유(정확히 적는다): 드라이버가 `-emit-module` 에
+    # `-experimental-skip-non-inlinable-function-bodies-without-types` 를 붙인다(크래시 덤프의
+    # frontend argv 로 확인). 이름만 보면 본문을 건너뛸 것 같은데, **실측으로는 건너뛰지 않았다** —
+    # `SettingsView` 의 `.foregroundStyle(.secondaryy)` 돌연변이를 emit 만으로도 잡았다.
+    # 그 플래그의 정확한 적용 범위를 확정하지 못했으므로, 소스 오류가 **모듈이 기록되기 전에**
+    # 파일 단위로 드러나도록 ①을 남긴다(비용 7초). 확정되면 지워도 된다.
+    if [ "$WITH_APP" = 1 ]; then
+        echo "== Waple(앱 계층): 소스 타입체크 + 모듈 emit + 테스트 타입체크 =="
+        a0=$SECONDS
+        declare -a ASRC=() ATEST=()
+        while IFS= read -r p; do
+            skip=0
+            for e in "${APP_EXCLUDED[@]}"; do
+                [ "${p#$REPO/Sources/Waple/}" = "${e%%:*}" ] && skip=1
+            done
+            [ "$skip" = 1 ] || ASRC+=("$p")
+        done < <(find "$REPO/Sources/Waple" -name '*.swift' | sort)
+        while IFS= read -r p; do
+            skip=0
+            for e in "${APP_TEST_EXCLUDED[@]}"; do
+                [ "${p#$REPO/Tests/WapleAppTests/}" = "${e%%:*}" ] && skip=1
+            done
+            [ "$skip" = 1 ] || ATEST+=("$p")
+        done < <(find "$REPO/Tests/WapleAppTests" -name '*.swift' | sort)
+        [ "${#ASRC[@]}" -gt 0 ] || { echo "!! Sources/Waple 에 .swift 가 없다" >&2; exit 2; }
+        [ "${#ATEST[@]}" -gt 0 ] || { echo "!! Tests/WapleAppTests 에 .swift 가 없다" >&2; exit 2; }
+        # **서곡(prelude)은 테스트 단계에만 넣는다.** 소스 46파일은 서곡 없이 rc=0 이다(실측) —
+        # 각자 필요한 것을 명시적으로 임포트하고 있고, 유일한 전이 의존이던
+        # `ObservableObject`(Combine)는 `swiftui.swift` 가 애플과 똑같이 재수출한다.
+        # 테스트는 다르다: `AppUIFixRegressionTests.swift:242` 가 `import AppKit` 없이
+        # `NSBitmapImageRep` 을 쓰는데 macOS 에서는 `@testable import Waple` 의 Clang 모듈
+        # 전이 노출로 빌드된다. 서곡을 빼면 거기서만 깨진다(실측).
+        "$SWIFTC" -typecheck -I "$MODS" "${ASRC[@]}" 2>&1 | tee "$WORK/app-typecheck.log"
+        arc=${PIPESTATUS[0]}
+        if [ $arc -eq 0 ]; then
+            emit_testing Waple "${ASRC[@]}" || exit 1
+            "$SWIFTC" -typecheck -I "$MODS" "${ATEST[@]}" "$SHIM/zz-app-implicit-imports.swift" \
+                2>&1 | tee "$WORK/apptests-typecheck.log"
+            arc=${PIPESTATUS[0]}
+        fi
+        if [ $arc -eq 0 ]; then
+            echo "== OK — Waple 소스 ${#ASRC[@]}(제외 ${#APP_EXCLUDED[@]}) + 테스트 ${#ATEST[@]}(제외 ${#APP_TEST_EXCLUDED[@]}, +서곡 1) 파일 통과 (rc=0, $((SECONDS - a0))초)"
+        else
+            echo "== FAIL (app, rc=$arc) — 위 판별법으로 심 공백부터 의심해라(SwiftUI/AppKit)." >&2
+            exit $arc
         fi
     fi
 else

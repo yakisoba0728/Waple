@@ -18,8 +18,25 @@ public struct UTType: Equatable, Hashable {
     /// 실제로 쓰이므로** 더미가 아니라 진짜 UTI 문자열을 넣는다(타입만 맞추면 되는 다른
     /// 심들과 다른 예외 — 값이 틀려도 타입체크는 통과하지만, 나중에 이 상수를 읽고 뭔가를
     /// 판단하는 코드가 생기면 조용히 틀린다).
-    private init(_ id: String) { self.identifier = id }
+    /// `internal` 이다 — 이 파일 안의 확장(아래 `--app` 표면)이 쓴다.
+    init(_ id: String) { self.identifier = id }
     public static let png = UTType("public.png")
     public static let jpeg = UTType("public.jpeg")
     public static let tiff = UTType("public.tiff")
+}
+
+// [2026-08-21] `--app` 이 요구한 표면 — `Sources/Waple/**` 의 드래그 앤 드롭.
+//   · `WallpaperGridView.swift:394` `UTType.fileURL.identifier` (드롭 필터 + `loadItem` 타입 식별자)
+//   · `DisplaysView.swift:134`      `.onDrop(of: [.text], …)`
+// 여기도 `png` 와 같은 이유로 **실제 UTI 문자열**을 넣는다 — 값이 `loadItem(forTypeIdentifier:)`
+// 로 그대로 흘러간다.
+extension UTType {
+    public static let fileURL = UTType("public.file-url")
+    public static let text = UTType("public.text")
+    public static let url = UTType("public.url")
+    /// `WallpaperGridView.swift:477` 의 `NSOpenPanel.allowedContentTypes`.
+    public static let folder = UTType("public.folder")
+    public static let zip = UTType("public.zip-archive")
+    public static let movie = UTType("public.movie")
+    public static let image = UTType("public.image")
 }
