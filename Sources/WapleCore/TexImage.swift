@@ -313,36 +313,60 @@ public struct TexImage {
         return n - 1                        // 부동소수 경계 폴백
     }
 
-    /// 파일이 speed 를 안 실었을 때(TEXS0002) 쓰는 프레임당 재생시간. 파티클 경로가 이미 쓰는
-    /// 값과 같게 맞춘다(SceneRendererFrameEncoder.particleSheetFrameIndex / SceneRenderer3D 의
-    /// `max(0.016, ft)`) — 한 자산이 이미지 레이어냐 파티클이냐에 따라 속도가 달라지지 않게 하는 것이
-    /// 이 상수의 유일한 근거다. **WE 가 이 자리에 쓰는 값은 RE 로 확정하지 못했다**(TEXS 리더
-    /// 0x14015e514 가 총 재생길이를 누적만 하고, 그걸 읽는 소비처를 바이너리에서 특정하지 못함).
+    /// 파일이 speed 를 안 실었을 때(TEXS0002 = 전 프레임 frametime 0) 쓰는 프레임당 재생시간.
+    /// 파티클 경로가 이미 쓰는 값과 같게 맞춘다(`SceneRendererFrameEncoder.particleSheetFrameIndex`
+    /// / `SceneRenderer3D` 의 `max(0.016, ft)`) — 한 자산이 이미지 레이어냐 파티클이냐에 따라 속도가
+    /// 달라지지 않게 하는 것이 이 상수의 존재 이유다.
     ///
-    /// **[2026-08-21 실측 — 이 값은 8건 중 5건에서 틀리다. 그래도 여기서는 안 고친다.]**
-    /// TEXS 리더를 다시 떠서 확인한 것: `[rdi]` 는 0x14015e1f8 에서 0 으로 초기화되고
-    /// 0x14015e514 `addss xmm6, [rdi]` 로 프레임 시간을 누적할 뿐, **합이 0 일 때의 폴백 분기가
-    /// 리더에는 없다**. 그래서 파일 밖에서 값을 가져와야 하는 것은 맞다.
+    /// **[2026-08-21 해소 — 종전 헤지가 틀렸다] WE 는 이 자리에 아무 값도 쓰지 않는다.**
+    /// 종전 주석은 "WE 가 이 자리에 쓰는 값은 RE 로 확정하지 못했다" 고 적었다. 그건 "값이 있는데
+    /// 못 찾았다" 는 뜻으로 읽히고, **그 전제가 틀렸다.** 시트 진행기(`0x14015f0d0`–`0x14015f326`,
+    /// `.pdata` 5조각, 게이트 `0x14015f0f7 test byte ptr [rcx+0x1c], 4`)를 선형으로 다시 떠서 확인한
+    /// 것 — 이 함수는 `frametime` 을 **초 단위 누적시간과 직접 비교**할 뿐이고, 0 일 때의 특례 분기가
+    /// 없다. 그래서 `frametime == 0` 이면 세 명령이 자동으로 "매 렌더 프레임 한 칸" 을 만든다:
     ///
-    /// 그 "파일 밖" 의 유력 후보는 짝 `.tex-json` 이다. TEXS0002 8건(전부
-    /// `assets/materials/particle/**`)의 사이드카는 **전건 `duration: 1`** 이다:
-    ///   snow 4프레임 → 0.25 · debris1 8 → 0.125 · fire2·lightning2 32 → 0.03125 ·
-    ///   fire1·smoke3·lightning1 64 → 0.015625 · fire3 128 → 0.0078125 (초/프레임)
-    /// 곧 상수 0.016 은 64프레임 **3건**(fire1·smoke3·lightning1)에서만 맞고(오차 2.4%), 나머지
-    /// **5건**은 틀리다 — snow 는 **15.6배 빠르고**, debris1 은 7.8배, fire2·lightning2 는 2배 빠르며,
-    /// fire3 은 2배 느리다. `1.0 / frameCount` 로 두면 8/8 이 정확해진다(전건 `duration: 1` 이므로).
+    ///   0x14015f1c4  movss xmm1, dword ptr [r10]   ; 현재 프레임의 frametime (= 0)
+    ///   0x14015f1c9  comiss xmm0, xmm1             ; acc(=dt>0) vs 0 → CF=0 이라
+    ///   0x14015f1cc  jb    0x14015f26a             ;   "그대로 두기" 분기를 **안 탄다**
+    ///   0x14015f1d2  inc   edi                     ; ★ 딱 한 프레임 전진
+    ///   0x14015f1d8  subss xmm0, xmm1              ; acc -= 0  (누적이 그대로 남고)
+    ///   0x14015f208  minss xmm0, dword ptr [r10]   ; ★ 새 프레임 길이(=0)로 잘려 acc = 0
     ///
-    /// 그런데도 상수를 바꾸지 않는 이유 셋(전부 실측):
-    ///   ① 이 상수의 소비처는 `spriteFrameIndex` **하나뿐**이고, 그걸 부르는 곳은
-    ///      `SceneRendererFrameEncoder.spriteFrameTexture`(이미지 레이어)뿐이다. 위 8건은 전부
-    ///      파티클 자산이라 실제로는 `particleSheetFrameIndex` 의 **별도** `max(0.016, ft)` 를 탄다.
-    ///      여기만 고치면 같은 자산이 레이어냐 파티클이냐에 따라 속도가 갈린다(= 이 상수의 존재 이유를 깬다).
-    ///   ② 두 자리를 함께 고쳐야 하는데 `SceneRendererFrameEncoder.swift` 는 이 과제 소유가 아니다.
-    ///   ③ 도달이 작다 — TEXS0002 는 동봉+설치 440건 중 8건, 워크샵 4,680건 중 1건이다
-    ///      (`spec/formats/tex-deep.json` `format.tex.texs.fieldLayout.versionDistribution`
-    ///       = TEXS0003 216 · TEXS0002 9 · 없음 4,895).
-    /// **넘길 패치안**: `fallbackFrameTime` 을 `1.0 / max(1, frameCount)` 로 바꾸고
-    /// `particleSheetFrameIndex` 의 `max(0.016, ft)` 도 같은 식으로 맞출 것. 근거는 위 8/8 사이드카.
+    /// 즉 dt 가 얼마든 **한 호출에 한 프레임**이고 잉여는 버려진다. 게다가 호출 자체가 씬 프레임
+    /// 카운터로 프레임당 1회만 열린다(`0x14015f162 cmp dword ptr [r8+0xa4], eax` ↔
+    /// `0x14015f275 mov dword ptr [r8+0xa4], eax`, `eax = [scene+0x144]`). **두 사실을 합치면 시트는
+    /// 화면 갱신률보다 빠르게 재생될 수 없다** — `frametime == 0` 은 "초/프레임" 값이 아니라
+    /// "1 렌더 프레임/시트 프레임"(디스플레이 종속)이라는 뜻이다. 전문은
+    /// `docs/re/sprite-occlusion.md` §10.4.3 · §11.
+    ///
+    /// **[2026-08-21 철회] 종전 "넘길 패치안 = `1.0 / max(1, frameCount)`" 는 틀린 제안이었다.**
+    /// 근거로 삼았던 것은 짝 `.tex-json` 의 `spritesheetsequences[].duration`(TEXS0002 8건 전건 `1`)
+    /// 인데, **런타임은 그 파일을 읽지 않는다**(실측 2026-08-21):
+    ///   · `wallpaper64.exe` 안의 `.tex-json` 문자열은 **정확히 1개**(`0x140492348`)이고, 그 자리는
+    ///     `resourcecompiler64.exe`(`0x140492330`) · `-mdl -i "`(`0x140492358`) ·
+    ///     `-tex -i "`(`0x140492368`) · `Recompiling textu…` 와 같은 클러스터다 — 즉 **리소스
+    ///     컴파일러 재호출 인자**이지 재생속도 소스가 아니다.
+    ///   · `spritesheetsequences` 문자열은 `wallpaper64.exe` 에 **0개**다(ASCII·UTF-16LE 둘 다).
+    ///     읽지 않는 키의 값을 런타임 규약으로 삼을 수 없다.
+    /// 그리고 실제 재생속도로 환산하면 그 제안은 **WE 보다 훨씬 느리다** — 60Hz 에서 WE 는
+    /// 1/60 ≈ 0.0167 s/프레임인데, `1/frameCount` 는 snow(4프레임) 0.25 s → **15배 느림**,
+    /// debris1(8) 0.125 → 7.5배 느림, fire2·lightning2(32) 0.031 → 1.9배 느림.
+    /// 반대로 fire3(128) 0.0078 만 2배 빠르다. 종전 주석이 "0.016 이 5건에서 틀리다" 고 적은 것은
+    /// **사이드카를 기준으로 잰 것**이라 기준 자체가 잘못됐다. WE 실동작(60Hz ≈0.0167)을 기준으로
+    /// 다시 재면 0.016 은 프레임 수와 무관하게 **8건 전부에서 오차 4% 안**이다.
+    ///
+    /// **그래서 값은 0.016 을 유지한다.** 근거 셋:
+    ///   ① WE 실동작 근사값이다 — 60Hz 에서 WE 는 1/60 = 0.01667 s/프레임이고 0.016 = 1/62.5 라
+    ///      오차 4%다. 헤드리스 결정성이 필요한 Waple 에서 "디스플레이 종속" 을 그대로 옮길 수는
+    ///      없으니 시간 기반 상수가 옳고, 그 상수의 올바른 목표값은 **주사율의 역수**다.
+    ///   ② 정확히 `1.0/60` 으로 바꾸면 형제 자리 셋(`particleSheetFrameIndex` ·
+    ///      `SceneRenderer3D` 의 `max(0.016, ft)`)과 어긋난다. `SceneRenderer3D.swift` 는 이 과제
+    ///      소유가 아니라 셋을 동시에 못 고친다 — 4% 를 얻으려고 자산별 속도 불일치를 만들 수 없다.
+    ///   ③ 도달이 작다 — TEXS0002 는 동봉 311 중 8 · 설치 440 중 8(같은 8건), 워크샵 코퍼스는 이
+    ///      컨테이너에 없어 **미측정**이다(`spec/formats/tex-deep.json`
+    ///      `format.tex.texs.fieldLayout.versionDistribution` 의 TEXS0002 9 는 워크샵 포함 수치).
+    /// **넘길 패치안(우선순위 낮음)**: 세 자리를 함께 `1.0/60` 으로 올릴 것. 값 자체보다 세 자리가
+    /// 같은 상수를 쓴다는 사실이 중요하다.
     public static let fallbackFrameTime: Float = 0.016
 
     /// 파일에 실린 frametime 의 총합(비유한/음수는 0 취급) — 0 이면 파일에 속도가 없다는 뜻.
@@ -356,6 +380,77 @@ public struct TexImage {
     /// fallback 이 아니면 종전과 **글자 그대로 같은 식**이라 TEXS0003 시트는 무회귀다.
     private static func frameDuration(_ f: TexFrame, fallback: Bool) -> Float {
         fallback ? fallbackFrameTime : max(1e-4, f.time)
+    }
+
+    /// `SPRITESHEETBLEND` 크로스페이드가 고르는 **두 프레임과 섞임 비율**.
+    /// `blend == 0` 이면 `next == current` 라 `mix(cur, next, 0)` 이 정확히 현재 프레임이다
+    /// (IEEE: `x + 0*(y-x) == x`) — 크로스페이드 미배선 소비처가 그대로 써도 무회귀다.
+    public struct SheetFramePair: Equatable {
+        public let current: Int
+        public let next: Int
+        public let blend: Float
+        public init(current: Int, next: Int, blend: Float) {
+            self.current = current; self.next = next; self.blend = blend
+        }
+    }
+
+    /// 파티클 스프라이트시트의 프레임 쌍 + 크로스페이드 비율 — WE `common_particles.h`
+    /// `ComputeSpriteFrame(lifetime, out uvs, out uvFrameSize, out frameBlend)` 의 프레임 선택부를
+    /// 그대로 옮긴 **순수 산술**이다(동봉 자산 원문, x86 앞에 — 브리프 함정 7).
+    ///
+    /// ```glsl
+    /// float currentFrame = floor(lifetime * numFrames);
+    /// float nextFrame    = min(numFrames - 1.0, currentFrame + 1.0);   // ★ 랩이 아니라 클램프
+    /// frameBlend         = frac(lifetime * numFrames);
+    /// ```
+    /// 여기 `frameCoordinate` 가 그 `lifetime * numFrames` 다. 위상을 어디서 얻느냐는 소비처 몫이고
+    /// (WE 는 `genericparticle.vert:94` 의 `frac(in_ParticleLifeTime)`), 이 함수는 **floor/frac 분해와
+    /// 클램프 규약**만 잠근다. 그래야 인덱스와 블렌드가 같은 좌표에서 나와 어긋나지 않는다.
+    ///
+    /// 못박을 것 셋:
+    ///  * **`next` 는 마지막 프레임에서 랩하지 않고 멈춘다**(`min(n-1, cur+1)`). 즉 시트 끝에서
+    ///    0번 프레임이 겹쳐 나오는 일이 없다 — 되감기처럼 보이는 깜빡임이 여기서 차단된다.
+    ///  * **크로스페이드가 꺼지면 두 번째 샘플 자체가 없다.** WE 는 `#if SPRITESHEETBLEND` 로
+    ///    프래그먼트 문면을 갈라 아예 한 번만 샘플한다(`genericparticle.frag:73–80`).
+    ///    끄는 조건은 `animationmode == "randomframe"` 하나다(파스 `0x1401c5717` "randomframe" →
+    ///    `[def+0x30] = 1` `0x1401c5727` → 시스템 flags bit1 `0x1401c57de or eax, 2`; 콤보 결정
+    ///    `0x1401d24d2 test r13b, 2` → `jne` 로 BLEND=0, 아니면 `0x1401d24d8 cmp [r15+0x30], 0` 로 1).
+    ///    `sequence` 와 **키 부재는 켠다** — 즉 실물 대다수가 켜져 있다.
+    ///  * **원저자가 이 크로스페이드를 "틀렸다" 고 적어 뒀다**(`genericparticle.frag:74`:
+    ///    "This is wrong because it can sample colors that are invisible on one frame but changing
+    ///    this can negatively impact additive particles"). 이유: `mix` 가 **straight-alpha 상태의
+    ///    RGB 를 섞는다.** 한쪽 프레임에서 `a == 0` 인 텍셀의 RGB 는 인코더가 무엇을 넣었든
+    ///    (보통 검정 또는 이웃 색 번짐) 화면에 안 보이는 값인데, `mix` 는 그걸 그대로 가중해
+    ///    보이는 프레임 쪽으로 끌고 온다(= 알파 오염). premultiplied 로 섞으면 그 오염은 사라지지만
+    ///    가산 파티클의 밝기 곡선이 바뀌어서 원저자가 안 고쳤다. **Waple 이 이 자리를 배선할 때도
+    ///    premultiply 로 "고치면" 실물과 달라진다** — WE 와 같으려면 straight 로 섞고 그 다음에
+    ///    premultiply 해야 한다.
+    ///
+    /// 비유한 좌표·`Int` 범위 밖 좌표는 정지(0,0,0)로 떨어진다 — `Int(Float)` 는 클램프가 아니라
+    /// **트랩**이라(F530 계열 사고) `safeInt` 를 거친다. 계산은 `Double` 로 한다: 소비처
+    /// (`SceneRendererFrameEncoder.particleSheetFrameIndex`)가 종전부터 `safeInt(Double(v))` 로
+    /// 좁혀 왔으므로 그 자리를 이 함수로 갈아끼워도 **음이 아닌 좌표에서는 값이 그대로**다.
+    /// 음수 좌표(되감기)는 여기서 감는다 — 종전은 `Int(v) % n` 이라 음수 인덱스를 냈고 소비처
+    /// `max(0, min(n-1, idx))` 가 0 으로 잘라 냈다. 감은 결과도 소비처를 지나면 유효 인덱스라
+    /// 관측 차이는 "0 고정" 대 "역방향 순환" 이고, **후자가 WE 다** — 진행기의 역방향 분기가
+    /// 인덱스를 내렸다가 음수가 되면 `lea eax, [rcx-1]`(`0x14015f23d`, `rcx` = 프레임 수)로
+    /// **마지막 프레임으로 감는다**(`0x14015f20f`–`0x14015f25d`: `addss` 로 누적을 되돌리고
+    /// `dec r10` 로 이전 프레임 길이를 더한 뒤 `maxss 0`). `spriteFrameIndex` 의 음수 시간
+    /// 규약과도 같은 쪽이다.
+    public static func sheetFramePair(frameCoordinate x: Float, frameCount n: Int,
+                                      crossfade: Bool) -> SheetFramePair {
+        let stopped = SheetFramePair(current: 0, next: 0, blend: 0)
+        guard n > 1 else { return stopped }
+        let d = Double(x)
+        guard d.isFinite else { return stopped }
+        let fl = d.rounded(.down)                     // WE 는 floor 다(trunc 아님) — 음수에서만 갈린다
+        guard let fi = safeInt(fl) else { return stopped }
+        var cur = fi % n
+        if cur < 0 { cur += n }
+        guard crossfade else { return SheetFramePair(current: cur, next: cur, blend: 0) }
+        // |x| 가 2^24 를 넘으면 Float 에 소수부가 남지 않아 blend 가 정확히 0 이 된다(= 크로스페이드
+        // 소멸). 그건 부동소수의 사실이지 규약 위반이 아니라 별도 분기를 두지 않는다.
+        return SheetFramePair(current: cur, next: Swift.min(n - 1, cur + 1), blend: Float(d - fl))
     }
 
     public static func parse(_ data: Data) -> TexImage? {

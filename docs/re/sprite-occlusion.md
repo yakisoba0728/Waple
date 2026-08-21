@@ -370,7 +370,7 @@ b    = min( 512.0f * (float)cov / (H*H), 1.0f )      // H = 화면 높이(px)
 
 유니폼 이름 ↔ 씬 오프셋은 **추측이 아니라 빌트인 유니폼 업로더의 점프 테이블**로 확정했다.
 업로더는 `0x1400d8300` 이고, `movzx edx, word [rsi+r9*2]` (`0x1400d83b3`) 로 유니폼 id 를
-읽어 인덱스 테이블 `0x1400daaac` → 점프 테이블 `0x1400da984` 로 분기한다(`0x1400d83c1`,
+읽어 인덱스 테이블 `0x1400daaac`[VA-데이터표] → 점프 테이블 `0x1400da984` 로 분기한다(`0x1400d83c1`,
 `0x1400d83ca`). 이름 ↔ id 는 등록 함수 `0x140002860–0x140004321` 에서 나온다(엔트리
 stride 0x28, `{int id; std::string name;}`).
 
@@ -910,7 +910,7 @@ VM 쪽 콤보 결정(`r13d = [r15+8]`):
 (`rcx = 2·i`, `rsi = i` 이므로 스트라이드는 각각 16바이트·8바이트다.)
 
 **유니폼 슬롯의 정체는 추측이 아니라 업로더 점프 테이블로 확정했다.** 빌트인 유니폼
-업로더 `0x1400d8300` 이 유니폼 id 로 인덱스 표 `0x1400daaac` 를 찍고(`0x1400d83c1`)
+업로더 `0x1400d8300` 이 유니폼 id 로 인덱스 표 `0x1400daaac`[VA-데이터표] 를 찍고(`0x1400d83c1`)
 점프 표 `0x1400da984` 로 분기한다(`0x1400d83ca`):
 
 | id 범위 | 암 | 읽는 곳 | 뜻 |
@@ -1102,10 +1102,335 @@ python3 scripts/re/disasm.py 0x1401d2d89 0x110    # 세 콤보 세팅
 
 ```python
 from wpe import pe; import struct
-idx = pe.read(0x1400daaac, 0x90)
+idx = pe.read(0x1400daaac, 0x90)   # [VA-데이터표] .text 안 데이터라 디스어셈 대상이 아니다
 for i in (0x2a, 0x34, 0x3e):
     a = idx[i]
     rva = struct.unpack('<I', pe.read(0x1400da984 + 4*a, 4))[0]
     print(hex(i), 'arm', hex(0x140000000 + rva))
 # 0x2a -> 0x1400d979d (Rotation)  0x34 -> 0x1400d97b7 (Translation)  0x3e -> 0x1400d97d5
 ```
+
+---
+
+## 11. [2026-08-21 추가] 배선 — Waple 쪽에서 실제로 무엇을 고쳤고 무엇이 남았나
+
+§10 은 규약을 쟀다. 이 절은 그 규약을 Waple 코드에 **얼마나 옮겼는지**를 적는다.
+§10 의 본문은 그대로 두고, 이 절이 §10.7 의 "넘길 패치안" 둘을 이어받는다.
+
+> **§10.7 넘길 패치안 1 은 이 절 §11.1 로 대체됐다**(툼스톤 — 값 유지, **사유 교체**).
+> **§10.7 넘길 패치안 2 는 이 절 §11.3 으로 대체됐다**(내용 유지, 정확한 패치 전문 추가).
+
+### 11.0 조치표
+
+| §10 이 잰 사실 | Waple 종전 | 이번 라운드 조치 |
+| --- | --- | --- |
+| `frametime == 0` → 렌더 프레임당 한 칸(값 없음) | `TexImage.swift` 주석이 "**확정 못 했다**" 로 헤지 + "1/frameCount 로 바꿔라" 패치안 | **주석 전면 교체**(§11.1). 헤지는 사실과 다르고 패치안은 **틀렸다** — 값 `0.016` 은 유지 |
+| 시트 프레임 쌍 = `floor`/`frac`, `next` 는 **클램프** | 인덱스만 있고 `next`·`blend` 개념 없음 | `TexImage.sheetFramePair(frameCoordinate:frameCount:crossfade:)` 신설 + 리눅스 테스트 9건 |
+| `SPRITESHEETBLEND` = `animationmode != "randomframe"` | 게이트 없음 | `SceneRendererFrameEncoder.particleSheetPair` 가 게이트를 진다. **셰이더 배선은 미완**(§11.3) |
+| 프레임 지오메트리 = 임의 2×2 아핀 | 축정렬 서브렉트 + `rotationQuarters`(90° 배수) | **배선 안 함** — 일반 아핀 도달이 측정 범위에서 0 이다(§11.4) |
+| 시트 게이트 = `.tex` flags bit2 | 파서가 `isGif` 로 이미 읽음 | **배선 불필요** — 동치를 테스트로 잠갔다(§11.5) |
+
+### 11.1 `fallbackFrameTime` — 헤지를 걷어내고, 종전 패치안을 철회한다
+
+종전 `Sources/WapleCore/TexImage.swift` 의 `fallbackFrameTime` 주석은
+"**WE 가 이 자리에 쓰는 값은 RE 로 확정하지 못했다**" 라고 적고 있었다. 그 문장은 "값이
+있는데 못 찾았다" 로 읽히고, **전제가 틀렸다.** 진행기(`0x14015f0d0`–`0x14015f326`)를
+`.pdata` 시작에서 선형으로 다시 떠서 확인한 것:
+
+```
+0x14015f0f7  test  byte ptr [rcx+0x1c], 4        ; 시트 게이트(= flags bit2)
+0x14015f15a  xorps xmm1, xmm1
+0x14015f1c4  movss xmm1, dword ptr [r10]         ; 현재 프레임의 frametime
+0x14015f1c9  comiss xmm0, xmm1                   ; acc vs frametime
+0x14015f1cc  jb    0x14015f26a                   ;   acc < ft 면 그대로
+0x14015f1d2  inc   edi                           ; ★ 한 프레임만
+0x14015f1d8  subss xmm0, xmm1                    ; acc -= ft
+0x14015f208  minss xmm0, dword ptr [r10]         ; ★ 잉여를 새 프레임 길이로 절사
+```
+
+`frametime == 0` 이면 `comiss` 가 `jb` 를 안 태우고, `subss` 가 0 을 빼고, `minss` 가 누적을
+0 으로 되돌린다 — **dt 가 얼마든 렌더 프레임당 정확히 한 칸**이다. 호출 자체도 씬 프레임
+카운터로 프레임당 1회만 열린다(`0x14015f162` ↔ `0x14015f275`, `[scene+0x144]`). 둘을 합치면
+**시트는 화면 갱신률보다 빠르게 재생될 수 없다.** 즉 "초/프레임" 이라는 값이 애초에 없다.
+
+**철회 — 종전 "넘길 패치안: `1.0 / max(1, frameCount)`" 는 틀린 제안이었다.** 근거였던
+짝 `.tex-json` 의 `spritesheetsequences[].duration`(TEXS0002 8건 전건 `1`)을 **런타임이 읽지
+않는다**(이번에 실측):
+
+* `wallpaper64.exe` 안 `.tex-json` 문자열은 **정확히 1개**(`0x140492348`)이고, 그 자리는
+  `resourcecompiler64.exe`(`0x140492330`) · `-mdl -i "`(`0x140492358`) ·
+  `-tex -i "`(`0x140492368`) · `Recompiling textu…` 와 한 클러스터다 —
+  **리소스 컴파일러 재호출 인자**다.
+* `spritesheetsequences` 문자열은 `wallpaper64.exe` 에 **0개**다(ASCII·UTF-16LE 둘 다).
+  `duration` 은 3개뿐이고 전부 무관하다(UI 색/base64 클러스터 1 ·
+  `minperiodicduration`/`maxperiodicduration` 2).
+
+읽지 않는 키의 값을 런타임 규약으로 삼을 수 없다. 게다가 실제 재생속도로 환산하면 그 제안은
+**WE 보다 훨씬 느리다** — 60Hz 에서 WE 는 1/60 ≈ 0.0167 s/프레임인데 `1/frameCount` 는
+snow(4프레임) 0.25 → **15배 느림**, debris1(8) 0.125 → 7.5배 느림, fire2·lightning2(32)
+0.031 → 1.9배 느림, fire3(128) 0.0078 만 2배 빠르다.
+
+**판단: 값은 `0.016` 을 유지한다.** ① 60Hz 실동작(1/60)의 4% 근사이고, ② 정확히 `1.0/60` 으로
+올리려면 형제 자리 셋(`particleSheetFrameIndex` · `SceneRenderer3D` 의 `max(0.016, ft)`)을
+같이 올려야 하는데 `SceneRenderer3D.swift` 는 이번 라운드 소유 밖이라 셋을 동시에 못 고친다.
+4% 를 얻으려고 "같은 자산이 레이어냐 파티클이냐에 따라 속도가 갈리는" 상태를 만들 수 없다.
+③ 도달이 작다 — TEXS0002 는 동봉 311 중 **8**, 설치 440 중 **8**(같은 8건).
+워크샵 코퍼스는 이 컨테이너에 없어 **미측정**이다(0 이 아니다).
+
+회귀는 `Tests/WapleCoreTests/TexSpriteSheetBlendTests.swift` 의
+`testFallbackFrameTimeApproximatesOneRenderFrameAt60Hz` ·
+`testZeroFrameTimeSheetCycleIsFrameCountTimesFallback` 이 잠근다(후자가 `1/frameCount`
+되돌림을 직접 잡는다 — 4프레임 시트 한 바퀴가 0.064s 에서 1.0s 로 늘어난다).
+
+### 11.2 크로스페이드를 "쿼드 두 번 그리기" 로 흉내 낼 수 없다
+
+`SPRITESHEETBLEND` 를 셰이더 없이 CPU 에서 흉내 내는 유일한 길은 같은 파티클을 두 번,
+현재 프레임 `α·(1−b)` + 다음 프레임 `α·b` 로 그리는 것이다. **그건 다른 식이다.**
+
+WE 는 `mix` 를 **straight-alpha 상태에서** 하고 그 뒤에 premultiply 한다:
+
+```
+A   = va · ((1−b)·a0 + b·a1)
+RGB = vc · ((1−b)·c0 + b·c1) · A          ← 색과 알파를 각각 섞은 뒤 곱한다
+```
+
+두 번 그리기는 premultiply 뒤에 더한다:
+
+```
+RGB = vc · va · ((1−b)·a0·c0 + b·a1·c1)   ← 곱한 뒤 섞는다
+```
+
+반례 하나면 충분하다. `c0=1, a0=0` · `c1=0, a1=1` · `b=0.5` · `vc=va=1`:
+두 번 그리기는 `0`, WE 는 `0.5 × 0.5 = 0.25` 다. 이게 원저자가
+`genericparticle.frag:74` 에 "**This is wrong because it can sample colors that are invisible
+on one frame**" 이라고 적어 둔 바로 그 자리다 — 한쪽 프레임에서 `a == 0` 인 텍셀의 RGB(인코더가
+넣은 검정이나 이웃 색 번짐)가 `mix` 를 타고 보이는 쪽으로 끌려 나온다. **알파 오염이지
+오클루전이 아니다.** 원저자가 안 고친 이유도 같이 적혀 있다 — premultiplied 로 섞으면 오염은
+사라지지만 가산(additive) 파티클의 밝기 곡선이 바뀐다.
+
+`translucent`(`dst = 1−srcα`)에서는 알파 합성까지 갈린다. `a0=a1=1, va=1, b=0.5`:
+두 번 그리기 `0.5 + 0.5·(1−0.5) = 0.75`, WE `1.0`.
+
+> **결론: 이 자리를 "고쳐서" premultiplied 로 섞으면 WE 와 달라진다.** WE 와 같으려면
+> straight 로 섞고 **그 다음에** premultiply 해야 한다 — 즉 프래그먼트 셰이더 안이어야 한다.
+
+### 11.3 넘길 패치안 — 파티클 시트 크로스페이드 (소유 밖 파일 포함)
+
+순수 산술은 이번에 들어갔다:
+
+* `TexImage.sheetFramePair(frameCoordinate:frameCount:crossfade:)` — `floor`/`frac` 분해,
+  `next = min(n−1, cur+1)`(**랩 아님**), `crossfade == false` 면 `next == current`·`blend == 0`.
+* `SceneRendererFrameEncoder.particleSheetPair(...)` — 좌표 산출 + `mode != .randomframe`
+  게이트. `particleSheetFrameIndex` 는 이제 그 `.current` 다(값 무변경).
+
+**남은 것은 GPU 쪽 두 파일이다. 정점 스트라이드가 두 파일에 동시에 박혀 있어 반쪽만 넣으면
+화면이 깨진다** — 그래서 이번 라운드에 안 넣었다.
+
+`Sources/WapleRender/ParticleShaders.swift`(소유 밖):
+
+```diff
+-    struct PVOut { float4 pos [[position]]; float2 uv; float4 color; };
++    struct PVOut { float4 pos [[position]]; float2 uv; float4 color; float2 uv2; float blend; };
+
+     vertex PVOut pv_main(uint vid [[vertex_id]], const device float* v [[buffer(0)]], ...) {
+-        uint b = vid * 8;
++        uint b = vid * 12;                       // [ndc.xy, u0,v0, rgba, u1,v1, blend, pad]
+         ...
+-        PVOut o; o.pos = ...; o.uv = uv; o.color = col; return o;
++        PVOut o; o.pos = ...; o.uv = uv; o.color = col;
++        o.uv2 = float2(v[b + 8], v[b + 9]); o.blend = v[b + 10]; return o;
+     }
+
+     fragment float4 pf_main(PVOut in [[stage_in]], texture2d<float> tex [[texture(0)]], ...) {
+-        float4 t = tex.sample(s, in.uv);
++        // WE genericparticle.frag:73-77 — straight-alpha 상태에서 mix 하고 **그 뒤에** premultiply.
++        // blend == 0 이면 mix(x, y, 0) == x 라 비트동일(무회귀).
++        float4 t = mix(tex.sample(s, in.uv), tex.sample(s, in.uv2), in.blend);
+```
+
+`pf_refract` 도 `pv_main` 을 공유하므로 같은 `mix` 를 넣어야 한다(안 넣으면 굴절 파티클만
+크로스페이드가 빠진다). `ParticleShaders.nearestSource` 는 `source` 를 문자열 치환으로 파생시킬
+뿐이라 자동으로 따라온다 — 따로 고칠 것 없다. 블렌드 상태는 `src = one`(프리멀티) ·
+`dst = one`(additive) / `oneMinusSourceAlpha`(translucent) 이고, §11.2 의 반례는 그 상태를 그대로
+가정한 계산이다. 3D 파티클(`pv3d_main` 9 float · `pv3d_fog_main` · 정점 조립은
+`SceneRenderer3D.swift`)도 같은 구조라 함께 넓혀야 2D/3D 가 갈리지 않는다 — 세 파일
+(`ParticleShaders.swift` · `SceneRenderer3D.swift` · `SceneRendererFrameEncoder.swift`)을
+**한 커밋에** 고쳐야 한다는 뜻이다.
+
+`Sources/WapleRender/SceneRendererFrameEncoder.swift`(이 라운드 소유 — **함께** 적용할 것):
+`particleVertices` 의 `func v(_:_:)` 를 12 float 로 넓히고, 시트 경로에서
+`particleSheetPair` 의 `.next` 로 두 번째 서브렉트 코너를, `.blend` 를 11번째 슬롯에 싣는다.
+시트가 없는 시스템은 `uv1 = uv0` · `blend = 0` 을 실으면 **렌더 결과가 비트동일**하다.
+
+**빠뜨리기 쉬운 자리 하나** — `particleVertices` 의 `p.frame >= 0` 분기(mapsequence: 스폰 시
+프레임 확정)에서는 `blend = 0` 이어야 한다. 고정 프레임에 다음 프레임을 섞으면 틀리고, 그게
+WE 가 `randomframe` 에서 `SPRITESHEETBLEND` 를 끄는 이유와 같은 이유다(§10.3). 그 분기는
+`particleSheetPair` 를 아예 안 타므로 게이트가 자동으로 걸리지 않는다.
+
+비용: 2D 파티클 정점 대역폭 +50%. 도달은 크다 — 동봉 파티클 def 289건 중 `randomframe`
+32건을 뺀 **257건**이 크로스페이드 켜짐이다(설치본 296 중 264). 즉 이 패치가 들어가면
+**시트를 쓰는 파티클의 화면이 실제로 바뀐다.** CI 픽셀 골든(`SyntheticPixelGoldenTests`)에는
+파티클 시트가 없어 안 깨지지만, 256×144 기준선 재기준선 부채는 늘어난다.
+
+### 11.4 프레임 지오메트리 아핀 — 도달을 세고 배선을 **안 했다**
+
+§10.4.4 대로 WE 는 프레임의 6개 float 를 그대로 `g_TextureNRotation`(2×2 vec4) +
+`g_TextureNTranslation`(vec2) 로 올린다. 업로더 암을 다시 되짚어 확인했다(점프 테이블
+`0x1400da984`, 인덱스 표 `0x1400daaac`[VA-데이터표]):
+
+```
+0x1400d979d  mov    rax, qword ptr [r14+8]                   ; ── Rotation 암 진입(id 0x2a–0x33)
+0x1400d97a1  add    rdx, rdx                                 ;    rdx = 2·id
+0x1400d97aa  movups xmm0, xmmword ptr [rax + rdx*8 - 0xd4]   ;    id 0x2a → scene+0x1cc, **16바이트**
+0x1400d97b7  mov    rax, qword ptr [r14+8]                   ; ── Translation 암 진입(id 0x34–0x3d)
+0x1400d97bb  mov    rcx, rdx                                 ;    rcx = id
+0x1400d97c4  mov    rcx, qword ptr [rax + rcx*8 + 0xcc]      ;    id 0x34 → scene+0x26c, **8바이트**
+```
+
+즉 vec4 하나 + vec2 하나이고, 진행기의 스토어(`0x14015f2a3`–`0x14015f2bc` 16바이트 스트라이드 ·
+`0x14015f2d3`/`0x14015f2da` 8바이트 스트라이드)와 폭·베이스·스트라이드가 정확히 맞는다.
+**그래서 WE 는 임의의 아핀(전단·회전)을 표현할 수 있다.**
+
+**그런데 실물이 없다.** 직접 센 결과:
+
+| 범위 | `.tex` | TEXS 보유 | TEXS 프레임 총수 | `widthY≠0 ∨ heightX≠0`(오프대각) | `width==0 ∨ height==0`(회전) | 음수 extent |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 동봉 `Sources/WapleRender/Resources/WEAssets/` | 311 | 52 | 1876 | **0** | **0** | **0** |
+| 설치본 `wallpaper_engine/` | 440 | 61 | 1912 | **0** | **0** | **0** |
+| 워크샵 코퍼스 | — | — | — | **미측정**(컨테이너에 없다) | 미측정 | 미측정 |
+
+전건이 `diag(width/w, height/h)` 에 둘 다 양수다. Waple 의 축정렬 서브렉트
+(`spriteSubrect`) + `rotationQuarters`(90° 배수) 가 **측정 도달 100%** 를 덮는다.
+그래서 일반 아핀 배선은 **하지 않는다** — 표본 0 인 코드는 검증할 수 없다.
+`TexSpriteSheetBlendTests.testBundledSheetFramesAreAllAxisAligned` 가 이 도달을 못박아,
+회전/전단 실물이 자산에 들어오는 날 **테스트가 먼저 깨진다**. 그때 배선하면 된다.
+
+### 11.5 시트 게이트 비트 — Waple 파서는 이미 읽고 있다
+
+WE 의 술어는 4명령 리프 하나다(`.pdata` 엔트리 없음 — 앞뒤 `cc` 패딩으로 경계가 자명,
+`0x14015c470` 직전이 `…5d c3 cc…cc`):
+
+```
+0x14015c470  mov eax, dword ptr [rcx+0x1c]   ; .tex 헤더 flags
+0x14015c473  shr eax, 2
+0x14015c476  and al, 1                       ; = flags & 0x4
+0x14015c478  ret
+```
+
+같은 비트가 **둘 다**를 켠다 — 프레임 진행기 진입(`0x14015f0f7 test byte ptr [rcx+0x1c], 4`)과
+`SPRITESHEET` 콤보(`0x1401d04a5 or dword ptr [r13+8], 0x1000000`, 그 직전
+`0x1401d049c call 0x14015c470` · `0x1401d04a1 test al, al`; 소비
+`0x1401d2d89 test dword ptr [r15+8], 0x1000000`).
+
+> **"유일 세팅" 은 범위를 붙여야 맞다.** 이미지 전체를 바이트로 훑으면 `or r/m32, 0x1000000`
+> 은 **5자리**다(§11.7 재현). 그중 파티클 def 의 flags 워드 `[def+8]` 에 쓰는 것은
+> `0x1401d04a5` **하나뿐**이고, 나머지 넷은 다른 오브젝트의 다른 오프셋이다 —
+> `0x140266f7a or [rsi], …`(함수 `0x140265c30`–`0x140266f99`) ·
+> `0x14038acf7`/`0x1403f6ee9`/`0x1403f7d5a` 는 전부 `or [reg+0xd8], …` 로 `.tex`·파티클과
+> 무관한 함수들이다. 즉 정확한 문장은 "**파티클 flags 워드에 이 비트를 세우는 자리가 1곳**" 이다. 콤보 문자열도 직접 확인했다 —
+`0x140490180` `"SPRITESHEET"` · `0x140490190` `"SPRITESHEETBLEND"` ·
+`0x140490110` `"SPRITESHEETBLENDNPOT"`.
+
+Waple 의 `.tex` 파서는 그 비트를 `TexImage.isGif`(`flags & 0x4`)로 **이미 읽는다** — 배선할 게
+없다. 대신 동치를 테스트로 잠갔다(`testSheetGateIsTexFlagsBit2AndMatchesTEXSPresence`):
+동봉 311건 전부에서 `isGif == (flags & 0x4 != 0)` 이고 `isGif == !frames.isEmpty` 다
+(불일치 **0**건 · 시트 **52**건).
+
+> **주의 — 이미지 레이어의 게이트는 텍스처가 아니라 머티리얼이다.** `0x1401d04a5` 는
+> **파티클 def 파스 함수**(`0x1401c5490`–`0x1401d152c`) 안이다. 이미지 레이어 쪽 `SPRITESHEET`
+> 콤보는 머티리얼 JSON 에 저작돼 온다(§10.1 의 `declarations.json` 3종). Waple 도 같은 모양이다
+> — `SceneRendererResources.swift` 의 `layer.spritesheet`(= 머티리얼 콤보) + `frames.count > 1`.
+> 두 경로의 게이트 출처가 다르다는 것을 §10.3 한 줄("`.tex` flags 하나로 결정된다")만 읽고
+> 뭉뚱그리면 오독한다.
+
+### 11.6 이 절이 못 닫은 것
+
+* **[미해결] 파티클 시트의 위상 정본.** WE 는 `frac(in_ParticleLifeTime)`
+  (`genericparticle.vert:94`)을 쓰는데, 그 정점 속성(`a_TexCoordVec4C1.w`)에 CPU 가 무엇을
+  굽는지는 **특정하지 못했다.** 강한 정황은 있다 — 파스가 `randomframe` 만 구분하고
+  (`[def+0x30]`, `0x1401c5727`/`0x1401c5731`) `sequence` 와 **키 부재를 똑같이** 다루므로,
+  WE 에는 "frametime 으로 도는 파티클 시트" 라는 모드가 아예 없고 둘 다
+  `frac(수명진행 × sequencemultiplier)` 일 가능성이 크다. 그렇다면 Waple 의 `mode == nil`
+  경로(`age / max(0.016, ft)`)는 WE 와 **구조가 다르다**. 정황일 뿐 **근거 없음** — 정점 버퍼를
+  채우는 자리를 못 찾았다. 참고로 `mode == .sequence` 경로는 대수적으로 WE 와 같다
+  (`floor(z·n) mod n == floor(frac(z)·n)`).
+* **[미해결] `g_RenderVar1`(파티클 시트 균일 격자 3값)을 굽는 코드** — §10.8 그대로.
+  Waple 은 TEXS 서브렉트를 쓰고 WE 파티클은 균일 격자를 쓰므로, 셀 폭 반올림이 어긋난
+  시트(`tex-format.md`)에서 두 구현의 UV 가 갈린다. **[관측 한 줄 보탬]** 프레임 **크기**만
+  보면 동봉 시트 **52/52** · 설치본 **61/61 이 균일**하다(한 시트 안의 `|width|`·`|height|`
+  집합 크기가 각각 1).
+  즉 갈릴 수 있는 것은 크기가 아니라 **위치(격자 원점 누적)**뿐이고, 그게 `tex-format.md` 가
+  적은 "저장 셀 폭이 `아틀라스/열수` 보다 아주 조금 크다" 관측과 같은 자리다. 실제 UV 차분은
+  아직 안 쟀다.
+* **[미해결] `general.spritesheetrefreshsync`(씬 플래그 bit6)의 소비처** — §10.8 그대로.
+
+### 11.7 재현 (이 절의 수치)
+
+```bash
+# 도달 — 동봉/설치본 .tex 의 TEXS 프레임 지오메트리 전수
+python3 - <<'PY'
+import os, struct
+def parse(b):
+    if len(b) <= 42 or b[:8] != b'TEXV0005': return None
+    flags = struct.unpack_from('<i', b, 22)[0]
+    i = b.rfind(b'TEXS000')
+    if i < 0: return (flags, 0, [])
+    ver = b[i+7]-0x30
+    if not (1 <= ver <= 3): return (flags, 0, [])
+    p = i+9; cnt = struct.unpack_from('<i', b, p)[0]; p += 4
+    if not (0 < cnt <= 4096): return (flags, 0, [])
+    if ver >= 3: p += 8
+    if p + cnt*32 > len(b): return (flags, 0, [])
+    fr = []
+    for _ in range(cnt):
+        g = struct.unpack_from('<6i' if ver == 1 else '<6f', b, p+8)
+        fr.append(tuple(float(v) for v in g)); p += 32
+    return (flags, ver, fr)
+for label, root in {'동봉': 'Sources/WapleRender/Resources/WEAssets',
+                    '설치본': 'wallpaper_engine'}.items():
+    tex=sheets=frames=off=0
+    for dp, dn, fn in os.walk(root):
+        for f in fn:
+            if not f.endswith('.tex'): continue
+            r = parse(open(os.path.join(dp, f), 'rb').read())
+            if not r: continue
+            flags, ver, fr = r; tex += 1
+            if not fr: continue
+            sheets += 1; frames += len(fr)
+            off += sum(1 for (x, y, w, wy, hx, h) in fr if wy or hx or w == 0 or h == 0)
+    print(label, f'.tex {tex} · TEXS {sheets} · 프레임 {frames} · 비축정렬 {off}')
+PY
+# → 동봉 .tex 311 · TEXS 52 · 프레임 1876 · 비축정렬 0
+# → 설치본 .tex 440 · TEXS 61 · 프레임 1912 · 비축정렬 0
+
+# 파티클 def 의 animationmode 분포(술어: 최상위 `emitter` 키)
+# → 동봉 289건 {부재 253, randomframe 32, sequence 4} · 설치본 296건 {260, 32, 4}
+
+# 사이드카가 런타임에 안 읽힌다는 것
+python3 -c "
+import re; d=open('wallpaper_engine/wallpaper64.exe','rb').read()
+for s in ('spritesheetsequences','.tex-json'):
+    print(s, 'ascii', len(re.findall(re.escape(s.encode()), d)),
+             'utf16', len(re.findall(re.escape(s.encode('utf-16le')), d)))"
+# → spritesheetsequences ascii 0 utf16 0 · .tex-json ascii 1 utf16 0
+```
+
+`or r/m32, 0x1000000` 전수(§11.5 의 범위 라벨 근거) — ModRM 네 형태를 각각 훑는다:
+
+```python
+from wpe import pe
+import re
+base = 0x140001000
+buf  = pe.read(base, 0x400000)
+for name, p in {
+    'mod=00': rb'\x81[\x08-\x0f]\x00\x00\x00\x01',
+    'mod=01': rb'\x81[\x48-\x4f].\x00\x00\x00\x01',
+    'mod=10': rb'\x81[\x88-\x8f]....\x00\x00\x00\x01',
+    'mod=11': rb'\x81[\xc8-\xcf]\x00\x00\x00\x01',
+}.items():
+    print(name, [hex(base + m.start()) for m in re.finditer(p, buf)])
+```
+
+바이트 패턴은 **오탐을 낸다** — 반드시 `.pdata` 시작에서 선형 디스어셈해 확인할 것.
+[VA-정정] 실제로 `0x1401d086d`(진짜는 `0x1401d086c or [rcx+r13+0xa4], 0x10000`, SIB 때문에 창이 밀렸다)와
+`0x1400a7433`(진짜는 `mov [rcx+0xc8], 1`) 둘이 오탐이었고, 남은 5자리가 진짜다.
