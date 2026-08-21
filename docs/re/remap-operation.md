@@ -404,6 +404,28 @@ VM opid **19**(`0x13`) → 핸들러 `0x140244874` (점프테이블 `0x14024bb58
 
 `sum`/`average`/`max`/`min` 은 **입력 축약 전용**이다(출력에 오면 무동작).
 
+### 5.4.1 `inputcomponent` — 입력 축약 (2026-08-21 추가 실측)
+
+§5.4 는 출력 축만 다뤘다. 입력 축(`[r14+0x1c]`)은 값 산출 **앞머리**에 따로 있다
+(`0x140244ffe`–`0x140245091`). `dec`+`cmp eax,6`+`ja`(`0x140245002`–`0x140245007`)로 **1..7 만**
+받고 7항 점프테이블 `0x14024bc80` 으로 흩는다. 표를 덤프해 확인한 대응:
+
+| 값 | 축 | 진입 | 산술 |
+| ---: | --- | --- | --- |
+| 0 | `all` | (`ja` 로 표를 건너뜀) | **축약하지 않는다** — 세 성분이 각자 정규화·변환을 지난다 |
+| 1 | `x` | `0x140245022` | 세 자리에 x 브로드캐스트 |
+| 2 | `y` | `0x140245029` | 세 자리에 y 브로드캐스트 |
+| 3 | `z` | `0x140245034` | 세 자리에 z 브로드캐스트 |
+| 4 | `sum` | `0x140245059` | `(y + x) + z` |
+| 5 | `average` | `0x140245043` | `((y + x) + z) · 0.33333334`(`0x140492db0`) |
+| 6 | `max` | `0x140245068` | `maxps` 연쇄 (x,y) → z |
+| 7 | `min` | `0x140245077` | `minps` 연쇄 |
+
+**`all` 이 "무축약" 이라는 것이 §5.4 의 출력 `all`(=세 배열 전부)과 짝이다** — 실물 값
+파이프라인은 처음부터 끝까지 **3성분**이고, 축 키 둘은 그중 어디를 좁힐지만 고른다.
+Waple 의 입력 파이프라인은 아직 스칼라라 `all` 을 x 로 떨어뜨린다(종전 기본과 같은 값이라 무회귀).
+**[미해결]** — 3성분 입력 파이프라인은 별건이다.
+
 ### 5.5 페이드 창 변종 — 적용 모형이 `old + w·(unweighted − old)` 임을 확정
 
 opid 39 핸들러(`0x140246ec0`–`0x14024a355`)는 base 의 근사 복제인데, 네 산술이 전부
@@ -476,7 +498,11 @@ WE 는 팩토리 직전에 `if (!json.find(k)) json[k] = C;` 꼴 주입기를 �
 
 ---
 
-## 8. Waple 착지 지점 (코드는 고치지 않았다)
+## 8. Waple 착지 지점
+
+> **[2026-08-21 갱신] §8.1–§8.4 는 반영됐다.** 아래 네 절은 *착지 전* 상태를 기록한 것이고,
+> 실제로 무엇이 어떻게 들어갔는지·자산 영향 실측·되돌리기 실험은 **§8.6** 에 있다.
+> §8.5(주석 출처 정정)도 `RemapVerb` doc 주석에 반영했다.
 
 우선순위 순. 줄번호는 2026-08-21 시점이고 **함수/심볼명이 정본**이다.
 
@@ -553,6 +579,90 @@ operation: parsedOperation ?? .remap,     // → ?? .multiply
 
 `ParticleSystem.swift:589` 위 주석의 "`wallpaper64.exe` 스트링 @0x491fd0–0x4920b0" 은
 `inheritvaluefromevent` 어휘 구간이다(§3.3). `remapvalue` 와 무관하다고 명시해야 한다.
+
+---
+
+### 8.6 착지 기록 (2026-08-21, 코드 반영 완료)
+
+§8.1–§8.4 를 구현했다. **판정은 전부 디스어셈으로 독립 재확인했고**(아래), 자산 영향은 시뮬로
+직접 재측정했다. `RemapVerb` 는 지우지 않고 `RemapSpec` 의 **읽기 뷰**로 남겼다(§8.3 의 제안대로).
+
+### 재확인한 것 (이 커밋에서 다시 뜬 것)
+
+| 판정 | 재확인 방법 | 결과 |
+| --- | --- | --- |
+| `output` 이 먼저, `operation` 이 나중 | 핸들러 전 구간 덤프 후 `[r14+0x10]` grep | **32건, 최소 주소 `0x1402459a7`** — 디스패치 `0x1402459a5` 뒤. 확인 |
+| 출력 점프테이블 18항 | `pe.read(0x14024bcb4, 20*4)` | idx 8..11 이 전부 `0x140246e52`(공통 꼬리), idx 18·19 는 다음 표. 확인 |
+| operation 표 4항 · 센티넬 5 | `dis(0x140260fb0, 0x140261030)` | `[0x140484f20/28/30/38]` → 0/1/2/3, `mov eax,5`. 확인 |
+| 주입기 기본 `multiply`/`size`/`all` | `dis(0x1401bfbb0, 0x1401bfc40)` | `mov r8,[0x140484f28]`+`lea rdx,"operation"` → H_STRING. 확인 |
+| 파스 저장 오프셋 7종 | `dis` 후 `mov dword ptr [rsi+…], eax` 추출 | `operation`+0x00 · `input`+0x04 · `output`+0x08 · `inputcomponent`+0x0c · `outputcomponent`+0x10 · `transformfunction`+0x14 · `flags`+0x1c. 확인 |
+| **`rotation`/`angularspeed` 가 z 전용** | rotation 핸들러(`0x140245bac`) 목적지 + 형제 `angularmovement`(`0x14024000d`–`0x140240039`) | 회전 배열 = `0x280/0x288/0x290`, 각속도 = `0x298/0x2a0/0x2a8`. remap 은 `0x290`·`0x2a8` **하나씩**만 건드린다 → **rot.z / angvel.z**. 확인 |
+| **`add` 에 `dt` 곱이 없다** | 핸들러 전 구간에서 dtScaled 슬롯 `[rbp+0xf0]` grep | **0건**. (§5.5 의 페이드 변종 논거보다 강한 직접 관측) 확인 |
+| `component` 는 실물 키가 아니다 | ASCII + UTF-16LE 전수 검색 | `inputcomponent`@`0x14048f760` · `outputcomponent`@`0x14048f810` 둘뿐, `component` 단독 0건. 확인 |
+| 채널 표 20 · 축 표 8 | 포인터 배열 덤프 + `strat` | §3.1 표 그대로. 확인 |
+
+**틀린 판정은 없었다.** 새로 잰 것은 §5.4.1(입력 축약 7갈래)뿐이고, 그것은 종전 문서가
+다루지 않은 자리다.
+
+### 자산 영향 — 시뮬 실측 (동봉 12파일)
+
+같은 자산을 두 벌 시뮬해(현 파스 vs `operation` 부재 기본을 종전 `remap` 으로 되돌린 대조군)
+파티클 전 필드 비트동일 여부를 봤다. `Tests/WapleCoreTests/RemapOperationAxesTests.swift` 의
+`testBundledAssetsOnlyThunderboltOpacityChangesWithTheNewDefault` 가 그 측정 자체다.
+
+| 파일 | `remapvalue` | 경로 | 결과 |
+| --- | --- | --- | ---: |
+| `presets/lightning/particles/presets/thunderbolt.json` | `output:"opacity"`, operation 부재 | Ex | **바뀐다** |
+| `presets/lightning/previewthunderbolt/…/thunderbolt.json` | 〃 | Ex | **바뀐다** |
+| `presets/rain/particles/presets/rain_screen.json` | `velocity`+`remap` / `speed`(부재) | Ex / **레거시** | 비트동일 |
+| `presets/rain/particles/presets/rain_screen_4k.json` | 〃 | Ex / **레거시** | 비트동일 |
+| `presets/rain/particles/presets/rain_screen_fast.json` | `velocity`+`remap` | Ex | 비트동일 |
+| `presets/rain/particles/presets/rain_screen_fast_4k.json` | 〃 | Ex | 비트동일 |
+| `presets/rain/previewrainscreen/…/rain_screen.json` | 〃(사본) | Ex / **레거시** | 비트동일 |
+| `presets/rain/previewrainscreen/…/rain_screen_fast.json` | 〃(사본) | Ex | 비트동일 |
+| `scenes/…/remapvalue/…/new_particle_system.json` | `color`+`remap` | Ex | 비트동일 |
+| `scenes/…/remapinitialvalue/…/new_particle_system.json` | (이니셜라이저, Waple 미파스) | — | 비트동일 |
+| `presets/lightning/…/thunderbolt_beam_child.json` ×2 | 〃 | — | 비트동일 |
+
+**§8.2 의 예측대로 12건 중 정확히 2건이다.** 그 둘도 **알파만** 갈린다 —
+`opacity` 는 표시 파생이라 위치·속도·크기는 비트동일이고, 파티클 수가 매 프레임 같으므로
+**RNG 드로 스트림이 그대로**다(`testThunderboltChangeIsAlphaOnly` 가 400스텝 전수로 못박는다).
+
+`output:"speed"` 3건이 무회귀인 이유는 §8.2 가 적은 그대로다 — 확장 키가 **하나도 없어서**
+레거시 `.remapValue(.speed)` 경로를 타고, 그쪽은 원래 곱하기였다(`우연히 맞아 있었다`).
+`testBundledSpeedRemapsStayOnTheLegacyPath` 가 그 경로 선택을 못박는다.
+
+### 구현 범위와 남긴 것
+
+구현한 채널 9종: `maxlifetime` · `size` · `opacity` · `speed` · `rotation`(z) · `angularspeed`(z) ·
+`color` · `position` · `velocity`. 각각 4산술 × (벡터 채널이면) `outputcomponent` 축.
+
+- **실물도 무동작**인 6종(`lifetimefraction` · `runtime` · `timeofday` · `particlesystemtime` ·
+  `layertime` · `layerorigin`)은 파스는 하고 적용하지 않는다 — 실물과 관측이 같다.
+- **[미해결] 미구현** CP 계열 5종(`controlpoint` · `distancetocontrolpoint` ·
+  `positionbetweentwocontrolpoints` · `deltatocontrolpoint` · `directiontocontrolpoint`).
+  실물은 위치 배열과 함께 CP 배열 `[rsi+0x400]` 을 건드리는데 Waple 의 CP 는 `def.controlPoints`
+  라는 시스템 수준 상수다. 동봉 도달 0건이라 지어내지 않았다.
+- **의도적 이탈 둘**(둘 다 동봉 도달 0건, 기존 테스트가 고정하고 있다):
+  `velocity`+`add`/`subtract` 는 Waple 에서 **비파괴**(이번 스텝 적분에만 실림)이고 실물은 파괴적이다.
+  `speed` 도 같은 비파괴 규약이다 — 다만 `multiply` 는 `s'/s` 에서 `s` 가 상쇄돼 산술이 같다.
+- **[미해결] 미지 문자열 센티넬.** `operation`/`inputcomponent`/`outputcomponent` 에 어휘 밖
+  문자열이 오면 실물은 센티넬(5 / 9)을 내고 그 오퍼레이터가 **통째 무동작**이 된다. Waple 은
+  열거에 센티넬 자리가 없어 부재 기본으로 떨어진다. 동봉 도달 0건이라 미뤄 뒀다.
+
+### 되돌리기 실험 — 테스트가 실제로 무는가
+
+프리즈한 트리에서 착지 하나씩을 되돌려 `--filter "Particle|Remap"`(315 테스트)를 돌렸다:
+
+| 되돌린 것 | 실패 |
+| --- | ---: |
+| §8.1 `operation` 단항 셰이핑 복원(`subtract` → `1−v01`) | **1** |
+| §8.2 부재 기본 `multiply` → `remap` | **9** (자산 실측 3 · 파스 4 · 종전 테스트 2) |
+| §8.3 `rotation`/`angularspeed` 를 전 성분 + `dt` 곱으로 | **5** |
+| §8.3 `output` 부재 드롭 + 채널 7종 외 드롭 | **40** |
+| §8.4 `inputcomponent`/`outputcomponent` 분리 취소 | **10** |
+
+전체(1,309 테스트) 실패 0 · spec 게이트 15종 전부 통과.
 
 ---
 
