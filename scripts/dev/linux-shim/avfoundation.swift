@@ -381,3 +381,67 @@ open class AVAudioPlayer {
     open func pause() {}
     open func stop() {}
 }
+
+// MARK: - AVAssetWriter 계열  (2026-08-21, `--tests` 요구 표면)
+//
+// `TestSupport.makeTinyMP4`/`makeOrientedMP4` 가 합성 mp4 픽스처를 만드는 데 쓴다.
+// 프로덕션 `Sources/WapleRender/**` 는 **읽기만** 하므로(AVAsset/AVPlayer 계열) 쓰기 쪽 API 가
+// 종전 심에 통째로 없었다 — 테스트 152파일을 타입체크에 넣으면서 처음 필요해졌다.
+// 값은 전부 더미다. 이 도구는 타입만 본다.
+
+/// 실제: `public struct AVFileType: RawRepresentable, Hashable`
+public struct AVFileType: RawRepresentable, Hashable {
+    public let rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+    public static let mp4 = AVFileType(rawValue: "public.mpeg-4")
+    public static let mov = AVFileType(rawValue: "com.apple.quicktime-movie")
+}
+
+/// 실제: `public struct AVVideoCodecType: RawRepresentable, Hashable`
+public struct AVVideoCodecType: RawRepresentable, Hashable {
+    public let rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+    public static let h264 = AVVideoCodecType(rawValue: "avc1")
+    public static let hevc = AVVideoCodecType(rawValue: "hvc1")
+}
+
+/// 실제: `public let AVVideoCodecKey: String` 외. `outputSettings` 딕셔너리 키다.
+public let AVVideoCodecKey: String = "AVVideoCodecKey"
+public let AVVideoWidthKey: String = "AVVideoWidthKey"
+public let AVVideoHeightKey: String = "AVVideoHeightKey"
+
+/// 실제: `open class AVAssetWriter: NSObject`.
+/// `startWriting()`/`append` 는 `@discardableResult` 이고 호출부가 반환값을 버린다.
+open class AVAssetWriter {
+    /// 실제: `public enum AVAssetWriter.Status: Int { case unknown, writing, completed, failed, cancelled }`
+    public enum Status: Int {
+        case unknown = 0, writing = 1, completed = 2, failed = 3, cancelled = 4
+    }
+    public var status: Status { .unknown }
+    public var error: (any Error)? { nil }
+    public init(outputURL: URL, fileType: AVFileType) throws {}
+    open func add(_ input: AVAssetWriterInput) {}
+    @discardableResult open func startWriting() -> Bool { false }
+    open func startSession(atSourceTime startTime: CMTime) {}
+    open func finishWriting(completionHandler handler: @escaping () -> Void) {}
+}
+
+/// 실제: `open class AVAssetWriterInput: NSObject`.
+/// `transform` 이 `preferredTransform` 을 트랙에 태그하는 자리다(`makeOrientedMP4` 가 쓴다).
+open class AVAssetWriterInput {
+    public var expectsMediaDataInRealTime: Bool = false
+    public var isReadyForMoreMediaData: Bool { true }
+    public var transform: CGAffineTransform = .identity
+    public init(mediaType: AVMediaType, outputSettings: [String: Any]?) {}
+    open func markAsFinished() {}
+    @discardableResult open func append(_ sampleBuffer: CMSampleBuffer) -> Bool { false }
+}
+
+/// 실제: `open class AVAssetWriterInputPixelBufferAdaptor: NSObject`.
+open class AVAssetWriterInputPixelBufferAdaptor {
+    public var pixelBufferPool: CVPixelBufferPool? { nil }
+    public init(assetWriterInput input: AVAssetWriterInput,
+                sourcePixelBufferAttributes: [String: Any]?) {}
+    @discardableResult
+    open func append(_ pixelBuffer: CVPixelBuffer, withPresentationTime presentationTime: CMTime) -> Bool { false }
+}

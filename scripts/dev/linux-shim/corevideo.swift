@@ -71,3 +71,26 @@ public func CVMetalTextureCacheCreateTextureFromImage(
 public func CVMetalTextureGetTexture(_ image: CVMetalTexture) -> MTLTexture? { nil }
 /// 실제: `public func CVMetalTextureCacheFlush(_ textureCache: CVMetalTextureCache, _ options: CVOptionFlags)`
 public func CVMetalTextureCacheFlush(_ textureCache: CVMetalTextureCache, _ options: UInt64) {}
+
+// MARK: - CVPixelBufferPool  (2026-08-21, `--tests` 요구 표면)
+//
+// `Tests/WapleRenderTests/TestSupport.swift` 의 `makeTinyMP4`/`makeOrientedMP4` 가
+// `AVAssetWriterInputPixelBufferAdaptor.pixelBufferPool` 에서 버퍼를 꺼내 합성 mp4 픽스처를
+// 만든다. 프로덕션 `Sources/WapleRender/**` 는 이 API 를 안 쓰므로 종전 심에 없었다 —
+// 테스트 타입체크를 붙이면서 처음 필요해졌다.
+
+/// 실제: `public class CVPixelBufferPool` (CoreFoundation 타입).
+public class CVPixelBufferPool { internal init(unavailable: ()) {} }
+
+/// 실제: `public let kCVPixelBufferWidthKey: CFString` / `kCVPixelBufferHeightKey`
+public let kCVPixelBufferWidthKey: CFString = "Width" as NSString
+public let kCVPixelBufferHeightKey: CFString = "Height" as NSString
+
+/// 실제: `public func CVPixelBufferPoolCreatePixelBuffer(
+///          _ allocator: CFAllocator?, _ pixelBufferPool: CVPixelBufferPool,
+///          _ pixelBufferOut: UnsafeMutablePointer<CVPixelBuffer?>) -> CVReturn`
+/// 첫 인자는 호출부가 전부 `nil` 을 준다.
+@discardableResult
+public func CVPixelBufferPoolCreatePixelBuffer(
+    _ allocator: CFAllocator?, _ pixelBufferPool: CVPixelBufferPool,
+    _ pixelBufferOut: UnsafeMutablePointer<CVPixelBuffer?>) -> CVReturn { kCVReturnSuccess }

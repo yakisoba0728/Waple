@@ -40,6 +40,12 @@ open class NSColor: NSObject {
     public var greenComponent: CGFloat { 0 }
     public var blueComponent: CGFloat { 0 }
     public var alphaComponent: CGFloat { 0 }
+    /// 실제: HSB 접근자 세 벌. RGB 접근자와 같은 제약(캘리브레이션된 RGB 색공간에서만 유효)이다.
+    /// [2026-08-21] `--tests` 가 요구한 표면(`SceneTranslatedEffectRenderTests:557` 이하가
+    /// 색상 변환 이펙트의 결과를 밝기로 비교한다).
+    public var hueComponent: CGFloat { 0 }
+    public var saturationComponent: CGFloat { 0 }
+    public var brightnessComponent: CGFloat { 0 }
 }
 
 /// 실제: `public struct NSColorSpaceName: RawRepresentable` — `.deviceRGB` 등.
@@ -107,10 +113,20 @@ open class NSImage: NSObject {
     public var size: NSSize = .zero
     public init?(data: Data) { nil }
     public init?(contentsOfFile fileName: String) { nil }
+    /// 실제: `public init?(contentsOf url: URL)`.
+    /// [2026-08-21] `--tests` 가 요구한 표면(`RealPackagesGroundTruthTests:172`).
+    /// 이게 없으면 `NSImage(contentsOf:)` 가 `init()` 에 인자를 넘긴 꼴이 되어
+    /// "argument passed to call that takes no arguments" 로 나오고, `img` 가 미해결이라
+    /// 뒤따르는 네 줄이 전부 파생 오류로 딸려 나온다(오류 6줄 중 5줄이 그 파생이었다).
+    public init?(contentsOf url: URL) { nil }
     public override init() { super.init() }
     public func cgImage(forProposedRect proposedDestRect: UnsafeMutablePointer<NSRect>?,
                         context referenceContext: NSGraphicsContext?,
                         hints: [NSImageRep.HintKey: Any]?) -> CGImage? { nil }
+    /// 실제: `open var tiffRepresentation: Data? { get }`.
+    /// [2026-08-21] `--tests` 가 요구한 표면(`RealWebGroundTruthTests:66` 이 스냅샷 NSImage 를
+    /// TIFF 로 뽑아 `NSBitmapImageRep(data:)` 에 먹인다).
+    public var tiffRepresentation: Data? { nil }
 }
 
 extension NSImageRep {
@@ -303,6 +319,10 @@ open class NSWindow: NSResponder {
     public var title: String = ""
     public var isReleasedWhenClosed: Bool = true
     public var isVisible: Bool { false }
+    /// 실제: `open var alphaValue: CGFloat`.
+    /// [2026-08-21] `--tests` 가 요구한 표면(`RealWebGroundTruthTests:249` 가 헤드리스 캡처용
+    /// 창을 `alphaValue = 0` 으로 숨긴다).
+    public var alphaValue: CGFloat = 1
     public weak var delegate: (any NSWindowDelegate)?
 
     /// 실제: `public init(contentRect: NSRect, styleMask style: NSWindow.StyleMask,

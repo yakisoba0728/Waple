@@ -36,3 +36,7 @@
 @_exported import Compression
 @_exported import WebKit
 @_exported import UniformTypeIdentifiers
+// [2026-08-21] `simd` 도 애플에서는 Clang 모듈이라 같은 전이가 일어난다 —
+// `SceneRendererAuditV06RegressionTests` 는 `import simd` 없이 `matrix_identity_float4x4`
+// 를 쓰는데 macOS 에서는 빌드된다(`@testable import WapleRender` 가 흘린다).
+@_exported import simd

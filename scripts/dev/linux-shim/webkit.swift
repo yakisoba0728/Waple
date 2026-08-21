@@ -225,9 +225,19 @@ open class WKWebView: NSView {
     public var configuration: WKWebViewConfiguration { _configuration }
     public weak var navigationDelegate: (any WKNavigationDelegate)?
     public var url: URL? { nil }
+    /// 실제: `open var isLoading: Bool { get }`.
+    /// [2026-08-21] `--tests` 가 요구한 표면(`RealWebGroundTruthTests:320` 이 진단 문자열에 싣는다).
+    public var isLoading: Bool { false }
     public init(frame: CGRect, configuration: WKWebViewConfiguration) {
         self._configuration = configuration
         super.init(frame: frame)
+    }
+    /// 실제로는 `NSView.init(frame:)`/`init()` 를 물려받아 `WKWebView()` 가 성립한다
+    /// (`configuration` 은 기본 구성으로 채워진다). 심의 `_configuration` 은 저장 프로퍼티라
+    /// 상속만으로는 초기화가 안 되므로 **명시 편의 생성자**로 같은 자리를 만든다.
+    /// [2026-08-21] `RealWebGroundTruthTests:289` 가 `WKWebView()` 를 쓴다.
+    public override convenience init() {
+        self.init(frame: .zero, configuration: WKWebViewConfiguration())
     }
     @discardableResult
     open func load(_ request: URLRequest) -> WKNavigation? { nil }
