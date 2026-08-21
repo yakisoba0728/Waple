@@ -360,16 +360,25 @@ final class HDRBloomTests: XCTestCase {
         return read(destination)
     }
 
-    /// 레벨 수 산출 — min(요청, **1/2** 부터 1×1 까지 halving 수). Metal 불필요(순수 함수).
+    /// 레벨 수 산출 — min(요청, `min(8, floor(log2(min(W,H))))`). Metal 불필요(순수 함수).
     /// 2026-08-02 WE 구조 교체: WE 는 매 단계 절반이라 레벨 0 이 1/2 다(종전 1/4 시작).
+    ///
+    /// **[2026-08-21 W-25 해소]** 종전 산식은 `w > 1 || h > 1` 로 도는 **max 기준**이라
+    /// 짧은 변이 256 미만이고 두 변의 2-거듭제곱 구간이 다르면 한 단을 더 셌다. WE 는
+    /// `cmovg 0x14017f363` 으로 **min(W,H)** 를 잡아 `sar 0x14017f376` → `jle 0x14017f37d`
+    /// → `inc [rsi+0x310c] 0x14017f383` 로 세고 상한이 `cmp ebx,8 0x14017f541` 이다.
+    /// 아래 64×32 기대치가 6 → **5** 로 바뀐 것이 그 차이다(나머지 넷은 불변).
+    /// 본체는 `WapleCore.HDRBloomMath.levelCount` 이고 리눅스 테스트
+    /// (`Tests/WapleCoreTests/HDRBloomMathTests.swift`)가 같은 표를 덮는다.
     func testLevelCountClampsToAvailableMips() throws {
+        // 2048×1024: min 축 1024 → floor(log2)=10, 상한 8 · 요청 8 → 8.
         XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 2048, sourceHeight: 1024), 8)
-        // 512×512: half 256×256 → 128/…/1 = 9단 가능, 요청 8 로 클램프.
+        // 512×512: min 축 512 → floor(log2)=9, 상한 8 로 클램프.
         XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 512, sourceHeight: 512), 8)
-        // 64×32: half 32×16 → 16×8/8×4/4×2/2×1/1×1 — 6단으로 클램프.
-        XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 64, sourceHeight: 32), 6)
+        // 64×32: min 축 **32** → floor(log2 32)=5. max 기준이던 종전 값 6 이 아니다.
+        XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 64, sourceHeight: 32), 5)
         XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 3, sourceWidth: 512, sourceHeight: 512), 3)
-        // 4×4: half 2×2 → 1×1 = 2단(인코드 n≥2 최소치를 정확히 만족).
+        // 4×4: min 축 4 → floor(log2 4)=2단(인코드 n≥2 최소치를 정확히 만족). 정사각이라 불변.
         XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 4, sourceHeight: 4), 2)
     }
 
@@ -422,14 +431,15 @@ final class HDRBloomTests: XCTestCase {
         XCTAssertEqual(max(px[center], max(px[center + 1], px[center + 2])), 255)
     }
 
-    /// 소스가 작으면 허용 mip 수(64×32 → 6단)로 클램프된 피라미드가 생성·합성되고,
-    /// 단일 레벨보다 넓은 글로우를 만든다(기존 3-레벨 테스트의 8-레벨 갱신판).
+    /// 소스가 작으면 허용 단수(64×32 → **5단**, min 축 32 기준)로 클램프된 피라미드가
+    /// 생성·합성되고, 단일 레벨보다 넓은 글로우를 만든다(기존 3-레벨 테스트의 8-레벨 갱신판).
+    /// [2026-08-21] W-25 해소로 6 → 5. 최심층은 64>>5 × 32>>5 = 2×1 이다.
     func testPyramidClampsLevelsForSmallSource() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let width = 64, height = 32
         let levelCount = HDRBloomPyramidPass.levelCount(
             requested: 8, sourceWidth: width, sourceHeight: height)
-        XCTAssertEqual(levelCount, 6)
+        XCTAssertEqual(levelCount, 5)
         let source = try makeFloatTexture(
             device: device, width: width, height: height,
             spot: (x: 28..<36, y: 12..<20, value: 8))

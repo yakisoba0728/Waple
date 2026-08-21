@@ -326,7 +326,10 @@ fin : _rt_FullFrameBuffer + level[0] --combine_hdr--> 타깃            (0x14018
   - **생성된 단 수**(`obj+0x310c`)는 **`min(W,H)`** 를 계속 반으로 나눠 0 이 되기 전까지의 횟수다
     (`cmovg r14d,r12d` `0x14017f363` 로 min → `sar eax,1` `0x14017f376` → `jle` `0x14017f37d`
     → `inc [rsi+0x310c]` `0x14017f383`), 루프 상한은 `cmp ebx,8` `0x14017f541`.
-    즉 `min(8, floor(log2(min(W,H))))` 다 — **max 가 아니라 min** 이다(§7 W-25)
+    즉 `min(8, floor(log2(min(W,H))))` 다 — **max 가 아니라 min** 이다(§7 W-25).
+    진입 전에 두 변이 `max(·,2)` 로 클램프된다(`cmovg r15d,edx` `0x14017f1ec` ·
+    `cmovg r12d,r8d` `0x14017f200`) — 그래서 1×N 소스도 최소 1단은 나온다.
+    **[2026-08-21] Waple 이 같은 산식이 됐다** — `WapleCore/HDRBloomMath.swift:66-75`
 - **업샘플 큐빅 선택**: `ebp >= N-2` 이면 `hdr_upsample_cubic`, 아니면 `hdr_upsample`
   (`0x140183810`–`0x140183822`) — 즉 **가장 깊은 두 단만 bicubic**
 - 가우시안 패스 없음. 전 단계가 4탭 박스다.
@@ -560,7 +563,7 @@ volumetrics_combine   (passthrough, additive) → 화면
 ## 7. Waple 대조 — 어긋난 숫자
 
 `spec/engine/uniform-feed.json` 의 `wapleGaps` 중 `hdrBloomStrengthNormalization` 은 **이미 해소됐다**
-(`HDRBloomPyramidPass.swift:138-141,299-300` 가 같은 식을 적용한다) — 그 정본 항목이 낡았다.
+(`HDRBloomPyramidPass.swift:255-256` 호출 → `WapleCore/HDRBloomMath.swift:95-98`) — 그 정본 항목이 낡았었다. **[2026-08-21] `해소` 키를 추가해 정정했다**(옛 키는 묘비 규약으로 남겼다).
 아래는 재측정으로 남은 것만이다.
 
 > **[2026-08-21] 파스 기본값 7건 반영, 1건 고의 보류.** `SceneDocument.swift` 의 `general` 파스
@@ -576,9 +579,9 @@ volumetrics_combine   (passthrough, additive) → 화면
 
 | # | 항목 | WE (VA/셰이더:행) | Waple (파일:행) | 등급 | 고치면 화면이 |
 |---|---|---|---|---|---|
-| **W-1** | HDR 피라미드 **추출·다운샘플 탭 반경** | `g_RenderVar0 = 2^i/W` = **±1 소스 텍셀**(`0x1401836a0`, `0x14018374a`–`0x14018375c`) → 4×4 박스 | ~~`0.5 / src.get_width()` = ±0.5 소스 텍셀~~ → **해소(`b19db5b`)**. 되짚기를 없애고 호스트가 `tapOffsetUV(scale:baseWidth:baseHeight)` 로 계산한 `t` 를 유니폼으로 싣는다 (`HDRBloomPyramidPass.swift:160-172,388-394`) | **확정 · 해소** | 글로우 반경이 단계마다 2배로 넓어지고 이동 하이라이트의 계단/쉬머가 사라진다 |
-| **W-2** | HDR 업샘플 **BICUBIC** | 가장 깊은 두 단(`ebp >= N−2`)은 `hdr_upsample_cubic` (`0x140183810`–`0x140183822`) | ~~전 단계 bilinear 4탭~~ → **해소(`b19db5b`)**. `upsampleUsesBicubic(sourceLevel:levelCount:)` 이 단마다 파이프라인을 고르고 `weBicubic` 이 `hdr_downsample.frag:8-51` 축자 이식이다 (`HDRBloomPyramidPass.swift:184-186,491-503`) | **확정 · 해소** | 저해상도 단의 업스케일 블록 아티팩트가 사라져 넓은 헤일로가 매끈해진다 |
-| **W-3** | `bloomhdrstrength` 기본값 | **2.0** (`0x1401870c2`) | ~~`?? 0`~~ → **`?? 2` 반영(2026-08-21)**. 패스 기본은 아직 0 (`HDRBloomPass.swift:15`, `HDRBloomPyramidPass.swift:38` — 렌더 레인 잔여) | **확정 · 파스 해소** | 키를 생략한 HDR 씬에서 블룸이 나타난다(현재는 완전히 안 보임). **동봉 172씬 영향 0건** — 84씬이 키를 생략하지만 `hdr && bloom` 인 씬은 previewthunderbolt 1건뿐이고 그 씬은 2.0 을 명시 저작한다 |
+| **W-1** | HDR 피라미드 **추출·다운샘플 탭 반경** | `g_RenderVar0 = 2^i/W` = **±1 소스 텍셀**(`0x1401836a0`, `0x14018374a`–`0x14018375c`) → 4×4 박스 | ~~`0.5 / src.get_width()` = ±0.5 소스 텍셀~~ → **해소(`b19db5b`)**. 되짚기를 없애고 호스트가 `tapOffsetUV(scale:baseWidth:baseHeight)` 로 계산한 `t` 를 유니폼으로 싣는다 (`WapleCore/HDRBloomMath.swift:117-129` · `HDRBloomPyramidPass.swift:344-350`) | **확정 · 해소** | 글로우 반경이 단계마다 2배로 넓어지고 이동 하이라이트의 계단/쉬머가 사라진다 |
+| **W-2** | HDR 업샘플 **BICUBIC** | 가장 깊은 두 단(`ebp >= N−2`)은 `hdr_upsample_cubic` (`0x140183810`–`0x140183822`) | ~~전 단계 bilinear 4탭~~ → **해소(`b19db5b`)**. `upsampleUsesBicubic(sourceLevel:levelCount:)` 이 단마다 파이프라인을 고르고 `weBicubic` 이 `hdr_downsample.frag:8-51` 축자 이식이다 (`WapleCore/HDRBloomMath.swift:141-143` · `HDRBloomPyramidPass.swift:447-459`) | **확정 · 해소** | 저해상도 단의 업스케일 블록 아티팩트가 사라져 넓은 헤일로가 매끈해진다 |
+| **W-3** | `bloomhdrstrength` 기본값 | **2.0** (`0x1401870c2`) | ~~`?? 0`~~ → **`?? 2` 반영(2026-08-21)**. 패스 기본은 아직 0 (`HDRBloomPass.swift:15`, `HDRBloomPyramidPass.swift:40` — 렌더 레인 잔여) | **확정 · 파스 해소** | 키를 생략한 HDR 씬에서 블룸이 나타난다(현재는 완전히 안 보임). **동봉 172씬 영향 0건** — 84씬이 키를 생략하지만 `hdr && bloom` 인 씬은 previewthunderbolt 1건뿐이고 그 씬은 2.0 을 명시 저작한다 |
 | **W-4** | `bloom` 기본값 | **true**(flags bit1, `0x140186d1f` `qword=0x26`) | `?? false` — **[2026-08-21] 확인했으나 의도적 미반영** | **확정 · 고의 이탈** | `bloom` 키 없는 씬에 블룸이 켜진다. **동봉 172씬 영향 0건**(전건 명시 저작)이라 실사용 이득이 없는데, `sceneWantsLDRBloom = doc.bloom && !doc.hdr` 를 타고 **키를 생략한 합성 렌더 픽스처 60여 개**의 합성 결과가 한꺼번에 바뀐다(`Tests/WapleRenderTests` 66파일 중 `bloom` 을 저작하는 것은 3파일뿐). 필요한 변경은 `SceneDocument.bloom` 선언 1줄 + 파스 `?? false` 1줄이고, **렌더 픽스처를 같이 갱신할 수 있는 레인에서 한 커밋으로** 뒤집어야 한다 |
 | **W-5** | `nearz` 기본값 | **0.1** (`0x140186d7d`) | ~~`?? 0.01`~~ → **`?? 0.1` 반영(2026-08-21)** | **확정 · 해소** | 3D 원근 씬의 깊이 정밀도가 10배 올라 z-fighting 이 준다(대신 카메라 0.1 이내가 잘린다 — WE 와 동일 동작). 2D 는 무영향(§5.3). **동봉 172씬 영향 1건** — 3D 씬 2개 중 `particleeditor3dscale` 만 키를 생략한다(`modeleditor` 는 0.1 명시) |
 | **W-6** | 정사영 씬의 z 클립 범위 | **하드코딩 ±2000**(`0x140183df9`/`0x140183e01`, 카메라 상태에도 `0x140189df0` imm `0x44fa0000`) — `nearz/farz` 무시 | `let F: Float = 10000` 대칭 클립 (`SceneRendererFrameEncoder.swift:923`, 주석은 *"WE ortho 기본 farz"* 라고 적었으나 WE 는 ortho 에서 `farz` 를 읽지 않는다 — **수정 시 상수와 함께 그 주석도 지워야 한다**; 도달 불가능한 `nearz`/`farz` 팔의 정체는 §5.3 의 2026-08-21 보강 참조) | **확정** — 렌더 레인 잔여 | ortho 3D 하이브리드의 깊이 버퍼 정밀도가 5배 올라 동일 z 메시의 z-fighting 이 줄고, \|z\|>2000 오브젝트의 클립 여부가 WE 와 같아진다 |
@@ -595,12 +598,12 @@ volumetrics_combine   (passthrough, additive) → 화면
 | **W-17** | 볼류메트릭 모델 | 깊이 기반 5패스 레이마치(백페이스 깊이 → 12~64샘플 → blur3 h/v → additive), `×0.1` 스케일 (`volumetricsfront.frag:78-96,190`) | 화면공간 원뿔 근사 1패스: `exp(-density*dist*0.001)` + `pow(intensity, exponent)`, 선형 콘 램프 (`VolumetricLightPass.swift:162,169,177`) | **확정**(구조 차이) | 샤프트가 지오메트리에 가려지고 그림자 결이 생긴다. 현재는 오브젝트를 통과해 비친다 |
 | **W-18** | 볼류메트릭 콘 감쇠 | `smoothstep(outer, inner, cos)` (`volumetricsfront.frag:140`) | `clamp((cos−outer)/(inner−outer), 0, 1)` 선형 (`VolumetricLightPass.swift:162`) | **확정** | 스포트 가장자리가 부드러워진다 |
 | **W-19** | 볼류메트릭 반경 감쇠 | `pow(saturate(1 − dist/radius), exponent)` (`volumetricsfront.frag:132`) | `exp(−density*dist*0.001)` (`VolumetricLightPass.swift:169`) | **확정** | 라이트 `radius` 밖에서 정확히 0 이 되어 무한 꼬리가 사라진다 |
-| **W-20** | HDR 최종 `lin()` | `saturate(lin(albedo)) * g_RenderVar0.x` (`combine_hdr.frag:43`), bloom off 는 `lin()`만 (`passthroughsrgb.frag:15`) | `saturate(base+bloom)` — `lin()` 미이식 (`HDRBloomPyramidPass.swift:517`, `HDRPostPass.swift:70`) | **미확정** | §8 참조 |
+| **W-20** | HDR 최종 `lin()` | `saturate(lin(albedo)) * g_RenderVar0.x` (`combine_hdr.frag:43`), bloom off 는 `lin()`만 (`passthroughsrgb.frag:15`) | `saturate(base+bloom)` — `lin()` 미이식 (`HDRBloomPyramidPass.swift:473`, `HDRPostPass.swift:70`) | **미확정** | §8 참조 |
 | **W-21** | `g_RenderVar0.x` 출처 | 합성 직전 디바이스 vtable `+0x158` 질의 (`0x140180b15`–`0x140180b26`) | 없음(암묵 1.0) | **유력** | 값이 1.0 이 아니면 HDR 씬 전체 밝기 배수가 바뀐다 |
 | **W-22** | `camerapreview` | 문자열 자체가 바이너리에 없음 = 미소비 | 미파스 | **확정** | **일치**(둘 다 무시) — 조치 불필요 |
 | **W-23** | `transparentsorting`(bit12) · `customsortorder`(bit13) | 등록됨(`0x14019ad55`·`0x14019adfd`), 기본 false | **미파스**(`SceneDocument` 에 키가 없다) | **확정** — 2026-08-21 47키 전건 대조에서 나온 잔여 | 지금은 무영향(WE 쪽 소비 지점도 §8-4 로 미특정). 동봉 저작은 `transparentsorting:true` 2씬(둘 다 3D)뿐이라 소비처를 찾기 전엔 파스만 넣어도 화면이 안 바뀐다 |
 | **W-24** | `fov`/`nearz`/`farz` 파스 시점 | `general` 의 독립 키 — `camera` 블록 유무와 무관하게 씬 필드(`0x140`/`0x14c`/`0x150`)에 항상 실린다 | `parseCamera` 안에서만 읽는다 — `orthogonalprojection` 이 딕셔너리면(=2D) `camera3D == nil` 이라 세 값이 **문서에 남지 않는다** | **확정**(구조 차이) | 지금은 무영향(2D 는 세 값을 안 쓴다 — §5.3). `zoom`·`perspectiveoverridefov` 처럼 2D 에서도 살아 있어야 할 키가 늘면 그때 `applyGeneralSettings` 로 옮겨야 한다 |
-| **W-25** | HDR 피라미드 **레벨 수 산식** | 생성 단수 = `min(8, floor(log2(min(W,H))))` (`0x14017f363`·`0x14017f376`·`0x14017f37d`·`0x14017f383`·`0x14017f541`), 실효 `N = max(1, min(bloomhdriterations, 생성단수))` (`0x14017f7f7`–`0x14017f84c`) | `levelCount` 이 `w > 1 || h > 1` 로 돌아 **max 기준** `ceil(log2(max(W,H)))` 를 센다 (`HDRBloomPyramidPass.swift:213-223`) | **확정** — 미반영 | 짧은 변이 256 이상이면 양쪽 다 상한 8 이라 **차이 0**. 갈리는 것은 짧은 변 < 256 인 소스뿐이다(64×32 → WE 5, Waple 6). N 은 정규화 분모 `scatter^(max(N,2)−2)+1` 의 지수로 직행하므로 틀리면 반경이 아니라 **강도가 통째로** 틀린다. 고칠 자리는 한 줄(`||` → `&&` 가 아니라 min 기준 재작성)이지만 기대치가 박힌 `Tests/WapleRenderTests/HDRBloomTests.swift:370`(64×32 → 6)을 같이 고쳐야 한다 |
+| **W-25** | HDR 피라미드 **레벨 수 산식** | 생성 단수 = `min(8, floor(log2(min(W,H))))` (`0x14017f363`·`0x14017f376`·`0x14017f37d`·`0x14017f383`·`0x14017f541`; 진입 전 두 변이 `max(·,2)` 로 클램프 `0x14017f1ec`·`0x14017f200`), 실효 `N = max(1, min(bloomhdriterations, 생성단수))` (`0x14017f7f7`–`0x14017f84c` → `obj+0x3108`) | ~~`w > 1 || h > 1` 로 도는 **max 기준**~~ → **해소(2026-08-21)**. `levelCount` 을 min 기준으로 다시 썼고 본체를 `WapleCore/HDRBloomMath.swift:66-75` 로 옮겼다(`HDRBloomPyramidPass.swift:176-179` 는 위임) | **확정 · 해소** | **풀스크린 화면 차이는 0**(짧은 변 ≥ 256 이면 양쪽 다 상한 8). 갈리는 것은 짧은 변 < 256 **이고 두 변의 2-거듭제곱 구간이 다른** 소스뿐이다 — 정사각 2의 거듭제곱(4×4·64×64)은 min=max 라 안 갈린다. **도달 실측: 이 리포의 골든 썸네일이 256×144**(`SnapshotPipeline.thumbW/thumbH`)라 `N` 이 8 → 7 로 바뀐다 — 정규화 분모가 19.01 → 12.12 라 HDR 블룸 씬 썸네일이 약 1.57배 밝아지고 **골든 재기준선이 필요하다**. 64×32 렌더 테스트는 6 → 5(`HDRBloomTests.swift` 의 두 기대치를 같이 고쳤다). 코퍼스 `bloomhdriterations` 는 157건 중 8 이 149건이라 요청 쪽이 먼저 캡을 만들지 않는다 |
 
 > **W-1 이 어떻게 닫혔나(`b19db5b`).** 공용 헬퍼가 추출·다운샘플·업샘플 **세 곳을 겸하는 한**
 > 반경을 분리할 수 없다 — 헬퍼의 `0.5` 를 `1.0` 으로 바꾸면 업샘플이 반대로 어긋난다. 그래서
@@ -617,10 +620,10 @@ volumetrics_combine   (passthrough, additive) → 화면
 
 | 항목 | 근거 |
 |---|---|
-| `g_BloomBlendParams` 소프트니 식·상수 | `0x14017f8bc`–`0x14017f906` ↔ `HDRBloomPyramidPass.swift:192-195` |
-| HDR 강도 정규화 `s/(scatter^(max(N,2)−2)+1)` | `0x14017f851`–`0x14017f88f` ↔ `HDRBloomPyramidPass.swift:138-141` |
-| 업샘플 가중 `0.25(4탭 평균) × 생 scatter` + 탭 ±0.5 소스텍셀 | `0x140183856`, `hdr_downsample.frag:61,78` ↔ `HDRBloomPyramidPass.swift:475-483` |
-| 합성 4탭 ±1 풀텍셀 | `combine_hdr.frag:21-25` ↔ `HDRBloomPyramidPass.swift:507-518` |
+| `g_BloomBlendParams` 소프트니 식·상수 | `0x14017f8bc`–`0x14017f906` ↔ `WapleCore/HDRBloomMath.swift:149-152` |
+| HDR 강도 정규화 `s/(scatter^(max(N,2)−2)+1)` | `0x14017f851`–`0x14017f88f` ↔ `WapleCore/HDRBloomMath.swift:95-98` |
+| 업샘플 가중 `0.25(4탭 평균) × 생 scatter` + 탭 ±0.5 소스텍셀 | `0x140183856`, `hdr_downsample.frag:61,78` ↔ `HDRBloomPyramidPass.swift:431-439` |
+| 합성 4탭 ±1 풀텍셀 | `combine_hdr.frag:21-25` ↔ `HDRBloomPyramidPass.swift:463-474` |
 | 피라미드 레벨 0 = 1/2 | `0x14017f376`, divisor `2<<i` ↔ `SceneRendererFinalizer.swift:50-51` |
 | LDR 추출 4탭 ±1 풀텍셀 + 하드 임계 + 채도 2배 | `downsample_quarter_bloom.frag:11-25` ↔ `LDRBloomPass.swift:214-224` |
 | LDR 13탭 가중·스트라이드(2 quarter텍셀 → 1 eighth텍셀) | `blur_h_bloom.frag:7-19`, `*.vert:12` ↔ `LDRBloomPass.swift:134,149,228-244` |
@@ -632,6 +635,16 @@ volumetrics_combine   (passthrough, additive) → 화면
 | `ambientcolor` 기본 (0,0,0) | `0x140186f6f` ↔ `SceneDocument.swift:1102` |
 | fog 파라미터 패킹 `(s, e−s, sd, ed−sd)` | `0x140186489`–`0x140186552` ↔ `Scene3DLighting.swift:575-576,618` |
 | 톤커브 부재(ACES/Reinhard 없음) | `assets/shaders/` 전수 ↔ `HDRPostPass.swift:67-70` |
+
+> **[2026-08-21] HDR 블룸 산술이 이제 리눅스에서 실행된다.** 종전에는 전부
+> `HDRBloomPyramidPass`(WapleRender)의 `static` 이라 `import Metal` 때문에 **리눅스에서 한 줄도
+> 돌지 않았고**(`scripts/dev/linux-render-typecheck.sh` 는 타입만 본다), 유일한 그물이 macOS 전용
+> `Tests/WapleRenderTests/HDRBloomTests.swift` 였다. 탭 반경(W-1)·레벨 수(W-25) 두 이탈이 정확히
+> 그 공백에서 나왔다. 본체를 `Sources/WapleCore/HDRBloomMath.swift` 로 옮기고
+> `Tests/WapleCoreTests/HDRBloomMathTests.swift` **17건**이 덮는다 — WE 루프를 독립 재구현한
+> 오라클과 전수 대조(폭 612종 × 높이 27종 × 요청 13종)하고 돌연변이 7건을 심어 7건을 잡았다.
+> `HDRBloomPyramidPass` 의 `static` 은 **위임만** 남아 호출부(`SceneRendererFinalizer`)와
+> macOS 테스트는 그대로다.
 
 ---
 

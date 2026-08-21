@@ -38,6 +38,10 @@ OUT = os.path.join("spec", "engine", "hdr-bloom.json")
 SHADERS = os.path.join(T.WE, "assets", "shaders")
 MATS = os.path.join(T.WE, "assets", "materials", "util")
 WSRC = os.path.join("Sources", "WapleRender", "HDRBloomPyramidPass.swift")
+# [2026-08-21] 순수 탭 산술 본체가 WapleCore 로 갔다(리눅스 테스트를 붙이려고).
+# 아래 탐침 중 산술 쪽은 **이 파일**을 읽어야 한다 — WSRC 에 남은 것은 얇은 위임뿐이라
+# 종전 정규식이 "탐침 불일치"/false 를 조용히 내놓는다(b19db5b 때 실제로 당한 고아화).
+MSRC = os.path.join("Sources", "WapleCore", "HDRBloomMath.swift")
 
 
 def read(p):
@@ -96,13 +100,16 @@ def waple_facts():
       · 2026-08-21(`b19db5b`) — 되짚기를 없애고 헬퍼 이름이 `weBox4(src, uv, t)` 가 됐다.
         `t` 는 호스트가 `tapOffsetUV(scale:baseWidth:baseHeight)` 로 계산해 유니폼으로 싣고,
         가장 깊은 두 업샘플 단은 `hdrBloomUpsampleCubic` 을 쓴다.
+      · 2026-08-21(W-25) — 순수 산술이 `WapleCore/HDRBloomMath.swift`(MSRC)로 이동했다.
+        MSL 과 인코드 루프는 그대로 WSRC 에 있으므로 **탐침이 두 파일로 갈린다**.
 
     **탐침이 소스를 놓치면 값이 조용히 0/false 로 무너진다.** 실제로 `b19db5b` 가
     `weDownsample4` → `weBox4` 로 이름을 바꾼 뒤 이 함수 전체가 헛돌아, 재생성이
     `helperTapCount 4 → 0` 으로 축소 가드에 막히는 상태였다(정본이 고아가 됐다).
     그래서 헬퍼 이름을 **한 자리**(HELPER)에 두고 아래가 전부 그걸 참조한다.
     """
-    s = read(WSRC)
+    s = read(WSRC)     # MSL + 인코드 루프
+    ms = read(MSRC)    # 순수 산술(탭 배율·BICUBIC 선택·강도 정규화)
     f = {}
     HELPER = "weBox4"
     m = re.search(r"float3 " + HELPER + r"\(.*?\n    \}", s, re.S)
@@ -137,16 +144,25 @@ def waple_facts():
                                  else "탐침 불일치"))
     # --- b19db5b 이후 새로 측정하는 것들 -------------------------------------
     f["tapOffsetFedByHost"] = bool(
-        re.search(r"static func tapOffsetUV\(scale: Int, baseWidth: Int, baseHeight: Int\)", s))
-    m = re.search(r"static func downsampleTapScale\(level: Int\) -> Int \{ ([^}]+) \}", s)
+        re.search(r"static func tapOffsetUV\(scale: Int, baseWidth: Int, baseHeight: Int\)", ms))
+    m = re.search(r"static func downsampleTapScale\(level: Int\) -> Int \{ ([^}]+) \}", ms)
     f["downsampleTapScaleRule"] = m.group(1).strip() if m else "탐침 불일치"
-    m = re.search(r"static func upsampleTapScale\(sourceLevel: Int\) -> Int \{ ([^}]+) \}", s)
+    m = re.search(r"static func upsampleTapScale\(sourceLevel: Int\) -> Int \{ ([^}]+) \}", ms)
     f["upsampleTapScaleRule"] = m.group(1).strip() if m else "탐침 불일치"
     f["hasBicubicUpsample"] = bool(re.search(r"fragment float4 hdrBloomUpsampleCubic\(", s))
-    m = re.search(r"static func upsampleUsesBicubic\(sourceLevel: Int, levelCount: Int\) -> Bool \{\n\s*([^\n]+)\n", s)
+    m = re.search(r"static func upsampleUsesBicubic\(sourceLevel: Int, levelCount: Int\) -> Bool \{\n\s*([^\n]+)\n", ms)
     f["bicubicSelectionRule"] = m.group(1).strip() if m else "탐침 불일치"
     f["strengthNormalization"] = bool(
-        re.search(r"return strength / \(powf\(scatter, exponent\) \+ 1\)", s))
+        re.search(r"return strength / \(powf\(scatter, exponent\) \+ 1\)", ms))
+    # [2026-08-21 신설] 레벨 수 산식. `sourceWidth`/`sourceHeight` 중 **min** 을 잡는지 본다 —
+    # W-25 가 정확히 이 한 줄이었다(종전 `w > 1 || h > 1` 은 max 기준).
+    f["levelCountBasis"] = (
+        "min(W,H)" if re.search(r"var d = min\(max\(1, sourceWidth\), max\(1, sourceHeight\)\)", ms)
+        else ("max(W,H)" if re.search(r"while w > 1 \|\| h > 1", ms + s) else "탐침 불일치"))
+    f["levelCountCap"] = (8 if re.search(r"while count < 8 \{", ms) else 0)
+    # WSRC 에 위임만 남았는지 — 산술이 두 곳에 복제되면 정본이 어느 쪽을 재는지 알 수 없다.
+    f["renderSideIsDelegationOnly"] = bool(
+        re.search(r"HDRBloomMath\.levelCount\(\n?\s*requested: requested", s))
     return f
 
 
@@ -295,6 +311,13 @@ def build():
                                  "생성기의 `weDownsample4` 탐침이 전부 헛돌아 재생성이 "
                                  "`helperTapCount 4 → 0` 축소로 막히는 상태였다(정본이 고아). "
                                  "2026-08-21 이 갱신이 그 자리를 메운다.",
+                "w25Move": "**[2026-08-21] 같은 함정을 한 번 더 밟을 뻔했다.** W-25(레벨 수 산식)를 "
+                           "고치면서 순수 산술을 `WapleCore/HDRBloomMath.swift` 로 옮겼는데, "
+                           "위 탐침 중 다섯이 `HDRBloomPyramidPass.swift` 만 읽고 있었다. 그대로 뒀으면 "
+                           "`downsampleTapScaleRule`·`upsampleTapScaleRule` 이 '탐침 불일치', "
+                           "`bicubicSelectionRule` 이 위임 한 줄, `strengthNormalization` 이 false 로 "
+                           "무너진다(음성 대조로 실제 확인했다). 산술 탐침을 MSRC 로 옮기고 "
+                           "`levelCountBasis`·`levelCountCap`·`renderSideIsDelegationOnly` 를 새로 잰다.",
             },
             "orderingConstraint": "W1·W2 는 결과를 넓히고 N1·N2 는 좁힌다. 일부만 고치면 더 나빠지므로 "
                                   "한 번에 갈아야 했다 — 실제로 그렇게 했다.",
@@ -339,31 +362,53 @@ def build():
                       },
                       "확정", [shader_ev, mat_ev, code_ev]),
 
-        # [2026-08-21 신설] upsampleWeight 를 검증하다 N(레벨 수) 산식에서 이탈을 하나 더 찾았다.
-        # 정규화 분모가 `scatter^(max(N,2)-2)+1` 이라 N 이 틀리면 **강도가 통째로 틀린다** —
-        # 탭 모양보다 눈에 띄는 축이다. 다만 실제 화면 크기에서는 양쪽 다 캡(8)에 걸려 같은 값이 나온다.
+        # [2026-08-21 신설 → 같은 날 해소] upsampleWeight 를 검증하다 N(레벨 수) 산식에서 이탈을
+        # 하나 더 찾았다. 정규화 분모가 `scatter^(max(N,2)-2)+1` 이라 N 이 틀리면 **강도가 통째로
+        # 틀린다** — 탭 모양보다 눈에 띄는 축이다. 풀스크린에서는 양쪽 다 캡(8)에 걸려 같은 값이
+        # 나오지만 **이 리포의 골든 썸네일(256×144)은 갈린다** — 도달을 실제로 재고 반영했다.
         specfmt.entry("engine.bloom.hdr.levelCountRule",
                       {
                           "we": "생성 가능 단수 = **min(W,H)** 를 2로 계속 나눠 0 이 되기 전까지의 횟수, "
                                 "루프 상한 8. `cmovg r14d,r12d`(0x14017f363)로 min 을 잡고 "
                                 "`sar eax,1`(0x14017f376) → `jle`(0x14017f37d) 로 끊으며 "
-                                "`inc [rsi+0x310c]`(0x14017f383) 로 센다. 루프는 `cmp ebx,8`(0x14017f541).",
+                                "`inc [rsi+0x310c]`(0x14017f383) 로 센다. 루프는 `cmp ebx,8`(0x14017f541). "
+                                "루프 진입 전에 두 변이 `max(·,2)` 로 클램프된다"
+                                "(`cmovg r15d,edx` 0x14017f1ec · `cmovg r12d,r8d` 0x14017f200).",
                           "effectiveN": "N = max(1, min(bloomhdriterations, 생성단수)) — 0x14017f7f7–0x14017f84c, "
-                                        "결과는 obj+0x3108. 이 N 이 그대로 정규화 지수 `max(N,2)-2` 로 간다.",
-                          "waple": "HDRBloomPyramidPass.levelCount 는 `w > 1 || h > 1` 로 도는 **max 기준**이라 "
-                                   "ceil(log2(max(W,H))) 를 센다 — WE 의 floor(log2(min(W,H))) 와 다르다.",
+                                        "결과는 obj+0x3108. 이 N 이 그대로 정규화 지수 `max(N,2)-2` 로 간다. "
+                                        "저작값은 obj+0x3d4(bloomhdriterations)에서 온다(0x14017f7ff).",
+                          "waple": "[2026-08-21 이전 서술] HDRBloomPyramidPass.levelCount 는 `w > 1 || h > 1` 로 "
+                                   "도는 **max 기준**이었다 — WE 의 floor(log2(min(W,H))) 와 달랐다. "
+                                   "종전 서술은 그 값을 ceil(log2(max(W,H))) 라고 적었는데 실제로는 "
+                                   "max(1, **floor**(log2(max(W,H)))) 다(재검산으로 정정).",
                           "reachability": "min(W,H) ≥ 256 이면 WE 쪽 단수가 이미 8 이라 캡에 걸려 양쪽이 같다. "
-                                          "갈리는 것은 **짧은 변이 256 미만인 소스**뿐이다 "
-                                          "(예: 64×32 → WE 5, Waple 6; 커밋된 기대치는 "
-                                          "Tests/WapleRenderTests/HDRBloomTests.swift:370 이 6 이다).",
-                          "status": "**미반영** — 고치려면 WapleRenderTests 의 기대치를 같이 바꿔야 하는데 "
-                                    "그 파일이 이 레인 소유가 아니다. 화면 영향은 짧은 변 <256 인 소스로 한정된다.",
+                                          "갈리는 것은 **짧은 변이 256 미만이고 두 변의 2-거듭제곱 구간이 다른** "
+                                          "소스뿐이다(정사각 2의 거듭제곱은 min=max 라 안 갈린다). "
+                                          "실사용 풀스크린은 전부 캡에 걸려 화면 차이 0 이지만, "
+                                          "**이 리포의 골든 썸네일 파이프라인은 256×144**"
+                                          "(SnapshotPipeline.thumbW/thumbH)라 8 → 7 로 갈린다 — "
+                                          "정규화 분모가 19.01 → 12.12 로 내려가 블룸이 약 1.57배 밝아진다. "
+                                          "64×32 렌더 테스트는 6 → 5. 코퍼스 bloomhdriterations 는 "
+                                          "8 이 149건(157건 중)이라 요청 쪽이 먼저 캡을 만들지 않는다.",
+                          "status": "**해소(2026-08-21)** — levelCount 를 min 기준으로 다시 썼다. 본체는 "
+                                    "WapleCore/HDRBloomMath.swift `levelCount` 이고 "
+                                    "HDRBloomPyramidPass 는 위임만 한다. 커밋된 기대치 "
+                                    "Tests/WapleRenderTests/HDRBloomTests.swift 의 64×32 두 곳도 "
+                                    "6 → 5 로 같이 고쳤다(나머지 넷은 불변).",
                           "crossRef": "engine.uniformFeed.hdrBloom.materialParams",
+                          "해소": "산술을 WapleCore 로 옮긴 것이 이 항목의 실질 변화다 — 종전에는 "
+                                 "WapleRender 의 static 이라 **리눅스에서 한 줄도 실행되지 않았다**. "
+                                 "Tests/WapleCoreTests/HDRBloomMathTests.swift 17건이 WE 루프를 독립 "
+                                 "재구현한 오라클과 전수 대조(폭 612종 × 높이 27종 × 요청 13종)하고, "
+                                 "돌연변이 7건을 심어 7건 검출했다. **골든 스냅샷 재기준선이 필요하다** — "
+                                 "256×144 에서 N 이 바뀌므로 HDR 블룸 씬의 썸네일 해시가 이동한다.",
                       },
                       "확정", [chain_ev,
                                specfmt.ev("binary",
                                           "wallpaper64.exe Composite::allocateTargets 0x14017f1b0–0x14017fa6f",
                                           "레벨 생성 루프와 N 산출"),
+                               specfmt.ev("file", "Sources/WapleCore/HDRBloomMath.swift"),
+                               specfmt.ev("file", "Tests/WapleCoreTests/HDRBloomMathTests.swift"),
                                code_ev]),
     ]
 
