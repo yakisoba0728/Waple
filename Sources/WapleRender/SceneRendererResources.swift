@@ -27,6 +27,12 @@ extension SceneRenderer {
         let aux: [(slot: Int, tex: MTLTexture)]
         let binds: [(slot: Int, source: Int)]
         let target: Int?
+        /// T09-D2: 매니페스트 `passes[].compose` — "이 패스의 출력이 **다음 패스의 `previous`** 가 된다"
+        /// (= 이펙트 **내부** 핑퐁). 원본 파스 `0x1401e7d96–0x1401e7dcf`: 태그 5(boolean)만 수용하고
+        /// (`0x1401e7dac`) 참이면 패스 플래그(pass+0x14)에 비트 0x2 를 세우며(`0x1401e7dc3`)
+        /// 이펙트의 compose 개수(effect+0x140)를 하나 올린다(`0x1401e7dc7`).
+        /// 소비처는 체인 루프 `0x1401e9b8f–0x1401e9bf0` — applyEffect 의 핑퐁 주석 참조.
+        let compose: Bool
         let usesAudio: Bool
         let texRes: [SIMD4<Float>]
         /// 슬롯별(0..7, texRes 와 동일 상한) 샘플러 어드레싱(F162/F163): 1=clamp/0=repeat.
@@ -743,7 +749,8 @@ extension SceneRenderer {
             if t.usesAudio { anyAudio = true }
             if plan.target == nil, combos["DIRECTDRAW"] == 1 { outputPremultiplied = true }
             passes.append(TranslatedPass(pipeline: pipe, material: material, aux: plan.aux,
-                                         binds: plan.binds, target: plan.target, usesAudio: t.usesAudio,
+                                         binds: plan.binds, target: plan.target, compose: mp.compose,
+                                         usesAudio: t.usesAudio,
                                          texRes: plan.texRes, texWrap: plan.texWrap, texFilter: plan.texFilter,
                                          scripts: passScripts, fullFrameSlots: plan.fullFrameSlots, swapPair: nil,
                                          mediaArtworkSlots: plan.mediaArtworkSlots, animations: passAnimations))
@@ -802,8 +809,10 @@ extension SceneRenderer {
         let dims = SIMD4<Float>(lw, lh, lw, lh)
         var wrap = [Float](repeating: 0, count: 8)
         wrap[0] = 1  // slot0 = fbo bind(자산 없음) → 항상 clamp.
+        // 명령 패스는 `compose` 를 안 읽는다 — 원본 파서도 command 패스에 같은 키 파스를 태우지만
+        // 동봉 자산에 도달 0건이고(compose 보유 2건은 전부 셰이더 패스), false 가 종전 동작이다.
         return TranslatedPass(pipeline: pipe, material: [], aux: [],
-                              binds: [(0, srcIdx)], target: tgtIdx, usesAudio: false,
+                              binds: [(0, srcIdx)], target: tgtIdx, compose: false, usesAudio: false,
                               texRes: [SIMD4<Float>](repeating: dims, count: 8), texWrap: wrap,
                               texFilter: [Float](repeating: 0, count: 8),  // fbo→fbo 복사 — 자산 없음, 선형 고정
                               scripts: [], fullFrameSlots: [], swapPair: nil, mediaArtworkSlots: [], animations: [])
@@ -823,7 +832,7 @@ extension SceneRenderer {
             return nil
         }
         return TranslatedPass(pipeline: pipe, material: [], aux: [],
-                              binds: [], target: nil, usesAudio: false,
+                              binds: [], target: nil, compose: false, usesAudio: false,
                               texRes: [SIMD4<Float>](repeating: .zero, count: 8),
                               texWrap: [Float](repeating: 0, count: 8), texFilter: [Float](repeating: 0, count: 8),
                               scripts: [], fullFrameSlots: [], swapPair: (srcIdx, tgtIdx), mediaArtworkSlots: [], animations: [])
@@ -2298,5 +2307,117 @@ extension SceneRenderer {
             SIMD4(tl.x, tl.y, 0, 0), SIMD4(br.x, br.y, 1, 1), SIMD4(bl.x, bl.y, 0, 1),
         ]
         g.vertexBuffer = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count)
+    }
+}
+
+/// T09-D2: 이펙트 **내부** 패스 라우팅(= `passes[].compose` 핑퐁)의 결정 로직.
+///
+/// 원본(체인 루프 `0x1401e9b8f–0x1401e9bf0`)은 패스를 그린 **직후** 패스 플래그 비트 0x2(compose,
+/// 파스 `0x1401e7d96–0x1401e7dcf`)를 보고, 렌더 타깃 핑퐁 쌍 `renderer+0x2c8`/`+0x2d0` 에서
+/// 반대쪽으로 갈아탄다(`0x1401e9bad–0x1401e9bf0`: 현 타깃 pop → 반대쪽 push → 패리티 `edi` 반전).
+/// 그 패리티는 다음 드로우(`0x1401e9b85` 의 4번째 인자 `r9d = edi`)로 넘어가 **`previous` 가 어느
+/// 쪽을 읽는지**를 정한다. 즉 compose 의 의미는 "이 패스의 출력이 다음 패스의 `previous` 가 된다".
+///
+/// ⚠️ 실측 정정: 갈아타기 가드는 "뒤에 패스가 남았는가" 가 **아니다**. `0x1401e9b9a–0x1401e9ba5` 는
+/// `inc r15d; cmp r15d, [rsp+0x180]; jge skip` 로, 전역 렌더타깃 예산 `[rsp+0x180]` 과 비교한다.
+/// 그 예산은 `0x1401e951a` 에서 `renderer+0x320` 을 읽어 온 값이고(`0x1401e9522`; 플래그
+/// `renderer+0x304 & 0x10` 이 꺼져 있으면 −1 — `0x1401e952b`), `renderer+0x320` 은 풀 산정
+/// `0x1401e6300–0x1401e63a6` 이 켜진 이펙트마다 `composeCount + 1` 을 누산한 총합이다
+/// (`0x1401e633f`·`0x1401e6345`·`0x1401e6347`). `r15d` 는 compose 패스마다 1(`0x1401e9b9a`),
+/// 이펙트가 끝날 때마다 1(`0x1401e9c5c`) 오르므로 총 증가량이 정확히 그 총합이다 → **compose 패스
+/// 에서는 예산이 항상 남아 있어 갈아타기가 무조건 일어난다**(예산 비교는 안전 클램프).
+///
+/// 그럼에도 아래 규칙이 "뒤에 출력 패스가 남았을 때만" 갈아타는 이유: 원본의 핑퐁 쌍은 **렌더러
+/// 전역**이라 마지막 compose 가 갈아타도 이펙트 출력의 소재지가 패리티(`0x1401e9c96`: `edi = r12d`)
+/// 로 다음 이펙트에 그대로 전달된다. Waple 의 `applyEffect` 는 호출부가 준 `dst` 로 나가야 하는
+/// src→dst 계약이므로, 마지막 출력 패스만은 스크래치가 아니라 실제 `dst` 로 고정해야 등가다
+/// (끝난 뒤 블릿으로 옮기면 복사가 1회 늘 뿐 결과는 같다 — 그래서 안 한다).
+///
+/// Metal 비의존 순수 값 로직이다 — 리눅스에서 이 타입만 떼어 컴파일·실행해 표를 검증한다.
+enum EffectChainRouting {
+    /// 패스의 `previous`(bind source == −1) 슬롯이 읽을 곳.
+    enum Source: Equatable {
+        /// `applyEffect(src:)` — 이펙트 입력. compose 가 하나도 없으면 전 패스가 이 값이다(= 종전 동작).
+        case effectInput
+        /// 앞선 compose 패스가 써 둔 스크래치 오프스크린.
+        case scratch(Int)
+    }
+    /// 패스가 그려 넣을 곳.
+    enum Sink: Equatable {
+        /// 이름 있는 fbo(`pass.target != nil`) — 핑퐁 대상이 아니다.
+        case fbo
+        /// compose 패스이고 뒤에 출력 패스가 더 남았다 → 스크래치로 나가고 다음 패스의 `previous` 가 된다.
+        case scratch(Int)
+        /// 이펙트 출력 = `applyEffect(dst:)`.
+        case output
+        /// `command:"swap"` — 드로우가 없다(포인터 교환만).
+        case none
+    }
+    struct Route: Equatable {
+        let sink: Sink
+        let source: Source
+    }
+    /// 라우팅에 필요한 패스 속성만 추린 입력(파이프라인/텍스처 무관 — 그래서 순수 함수가 된다).
+    struct PassKind: Equatable {
+        /// `TranslatedPass.target != nil`.
+        let hasFBOTarget: Bool
+        /// `TranslatedPass.compose`.
+        let compose: Bool
+        /// `TranslatedPass.swapPair != nil`.
+        let isSwap: Bool
+        init(hasFBOTarget: Bool, compose: Bool, isSwap: Bool = false) {
+            self.hasFBOTarget = hasFBOTarget
+            self.compose = compose
+            self.isSwap = isSwap
+        }
+    }
+    struct Plan: Equatable {
+        /// 입력과 1:1 대응(같은 개수·같은 순서).
+        let routes: [Route]
+        /// 필요한 스크래치 오프스크린 장수. 0 이면 **호출부는 스크래치를 한 장도 잡지 않는다**
+        /// (= compose 없는 이펙트의 무회귀 조기 분기).
+        let scratchCount: Int
+    }
+
+    /// 상한: `passes.filter(\.compose).count`(원본의 `composeCount + 1` 풀 산정 `0x1401e633f` 와 같은
+    /// 세는 법 — 원본은 이펙트 출력분 +1 을 더 잡지만 Waple 은 그 자리를 `dst` 가 대신한다).
+    /// 실제로는 그보다 적을 수 있다(마지막 출력 패스의 compose 는 갈아타지 않으므로).
+    static func plan(_ passes: [PassKind]) -> Plan {
+        // 드로우하는 출력 패스(= fbo 타깃 없음 & swap 아님)의 총 개수 — "마지막 하나" 를 알아야
+        // 그것만 `dst` 로 고정할 수 있다. swap 패스도 `target == nil` 이라(makeSwapPass) 반드시 제외한다.
+        let outputTotal = passes.filter { !$0.hasFBOTarget && !$0.isSwap }.count
+        var routes: [Route] = []
+        routes.reserveCapacity(passes.count)
+        var source: Source = .effectInput
+        var scratchCount = 0
+        var outputsSeen = 0
+        for p in passes {
+            if p.isSwap {
+                // 드로우 없음 — 체인 상태(source)도 건드리지 않는다.
+                routes.append(Route(sink: .none, source: source))
+                continue
+            }
+            if p.hasFBOTarget {
+                // fbo 타깃 패스: compose 여도 갈아타지 않는다. 원본은 타깃을 안 보고 갈아타지만,
+                // 그렇게 하면 `previous` 가 **아무도 안 쓴** 핑퐁 반대쪽을 가리키게 된다(원본에서도
+                // 그 자리는 미기록 상태다). 동봉 자산의 compose 2건은 전부 출력 패스라 도달 0건이고,
+                // 워크샵 자산에서도 "쓰레기를 읽는 쪽" 보다 "체인을 유지하는 쪽" 이 안전하다.
+                routes.append(Route(sink: .fbo, source: source))
+                continue
+            }
+            outputsSeen += 1
+            let isLastOutput = (outputsSeen == outputTotal)
+            if p.compose && !isLastOutput {
+                let idx = scratchCount
+                scratchCount += 1
+                routes.append(Route(sink: .scratch(idx), source: source))
+                source = .scratch(idx)      // 다음 패스의 `previous` = 방금 쓴 스크래치
+            } else {
+                // compose 가 아니면 종전과 동일하게 그냥 `dst` 로 쓴다(뒤 패스가 덮어써도 종전 동작
+                // 그대로 — 원본도 갈아타지 않으면 같은 렌더 타깃에 연속으로 쓴다).
+                routes.append(Route(sink: .output, source: source))
+            }
+        }
+        return Plan(routes: routes, scratchCount: scratchCount)
     }
 }

@@ -1994,7 +1994,8 @@ extension SceneRenderer {
                 passes = Array(passes.prefix(n))
                 let last = passes.removeLast()
                 passes.append(TranslatedPass(pipeline: last.pipeline, material: last.material, aux: last.aux,
-                                             binds: last.binds, target: nil, usesAudio: last.usesAudio,
+                                             binds: last.binds, target: nil, compose: last.compose,
+                                             usesAudio: last.usesAudio,
                                              texRes: last.texRes, texWrap: last.texWrap, texFilter: last.texFilter,
                                              scripts: last.scripts, fullFrameSlots: last.fullFrameSlots,
                                              swapPair: last.swapPair, mediaArtworkSlots: last.mediaArtworkSlots,
@@ -2092,7 +2093,72 @@ extension SceneRenderer {
                 enc.endEncoding()
             }
             uniqueStore.pendingClear.removeAll()
-            for pass in passes {
+            // T09-D2 **이펙트 내부 핑퐁(`passes[].compose`)**.
+            //
+            // 원본: 패스 드로우 직후 패스 플래그 비트 0x2 를 보고(`0x1401e9b8f–0x1401e9b98`) 핑퐁 렌더
+            // 타깃 쌍 `renderer+0x2c8`/`+0x2d0` 의 반대쪽으로 갈아탄 뒤(`0x1401e9bad–0x1401e9be8`)
+            // 패리티 `edi` 를 뒤집는다(`0x1401e9be9–0x1401e9bf0`). 그 패리티가 다음 드로우의 4번째
+            // 인자(`0x1401e9b7f–0x1401e9b85`: `r9d = edi`)로 넘어가 `previous` 가 읽을 쪽을 정한다.
+            // 요컨대 **compose 패스의 출력 = 다음 패스의 `previous`**.
+            //
+            // 종전 Waple 은 `target == nil` 패스를 전부 같은 `dst` 에 쓰고 `previous` 를 전부 `src` 에
+            // 물렸다. 동봉 `effects/refraction`(`passes[0] = effectcomposebackground(compose:true)`,
+            // `passes[1] = refract`, 둘 다 bind 기본 `previous`)에서 pass1 이 원래 입력을 읽고 `dst` 를
+            // 덮어써 **pass0(배경 합성) 결과가 통째로 버려졌다**. 라우팅 표로 그걸 고친다.
+            //
+            // **무회귀**: 라우팅은 `EffectChainRouting.plan` 이 전부 결정하고, compose 패스가 하나도
+            // 없으면 `scratchCount == 0` 이라 아래 스크래치 확보 블록이 통째로 실행되지 않는다
+            // (= `pooledOffscreen` 체크아웃 순서·실패 경로 무변화). 그때 모든 출력 패스의 sink 는
+            // `.output`(=`dst`), 모든 source 는 `.effectInput`(=`src`) 으로 종전 값과 동일하다.
+            // 동봉 `WEAssets/**/effect.json` 128건 중 `"compose"` 보유는 refraction 과 그 preview
+            // 사본 2건뿐이다(전문 grep 실측) — 나머지 126건은 이 지점 이후 코드 경로가 종전과 완전히
+            // 같다(`plan` 전수 대조: compose 0 이면 모든 route 가 `SRC->fbo`/`SRC->DST`, scratch 0).
+            let routing = EffectChainRouting.plan(passes.map { p in
+                // **compose 를 실을 수 있을 때만 켠다(F-X4 폴백 정책의 연장).**
+                // `_rt_FullFrameBuffer` 를 요구하는 compose 패스는 씬 컬러 스냅샷이 있어야 뜻이 선다.
+                // 동봉 refraction 의 `effectcomposebackground.frag` 는
+                // `gl_FragColor.rgb = mix(bg.rgb, result.rgb, result.a); gl_FragColor.a = 1.0` 라,
+                // bg 가 빌드 시점 폴백인 **흰색 1×1** 이면 결과가 "흰 바탕에 올린 완전 불투명 판" 이
+                // 된다. 그걸 체인에 실으면 refraction 레이어가 흰 사각형으로 변한다 — 종전의
+                // "pass0 결과 폐기" 보다 눈에 띄게 나쁘다. 스냅샷이 없으면 종전 경로를 그대로 둔다.
+                //
+                // 스냅샷을 넘기는 호출부는 컴포지션(`_rt_`) 레이어뿐이다(runFrameBufferLayer:426,
+                // SceneRenderer3D:1616) — 거기서만 핑퐁이 켜진다. `buildDisplayTextures` 는 씬 합성
+                // **전에** 레이어 텍스처를 만들어서 그 시점엔 "씬 컬러" 자체가 없다(runFrameBufferLayer
+                // 의 B2-effects④ 주석이 말하는 자식 RT 부재와 같은 뿌리). 그 한계가 풀리면 이 가드는
+                // 떼면 된다 — 라우팅 자체는 스냅샷 유무와 무관하게 옳다.
+                let composeUsable = p.compose && (p.fullFrameSlots.isEmpty || fullFrameSnapshot != nil)
+                return EffectChainRouting.PassKind(hasFBOTarget: p.target != nil, compose: composeUsable,
+                                                   isSwap: p.swapPair != nil)
+            })
+            var scratch: [MTLTexture] = []
+            if routing.scratchCount > 0 {
+                // 스크래치는 `dst` 와 같은 규격이다 — 출력 패스 파이프라인의 컬러 어태치먼트 포맷은
+                // 빌드 시점에 `outputFormat`(rgba8Unorm)으로 고정돼 있고 호출부의 `dst` 도 전건
+                // `pooledOffscreen(w, h, device)`(rgba8Unorm)다. fbo 풀 할당이 **끝난 뒤** 잡아
+                // 기존 체크아웃 순서를 밀지 않는다.
+                scratch.reserveCapacity(routing.scratchCount)
+                for _ in 0..<routing.scratchCount {
+                    guard let t = pooledOffscreen(baseW, baseH, device) else { return false }
+                    scratch.append(t)
+                }
+            }
+            /// 라우팅 표의 스크래치 인덱스를 실제 텍스처로. 범위를 벗어나면(있을 수 없다 —
+            /// `plan` 이 0..<scratchCount 만 낸다) `dst`/`src` 로 떨어져 종전 동작이 된다.
+            func chainDst(_ sink: EffectChainRouting.Sink) -> MTLTexture {
+                if case .scratch(let i) = sink, i < scratch.count { return scratch[i] }
+                return dst
+            }
+            func chainSrc(_ source: EffectChainRouting.Source) -> MTLTexture {
+                if case .scratch(let i) = source, i < scratch.count { return scratch[i] }
+                return src
+            }
+            for (passIndex, pass) in passes.enumerated() {
+                // 라우팅 표는 `passes` 와 1:1 이다(`plan` 이 같은 개수를 낸다) — 방어적으로만 폴백.
+                let route = passIndex < routing.routes.count
+                    ? routing.routes[passIndex]
+                    : EffectChainRouting.Route(sink: .output, source: .effectInput)
+                let passSrc = chainSrc(route.source)
                 // X-②: command:"swap" — 무비용 포인터 교환(draw 없음). 인덱스 유효성만 재확인(빌드 시
                 // fboIndex 로 이미 확정됐지만 fboTex.count 는 fboSpecs.count 와 항상 같아 안전).
                 if let sp = pass.swapPair, sp.source < fboTex.count, sp.target < fboTex.count {
@@ -2126,7 +2192,9 @@ extension SceneRenderer {
                     }
                     continue
                 }
-                let target = pass.target.map { fboTex[$0] } ?? dst
+                // T09-D2: 타깃 없는 패스의 실제 목적지는 라우팅 표가 정한다 — 마지막 출력 패스만
+                // `dst`, compose 로 갈아탄 앞쪽 출력 패스는 스크래치. fbo 타깃은 종전 그대로.
+                let target = pass.target.map { fboTex[$0] } ?? chainDst(route.sink)
                 // X-⑧: **unique 타깃은 `.load` 다.** 원본은 획득 경로에서 1회만 클리어하고 프레임
                 // 렌더 경로는 플래그를 읽지도 않는다. 동봉 이펙트 셰이더에 `discard` 가 0건이라
                 // 전 픽셀을 덮어써서 지금은 `.clear` 여도 결과가 같지만, `discard` 를 쓰는 워크샵
@@ -2187,14 +2255,16 @@ extension SceneRenderer {
                         enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
                     }
                 }
-                let eng = engineUniform(time: time, texRes: runtimeTexRes(for: pass, src: src, fboTex: fboTex),
+                let eng = engineUniform(time: time, texRes: runtimeTexRes(for: pass, src: passSrc, fboTex: fboTex),
                                         texWrap: pass.texWrap, texFilter: pass.texFilter, targetRes: targetRes)
                 eng.withUnsafeBytes {
                     enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
                     enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
                 }
                 for (slot, source) in pass.binds {
-                    enc.setFragmentTexture(source == -1 ? src : fboTex[source], index: slot)
+                    // T09-D2: `previous`(source == −1) 는 이펙트 입력이 아니라 **체인의 현재 소스**다.
+                    // compose 가 없는 이펙트에서는 `passSrc === src` 라 종전과 같은 텍스처가 물린다.
+                    enc.setFragmentTexture(source == -1 ? passSrc : fboTex[source], index: slot)
                 }
                 for (slot, tex) in pass.aux { enc.setFragmentTexture(tex, index: slot) }
                 // F-X4: `_rt_FullFrameBuffer` 슬롯 — 위 aux 루프가 이미 흰색 1×1 로 채웠으므로, 실제
