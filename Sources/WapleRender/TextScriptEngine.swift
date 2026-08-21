@@ -18,6 +18,12 @@ public struct SceneScriptLayerDescriptor {
     public var parentId: Int?
     /// animationlayers 바인딩 수 — ILayer.getAnimationLayerCount() 실값(F708). 0 = 미지정.
     public var animationLayerCount: Int
+    /// ITextLayer.pointsize(lib.sceneScript.d.ts:1606) 실값. 기본값은 SceneDocument 의 텍스트 파스
+    /// 폴백과 같은 16(SceneDocument.swift:1795) — 텍스트가 아닌 레이어는 이 값을 쓰지 않는다.
+    public var pointSize: Float
+    /// ITextLayer.font(lib.sceneScript.d.ts:1611) 실값. 기본값은 SceneDocument 파스 폴백과 같은
+    /// "systemfont_arial"(SceneDocument.swift:1794).
+    public var font: String
 
     public init(name: String, visible: Bool = true, alpha: Float = 1,
                 origin: SIMD3<Float> = SIMD3<Float>(0, 0, 0),
@@ -25,7 +31,8 @@ public struct SceneScriptLayerDescriptor {
                 angles: SIMD3<Float> = SIMD3<Float>(0, 0, 0),
                 size: SIMD2<Float> = SIMD2<Float>(1, 1),
                 solid: Bool = false, text: String = "",
-                id: Int = 0, parentId: Int? = nil, animationLayerCount: Int = 0) {
+                id: Int = 0, parentId: Int? = nil, animationLayerCount: Int = 0,
+                pointSize: Float = 16, font: String = "systemfont_arial") {
         self.name = name
         self.visible = visible
         self.alpha = alpha
@@ -38,6 +45,8 @@ public struct SceneScriptLayerDescriptor {
         self.id = id
         self.parentId = parentId
         self.animationLayerCount = animationLayerCount
+        self.pointSize = pointSize
+        self.font = font
     }
 }
 
@@ -185,7 +194,11 @@ public final class SceneScriptContext {
                 "text": l.text,
                 "id": l.id,
                 "parentId": l.parentId ?? NSNull(),
-                "animationLayerCount": l.animationLayerCount
+                "animationLayerCount": l.animationLayerCount,
+                // ITextLayer.pointsize/font — 무단위/문자열이라 변환 없음. 텍스트가 아닌 레이어도
+                // 기본값이 실려 오지만 WE 도 ILayer 가 인터페이스 합집합이라 같은 자리에 있다.
+                "pointsize": Double(l.pointSize),
+                "font": l.font
             ]
         }
         guard JSONSerialization.isValidJSONObject(objects),
@@ -712,6 +725,33 @@ public final class TextScriptEngine {
                 return numbers.map { Float(truncating: $0) }
             }
         }
+    }
+
+    /// T09-D1: 스크립트가 `thisObject.executeMaterialFunction(name)` 으로 요청한 이펙트 함수 이름을
+    /// **호출 순서대로** 꺼내고 비운다(중복도 보존 — 실물은 호출마다 1회 클리어한다).
+    ///
+    /// 실물(0x1401EE3A0–0x1401EE51B)은 이름으로 `EffectManifest.functions` 를 선형 탐색해 첫 일치의
+    /// `fboIndices` 에 해당하는 FBO 들을 그 FBO 의 `clear` 색으로 비운다. 클리어는 렌더 패스라
+    /// 스크립트 엔진이 직접 할 수 없으므로, 여기서는 **요청만** 돌려주고 해석(이름→인덱스)과
+    /// 실행(클리어 예약)은 호출자가 한다:
+    ///
+    ///     for name in engine.drainMaterialFunctionCalls() {
+    ///         guard let f = manifest.function(named: name) else { continue }   // 없는 이름은 무시(실물 동일)
+    ///         for i in f.fboIndices { uniqueStore.pendingClear.insert(i) }
+    ///     }
+    ///
+    /// owner == .layer(레이어 프로퍼티 스크립트 — 전체의 대다수)는 항상 빈 배열 → 호출자 무영향.
+    /// **읽으면 비운다** — 매 프레임 부르는 소비자가 같은 요청을 두 번 실행하지 않게.
+    public func drainMaterialFunctionCalls() -> [String] {
+        if case .layer = owner { return [] }
+        guard let obj = thisObjectValue, obj.isObject,
+              let reader = context.objectForKeyedSubscript("__wapleDrainMaterialFunctions"),
+              let json = reader.call(withArguments: [obj])?.toString(),
+              let data = json.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
+              let names = parsed as? [String]
+        else { return [] }
+        return names
     }
 
     /// export 된 이벤트 훅 이름들(update 제외). 비어 있으면 이벤트 배달 대상 아님.
@@ -1989,6 +2029,21 @@ public final class TextScriptEngine {
             origin: new Vec3(0, 0, 0), angles: new Vec3(0, 0, 0), scale: new Vec3(1, 1, 1),
             size: new Vec2(1, 1), color: new Vec3(1, 1, 1),
             text: '', solid: false, texture: tex, textures: [tex], parent: null, children: [],
+            // ITextLayer 프로퍼티(lib.sceneScript.d.ts:1577-1655). exe 등록부 0x140258CA0–0x14025A713 이
+            // pointsize/font/text/color/alpha/horizontalalign/verticalalign/anchor/padding/
+            // opaquebackground/backgroundcolor/limitrows/maxrows/limitwidth/maxwidth 를 전부 건다.
+            // 종전엔 이 중 text/color/alpha 만 있어 `thisLayer.pointsize` 가 undefined 였다 —
+            // 동봉 `presets/clock/preview3dclock` 의 init 이 그 값을 그대로 createLayer 설정에
+            // 실어서(`pointsize: thisLayer.pointsize`) 그림자 레이어 글자 크기가 NaN 이 됐다.
+            // 기본값은 SceneDocument 의 텍스트 파스 폴백과 같다(font "systemfont_arial" · pointsize 16
+            // — SceneDocument.swift:1794-1795). 실값은 __setSceneLayers 가 디스크립터로 덮어쓴다.
+            pointsize: 16, font: 'systemfont_arial',
+            horizontalalign: 'center', verticalalign: 'center', anchor: 'none',
+            padding: 0, opaquebackground: false, backgroundcolor: new Vec3(0, 0, 0),
+            limitrows: false, maxrows: 1, limitwidth: false, maxwidth: 500,
+            // IEffectLayer.perspective / IModelLayer.perspective(d.ts:1565·1916) — 씬 JSON 의 동명 키.
+            // createLayer 설정이 실어 보내는 값(preview3dclock 의 `perspective: true`)을 받는 자리.
+            perspective: false,
             getTexture: function(i) { return this.textures[i || 0] || tex; },
             getTextureAnimation: function() { return tex.animation; },
             getAnimation: function() { return tex.animation; },
@@ -2103,6 +2158,33 @@ public final class TextScriptEngine {
         root.parent = root;
         return root;
     }
+    // thisScene.createLayer(설정객체) 의 설정 → 레이어 심 필드. 키 이름은 씬 JSON 오브젝트와 같다
+    // (WE 편집기가 저장하는 형태 그대로이고, 동봉 preview3dclock 이 그 형태로 부른다).
+    // 벡터는 `"r g b"` 문자열도 배열도 Vec 도 받는다 — Vec3/Vec2 생성자가 셋 다 삼킨다(:1729).
+    // 모르는 키는 그대로 얹는다(WE 도 설정 객체의 미지 키를 오브젝트 필드로 남긴다 — 스크립트가
+    // 직후에 그 이름으로 읽는 경우가 있어 버리면 undefined 가 된다).
+    var __wapleLayerConfigVec3 = { origin: 1, angles: 1, scale: 1, color: 1, backgroundcolor: 1 };
+    var __wapleLayerConfigVec2 = { size: 1, parallaxDepth: 1 };
+    var __wapleLayerConfigNumber = { alpha: 1, pointsize: 1, padding: 1, maxrows: 1, maxwidth: 1 };
+    var __wapleLayerConfigBool = { visible: 1, solid: 1, perspective: 1, opaquebackground: 1,
+                                   limitrows: 1, limitwidth: 1 };
+    var __wapleLayerConfigString = { text: 1, font: 1, horizontalalign: 1, verticalalign: 1, anchor: 1 };
+    function __wapleApplyLayerConfig(l, cfg) {
+        for (var k in cfg) {
+            if (!Object.prototype.hasOwnProperty.call(cfg, k)) { continue; }
+            var v = cfg[k];
+            if (k === 'name' || v === undefined || v === null) { continue; }
+            if (__wapleLayerConfigVec3[k] === 1) {
+                l[k] = (v instanceof Array) ? __vec3FromArray(v, [0, 0, 0]) : new Vec3(v);
+            } else if (__wapleLayerConfigVec2[k] === 1) {
+                l[k] = (v instanceof Array) ? __vec2FromArray(v, [0, 0]) : new Vec2(v);
+            }
+            else if (__wapleLayerConfigNumber[k] === 1) { l[k] = __num(v, l[k]); }
+            else if (__wapleLayerConfigBool[k] === 1) { l[k] = !!v; }
+            else if (__wapleLayerConfigString[k] === 1) { l[k] = String(v); }
+            else { l[k] = v; }
+        }
+    }
     function __makeScene(layer) {
         var camera = __makeCamera();
         var transforms = __makeCameraTransforms();
@@ -2149,7 +2231,19 @@ public final class TextScriptEngine {
                 }
                 return this.layers[i || 0] || layer;
             },
+            // d.ts:2185 `getLayerIndex(layer: String|ILayer): Number` — **문자열도 받는다**.
+            // 종전엔 객체만 봤다: `thisScene.getLayerIndex('postprocess')`(WE 동봉 dino_run
+            // objects[22].visible 스크립트, 설치본 도달 1) 가 indexOf 실패로 항상 0 을 돌려줘
+            // 뒤따르는 sortLayer 가 맨 앞으로 밀어 넣었다. 이름 조회는 getLayer 와 같은 규약
+            // (첫 이름 일치)이고, 못 찾으면 종전과 같이 0 이다(폴백 레이어를 만들지는 않는다 —
+            // 인덱스 질의가 씬에 레이어를 늘리면 안 된다).
             getLayerIndex: function(l) {
+                if (typeof l === 'string') {
+                    for (var n = 0; n < this.layers.length; n += 1) {
+                        if (this.layers[n].name === l) { return n; }
+                    }
+                    return 0;
+                }
                 var idx = this.layers.indexOf(l);
                 return idx < 0 ? 0 : idx;
             },
@@ -2169,12 +2263,27 @@ public final class TextScriptEngine {
                 }
                 return out;
             },
-            createLayer: function(name) {
-                // E1(⑤): 무해 스텁 — JS layers 배열에만 추가(실 GPU 렌더 경로 연결은 보류, 별도 갭).
-                // 저작자가 이 반환 레이어를 이후 조작해도 화면엔 나타나지 않으므로 1회 경고.
-                if (typeof __wapleWarnCreateLayer === 'function') { __wapleWarnCreateLayer(String(name || '')); }
+            // d.ts:2175 `createLayer(configuration: String|Object|IAssetHandle|IModelData): ILayer`.
+            // 종전 심은 인자를 무조건 `String(name || '')` 로 밟아 **설정 객체를 통째로 버렸다** —
+            // 동봉 `presets/clock/preview3dclock`(text 스크립트 init)이
+            //   thisScene.createLayer({ text:'shadow', color:'0 0 0', alpha:1,
+            //                           pointsize: thisLayer.pointsize, font: thisLayer.font,
+            //                           perspective: true })
+            // 로 부르므로 이름이 문자열 `"[object Object]"` 가 되고 text/color/pointsize/font 가
+            // 전부 기본값에 머물렀다. 그 뒤 스크립트는 `shadowLayer.text = value` 로 매 프레임
+            // 그림자 문자열을 쓰므로, 렌더 배선이 붙는 순간 잘못된 폰트/크기로 그려진다.
+            // 설정 객체는 씬 JSON 오브젝트와 **같은 키 이름**을 쓴다(WE 편집기가 저장하는 형태 그대로).
+            // 문자열 인자는 종전과 문자 그대로 같은 경로다(무회귀).
+            //
+            // 남는 한계는 그대로다 — 이 레이어는 JS layers 배열에만 있고 GPU 렌더 경로에 붙지 않는다.
+            // 그래서 1회 경고도 그대로 남긴다(별도 갭).
+            createLayer: function(configuration) {
+                var cfg = (configuration && typeof configuration === 'object') ? configuration : null;
+                var name = cfg ? String(cfg.name || '') : String(configuration || '');
+                if (typeof __wapleWarnCreateLayer === 'function') { __wapleWarnCreateLayer(name); }
                 var l = __makeLayer();
-                l.name = String(name || '');
+                l.name = name;
+                if (cfg) { __wapleApplyLayerConfig(l, cfg); }
                 this.layers.push(l);
                 return l;
             },
@@ -2210,7 +2319,34 @@ public final class TextScriptEngine {
                 }
                 return null;
             },
-            sortLayer: function() { return this; },
+            // d.ts:2180 `sortLayer(layer: String|Number|ILayer, index: Number): Boolean` —
+            // 종전은 인자를 전부 버리고 `this`(씬)를 돌려줬다. 씬은 truthy 라 실패해도 성공처럼
+            // 보였고 반환형도 틀렸다. 동봉 `presets/clock/preview3dclock` 이
+            // `thisScene.sortLayer(shadowLayer, thisScene.getLayerIndex(thisLayer))` 로 부른다.
+            //
+            // **배열을 실제로 재정렬하지는 않는다**: this.layers 의 위치 인덱스는 렌더러 read-back
+            // 채널(readBackScriptLayerState)이 doc.layers 인덱스로 직접 참조하는 규약이라
+            // (destroyLayer 툼스톤 주석과 같은 이유) 순서를 바꾸면 그 뒤 모든 레이어 값이 어긋난다.
+            // 대신 요청한 정렬 위치를 레이어에 **기록**하고(__wapleSortIndex) d.ts 대로 Boolean 을
+            // 돌려준다 — 대상/인덱스가 유효할 때만 true. 실제 드로우 순서 반영은 렌더 배선 몫이다
+            // (createLayer 로 만든 레이어가 아직 렌더 경로에 없다는 같은 갭 안에 있다).
+            sortLayer: function(l, index) {
+                var idx = -1;
+                if (typeof l === 'string') {
+                    for (var i = 0; i < this.layers.length; i += 1) {
+                        if (this.layers[i].name === l) { idx = i; break; }
+                    }
+                } else if (typeof l === 'number') {
+                    idx = (l >= 0 && l < this.layers.length) ? Math.floor(l) : -1;
+                } else if (l) {
+                    idx = this.layers.indexOf(l);
+                }
+                if (idx < 0) { return false; }
+                var want = __num(index, NaN);
+                if (!isFinite(want)) { return false; }
+                this.layers[idx].__wapleSortIndex = Math.floor(want);
+                return true;
+            },
             getInitialLayerConfig: function() { return { origin: new Vec3(0, 0, 0), angles: new Vec3(0, 0, 0), scale: new Vec3(1, 1, 1) }; },
             getObject: function(i) { return this.getLayer(i); },
             getTexture: function(i) { return layer.getTexture(i); }
@@ -2243,6 +2379,8 @@ public final class TextScriptEngine {
         l.__wapleId = (typeof d.id === 'number') ? d.id : 0;              // F711: parent 체인 배선용
         l.__wapleParentId = (typeof d.parentId === 'number') ? d.parentId : null;
         l.animationLayerCount = (typeof d.animationLayerCount === 'number') ? d.animationLayerCount : 0;   // F708
+        l.pointsize = __num(d.pointsize, l.pointsize);   // ITextLayer.pointsize(d.ts:1606)
+        if (typeof d.font === 'string' && d.font.length > 0) { l.font = d.font; }   // d.ts:1611
         return l;
     }
     // F711(S-36): getParent() 가 항상 root 였던 결함 — 디스크립터의 id/parentId(scene.json objects id 체계)로
@@ -2330,6 +2468,8 @@ public final class TextScriptEngine {
             __assignVec(l.size, d.size);
             l.text = String(d.text || '');
             l.solid = !!d.solid;
+            l.pointsize = __num(d.pointsize, l.pointsize);
+            if (typeof d.font === 'string' && d.font.length > 0) { l.font = d.font; }
         }
     }
     // F709(S-34): thisLayer = 스크립트가 붙은 오브젝트 자체(WE 계약) — 디스크립터 인덱스가 오면 그 레이어로
@@ -2351,11 +2491,44 @@ public final class TextScriptEngine {
         if (a.length === 2) { return new Vec2(a[0], a[1]); }
         return new Vec3(a[0], a[1], a[2]);
     }
+    // T09-D1: `executeMaterialFunction(name)`(d.ts:1295) 의 실물은 0x1401EE3A0–0x1401EE51B 다.
+    // 이펙트의 `functions[name]`(= EffectManifest.Function, action 은 `clear` 하나뿐)을 이름으로
+    // 선형 탐색해 **첫 일치**를 쓰고(0x1401EE3D0–0x1401EE40A), 그 항목의 fboIndices 마다 해당
+    // FBO 를 렌더 타깃으로 밀어(0x1401EE468, vtbl+0x48) `fbos[].clear` 색을 실어(0x1401EE472–
+    // 0x1401EE491) 클리어색을 세우고(0x1401EE49A, vtbl+0x118) 색만 클리어한 뒤(0x1401EE4B6,
+    // vtbl+0x120 — dl=1/r8d=0 = 깊이 없음) 타깃을 되돌린다(0x1401EE4BC–0x1401EE4E7).
+    // 반환값은 없다(void).
+    //
+    // 클리어는 렌더 패스라 JS 가 직접 할 수 없다. 그래서 심은 **요청을 호출 순서대로 적재**만 하고,
+    // 네이티브가 TextScriptEngine.drainMaterialFunctionCalls() 로 꺼내 인코더의 FBO 클리어 예약
+    // (SceneRendererResources.EffectFBOStore.pendingClear)으로 옮긴다.
+    // 종전 심은 `return m` / `return e` 로 **인자를 통째로 버렸다** — 이름조차 보지 않았다.
+    //
+    // 상한 64: 이름은 JS 인자라 신뢰 경계 밖이다(`executeMaterialFunction(String(Math.random()))`
+    // 를 매 프레임 부르면 배열이 무한히 자란다). 드레인이 매 프레임 비우므로 정상 사용은 한 자릿수다.
+    function __wapleRecordMaterialFunction(obj, name) {
+        if (typeof name !== 'string' || name.length === 0) { return; }
+        if (!obj.__wapleFunctionCalls) { obj.__wapleFunctionCalls = []; }
+        if (obj.__wapleFunctionCalls.length >= 64) { return; }
+        obj.__wapleFunctionCalls.push(name);
+    }
+    // 네이티브 드레인(TextScriptEngine.drainMaterialFunctionCalls): 적재분을 JSON 으로 넘기고 비운다.
+    // 실물이 호출 즉시 1회 클리어하는 것과 같은 "한 번 소비하면 사라진다" 규약이다.
+    function __wapleDrainMaterialFunctions(obj) {
+        if (!obj || !obj.__wapleFunctionCalls || !obj.__wapleFunctionCalls.length) { return '[]'; }
+        var out = JSON.stringify(obj.__wapleFunctionCalls);
+        obj.__wapleFunctionCalls.length = 0;
+        return out;
+    }
     function __wapleMaterialObject(seed) {
         var m = {
             getAnimation: function() { return __makeTextureAnimation(); },   // IMaterial extends IObject
             setMaterialProperty: function(k, v) { m[String(k)] = v; return m; },
-            executeMaterialFunction: function() { return m; }
+            // d.ts 는 이 메서드를 IEffect(:1295)에만 선언한다 — exe 등록부 0x1401EFCA0 도 IEffect
+            // 바인딩 하나뿐이고 IMaterial 쪽 등록은 없다. 여기 남겨 두는 것은 머티리얼 바인딩
+            // (패스 상수 스크립트)이 실수로 불러도 TypeError 로 훅 전체가 죽지 않게 하려는 것이고,
+            // 적재/드레인 규약은 이펙트와 같다. 도달 0(코퍼스 호출 0건).
+            executeMaterialFunction: function(name) { __wapleRecordMaterialFunction(m, name); }
         };
         if (seed) {
             for (var k in seed) {
@@ -2385,7 +2558,7 @@ public final class TextScriptEngine {
                 for (var j = 0; j < mats.length; j += 1) { mats[j][String(k)] = v; }
                 return e;
             },
-            executeMaterialFunction: function() { return e; }
+            executeMaterialFunction: function(name) { __wapleRecordMaterialFunction(e, name); }
         };
         return e;
     }
