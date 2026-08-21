@@ -158,10 +158,37 @@ public enum ProjectJSONParser {
         }
     }
 
+    /// `workshopid` 전용 — 문자열이면 그대로, 수면 문자열로. **공백뿐인 문자열은 부재로 본다.**
+    ///
+    /// 빈 문자열을 통과시키면 안 되는 이유는 두 겹이다.
+    ///  1. 이 값이 곧 `WallpaperProject.id` 이고(`workshopId ?? folderURL.lastPathComponent`),
+    ///     `title` 의 폴백도 그 id 다 — `{"workshopid":""}` 하나로 id 와 title 이 **둘 다 빈 문자열**이 된다.
+    ///  2. 더 나쁜 것은 `LibraryStore.importExtractedZipCounting` 이
+    ///     `let hasStableId = parsed?.workshopId != nil` 로 "전역 유일 식별자가 선언됐다 =
+    ///     같은 배경의 재가져오기다" 를 판정하고, 참이면 **이미 있는 관리 폴더를 지우고 덮어쓴다**는
+    ///     점이다. 빈 문자열이 non-nil 로 통과하면 서로 다른 배경 두 개가(WE export 관례상 래퍼
+    ///     폴더명은 `Wallpaper/` 로 비유일이다) **무통지로 서로를 덮어쓴다** — F247·F581 이
+    ///     막으려던 바로 그 손실이다. 관리 폴더명 쪽은 `normalizedPathComponent("")` 가 nil 을 내
+    ///     이미 폴더명으로 폴백하지만, 그 폴백이 오히려 "빈 id + 비유일 폴더명" 조합을 만든다.
+    ///
+    /// 실물에서 이 키가 채워지는 경로는 `strtoull` 결과를 심는 것뿐이라(docs/re/package-format.md
+    /// §5.4 — `0x14010aadf` strtoull → `0x14010ab27` `json["workshopid"] = <수>`) 빈 문자열이
+    /// 나올 수 없다. 빈 값은 손편집·내보내기 도구에서만 온다. **설치본 191건 도달 0**
+    /// (`workshopid` 키 자체가 0건 — `ProjectJSONInstallCorpusTests` 가 그 도수를 고정한다).
+    ///
+    /// 공백 제거는 **하지 않는다**. `" 123 "` 은 빈 값과 달리 유일·안정하므로 위 손실 경로가 없고,
+    /// 원문을 말없이 바꾸는 쪽이 오히려 id 드리프트를 만든다.
     private static func parseStringOrNumber(_ value: Any?) -> String? {
-        if let string = value as? String { return string }
+        if let string = value as? String {
+            return string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : string
+        }
         guard let number = value as? NSNumber,
               CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        // `NSNumber.stringValue` 의 **형식**은 Foundation 구현마다 다를 수 있다(정수 태그는
+        // 양쪽 다 자릿수 그대로지만, `{"workshopid":1108426854.0}` 처럼 실수 태그로 오면
+        // swift-corelibs 는 `"1108426854.0"` 을 낸다 — Apple Foundation 값은 이 컨테이너에서
+        // 실측할 수 없다). 실수 workshopid 는 설치본 도달 0이고 WE 도 정수로만 심으므로
+        // 여기서 형식을 강제하지 않는다. 테스트는 **수치 동등성**만 단언한다. `[미해결]`
         return number.stringValue
     }
 }
