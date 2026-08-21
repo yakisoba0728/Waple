@@ -401,6 +401,83 @@ if (t < 0):  step = −step ; t = −t                           ; 0x14023ce13�
 **[미해결]** `[rdi+0x20] & 1` 이 설 때만 `p −= A` 를 하는 이유(월드/로컬 스페이스 구분으로
 보이나, 안 설 때 수직 성분이 **원점을 지나는 축** 기준이 되는 것이 의도인지 확인 못 했다).
 
+`mirror` 판정이 `cmp dword [r14+0x14], r13d`(`0x14023cdc6`)인데 **`r13d` 는 0** 이다 —
+이니셜라이저 VM 프롤로그의 `xor r13d, r13d`(`0x14023b37e`). 즉 `jne` = "mirror != 0" 이다.
+그리고 두 경계 검사의 `jbe`(`0x14023cdc4` · `0x14023ce34`)는 **비순서(NaN)에서도 잡힌다** —
+`t` 가 NaN 이면 실물은 `t`/`step` 을 그대로 둔다(부호 반전 없음).
+
+### 5.3 `mapsequencearoundcontrolpoint`(opid 13) 의 페이로드 — §11 [미해결] 3 을 절반 닫는다
+
+레코드 `0x5c` / 페이로드 `0x58`(썽크 `0x1401d88f0` — `mov byte [rdx],0xd` @`0x1401d88f7`,
+`mov word [rdx+2],0x5c` @`0x1401d8901`). 파스 `0x1401c9930`–`0x1401ca1c2`, 게이트
+`stricmp` vs `0x14048fe00` @`0x1401c993a`, 주입기 `0x1401bbc90`–`0x1401bc074` @`0x1401c9970`.
+파스 베이스는 `rsi`(썽크가 `lea rax,[rdx+4]` 로 페이로드를 돌려준다), 핸들러 베이스는 `r14` = 페이로드 − 4.
+
+| 페이로드 | 내용 | 파스 스토어 | 핸들러 로드 | 주입 기본 |
+| --- | --- | --- | --- | --- |
+| `+0x00` | 스텝 `1 / max(count, 1e-4)` — **`−1` 없음** | `0x1401c9a01` | — | `count` 32 (`0x1401bbceb`) |
+| `+0x04` | 누산기 `t`(초기 0) | `0x1401c99e8` | `[r14+8]` `0x14023c9cd` | — |
+| `+0x08` | `bounds[0]` | `0x1401c9ac9` | `[r14+0xc]` `0x14023c650` | `"0 1"` (`0x1401bbd93`) |
+| `+0x0c` | `bounds[1] − bounds[0]` | `0x1401c9ae5` | `[r14+0x10]` `0x14023c63f` | — |
+| `+0x10..+0x18` | **`speedmin` (vec3)** | `0x1401c9d82` / `0x1401c9d9b` | `[r14+0x14]` `0x14023c7d9` · `[r14+0x18]` `0x14023c7f9` · `[r14+0x1c]` `0x14023c7a0` | **`"0 0 0"`** (`0x1401bbeb3`, 상수 `0x14048f4d4`) |
+| `+0x1c..+0x24` | **`speedmax` (vec3)** | `0x1401c9db5` / `0x1401c9dbd` | `[r14+0x20]` `0x14023c7d3` · `[r14+0x24]` `0x14023c7ef` · `[r14+0x28]` `0x14023c752` | **`"0 0 0"`** (`0x1401bbf7b`) |
+| `+0x28`/`+0x34`/`+0x40` | 기저벡터 셋(`axis` 에서 조립) | `0x1401c9ebb`/`0x1401c9ecd`/`0x1401c9ec3` → `0x1401c19e0` @`0x1401c9ed4` | `[r14+0x2c]`/`[r14+0x38]`/`[r14+0x44]` | `axis` **`"0 0 1"`** (`0x1401bbfc4`, 상수 `0x14048f6e0`) |
+| `+0x4c` | `limitbehavior == "mirror"` | `0x1401c9b2c` | `[r14+0x50]` `0x14023c9df` | `"repeat"` (`0x1401bbfda`) |
+| `+0x50` | `controlpoint`(≤7 클램프) | `0x1401c9b75` | `[r14+0x54]` `0x14023c4fd` | 0 (`0x1401bbff0`) |
+| `+0x54` | (읽히지만 **파스가 안 쓴다** — 아래) | — | — | `flags` 0 (`0x1401bc002`) |
+
+**[확정] `speedmin`/`speedmax` 는 살아 있다.** 핸들러가 여섯 성분을 전부 읽고, 그 사이에
+균일난수 `0x1401f87a0` 호출이 **정확히 셋**(`0x14023c74d` · `0x14023c7c7` · `0x14023c7ea`) 끼어
+기저벡터 셋과 섞여 스폰 속도가 된다. 부재 기본이 `"0 0 0"` 이라 안 적으면 기여가 0 이다.
+동봉·설치 저작 **2선언**(`presets/magic/.../magic_trinity.json` — `speedmin "0 10 0"` ·
+`speedmax "0 100 0"`).
+**[미해결]** 그 혼합의 정확한 대수식(축별 결합 순서)은 아직 안 옮겼다.
+
+**[미해결 — 신규] `around` 파스는 `flags` 를 한 번도 읽지 않는다.** 주입기는 `flags` 기본 0 을
+DOM 에 심지만(`xor r8d,r8d` @`0x1401bc002` → `H_INT` @`0x1401bc00f`), `0x1401c9930`–`0x1401ca1c2`
+어디에도 `"flags"`(`0x14048f4cc`) `lea` 가 없다(그 구간의 `lea rdx,[rip→0x14048…]` 전수:
+mapsequencearoundcontrolpoint · count ×2 · bounds · limitbehavior · mirror · controlpoint ·
+speedmin ×2 · speedmax ×2 · axis). 그런데 `0x1401ca184 test byte [rsi+0x54], 1` 이 그 자리를 읽어
+두 번째 스트림 레코드를 찍을지 고른다(§5.4). **그래서 Waple 의 `MapSequenceAroundSpec` 에는
+`flags` 를 싣지 않았다** — 읽히지 않는 값을 필드로 만들면 유령이 된다.
+
+### 5.4 두 mapsequence 는 **이니셜라이저 스트림 밖에도** 레코드를 찍는다 [미해결]
+
+팩토리는 스트림을 **둘** 쌓는다 — `[rsp+0x48]`(이니셜라이저, §4.2 의 썽크들)과 `[rsp+0x30]`.
+`mapsequence*` 는 조건부로 `[rsp+0x30]` 에도 하나 찍는다:
+
+```
+; between — 0x1401ca62c
+0x1401ca62c  test byte [r13+8], 0x20   ; jne → 안 찍음
+0x1401ca637  test byte [rdi+0x1c], 0x10 ; je  → 안 찍음      ← 페이로드 flags **bit4**
+0x1401ca658  call 0x1401d8950           ; opcode 4, 레코드 0x24
+0x1401ca66c  [rax+8]    = 0x24
+0x1401ca6a4  [rbx+0x10] = asFloat(count)
+0x1401ca6ac  [rbx+0x14] = -1.0f
+0x1401ca6b3  [rbx+0x18] = 0xd0
+0x1401ca6ba  [rbx+0x1c] = (이 페이로드의 버퍼 내 바이트 오프셋)
+
+; around — 0x1401ca17d
+0x1401ca17d  test byte [r13+8], 0x20   ; jne → 안 찍음
+0x1401ca184  test byte [rsi+0x54], 1   ; je  → 안 찍음
+0x1401ca1a1  call 0x1401d8910           ; opcode 3, 레코드 0x24
+0x1401ca1b8  [rax+0x14] = 0xd0
+```
+그리고 around 은 그와 별개로 `0x1401c9ed9 test byte [r13+8],0x10` 이 **안 서면**
+`0x1401d8800`(opcode `0x0a`, `0x3c`)로 또 하나를 찍고 거기에 `speedmin`/`speedmax` 를 **다시**
+파스해 넣는다(`0x1401c9efb`–`0x1401ca161`).
+
+**[미해결]** `[rsp+0x30]` 스트림의 VM 을 아직 안 짚었다 — 오퍼레이터 VM(`0x14023fbc0`)의 썽크는
+`0x1401d8a50`(opid 4) · `0x1401d8b30`(opid 10)이라 **다른 스트림**이다. 그래서 이 레코드들의
+효과는 미확정이다. 함정 2("한 요소에 핸들러가 둘 붙을 수 있다")의 실사례다.
+**도달**: `between` 의 bit4 는 동봉·설치 **2선언**
+(`presets/lightning/particles/presets/thunderbolt.json` `flags:23` ·
+`.../thunderbolt_beam_child.json` `flags:19`). around 쪽 게이트는 §5.3 의 [미해결] 때문에 미상.
+
+**[정정]** §8.3 의 "값 16 은 bit4 이고 런타임이 읽는 비트가 아니라 아무 데도 안 걸린다" 는
+**`controlpoint[].flags`** 에 대한 문장이다. `mapsequencebetweencontrolpoints` **자신의** `flags`
+bit4 는 위처럼 걸린다 — 두 `flags` 는 다른 필드다.
+
 ---
 
 ## 6. 자식 시스템의 CP 상속 — `controlpointstartindex` [확정]
@@ -652,14 +729,67 @@ bit0·bit2·bit3·bit16 뿐이므로 이 10건은 **아무 데도 안 걸린다*
 > 다만 §4.1 이 "종전 `particle-operator-vm.md` §7 은 오기다" 라고만 적어 둔 것은 이제
 > **그 문서에서 실제로 고쳐졌다**.
 
+> ---
+>
+> **[2026-08-21 세 번째 라운드 — 클러스터 AT] 무회귀를 먼저 재고, 산술만 잠갔다.**
+>
+> | | 상태 | 근거 |
+> | --- | --- | --- |
+> | **P1-① 도달 재측정** | **끝** | `p.frame >= 0` 분기를 지나는 mapsequence 자산 **0건**(아래) |
+> | **P1-② 산술 이식** | **적용** | `MapSequenceBetweenSolver`(`ParticleSimulator.swift`) — 오라클 27건 |
+> | **P1-③ 페이로드 파스** | **적용** | `MapSequenceBetweenSpec` / `MapSequenceAroundSpec` + `def.mapSequence{Between,Around}` |
+> | **P1-④ 위치 대입 배선** | **미적용** | 화면이 바뀌고 A/B 캡처가 불가능하다(아래 수치) |
+> | **P1-⑤ `p.frame` 대입 삭제** | **미적용** | 소유 밖 테스트 파일이 걸린다(§P1 패치안) |
+> | **P2 자식 CP 피드** | **파스만**(전 라운드 그대로) | 소비는 `bakeControlPointTargets` 구조 변경이 먼저 |
+> | **§11 [미해결] 3** | **절반 닫음** | `around` 의 `speedmin`/`speedmax` 자리·기본·소비처 확정(§5.3) |
+>
+> **① 도달 — 0 이다(양성 대조 포함).** 관용 파서(`measure_misc_assets.lenient_json`)로 다시 셌다:
+> 동봉 `.json` **1,698** 중 `initializer[].name` 이 `mapsequence*` 인 파티클 **17파일 / 19선언**
+> (between **12** · around **7**), 설치본 **2,143** 중에서도 **똑같이 17 / 19**.
+> 그 `material` 8종(`materials/particle/halo_1.json` · `materials/presets/{discharge,dischargearc,
+> dna,magic_trinity,starcircle,thunderbolt,thunderbolt_beam_child}.json`)이 가리키는 텍스처는
+> 다섯 종(`particle/halo` · `particle/halo_2` · `particle/beam/beam_0` · `particle/beam/beam_2` ·
+> `particle/misc/star_0`)이고, `measure_tex_deep.parse_tex` 로 열면 **다섯 다 `texs = None`** 이다.
+> **양성 대조**: 같은 트리의 `.tex` **311개 중 52개는 TEXS 를 갖는다**(`particle/fire/fire1..3`
+> `TEXS0002`, `particle/shape/{sparks_thick,electricity}_sheet` `TEXS0003` 등) — 탐지가 도는데
+> 이 다섯만 없는 것이다. Waple 은 `sys.frames` 를 `resolveTextureWithFrames(def.material?.textureName)`
+> 에서만 받고(`SceneRendererResources.buildParticles`), 시트 분기는 전부 `if !sys.frames.isEmpty`
+> 안에 있다. 그리고 19선언 전부 `animationmode: null` 이다.
+> → **`p.frame >= 0`(`SceneRendererFrameEncoder` 두 자리 · `SceneRenderer3D` 한 자리)를 지나는
+> mapsequence 자산은 0건이다.** 즉 `p.frame` 대입을 걷어내는 것 자체는 그림을 안 바꾼다.
+>
+> **② 그런데 위치 대입은 그림을 바꾼다 — 그래서 안 넣었다.** `flags` 저작 분포(동봉·설치 동일):
+> `4`×2 · `7`×3 · `3`×1 · `15`×2 · `23`×1 · `19`×1 · 부재×2 = 12선언.
+> 비트별로 세면 **bit0(수직 성분 수렴) 10선언 · bit1(속도 감쇠) 10선언 · bit2(크기 축소) 8선언 ·
+> bit3(arc 벌지) 4선언**이다. `sizereductionamount` 는 **저작 0건**이라 8선언 전부 주입 기본 0.9 —
+> 즉 시퀀스 양 끝에서 크기가 원래의 **10%** 가 된다. 이건 눈에 보이는 변화다.
+> **이 컨테이너에는 Metal 이 없어 A/B 캡처가 불가능하므로 배선은 맥 라운드로 넘긴다**(§P1 절차).
+>
+> **③ 새로 확정한 것 셋.**
+> 1. **`between` 과 `around` 의 스텝 식이 다르다.** between 은 `1 / max(count − 1, 1e-4)`
+>    (`subss xmm0, xmm10(1.0)` @`0x1401ca249` → `comiss xmm14(1e-4)` @`0x1401ca24e` →
+>    `divss` @`0x1401ca29d` → `movss [rdi]` @`0x1401ca2af`), around 은 **`−1` 없이**
+>    `1 / max(count, 1e-4)`(`comiss` @`0x1401c99a5` → `divss` @`0x1401c99ef` → `movss [rsi]` @`0x1401c9a01`).
+>    상수는 둘 다 루프 진입 전 `xmm14 = 1e-4`(`0x1404925fc`, 적재 `0x1401c70a1`) ·
+>    루프 백에지 `xmm10 = 1.0`(`0x140492704`, 적재 `0x1401c70c0`)에서 온다.
+> 2. **`around` 의 `speedmin`/`speedmax` 는 살아 있다**(§5.3).
+> 3. **`between` 의 `flags` bit4(`0x10`)는 죽은 비트가 아니다**(§5.4).
+>
+> **④ 검증.** `verify-isolated.sh AT … --filter ParticleMapSequenceOracleTests` →
+> **27건 0실패**(rc=0). 돌연변이 4건(스텝의 `−1` 제거 · `arc` 지수 2→1 ·
+> 크기식 `(1−sr)+sr·arc` → `sr+(1−sr)·arc` · `controlpointend` 주입 기본 1→0)을 넣으니
+> **8개 테스트 15단언이 실패**했다 — 네 돌연변이 전부 잡힌다.
+
 아래 파일들은 **이 클러스터의 소유가 아니다**. 고치지 않았다. 넘긴다.
 
 ### P1. `mapsequence*` 는 스프라이트 프레임 선택이 **아니다** (가장 큰 어긋남)
 
-**현상.** `Sources/WapleCore/ParticleSystem.swift:143` 의 주석이
-"스프라이트시트 프레임 선택(스폰 시 확정)" 이라고 적고, `ParticleSimulator.swift:1367-1388`
-(`case let .mapSequence(count, _, between)`)이 `p.frame = t * count` 만 한다.
-`SceneRendererFrameEncoder.swift:123-124` 와 `:264-265` 가 그 `p.frame` 으로 시트 인덱스를 고른다.
+**현상.** `ParticleSystem.swift` 의 `Initializer.mapSequence` 주석이 종전에
+"스프라이트시트 프레임 선택(스폰 시 확정)" 이라고 적었고, `ParticleSimulator.swift` 의
+`case let .mapSequence(count, _, between)` 이 `p.frame = t * max(0, count)` 만 한다.
+`SceneRendererFrameEncoder.swift` 의 `if p.frame >= 0 { idx = sheetFrameIndex(sequence: p.frame, …) }`
+두 자리와 `SceneRenderer3D.swift` 의 형제 분기가 그 `p.frame` 으로 시트 인덱스를 고른다.
+(**함정 20** — 남의 파일 줄 번호 대신 그 줄의 코드를 적는다.)
 
 **실측.** 실물 핸들러 둘(`0x14023c4cf` around / `0x14023ca93` between)이 만지는 SoA 슬롯을
 전수로 뽑으면 `+0x2b0/+0x2b8/+0x2c0`(위치) · `+0x2c8/+0x2d0/+0x2d8`(속도) ·
@@ -670,7 +800,7 @@ bit0·bit2·bit3·bit16 뿐이므로 이 10건은 **아무 데도 안 걸린다*
 **패치안 (before/after — 개념)**
 
 ```swift
-// Sources/WapleCore/ParticleSystem.swift:143  (before)
+// Sources/WapleCore/ParticleSystem.swift  `case mapSequence` (before)
 /// 스프라이트시트 프레임 선택(스폰 시 확정). between=false: CP0 기준 각도 → 시퀀스,
 /// true: CP0→CP1 구간 투영 → 시퀀스. count=시퀀스 길이(시트 프레임 수와 다를 수 있음 — mirror 폴드).
 case mapSequence(count: Float, mirror: Bool, between: Bool)
@@ -696,7 +826,7 @@ case mapSequence(count: Float, mirror: Bool, between: Bool,
 > 마지막이 이긴다 — 그 손실을 감수할지는 소유자 판단이다.
 
 ```swift
-// Sources/WapleCore/ParticleSystem.swift:1842-1849  (before)
+// Sources/WapleCore/ParticleSystem.swift  parseInitializers `case "mapsequencebetweencontrolpoints"` (before)
 case "mapsequencebetweencontrolpoints":
     inits.append(.mapSequence(count: injected(i, "count", 32),
                               mirror: (i["limitbehavior"] as? String) == "mirror", between: true))
@@ -725,7 +855,7 @@ case "mapsequencebetweencontrolpoints":
 ```
 
 ```swift
-// Sources/WapleCore/ParticleSimulator.swift:1367-1388  (before)
+// Sources/WapleCore/ParticleSimulator.swift  `case let .mapSequence(count, _, between)` (before)
 case let .mapSequence(count, _, between):
     let t: Float
     if between { … CP0→CP1 투영 … } else { … CP0 기준 각도 … }
@@ -766,14 +896,28 @@ case let .mapSequence(count, mirror, between, b0, bSpan, cpS, cpE, flags, arcAmt
 `around` 분기(`between == false`)의 실물 식은 §4.2 의 세 기저벡터 변환까지 필요하므로
 이번 라운드에서 옮기지 않았다 — **[미해결]** 로 남긴다.
 
-**무회귀 경고.** `p.frame` 을 안 쓰게 되면 `SceneRendererFrameEncoder.swift:123`/`:264` 의
-`p.frame >= 0` 분기가 죽고 시트 인덱스가 `particleSheetFrameIndex` 폴터로 간다.
-동봉에서 `mapsequence*` 를 쓰는 파티클은 12+7 = 19건이므로 **그림이 바뀐다**.
-바꾸기 전에 그 19건의 시트 프레임 수를 세고 A/B 캡처를 잡는 것을 권한다.
+**무회귀 — [정정 2026-08-21] 이 경고는 성립하지 않는다.** `p.frame` 을 안 쓰게 되면
+`p.frame >= 0` 분기가 죽고 시트 인덱스가 `particleSheetFrameIndex` 폴터로 가는 것은 맞다.
+그런데 그 분기는 전부 `if !sys.frames.isEmpty` 안에 있고, `sys.frames` 는
+`resolveTextureWithFrames(def.material?.textureName)` → `.tex` 의 **TEXS 섹션**에서만 온다.
+`mapsequence*` 19선언이 쓰는 텍스처 다섯 종에는 TEXS 가 **없다**(양성 대조: 같은 트리의
+`.tex` 311개 중 52개는 TEXS 를 갖는다). → **도달 0건, 그림 변화 0.** 자세한 수치는 §9 세 번째
+라운드 블록.
+
+**그러나 위치 대입 배선은 별개로 그림을 바꾼다** — 아래 `after` 스케치는 파티클을 실제로
+선분 위로 옮기고, 동봉 12선언 중 8선언이 `flags & 4` 로 크기를 양 끝에서 10% 까지 줄인다.
+그쪽은 A/B 캡처가 필요하다(맥 절차는 §9).
+
+**[2026-08-21 진척]** 아래 `after` 중 **산술과 페이로드 파스는 이미 들어갔다** —
+`MapSequenceBetweenSolver`(`ParticleSimulator.swift`) · `MapSequenceBetweenSpec` /
+`MapSequenceAroundSpec` + `def.mapSequenceBetween` / `def.mapSequenceAround`
+(`ParticleSystem.swift`). 케이스 시그니처는 **안 바꿨다** — 페이로드를 def 배열에 실었으므로
+`SceneRendererResources.swift` 의 `if case .mapSequence(_, true, _)` 패턴이 그대로 산다.
+남은 것은 시뮬에 원소별 solver 슬롯을 두고 `apply` 를 부르는 일과 `p.frame` 대입 제거뿐이다.
 
 ### P2. `ChildLink.controlPointStartIndex` 소비 배선
 
-`Sources/WapleCore/ParticleSystem.swift:1265` 의 `[파스·보존 전용]` 을 닫을 수 있다.
+`ParticleSystem.swift` 의 `ChildLink.controlPointStartIndex` 에 붙은 `[파스·보존 전용]` 을 닫을 수 있다.
 
 **규약**(§6): 자식 링크 `flags & 1` 일 때만, 자식 시스템의 CP 슬롯
 `startIndex … 7` 에 **부모의 살아 있는 파티클 위치**를 순서대로 채운다.
@@ -782,7 +926,7 @@ case let .mapSequence(count, mirror, between, b0, bSpan, cpS, cpE, flags, arcAmt
 
 **패치안**: `ChildLink` 에 `flags: Int` 를 추가로 파스하고(현재 `children[].flags` 미파스 —
 파스 VA `0x1401d09be`, 주입 기본 0), `ParticleSimulator` 의 자식 인스턴스 스폰/갱신 지점
-(`ParticleSimulator.swift:435` `makeInstance` / `:821-830` 의 자식 갱신 루프)에서 매 프레임
+(`ParticleSimulator.swift` 의 `makeInstance` / `stepChildren` 자식 갱신 루프)에서 매 프레임
 ```swift
 if link.flags & 1 != 0 {
     var slot = max(0, link.controlPointStartIndex)
@@ -802,8 +946,8 @@ if link.flags & 1 != 0 {
 
 ### P3. `ParticleSystemDef.controlPointAngles` 의 `[미해결]` 을 닫는다
 
-`Sources/WapleCore/ParticleSystem.swift:1527-1528` 과
-`ParticleInstanceOverride.controlPointAngles`(`Sources/WapleCore/ParticleSystem.swift:1291-1314`)의 "소비처 미확정" 은
+`ParticleSystemDef.controlPointAngles` 와
+`ParticleInstanceOverride.controlPointAngles`(둘 다 `ParticleSystem.swift`)의 "소비처 미확정" 은
 **닫힌다** — 소비처는 두 곳이다:
 1. **이미터 VM** `0x140237c42`–`0x140237c86` / `0x1402384c8`–`0x140238502` (4×4 전체)
 2. **이니셜라이저 opid 13** `mapsequencearoundcontrolpoint` 의 3×3 기저 변환
@@ -890,9 +1034,17 @@ print({hex(k):sorted(set(v)) for k,v in hits.items()})"
    생성자 `0x14022c3c0` 은 안 읽는다. 전수 반증은 못 했다 — 동봉 도달 0 이라 실효는 0.
 2. `mapsequencebetweencontrolpoints` 의 `[sys+0x20] & 1` 게이트(`0x14023cb55`)가 왜
    수직 성분 기준점을 바꾸는지(월드/로컬 구분으로 보이나 확증 없음).
-3. `mapsequencearoundcontrolpoint`(opid 13)의 **페이로드 전수**. 핸들러가 읽는 자리
-   (`[r14+0x08/0x0c/0x10/0x2c/0x38/0x44/0x54]`)는 짚었지만 파스 측 대응을 다 못 떴다.
-   `speedmin`/`speedmax` 가 어디로 가는지 미확정.
+3. ~~`mapsequencearoundcontrolpoint`(opid 13)의 **페이로드 전수**~~ — **[2026-08-21 절반 닫음, §5.3]**
+   페이로드 지도(`+0x00` 스텝 · `+0x04` t · `+0x08/+0x0c` bounds · `+0x10..0x18` `speedmin` ·
+   `+0x1c..0x24` `speedmax` · `+0x28/+0x34/+0x40` 기저 · `+0x4c` mirror · `+0x50` controlpoint)와
+   `speedmin`/`speedmax` 의 소비처(핸들러 `[r14+0x14..0x1c]`/`[r14+0x20..0x28]`, 균일난수 3드로와
+   혼합) · 주입 기본(**둘 다 `"0 0 0"`**)까지 확정했다.
+   **남은 것**: 그 혼합의 정확한 대수식(축별 결합 순서), 그리고 파스가 `flags` 를 안 읽는데
+   `0x1401ca184` 가 `+0x54` 를 읽는 모순(§5.3 끝).
+3b. **[신규]** `[rsp+0x30]` 스트림의 VM(§5.4). `mapsequence*` 가 조건부로 찍는 `0x24`/`0x3c`
+   레코드(썽크 `0x1401d8950` opcode 4 · `0x1401d8910` opcode 3 · `0x1401d8800` opcode 0xa)의
+   효과가 미확정이다. `between` 의 게이트는 **자기 `flags` bit4** 이고 동봉 도달 2선언이다.
+   오퍼레이터 VM 썽크(`0x1401d8a50`/`0x1401d8b30`)와 다른 계열이라 그 문서로도 안 닫힌다.
 4. §6 의 슬롯 정체(막힌 CP 에서 `edx` 미전진)가 의도인지.
 5. 이미터 레코드의 파스↔런타임 오프셋 차이 `0x10` 의 복사 지점.
 6. 브리프의 "JSON 3,655개" 분모 출처(이 저장소 두 코퍼스 합은 3,841, JSONC 63 은 일치).
