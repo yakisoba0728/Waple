@@ -140,8 +140,8 @@ public enum Initializer: Equatable {
     /// 레코드에 남는 누산기 `t` 가 스폰마다 `1/(count−1)` 씩 전진한다(파티클 위치에서 유도하는
     /// 값이 아니다). `count` 는 시트 프레임 수가 아니라 **시퀀스 스텝 수**다.
     ///
-    /// **[근거없음 — 걷어낼 자리] Waple 시뮬의 `p.frame = t·count`(`ParticleSimulator` `case let
-    /// .mapSequence`)는 실물에 대응이 없다.** 걷어내도 **그림이 바뀌지 않는다는 것**까지는
+    /// **[2026-08-21 해소 — 걷어냈다] Waple 시뮬의 `p.frame = t·count`(`ParticleSimulator`
+    /// `case .mapSequence`)는 실물에 대응이 없었다.** 걷어내도 **그림이 바뀌지 않는다는 것**까지
     /// 코퍼스로 확인했다 — 동봉·설치 두 코퍼스에서 `mapsequence*` 를 선언한 파티클은
     /// 각각 **17파일 / 19선언**이고, 그 머티리얼이 가리키는 텍스처는 다섯 종
     /// (`particle/halo`, `particle/halo_2`, `particle/beam/beam_0`, `particle/beam/beam_2`,
@@ -160,10 +160,25 @@ public enum Initializer: Equatable {
     /// 도는데 이 다섯만 없는 것이다. 그리고 19선언 전부 `animationmode: null` 이다.
     /// → **`p.frame >= 0` 분기를 실제로 지나는 mapsequence 자산은 0건이다.**
     ///
-    /// **[미적용 사유]** 그래도 삭제는 `Tests/WapleCoreTests/TexFramesAndMapSequenceTests.swift`
-    /// 의 세 테스트(`testMapSequenceBetween_projectsOntoSegment` 2.0 /
-    /// `…_clampsOutsideSegment` 0 / `testMapSequenceAround_angleToSequence` 4.0)를 같이 고쳐야
-    /// 하는데 그 파일은 이 라운드도 소유 밖이다(이름에 `Particle` 이 없다) — 표시만 하고 넘긴다.
+    /// **[2026-08-21 삭제 근거 — x86 을 다시 떴다]** 위 도달 논증은 "지워도 안전하다" 만 말한다.
+    /// "왜 틀렸나" 는 이니셜라이저 VM(`0x14023b340`–`0x14023fbbc`) 쪽이다:
+    ///   · 점프테이블 `0x14023fa78`(진입 `movzx eax,[r14]` `0x14023b5c0` → `jmp rax` `0x14023b5d3`)
+    ///     에서 opid 13 암 = `0x14023c4cf`, opid 14 암 = `0x14023ca93`, opid 15 암 = `0x14023ce53`.
+    ///   · 두 mapsequence 암이 만지는 SoA 슬롯 전수: 위치 `+0x2b0/+0x2b8/+0x2c0` ·
+    ///     속도 `+0x2c8/+0x2d0/+0x2d8` · CP 배열 `+0x400`(+ between 만 `+0x278`·`+0x20`).
+    ///     **시퀀스 슬롯 `+0x268` 은 0회.**
+    ///   · VM 전체에서 `+0x268` 을 건드리는 자리는 셋뿐 — 스폰 프롤로그 둘
+    ///     (`0x14023b4ef` 가 0, `0x14023b503` 가 난수 배열 `[rdi+0x338]` 복사; 게이트
+    ///     `cmp [rdi+0x48], r13d` `0x14023b4e9`)과 **다른 암** opid 17(`0x14023ce8b`, 읽기 전용).
+    ///     곧 시퀀스 인덱스는 **스폰 때 `animationmode` 하나로 확정**되고 그 뒤 이니셜라이저가
+    ///     고치지 않는다.
+    ///   · 그리고 시트 전진의 형태 자체가 `t·count` 같은 연속값이 아니다 — 이미지 경로는 씬
+    ///     프레임 카운터로 프레임당 1회 게이트된 **정수 전진**, 파티클 경로는 셰이더의
+    ///     `floor(lifetime·numFrames)` 다(`docs/re/sprite-occlusion.md` §10.2 · §10.4.3).
+    /// 짝 테스트 셋(`Tests/WapleCoreTests/TexFramesAndMapSequenceTests.swift` 의
+    /// `testMapSequenceBetween_projectsOntoSegment` / `…_clampsOutsideSegment` /
+    /// `testMapSequenceAround_angleToSequence`)은 같은 커밋에서 "시퀀스 슬롯을 만지지 않는다" 를
+    /// 단언하는 쪽으로 뒤집었다.
     ///
     /// **[미배선] 위치 산식은 옮겼지만 배선하지 않았다.**
     ///   · 산술 — `MapSequenceBetweenSolver`(`ParticleSimulator.swift`)가 실물 핸들러
@@ -178,12 +193,13 @@ public enum Initializer: Equatable {
     ///     불가능하므로 맥에서 뜬 뒤로 넘긴다.
     ///   · 배선 시 케이스 시그니처는 **흔들 필요가 없다** — 페이로드는 def 배열에 있으므로
     ///     `SceneRendererResources.swift` 의 `if case .mapSequence(_, true, _)` 패턴은 그대로 산다.
-    ///     남는 것은 (a) 이니셜라이저 인스턴스별 `MapSequenceBetweenSolver` 슬롯을 시뮬에 두는 일과
-    ///     (b) `p.frame` 대입 제거(위 [미적용 사유])뿐이다.
+    ///     남는 것은 이니셜라이저 인스턴스별 `MapSequenceBetweenSolver` 슬롯을 시뮬에 두는 일뿐이다
+    ///     ((b) `p.frame` 대입 제거는 위에서 끝냈다).
     ///
     /// 실물 `arcamount` 는 이 케이스가 아니라 **def 레벨 `mapSequenceArcAmount`** 에 싣는다
-    /// (`mapSequenceAxis` 와 같은 관례 — 시뮬레이터의 `case let .mapSequence(count, _, between)`
-    /// 패턴을 흔들지 않기 위해서다). **[2026-08-21 실측]** `mapsequencebetweencontrolpoints`
+    /// (`mapSequenceAxis` 와 같은 관례 — 시뮬레이터의 `case .mapSequence` 패턴과
+    /// `SceneRendererResources` 의 `if case .mapSequence(_, true, _)` 를 흔들지 않기 위해서다).
+    /// **[2026-08-21 실측]** `mapsequencebetweencontrolpoints`
     /// **전용** 키다 — 주입기가 갈린다:
     ///   between  : `0x1401bc080`–`0x1401bc470` — `count`·`bounds`·`limitbehavior`·
     ///              `controlpointstart`·`controlpointend`·`flags`·**`arcamount`**·`arcdirection`·
@@ -269,11 +285,27 @@ public enum Initializer: Equatable {
     /// 동봉 도달: `inputrangemax` 3건(thunderbolt_beam_child ×2 = 50, remapinitialvalue 프리뷰 = 300),
     /// `inputrangemin` 0건.
     ///
-    /// **반증 메모 — `min`/`max` 는 이 원소의 키가 아니다.** `remapinitialvalue` 분기가 읽는
-    /// 키는 `0x1401ca6f0`–`0x1401cad60` 구간에서 전수로 보이며 `operation`·`input`·`output`·
-    /// `inputcomponent`·`outputcomponent`·`transformfunction`·`flags`·`inputrangemin`·
-    /// `inputrangemax`·`outputrangemin`·`outputrangemax` 뿐이다 — `"min"`/`"max"` 를 `lea` 하는
-    /// 명령이 하나도 없다. 아래 `min`/`max` 는 유령 키를 읽고 있어 동봉 자산 3건 전건에서 nil 이다
+    /// **반증 메모 — `min`/`max` 는 이 원소의 키가 아니다.** `remapinitialvalue` 분기는
+    /// 게이트 `stricmp`(`lea rdx,"remapinitialvalue"` @`0x1401ca6cd`, 미일치 시
+    /// `jne 0x1401cb057` @`0x1401ca6db`)부터 그 미일치 목적지까지, 곧
+    /// **`0x1401ca6cd`–`0x1401cb057`** 이다. 그 안의 키 `lea` 는 **전수 17개**다:
+    /// `operation`(`0x1401ca70c`) · `input`(`0x1401ca744`) · `output`(`0x1401ca77e`) ·
+    /// `inputcomponent`(`0x1401ca7b9`) · `outputcomponent`(`0x1401ca7f4`) ·
+    /// `transformfunction`(`0x1401ca82f`) · `flags`(`0x1401ca86a`) ·
+    /// `inputrangemin`(`0x1401ca89d`) · `inputrangemax`(`0x1401ca9eb`) ·
+    /// `outputrangemin`(`0x1401cab52`) · `outputrangemax`(`0x1401cacab`) ·
+    /// `inputcontrolpoint0`(`0x1401cae52`) · `outputcontrolpoint0`(`0x1401cae82`) ·
+    /// `inputcontrolpoint1`(`0x1401caf0a`) · `outputcontrolpoint1`(`0x1401caf3a`) ·
+    /// `transforminputscale`(`0x1401cafe5`) · `transformoctaves`(`0x1401cb015`).
+    /// **`"min"`/`"max"` 를 `lea` 하는 명령이 하나도 없다.**
+    ///
+    /// > **2026-08-21 정정** — 종전 이 문단은 구간을 `0x1401ca6f0`–`0x1401cad60` 으로 적었다.  [VA-정정]
+    /// > 그 시작은 **명령 경계가 아니다**(`0x1401ca6ef` 의 `xor ecx, ecx` 한복판 +1).
+    /// > 그리고 끝 `0x1401cad60` 이 너무 일러 **키 목록이 11개에서 잘려 있었다** —
+    /// > CP 넷과 `transforminputscale`·`transformoctaves` 여섯이 그 뒤에 있다.
+    /// > 판정(= `min`/`max` 가 유령 키다)은 구간을 넓혀도 그대로다.
+    ///
+    /// 아래 `min`/`max` 는 유령 키를 읽고 있어 동봉 자산 3건 전건에서 nil 이다
     /// (실 출력 구간은 `outputrangemin`/`outputrangemax` 다). 시뮬 미소비라 지금은 무해하지만,
     /// 소비를 붙일 때는 **키 이름부터 갈아야 한다** — 이 라운드의 범위 밖이라 남겨 둔다.
     case remapInitialValue(output: String?, min: Vec3?, max: Vec3?,
@@ -942,9 +974,45 @@ public struct RemapSpec: Equatable {
     /// (실물 부재 기본은 `"lifetimefraction"` — 주입기 `0x1401bfbdf` → `[0x140484e80]`.
     /// Waple 은 종전 노이즈 경로와의 비트동일을 지키려고 nil 을 그대로 둔다. **[미해결]**)
     public let input: RemapInput?
-    public let transform: RemapTransform?     // nil = 변환 없음(입력을 0..1 클램프해 직접 매핑 [추정])
+    /// nil = `transformfunction` 부재/미지 문자열 → **변환을 통째로 건너뛴다**(`v = t`).
+    /// 그때는 `transforminputscale` 을 **곱하지 않는다** — `dec`+`cmp eax,5`+`ja`
+    /// (`0x140245137`–`0x14024513c`)가 0(none)과 센티넬 ≥7 을 `0x140245928` 로 보내는데,
+    /// 그 자리는 `movaps xmm12,[0x140483640]` 한 줄만 하고 곧장 출력 매핑(`0x140245779`)으로 뛴다.
+    /// 스케일은 여섯 암 **안에서만** 곱해진다(`mulps xmm7,xmm8/xmm9`).
+    public let transform: RemapTransform?
     public let octaves: Int                   // transformoctaves (기본 3)
     public let inputScale: Float              // transforminputscale (기본 1)
+    /// **`flags` — 클램프 비트 둘이 전부다.** 파스 저장 `[op+0x1c]`, VM `[r14+0x2c]`.
+    ///
+    /// **[2026-08-21 실측 — 종전에는 이 필드가 아예 없었다.]** 직접 다시 뜬 근거:
+    ///   · 파스 — `remapvalue` 분기에서 `operator[]`(`0x140087640` @`0x1401ce829`) →
+    ///     **`asInt`(`0x140085f70`) 직독** @`0x1401ce831` → `mov dword ptr [rsi+0x1c], eax`
+    ///     @`0x1401ce83d`. **`isNumeric`(`0x140088880`) 게이트가 없다** — 브리프 함정 18 그대로
+    ///     `{"flags": true}` 는 1 로 들어온다.
+    ///     (함정 16: `lea rdx,"flags"` 는 `0x1401ce803` 인데 그 **바로 뒤**의
+    ///      `mov [rsi+0x14], eax` 는 앞 키 `transformfunction` 의 스토어다. 한 칸 밀린다.)
+    ///   · 소비 — VM opid 19 핸들러가 `[r14+0x2c]` 를 **정확히 두 번** 읽는다:
+    ///     `mov ecx,[r14+0x2c]`(`0x140244986`) · `movzx r9d, byte [r14+0x2c]`(`0x140244996`).
+    ///     bit0 은 `and r9b,1`(`0x1402449a0`) → 정규화 직후 `t` 클램프 게이트
+    ///     (`test r9b,r9b` `0x1402450be`/`0x140245105`), bit1 은 `shr ecx,1`(`0x140244a21`) +
+    ///     `and cl,1`(`0x140244a2a`) → 출력 매핑 직후 클램프 게이트(`test cl,cl` `0x140245791`).
+    ///     페이드창 변종(opid 39)도 같은 모양이다(`0x140246fc9`·`0x140246fd9`·`0x140246fe3`,
+    ///     `shr ecx,1` `0x140247075` · `and cl,1` `0x14024707e`).
+    ///     **오퍼레이터 VM 전체(`0x14023fbc0`–`0x14024be38`)에서 `[r14+0x2c]` 를 읽는 자리는 그
+    ///     넷뿐이다** — 곧 **bit2 이상은 죽어 있다**.
+    ///   · 부재 기본 = **int 1**. `remapvalue` 주입기(`0x1401bfbb0`–`0x1401c0080`)의 키 목록에
+    ///     `flags` 가 없고, 대신 꼬리에서 공유 주입기로 **점프**한다(`jmp 0x1401d8040`
+    ///     @`0x1401c001a`; 짝인 `remapinitialvalue` 주입기는 @`0x1401bc91a`).
+    ///     이미지 전체에서 `0x1401d8040` 으로 오는 `call`/`jmp` 는 **그 둘뿐**이다.
+    ///     그 함수는 `find("flags")`(`0x1401d8057`)가 노드를 찾으면 아무것도 안 하고
+    ///     (`jne 0x1401d810b`), 없을 때만 타입 태그 1(int, `0x1401d8071`)에 값 1
+    ///     (`mov qword ptr [rax], 1` `0x1401d809d`)을 심는다.
+    ///
+    /// 기본 1 의 뜻: **`t` 는 기본으로 잘리고 출력은 기본으로 안 잘린다.** 동봉 자산이 정확히 그
+    /// 규약에 기댄다 — `rain_screen` 의 `simplexnoise` 항목은 `flags` 를 안 쓰면서
+    /// `outputrangemin:"-100 -50 0"`/`outputrangemax:"100 -500 0"` 을 쓰고(출력 클램프가 켜져
+    /// 있으면 전부 죽는다), 같은 파일의 `fbmnoise` 항목만 `flags: 3` 으로 둘 다 켠다.
+    public let flags: Int
     public let outMin: Vec3                   // outputrangemin (스칼라 브로드캐스트)
     public let outMax: Vec3                   // outputrangemax
     /// `inputrangemin` / `inputrangemax` — 입력 신호를 [0,1] 로 정규화하는 **구간**이다.
@@ -987,10 +1055,14 @@ public struct RemapSpec: Equatable {
     /// (실물도 정규화가 transform 디스패치 `0x14024512c` 앞이다). 종전에는 이 두 필드를 파스만
     /// 하고 아무도 읽지 않아, 프리뷰 씬의 `inputrangemin:150`/`inputrangemax:200` 같은 값이
     /// `.none` transform 의 `[0,1]` 클램프에 통째로 뭉개졌다.
-    /// 다만 **`flags & 1` 게이트는 아직 옮기지 않았다** — Waple 의 `.none` transform 은 항상
-    /// 클램프하고 나머지 transform 은 한 번도 안 한다. 실물은 `flags` bit0 으로 **모든** transform
-    /// 앞에서 한 번 자른다(`minps` 1.0 `0x14024510a` · `maxps` 0 `0x140245117`). `flags` 기본이 1 이라
-    /// `.none` 은 우연히 일치하고 나머지는 갈린다. **[미해결]** — `RemapSpec` 이 `flags` 를 안 들고 있다.
+    ///
+    /// **[2026-08-21 해소] `flags & 1` 게이트도 이제 옮겼다.** 종전 이 자리에 남아 있던
+    /// "**[미해결]** — `RemapSpec` 이 `flags` 를 안 들고 있다" 는 위 `flags` 필드가 닫는다.
+    /// `remapEval` 은 `t` 를 `flags & 1` 일 때만 자르고(`0x1402450be`/`0x140245105`),
+    /// 출력은 `flags & 2` 일 때만 자른다(`0x140245791`). 다만 **`input` 부재(=`RemapInput` nil,
+    /// Waple 레거시 노이즈 클록)에서는 bit0 을 걸지 않는다** — 그 신호는 실물의
+    /// `lifetimefraction`(주입 기본) 이 아니라 유계가 아닌 대체물이라, 자르면 파형이 얼어붙는다.
+    /// 그 갭 자체는 `input` 필드 주석의 **[미해결]** 그대로다.
     public let inMin: Vec3                    // inputrangemin (부재 int 0 → (0,0,0))
     public let inMax: Vec3                    // inputrangemax (부재 int 1 → (1,1,1))
     /// blendinstart/end · blendoutstart/end. 실물 RVA 는 **0x48f850/0x48f860/0x48f870/0x48f880**
@@ -1025,6 +1097,9 @@ public struct RemapSpec: Equatable {
                 outputComponent: RemapComponent = .all, inputComponent: RemapComponent = .all,
                 verb: RemapVerb? = nil,
                 input: RemapInput?, transform: RemapTransform?, octaves: Int, inputScale: Float,
+                // 부재 기본은 **int 1**(공유 주입 꼬리 `0x1401d8040`) — 직접 조립한 def 도
+                // 그 기본을 받아야 파스 경로와 관측이 같다.
+                flags: Int = RemapValueMath.InjectedDefault.flags,
                 outMin: Vec3, outMax: Vec3,
                 blendInStart: Float, blendInEnd: Float, blendOutStart: Float, blendOutEnd: Float,
                 inputCP0: Int, inputCP1: Int, outputCP0: Int, outputCP1: Int,
@@ -1034,6 +1109,7 @@ public struct RemapSpec: Equatable {
         self.verb = verb ?? RemapSpec.fusedVerb(outputChannel, operation)
         self.input = input
         self.transform = transform; self.octaves = octaves; self.inputScale = inputScale
+        self.flags = flags
         self.outMin = outMin; self.outMax = outMax
         self.inMin = inMin; self.inMax = inMax
         self.blendInStart = blendInStart; self.blendInEnd = blendInEnd
@@ -1051,6 +1127,7 @@ public struct RemapSpec: Equatable {
     /// `component:` 는 `inputComponent` 로 간다(0=x/1=y/2=z, 그 밖은 `.all`).
     public init(verb: RemapVerb, input: RemapInput?, operation: RemapOperation,
                 transform: RemapTransform?, octaves: Int, inputScale: Float,
+                flags: Int = RemapValueMath.InjectedDefault.flags,
                 outMin: Vec3, outMax: Vec3,
                 blendInStart: Float, blendInEnd: Float, blendOutStart: Float, blendOutEnd: Float,
                 inputCP0: Int, inputCP1: Int, outputCP0: Int, outputCP1: Int, component: Int,
@@ -1061,7 +1138,7 @@ public struct RemapSpec: Equatable {
                   outputComponent: .all,
                   inputComponent: RemapSpec.legacyComponent(component),
                   verb: verb, input: input, transform: transform, octaves: octaves,
-                  inputScale: inputScale, outMin: outMin, outMax: outMax,
+                  inputScale: inputScale, flags: flags, outMin: outMin, outMax: outMax,
                   blendInStart: blendInStart, blendInEnd: blendInEnd,
                   blendOutStart: blendOutStart, blendOutEnd: blendOutEnd,
                   inputCP0: inputCP0, inputCP1: inputCP1,
@@ -1883,11 +1960,11 @@ public struct ParticleSystemDef: Equatable {
     /// F626: 렌더러 orientation(기본 screen — 기존 스크린 빌보드 폴터와 동일).
     public var orientation: ParticleOrientation = .screen
     /// F630: mapsequencearoundcontrolpoint "axis"(회전 평면 선택, 기본 z축=XY 평면 레거시).
-    /// **[2026-08-21] 소비 자리가 근거없음으로 판정됐다.** 시뮬은 이 축으로 각도를 재서
-    /// `p.frame` 을 정하는데(`ParticleSimulator` `case let .mapSequence`), 실물 opid 13
-    /// 핸들러 `0x14023c4cf` 는 시퀀스 슬롯을 안 만지고 이 축을 **CP 의 3×3 회전**
-    /// (`0x1400dd7d0` @`0x14023c537`)과 함께 **기저변환**에 쓴다. 걷어낼 자리로 표시만
-    /// 해 뒀다 — 근거는 `Initializer.mapSequence` 주석.
+    /// **[2026-08-21] 종전 소비 자리가 근거없음으로 판정돼 걷어냈다 — 지금은 파스·보존 전용이다.**
+    /// 시뮬이 이 축으로 각도를 재서 `p.frame` 을 정했는데, 실물 opid 13 암 `0x14023c4cf` 는
+    /// 시퀀스 슬롯 `+0x268` 을 **한 번도 안 만지고**(암 전 구간 전수 0회) 이 축을 CP 의 3×3 회전
+    /// (`0x1400dd7d0` @`0x14023c537`)과 함께 **기저변환**에 쓴다. 그 위치 배선은 아직
+    /// **[미배선]**이다 — 근거·남은 일은 `Initializer.mapSequence` 주석.
     public var mapSequenceAxis: Vec3? = nil
     /// `mapsequencebetweencontrolpoints` 의 `arcamount`(부재 주입 기본 **0.3**).
     /// nil = 그 이니셜라이저가 없었다(= 이 시스템에 실릴 수 없는 키다). 마지막 지정이 승 —
@@ -2518,6 +2595,16 @@ public struct ParticleSystemDef: Equatable {
                 // (동봉 도달은 0 — `inputrange*` 를 쓰는 3+1건이 전부 output=color 라 이미 Ex 였다.)
                 // `inputcomponent`/`outputcomponent` 는 **실물 키**다(`0x14048f760`/`0x14048f810`).
                 // `component` 는 Waple 레거시 별칭이라 남겨 둔다 — 셋 다 동봉 도달 0건이다.
+                //
+                // **[2026-08-21] `flags` 는 아직 이 목록에 없다 — 의도적이고, 갭이다.**
+                // 레거시 경로(`.remapValue`)에는 클램프 비트를 실을 자리가 없으므로 위
+                // `inputrange*` 와 **똑같은 이유로** 확장 키여야 한다. 그런데 넣으면 동봉
+                // `output:"speed"` + `flags:3` **3건**(`rain_screen(.json/_4k)` ×3)이 레거시에서
+                // Ex 로 옮겨 가고, 그 셋을 이름으로 못박은 테스트 둘이
+                // `Tests/WapleCoreTests/RemapOperationAxesTests.swift`
+                // (`testBundledSpeedRemapsStayOnTheLegacyPath` · `testBundledRemapValueAxesCensus`
+                //  의 `speed/legacy == 3`)에 있는데 그 파일은 이 라운드의 소유 밖이다.
+                // 그래서 넘긴다 — 정확한 패치안은 `docs/re/remap-operation.md` §11.4.
                 let extKeys = ["input", "operation", "transformoctaves",
                                "blendinstart", "blendinend", "blendoutstart", "blendoutend",
                                "inputcontrolpoint0", "inputcontrolpoint1",
@@ -2550,6 +2637,11 @@ public struct ParticleSystemDef: Equatable {
                         transform: (o["transformfunction"] as? String).flatMap { RemapTransform(rawValue: $0.lowercased()) },
                         octaves: max(1, pint(o["transformoctaves"]) ?? 3),
                         inputScale: scale,
+                        // 부재만 주입(int 1) — 공유 꼬리 `0x1401d8040` 이 `find` 로 게이트한다.
+                        // 리더는 `asInt`(`0x140085f70` @`0x1401ce831`) **직독**이고 `isNumeric`
+                        // 게이트가 없다 → JSON 불리언은 1/0 으로 들어온다(함정 18).
+                        // `strictInt` 가 `NSNumber`(=`__NSCFBoolean`) 를 그대로 받아 그 규약을 만족한다.
+                        flags: injectedInt(o, "flags", RemapValueMath.InjectedDefault.flags),
                         outMin: pvec3OrScalar(o["outputrangemin"]) ?? Vec3(x: 0, y: 0, z: 0),
                         outMax: pvec3OrScalar(o["outputrangemax"]) ?? Vec3(x: 1, y: 1, z: 1),
                         blendInStart: pfloat(o["blendinstart"]) ?? 0,

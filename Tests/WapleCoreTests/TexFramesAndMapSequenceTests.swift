@@ -175,30 +175,80 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
         return def
     }
 
-    func testMapSequenceBetween_projectsOntoSegment() {
-        // CP0(0,0) → CP1(100,0), 스폰 (50,0) → t=0.5, count 4 → frame 2.
+    // MARK: - mapsequence 는 시퀀스 슬롯을 만지지 않는다 (2026-08-21 뒤집음)
+
+    /// **종전 세 테스트가 근거 없는 값을 잠그고 있었다.** `mapsequencebetweencontrolpoints` /
+    /// `mapsequencearoundcontrolpoint` 는 **위치 이니셜라이저**이고 스프라이트 시퀀스 슬롯을
+    /// 건드리지 않는다. 종전에는 시뮬이 `p.frame = t·count`(구간 투영 / CP 각도)를 넣었고
+    /// 이 세 테스트가 각각 `2.0` / `0` / `4.0` 을 단언해 **그 발명을 고정**하고 있었다.
+    ///
+    /// 실측 근거(이니셜라이저 VM `0x14023b340`–`0x14023fbbc`, `.pdata` 시작부터 선형):
+    ///  · 점프테이블 `0x14023fa78` → opid 13 암 `0x14023c4cf` · opid 14 암 `0x14023ca93` ·
+    ///    opid 15 암 `0x14023ce53`. 두 mapsequence 암 = `[0x14023c4cf, 0x14023ce53)`.
+    ///  · 그 구간의 `[rdi+…]` 슬롯 전수 = 위치 `+0x2b0/+0x2b8/+0x2c0` ·
+    ///    속도 `+0x2c8/+0x2d0/+0x2d8` · CP 배열 `+0x400` (+ between 만 `+0x278` · `+0x20`).
+    ///    **시퀀스 슬롯 `+0x268` 은 0회.**
+    ///  · VM 전체에서 `+0x268` 을 만지는 자리는 셋뿐 — 스폰 프롤로그 둘(`0x14023b4ef` → 0,
+    ///    `0x14023b503` → 난수 배열 `[rdi+0x338]` 복사, 게이트 `cmp [rdi+0x48], r13d`
+    ///    `0x14023b4e9`)과 opid 17 암(`0x14023ce8b`, **읽기 전용**).
+    ///  · 시트 전진의 형태도 `t·count` 가 아니다 — 정수 전진이고 이미지 경로는 씬 프레임
+    ///    카운터로 프레임당 1회 게이트, 파티클 경로는 셰이더의 `floor(lifetime·numFrames)` 다
+    ///    (`docs/re/sprite-occlusion.md` §10.2 · §10.4.3).
+    ///
+    /// 그래서 세 테스트는 이제 **"시퀀스 슬롯이 스폰 기본값 그대로 남는다"** 를 단언한다.
+    /// `Particle.frame` 의 스폰 기본은 `-1` 이고, 렌더러의 시트 분기는 `p.frame >= 0` 이라
+    /// `-1` 은 "시퀀스 미지정 → 시간 기반 재생" 을 뜻한다.
+    func testMapSequenceBetween_doesNotTouchTheSequenceSlot() {
+        // 종전: CP0(0,0) → CP1(100,0), 스폰 (50,0) → t=0.5, count 4 → frame 2.0 을 단언했다.
         let def = defWith(initializer: .mapSequence(count: 4, mirror: false, between: true),
                           origin: Vec3(x: 50, y: 0, z: 0),
                           cps: [(0, Vec3(x: 0, y: 0, z: 0)), (1, Vec3(x: 100, y: 0, z: 0))])
         var sim = ParticleSimulator(def: def, seed: 41)
         let p = sim.step(0.01)
-        XCTAssertEqual(p[0].frame, 2.0, accuracy: 0.01)
+        XCTAssertEqual(p[0].frame, -1, "mapsequence 가 시퀀스 슬롯을 정하면 안 된다(종전 2.0)")
     }
 
-    func testMapSequenceBetween_clampsOutsideSegment() {
+    func testMapSequenceBetween_outsideSegmentAlsoLeavesTheSlotAlone() {
+        // 종전: 구간 밖 투영 클램프로 frame 0 을 단언했다 — 0 은 "0번 프레임" 과 구분이 안 됐다.
         let def = defWith(initializer: .mapSequence(count: 4, mirror: false, between: true),
                           origin: Vec3(x: -50, y: 0, z: 0),
                           cps: [(0, Vec3(x: 0, y: 0, z: 0)), (1, Vec3(x: 100, y: 0, z: 0))])
         var sim = ParticleSimulator(def: def, seed: 42)
-        XCTAssertEqual(sim.step(0.01)[0].frame, 0, accuracy: 0.01)
+        XCTAssertEqual(sim.step(0.01)[0].frame, -1, "종전 0 은 '0번 프레임' 과 구분되지 않았다")
     }
 
-    func testMapSequenceAround_angleToSequence() {
-        // CP0=(0,0). 스폰 (10,0): atan2(0,10)=0 → t=0.5 → count 8 → frame 4.
+    func testMapSequenceAround_doesNotTouchTheSequenceSlot() {
+        // 종전: CP0=(0,0), 스폰 (10,0) → atan2(0,10)=0 → t=0.5 → count 8 → frame 4.0.
         let def = defWith(initializer: .mapSequence(count: 8, mirror: true, between: false),
                           origin: Vec3(x: 10, y: 0, z: 0))
         var sim = ParticleSimulator(def: def, seed: 43)
-        XCTAssertEqual(sim.step(0.01)[0].frame, 4.0, accuracy: 0.01)
+        XCTAssertEqual(sim.step(0.01)[0].frame, -1, "mapsequence 가 시퀀스 슬롯을 정하면 안 된다(종전 4.0)")
+    }
+
+    /// `count` 를 바꿔도 시퀀스 슬롯이 안 움직인다 — 종전 식(`t·count`)이 살아 있으면
+    /// 이 셋이 서로 다른 값이 되므로 이 한 줄이 되돌림을 잡는다.
+    func testMapSequenceCountDoesNotMoveTheSequenceSlot() {
+        for count in [Float(1), 4, 64] {
+            let def = defWith(initializer: .mapSequence(count: count, mirror: false, between: true),
+                              origin: Vec3(x: 50, y: 0, z: 0),
+                              cps: [(0, Vec3(x: 0, y: 0, z: 0)), (1, Vec3(x: 100, y: 0, z: 0))])
+            var sim = ParticleSimulator(def: def, seed: 41)
+            XCTAssertEqual(sim.step(0.01)[0].frame, -1, "count=\(count) 에서 슬롯이 움직였다")
+        }
+    }
+
+    /// **시퀀스 슬롯을 정하는 유일한 자리는 `animationmode` 다**(실물 스폰 프롤로그
+    /// `0x14023b4e9`–`0x14023b50e` — `[rdi+0x48]` 이 게이트, 슬롯 `[rdi+0x268]` 에 0 또는
+    /// 파티클 난수). mapsequence 가 그 위에 덧쓰지 않는다는 것을 함께 못박는다.
+    func testRandomFrameStillSetsTheSequenceSlotEvenWithMapSequence() {
+        var def = defWith(initializer: .mapSequence(count: 4, mirror: false, between: true),
+                          origin: Vec3(x: 50, y: 0, z: 0),
+                          cps: [(0, Vec3(x: 0, y: 0, z: 0)), (1, Vec3(x: 100, y: 0, z: 0))])
+        def.animationMode = .randomframe
+        var sim = ParticleSimulator(def: def, seed: 41)
+        let f = sim.step(0.01)[0].frame
+        XCTAssertGreaterThanOrEqual(f, 0, "randomframe 은 슬롯을 정해야 한다")
+        XCTAssertLessThan(f, 4096, "실물 난수 배열과 같은 폭")
     }
 
     func testParse_mapSequenceRealKeys_andControlPoints() {
