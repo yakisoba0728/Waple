@@ -54,6 +54,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 VA_RE = re.compile(r"0x1[0-9a-fA-F]{8}")
 # 범위 표기: `A–B`(엔대시) · `A-B` · `A..B` · `dis(A, B)` · `vdis2.py A B`
 RANGE_RE = re.compile(r"(0x1[0-9a-fA-F]{8})[`'\"]?\s*(?:–|—|-|\.\.|,\s*|\s+)\s*[`'\"]?(0x1[0-9a-fA-F]{8})")
+# Ghidra 산출물(주입본)과 원본 이미지의 주소 차. `spec/engine/decompilation-provenance.json` 참조.
+GHIDRA_SHIFT = 0xD0
+
 OTHER_BINARIES = ("webwallpaper64.exe", "scenescript64.dll", "wallpaperui.exe",
                   "mediaextensions64.dll", "resourceutil64.dll", "resourcecompiler64.exe",
                   "cloneextensions64.dll", "winrtutil64.exe", "wallpaper32.exe")
@@ -81,6 +84,10 @@ CORRECTION_LINES = {
         "particle-operator-vm.md 정정 문단",
     "> **`Sources/WapleCore/SceneDocument.swift` 의 주석에도 `0x140259458`/`0x1402594e6` 이 그대로":
         "scene-object-model.md — 소유 밖 파일에 남은 같은 인용을 지목하는 줄",
+    "> | `0x1401ecece` | `0x1401ececb` | `mov qword ptr [rax + 0xaf0], 0x3f800000` | 범위 **시작** — 명령 내부(+3)였다 |":
+        "particle-world-basis.md 정정 표",
+    "> | `0x1401ecf1c` | `0x1401ecf20` | `mov dword ptr [rax + 0xb2c], 0x3f800000` | 범위 **끝** — 마지막 명령 내부(+6)였다 |":
+        "particle-world-basis.md 정정 표",
 }
 SUFFIXES = (".swift", ".md", ".py", ".json")
 
@@ -197,6 +204,23 @@ def main(argv):
         fn = containing(funcs, va)
         (by_fn[fn].append(va) if fn else data_or_leaf.append(va))
 
+    # 조각 → 경계 집합 캐시. `-0xD0` 가설을 재려면 **다른 조각**을 떠야 하므로 캐시가 필요하다.
+    boundary_cache = {}
+
+    def boundaries_of(b, e):
+        if (b, e) not in boundary_cache:
+            o2 = disasm.off_of(b, secs)
+            m = {}
+            if o2 is not None:
+                for i in md.disasm(data[o2:o2 + (e - b)], b):
+                    m[i.address] = i
+            boundary_cache[(b, e)] = m
+        return boundary_cache[(b, e)]
+
+    def is_boundary(va):
+        fn = containing(funcs, va)
+        return bool(fn) and va in boundaries_of(*fn)
+
     ok, off, unreached, range_end = 0, [], [], []
     for (b, e), vas in sorted(by_fn.items()):
         o = disasm.off_of(b, secs)
@@ -241,6 +265,13 @@ def main(argv):
                         hint += f" ; 가리키는 곳 {tgt_disp:#x}"
                 else:
                     hint = f"  → 명령은 {host.address:#x} ({host.mnemonic} {host.op_str}), +{delta}"
+            # **주입본 가설.** Ghidra 산출물은 rich header 가 주입된 이미지라 원본보다 +0xD0
+            # 밀려 있다(`spec/engine/decompilation-provenance.json`). 디컴파일 창의 주소를 그대로
+            # "어셈블리 0x…" 로 적으면 여기서 경계 이탈로 나온다. `va - 0xD0` 이 **경계면** 그게
+            # 답이다 — 임의의 주소가 경계일 확률이 낮으므로(명령 평균 길이의 역수) 신호가 강하다.
+            if is_boundary(va - GHIDRA_SHIFT):
+                kind = f"주입본 주소(Ghidra, +{GHIDRA_SHIFT:#x})"
+                hint = f"  → 원본은 {va - GHIDRA_SHIFT:#x}"
             off.append((va, kind, hint, sorted(cited[va])))
 
     if mixed:
