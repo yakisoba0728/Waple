@@ -1802,20 +1802,73 @@ extension SceneRenderer {
     /// — randomframe 은 시뮬이 스폰 시 p.frame 을 확정(F622)해 애초에 이 경로에 오지 않는다.
     static func particleSheetFrameIndex(age: Float, lifetime: Float, frameTime ft: Float, frameCount fc: Int,
                                         mode: ParticleAnimationMode?, seqMul: Float) -> Int {
-        guard fc > 1 else { return 0 }
+        particleSheetPair(age: age, lifetime: lifetime, frameTime: ft, frameCount: fc,
+                          mode: mode, seqMul: seqMul).current
+    }
+
+    /// 위와 같은 좌표에서 **크로스페이드 짝까지** 뽑는다(WE `SPRITESHEETBLEND`).
+    ///
+    /// 왜 인덱스와 한 함수냐: WE 는 `ComputeSpriteFrame` 한 곳에서 `floor`/`frac` 를 동시에 낸다
+    /// (`common_particles.h:61-85`). 인덱스와 블렌드를 따로 계산하면 두 식이 조용히 어긋난다 —
+    /// 그래서 `particleSheetFrameIndex` 는 이제 이 함수의 `.current` 다(값 무변경: 음이 아닌
+    /// 좌표에서 `TexImage.sheetFramePair` 의 `safeInt(floor(·)) % fc` 는 종전
+    /// `safeInt(Double(v)) % fc` 와 같다).
+    ///
+    /// **음수 좌표에서만 값이 달라진다**(= `age < 0`, 이 함수의 계약 밖). 종전은 `Int(v)` 절사라
+    /// **음수 인덱스**를 냈고 두 소비처(`particleVertices` 쿼드·리본)의 `max(0, min(fc-1, idx))`
+    /// 가 0 으로 잘라 냈다. 지금은 감아서 유효 인덱스를 낸다 — 형제 `TexImage.spriteFrameIndex`
+    /// 의 음수 시간 규약("일시정지 되감기") 과 같은 쪽으로 맞춘 것이다. 기존 회귀
+    /// (`SceneIntegrationFixTests.testF530…`: `age: -1e30 → 0`)는 `safeInt` 가 먼저 걸러 그대로다.
+    ///
+    /// **크로스페이드 게이트는 `animationmode != "randomframe"` 하나다**(내가 다시 뜬 VA):
+    ///   파스   `0x1401c5717 lea rdx, [0x14048fd10]`("randomframe") → `0x1401c5727 mov [r13+0x30], 1`
+    ///          / 불일치·키부재는 `0x1401c5731 mov [r13+0x30], 0` → `0x1401c57de or eax, 2`(flags bit1)
+    ///   콤보   `0x1401d24d2 test r13b, 2` → `jne` 면 `0x1401d24e6 mov [rbp-0x30], 0`(BLEND=0),
+    ///          아니면 `0x1401d24d8 cmp [r15+0x30], 0` → `0x1401d24dd mov [rbp-0x30], 1`
+    ///   업로드 `0x1401d2e27 mov ecx, [rbp-0x30]` → `0x1401d2e2a mov [rax], ecx`(SPRITESHEETBLEND)
+    /// (참고: `SPRITESHEET` 자신의 게이트 비트 `0x1000000` 을 파티클 flags 워드 `[def+8]` 에
+    ///  세우는 자리는 `0x1401d04a5` 하나다. 이미지 전체의 `or r/m32, 0x1000000` 은 5자리인데
+    ///  나머지 넷은 다른 오브젝트의 `+0xd8`·`[rsi]` 라 무관하다 — 범위 라벨 없이 "유일" 이라고
+    ///  적으면 틀린다.)
+    /// 즉 `sequence` 와 **키 부재는 켜진다**. 내가 직접 센 분포(술어: 최상위 `emitter` 키를 가진
+    /// `.json` = 파티클 def) — **동봉 289건 중 부재 253 · randomframe 32 · sequence 4**,
+    /// 설치본 296건 중 부재 260 · randomframe 32 · sequence 4. 곧 **9할 가까이가 켜져 있다**.
+    /// 워크샵 코퍼스는 이 컨테이너에 없어 **미측정**이다(0 이 아니다).
+    ///
+    /// **[미배선] `.next`/`.blend` 를 실제로 섞는 것은 프래그먼트 셰이더 일이라 이번 라운드에서
+    /// 렌더까지 못 갔다.** `pv_main` 은 정점당 8 float(`ndc.xy, uv, rgba`)만 읽고 `pf_main` 은
+    /// 샘플을 한 번만 뜬다 — 둘 다 `ParticleShaders.swift`(이 과제 소유 밖)에 있고, 정점 스트라이드는
+    /// 그 파일과 이 파일이 **동시에** 바뀌어야 해서 반쪽만 넣으면 화면이 깨진다. 정확한 패치안은
+    /// `docs/re/sprite-occlusion.md` §11.3 에 있다. CPU 에서 쿼드를 두 번 그려 흉내 내는 우회는
+    /// **틀린다** — WE 는 straight-alpha 상태에서 `mix` 하고 그 뒤에 premultiply 하는데, 두 번 그리기는
+    /// premultiply 뒤에 더하는 것이라 서로 다른 식이다(§11.2 의 반례 참조).
+    static func particleSheetPair(age: Float, lifetime: Float, frameTime ft: Float, frameCount fc: Int,
+                                  mode: ParticleAnimationMode?, seqMul: Float) -> TexImage.SheetFramePair {
+        let stopped = TexImage.SheetFramePair(current: 0, next: 0, blend: 0)
+        guard fc > 1 else { return stopped }
+        let crossfade = mode != .randomframe
+        // F530-sweep: 유한성만으로는 부족하다 — `sequencemultiplier: 1e19` 처럼 **유한하지만
+        // Int 범위를 넘는** 값에서 `Int(v)` 는 클램프가 아니라 트랩이었다(매 프레임 경로).
+        // `TexImage.sheetFramePair` 안에도 같은 가드가 있지만(공개 API 라 자기방어가 필요하다)
+        // 그게 이 자리의 보증을 대신하지는 않는다 — 여기서 먼저 걸러 낸다. 두 자리의
+        // `safeInt(Double(` 개수는 `scripts/spec/check_int_narrowing.py` [R3] 이 세고 있다.
+        // 같은 파일의 `safeFloatToInt(_:floor:)` 는 **반올림** 규약이라 여기 쓸 수 없다 — 프레임
+        // 인덱스는 내림(WE `floor(lifetime*numFrames)`)이고, 반올림으로 바꾸면 모든 스프라이트
+        // 애니가 한 프레임씩 밀린다(`SceneIntegrationFixTests` 의 대조군 단언이 그걸 잡는다).
+        let coord: Float
         if mode == .sequence, lifetime > 1e-4 {
             let m = seqMul.isFinite ? max(0, seqMul) : 1
-            guard m > 0 else { return 0 }
+            guard m > 0 else { return stopped }
             let v = age / lifetime * Float(fc) * m
-            // F530-sweep: 유한성만으로는 부족하다 — `sequencemultiplier: 1e19` 처럼 **유한하지만
-            // Int 범위를 넘는** 값에서 `Int(v)` 는 클램프가 아니라 트랩이었다(매 프레임 경로).
-            // safeFloatToInt(:1766)는 반올림 규약이라 여기 쓸 수 없다(프레임 인덱스는 절사).
-            guard let iv = safeInt(Double(v)) else { return 0 }
-            return iv % fc
+            guard safeInt(Double(v)) != nil else { return stopped }
+            coord = v
+        } else {
+            // 같은 트랩이 frametime 폴터에도 있었다(age 가 비유한이거나 거대하면 사망).
+            let v = age / max(0.016, ft)
+            guard safeInt(Double(v)) != nil else { return stopped }
+            coord = v
         }
-        // 같은 트랩이 frametime 폴터에도 있었다(age 가 비유한이거나 거대하면 사망).
-        guard let iv = safeInt(Double(age / max(0.016, ft))) else { return 0 }
-        return iv % fc
+        return TexImage.sheetFramePair(frameCoordinate: coord, frameCount: fc, crossfade: crossfade)
     }
 
     /// F530(F-2/F-70): 유한하지만 Int 범위를 넘는 float 의 Int() 변환은 클램프 전에 트랩 — 비신뢰
