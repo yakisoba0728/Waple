@@ -1930,7 +1930,11 @@ extension SceneRenderer {
                         exponent: light.volumetricsExponent,
                         intensity: light.intensity,
                         innerCone: cone.inner,
-                        outerCone: cone.outer))
+                        outerCone: cone.outer,
+                        // 라이트 반경. 실물은 셰이더에 `radius × 0.99` 로 넣고(0x140198760),
+                        // 레이마치 구간을 이 반경 구와의 교차로 잡는다 — 배선 전에는 WE 생성자
+                        // 기본 1.0(0x140190494) 이라 헐이 사실상 안 보였다.
+                        radius: light.radius))
                 if !ok {
                     WapleLog.warn("[Waple] VolumetricLightPass.encode 실패(light id=\(light.id), target format=\(target.pixelFormat)) — 갓레이 스킵")
                 }
