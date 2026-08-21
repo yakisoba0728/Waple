@@ -246,4 +246,60 @@ final class AudioSpectrumProcessorTests: XCTestCase {
         XCTAssertEqual(bins[1], 1.0, accuracy: 1e-6, "4개 중 최댓값 — 평균이었다면 0.25")
         XCTAssertEqual(bins[0], 0, accuracy: 1e-6)
     }
+
+    // MARK: 32밴드 유니폼 — 접근자가 없어서 호출부가 평균으로 다시 짰던 자리
+
+    /// `g_AudioSpectrum32Left/Right` 로 나가야 하는 32밴드 반쪽. `spec32` 는 [L|R|Mono] 3분면
+    /// (96 float)이므로 좌는 `[0..<32]`, 우는 `[32..<64]` 다.
+    ///
+    /// 이 접근자가 없던 동안 `SceneRenderer.setSpectrum64` 는 `left64`/`right64` 만 받아
+    /// **자기 축약을 다시 짰고 그게 평균이었다** — 실물은 `maxss`(`0x1401128e0`,
+    /// 원시 바이트 `f30f5f048b`). 아래 두 단언이 그 재발을 막는다.
+    func testLeft32AndRight32SliceTheMaxReducedQuadrants() {
+        var stereo = [Float](repeating: 0, count: 128)
+        stereo[5] = 1.0            // Left  밴드 5 → 32밴드 인덱스 2 (밴드 4·5)
+        stereo[64 + 9] = 0.75      // Right 밴드 9 → 32밴드 인덱스 4 (밴드 8·9)
+        let out = AudioSpectrumProcessor.reduce(stereo)
+
+        XCTAssertEqual(out.left32.count, 32)
+        XCTAssertEqual(out.right32.count, 32)
+        XCTAssertEqual(out.left32, Array(out.spec32[0..<32]))
+        XCTAssertEqual(out.right32, Array(out.spec32[32..<64]))
+
+        XCTAssertEqual(out.left32[2], 1.0, accuracy: 1e-6, "MAX 라면 그대로 1.0")
+        XCTAssertEqual(out.right32[4], 0.75, accuracy: 1e-6)
+        // 좌/우가 서로 섞이지 않는다 — 종전 호출부처럼 left64 만 보고 다시 접으면 이게 깨진다.
+        XCTAssertEqual(out.left32[4], 0, accuracy: 1e-6)
+        XCTAssertEqual(out.right32[2], 0, accuracy: 1e-6)
+    }
+
+    /// **평균과 MAX 가 실제로 갈리는 것을 수치로 못 박는다.** 인접 두 밴드 중 하나만 뜨는
+    /// 신호(순음 저역이 정확히 이 모양이다)에서 평균은 MAX 의 **절반**이다.
+    /// 이 테스트가 실패하면 누군가 32밴드 축약을 다시 평균으로 되돌린 것이다.
+    func test32BandFoldIsMaxAndDivergesFromMeanByTwoX() {
+        var stereo = [Float](repeating: 0, count: 128)
+        stereo[6] = 1.0            // 32밴드 인덱스 3 = 밴드 6·7 중 하나만 뜬다
+        let out = AudioSpectrumProcessor.reduce(stereo)
+
+        let mine = out.left32[3]
+        let ifItHadBeenMean = (stereo[6] + stereo[7]) / 2      // 종전 호출부가 쓰던 식
+        XCTAssertEqual(mine, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(ifItHadBeenMean, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(mine, ifItHadBeenMean * 2, accuracy: 1e-6, "좁은 피크에서 정확히 2배 갈린다")
+    }
+
+    /// mono 사분면 접근자. 유니폼으로는 안 나가지만(등록표에 오디오는 0x62…0x67 여섯 개뿐),
+    /// 세 해상도 전부에서 `0.5·(L+R)` 규약이 유지되는지는 고정해 둔다(`0x1401126b6` 의 `mulss …, 0.5`).
+    func testMonoQuadrantAccessorsAtAllThreeResolutions() {
+        var stereo = [Float](repeating: 0, count: 128)
+        for i in 0..<64 { stereo[i] = 1.0 }        // Left 만 1, Right 0
+        let out = AudioSpectrumProcessor.reduce(stereo)
+        XCTAssertEqual(out.mono64.count, 64)
+        XCTAssertEqual(out.mono32.count, 32)
+        XCTAssertEqual(out.mono16.count, 16)
+        XCTAssertEqual(out.mono64, [Float](repeating: 0.5, count: 64))
+        // 32·16 의 mono 분면은 mono64 를 MAX 로 접은 것이지 L/R 을 다시 평균한 게 아니다.
+        XCTAssertEqual(out.mono32, [Float](repeating: 0.5, count: 32))
+        XCTAssertEqual(out.mono16, [Float](repeating: 0.5, count: 16))
+    }
 }

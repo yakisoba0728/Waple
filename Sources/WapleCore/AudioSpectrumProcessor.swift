@@ -106,6 +106,24 @@ public struct AudioSpectrumProcessor {
         public var right16: [Float] { Array(spec16[16..<32]) }
         public var left64: [Float] { Array(spec64[0..<64]) }
         public var right64: [Float] { Array(spec64[64..<128]) }
+
+        /// 셰이더 유니폼 `g_AudioSpectrum32Left/Right`(유니폼 id 0x64 / 0x65 — 등록표
+        /// `0x140003e2f`/`0x140003e4f` 의 `mov dword [rsp+…], imm` 이 각 이름 `lea` **바로 앞**에
+        /// 온다. 순진하게 "이름 뒤의 imm" 으로 읽으면 한 칸 밀린다 — 브리프 함정 16).
+        ///
+        /// **이 접근자가 없어서 호출부가 자기 축약을 다시 짰다.** `SceneRenderer.setSpectrum64` 는
+        /// `left64` 만 받아 `(a+b)/2` 로 32밴드를 만드는데, 실물은 `maxss` 다
+        /// (`0x1401128e0: f30f5f048b  maxss xmm0, [rbx+rcx*4]` — 원시 바이트 직접 대조).
+        /// 아래 `spec32` 는 `reduce` 가 이미 MAX 로 접어 둔 값이므로, 잘라 쓰기만 하면 된다.
+        /// 순음 저역처럼 인접 두 밴드 중 하나만 뜨는 신호에서 평균은 MAX 의 **절반**이다.
+        public var left32: [Float] { Array(spec32[0..<32]) }
+        public var right32: [Float] { Array(spec32[32..<64]) }
+
+        /// mono 사분면. 유니폼으로는 노출되지 않는다(등록표에 오디오는 0x62…0x67 여섯 개뿐이고
+        /// 그 중 mono 는 없다 — `0x140003df7`–`0x140003e9e` 전수 확인). 진단·테스트용.
+        public var mono64: [Float] { Array(spec64[128..<192]) }
+        public var mono32: [Float] { Array(spec32[64..<96]) }
+        public var mono16: [Float] { Array(spec16[32..<48]) }
     }
 
     /// - raw: 128 float(64L + 64R). 길이가 모자라면 0 으로 채우고, 넘치면 앞 128 만 쓴다.
