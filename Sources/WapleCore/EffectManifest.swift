@@ -209,12 +209,26 @@ public struct EffectManifest: Equatable {
         }
 
         public let name: String
-        public let scale: Int          // 해상도 나눗수(4 = 1/4) — fixedWidth/fixedHeight 가 있으면 무시.
-        /// X-①: `fit`(정사각 고정 크기, 실물 cursorripple `_rt_EightBuffer1/2` fit:512) 또는
-        /// `width`+`height`(실물 glitter `_rt_GlitterTiles` 256×256) — dst 비례 대신 절대 픽셀 크기.
-        /// nil 이면 종전처럼 scale 기반(dst/scale).
-        public let fixedWidth: Int?
-        public let fixedHeight: Int?
+        /// 해상도 나눗수(4 = 1/4). **원본에서 `fit`/`width`/`height` 와 배타가 아니다** —
+        /// 아래 `fittedBox` 주석의 W-FIT-4 참조(렌더타깃 ctor `0x1400d2c9b`–`0x1400d2ce4` 가
+        /// `fit`/`width`/`height` 로 정해진 "full" 크기를 **그 뒤에** scale 로 나눈다).
+        /// 동봉·설치본 전수에서 동시 선언은 0건이라 이 리포의 실측 도달은 없다.
+        public let scale: Int
+        /// X-①: `width` / `height` — dst 비례 대신 **절대 픽셀**. 실물 glitter `_rt_GlitterTiles`
+        /// 256×256 한 건뿐(동봉+설치 4파일). nil 이면 그 축은 dst 크기가 그대로 들어간다.
+        public let declaredWidth: Int?
+        public let declaredHeight: Int?
+        /// **W-FIT (2026-08-21 정정): `fit:N` 은 N×N 정사각이 아니다.**
+        /// "긴 변을 N 에 맞추고 종횡비를 보존하며 확대하지 않는다" — 1920×1080 에서 `fit:256`
+        /// 은 **256×144** 다. 근거 VA 와 전문은 `fittedBox(baseWidth:baseHeight:)` 주석.
+        /// 이 값은 **봉투(envelope) 한 변**일 뿐 치수가 아니므로 **직접 쓰지 마라** —
+        /// 치수는 반드시 `fittedBox` 로 풀어야 한다(dst 를 알아야 풀린다).
+        public let fit: Int?
+        /// 하위호환 표현. `fit` 만 있는 FBO 에서는 **정사각 봉투**를 돌려주므로
+        /// 실제 치수가 아니다 — `fit != nil` 이면 `fittedBox` 를 먼저 보라.
+        /// (종전 소비처·테스트가 이 이름으로 `width`/`height` 선언을 읽는다.)
+        public var fixedWidth: Int? { declaredWidth ?? fit }
+        public var fixedHeight: Int? { declaredHeight ?? fit }
         /// X-①: `uvs:"repeat"` — 텍셀 랩(실물 glitter 타일 아틀라스). 기본 false(=clamp, 기존 bind-slot 관례).
         public let uvsRepeat: Bool
         /// X-⑧: `format` — nil = 미지/미선언(소비처가 rgba8 기본값). 위 `Format` 주석 참조.
@@ -236,13 +250,109 @@ public struct EffectManifest: Equatable {
         /// 어긋나지 않는다(실물 `fluidsimulation` 의 `_rt_SmokeNormal` 이 `LIGHTING==1` 조건부이고,
         /// 그것을 쓰는 패스·바인드가 **같은 조건**이라 함께 사라진다).
         public let conditions: Conditions?
-        public init(name: String, scale: Int, fixedWidth: Int? = nil, fixedHeight: Int? = nil,
+        public init(name: String, scale: Int, declaredWidth: Int? = nil, declaredHeight: Int? = nil,
+                    fit: Int? = nil,
                     uvsRepeat: Bool = false, format: Format? = nil, unique: Bool = false,
                     clearColor: SIMD4<Float>? = nil, conditions: Conditions? = nil) {
             self.name = name; self.scale = scale
-            self.fixedWidth = fixedWidth; self.fixedHeight = fixedHeight; self.uvsRepeat = uvsRepeat
+            self.declaredWidth = declaredWidth; self.declaredHeight = declaredHeight
+            self.fit = fit; self.uvsRepeat = uvsRepeat
             self.format = format; self.unique = unique; self.clearColor = clearColor
             self.conditions = conditions
+        }
+
+        /// **W-FIT 정본 — `fit` 이 만드는 실제 텍스처 치수.** `fit` 미선언이면 `nil` 을 돌려
+        /// 소비처가 **종전 경로**(`fixedWidth ?? dst/scale`)를 그대로 타게 한다. 무회귀가 목적이다.
+        ///
+        /// 원본 전문(함수 `0x1401ea500`–`0x1401ebbb6`, `.pdata` 조각 둘이 인접해 한 몸이다.
+        /// FBO 루프는 `0x1401eb280` 부터, 크기 계산은 `0x1401eb2cc`–`0x1401eb381`):
+        ///
+        /// ```
+        /// W0 = max(4, dstW); H0 = max(4, dstH)              # 0x1401ea5e4 · 0x1401ea606 (cmovg)
+        /// W  = (width_u16  <= 0x1000) ? width_u16  : W0     # 0x1401eb2cc–0x1401eb2e3
+        /// H  = (height_u16 <= 0x1000) ? height_u16 : H0     # 0x1401eb2d7–0x1401eb2f4
+        /// if (fit_u16 <= 0x1000) {                          # 0x1401eb2f8 cmp ax,0x1000 / ja
+        ///     if (W >= H) {                                 # 0x1401eb30c cmp r9d,ecx / jb  ← 긴 변이 major
+        ///         W' = min(fit, W)                          # 0x1401eb311 cmp / 0x1401eb316 cmova (확대 금지)
+        ///         H' = (int)((float)H / (float)W * (float)W')   # 0x1401eb31e–0x1401eb33b
+        ///     } else {
+        ///         H' = min(fit, H)                          # 0x1401eb349 cmp / 0x1401eb34c cmova
+        ///         W' = (int)((float)W / (float)H * (float)H')   # 0x1401eb353–0x1401eb372
+        ///     }
+        /// } else { W' = W; H' = H; }                        # 0x1401eb37d
+        /// tex = (max(2, W'/scale), max(2, H'/scale))        # ctor 0x1400d2c9b–0x1400d2ce4
+        /// ```
+        ///
+        /// 확정한 다섯 가지(과제 W-FIT-1..5):
+        ///
+        /// * **W-FIT-1 반올림** — 파생되는 짧은 변만 부동소수를 거치고 `cvttss2si`(`0x1401eb33b` ·
+        ///   `0x1401eb372`)로 **0 방향 절단**한다. 긴 변은 정수 `min` 이라 오차가 없다.
+        ///   하한은 이 산술에 없고 **렌더타깃 생성자**가 축마다 `max(2, ·)` 로 건다
+        ///   (`0x1400d2cac`/`0x1400d2ccc`, 리사이즈 경로 `0x140161f83`–`0x140161f9e` 도 같은 2).
+        ///   float32 를 그대로 흉내 낸다 — `H*W'/W` 를 정수로 계산하면 비율이 float32 로
+        ///   반올림되며 정수 경계 아래로 떨어지는 경우를 재현하지 못한다.
+        /// * **W-FIT-2 major** — **긴 변**이다(너비 고정이 아니다). `W == H` 는 너비 분기로 가지만
+        ///   두 분기의 답이 같다. `width`/`height` 가 선언돼 있으면 그 값이 **비교 대상 자체**를
+        ///   갈아치우므로(`0x1401eb2e3`/`0x1401eb2f4`) major 판정도 그 값들로 한다.
+        /// * **W-FIT-3 확대 금지** — 명시 클램프(`cmova`)는 **major 한쪽에만** 있다. 짧은 변은
+        ///   `minor × major'/major` 이고 `major' <= major` 이므로 결과적으로 양쪽 다 원본을
+        ///   넘지 않는다(수학적 귀결이지 별도 클램프가 아니다).
+        /// * **W-FIT-4 `scale` 과의 관계 — 경쟁이 아니라 합성이다.** 크기 계산은 `scale` 을 전혀
+        ///   보지 않고, `scale` 바이트는 렌더타깃 생성 호출의 **4번째 인자로 따로** 실린다
+        ///   (`0x1401eb97d` 로드 → `0x1401eb9d4` 적재 → `0x1401eba0b` 호출). 생성자가 그때
+        ///   "full" 크기를 `+0x18/+0x1a` 에 그대로 보관하고 텍스처 치수를 `max(2, full/scale)`
+        ///   로 만든다(`0x1400d2c9b`–`0x1400d2ce4`). 즉 `fit:256, scale:2` = 긴 변 128.
+        ///   동봉+설치본 FBO 선언 112건(동봉 55 + 설치본 57) 중 `fit`+`scale` 동시 선언은 **0건**,
+        ///   `width|height`+`scale` 도 **0건** — 실측 도달이 없다.
+        /// * **W-FIT-5 입력** — 화면 해상도가 아니라 **이 이펙트의 dst 서피스 크기**다. 같은
+        ///   `(W0,H0)` 가 이펙트 자신의 핑퐁 렌더타깃(`this+0x2c8`/`+0x2d0`)을 만드는 데 쓰이고
+        ///   (`0x1401eb0dd` → `0x1401eb0e5`, scale 인자 1), 그 값은 이펙트 객체의 가상 호출
+        ///   `[vtable+0x128]`(`0x1401ea5b1`)이 채운다. Waple 의 대응값은 `effW/effH`
+        ///   (레이어 크기, `isFrameBuffer` 면 프로젝션 크기)와 프레임 시점의 `dst` 크기다.
+        ///
+        /// **의도적 편차 하나** — 하한을 2 가 아니라 1 로 둔다. 2 로 올리면 `fit` 미선언 FBO 의
+        /// 종전 `max(1, dst/scale)` 까지 같이 움직여야 하는데(무회귀 규약 위반), 두 값이 갈리는
+        /// 구간은 "한 축이 1 이하로 떨어지는 dst" 뿐이고 동봉·설치 코퍼스 도달이 0이다.
+        /// 0/음수가 Metal 텍스처 생성에 가지 않는다는 목적은 1 로도 똑같이 달성된다.
+        public func fittedBox(baseWidth: Int, baseHeight: Int) -> (width: Int, height: Int)? {
+            guard let fit = fit else { return nil }
+            return Self.fittedBox(fit: fit, declaredWidth: declaredWidth, declaredHeight: declaredHeight,
+                                  scale: scale, baseWidth: baseWidth, baseHeight: baseHeight)
+        }
+
+        /// `fittedBox` 의 순수 계산부 — 렌더 계층의 `FBOSpec`(매니페스트 타입을 들지 않는다)이
+        /// 같은 산술을 쓰도록 정적으로 뺀다. 규약 전문은 위 인스턴스 메서드 주석.
+        public static func fittedBox(fit: Int, declaredWidth: Int?, declaredHeight: Int?,
+                                     scale: Int, baseWidth: Int, baseHeight: Int)
+            -> (width: Int, height: Int) {
+            // 원본은 dst 를 4 로 하한 클램프한다(`0x1401ea5e4`/`0x1401ea606`). 상한은 원본에 없지만
+            // 여기 base 는 레이어/프로젝션 크기라 신뢰 경계 밖 값이 올 수 있어 u16 폭으로 접는다 —
+            // 원본이 `width`/`height`/`fit` 을 u16 필드에 담는 것과 같은 폭이다(`0x1401e7804` 등).
+            let w0 = Swift.max(4, Swift.min(baseWidth, 65535))
+            let h0 = Swift.max(4, Swift.min(baseHeight, 65535))
+            // W-FIT-2: `width`/`height` 선언이 있으면 fit 의 **입력**이 그것으로 바뀐다.
+            let w = Swift.max(1, declaredWidth ?? w0)
+            let h = Swift.max(1, declaredHeight ?? h0)
+            let box = Swift.max(1, fit)
+            let major: Int, minor: Int, fittedMajor: Int
+            let widthIsMajor = w >= h                    // 0x1401eb30c (jb → 반대 분기)
+            if widthIsMajor { major = w; minor = h } else { major = h; minor = w }
+            fittedMajor = Swift.min(box, major)          // 0x1401eb316 / 0x1401eb34c — 확대 금지
+            let fittedMinor = ratioTruncated(minor: minor, major: major, fittedMajor: fittedMajor)
+            let fullW = widthIsMajor ? fittedMajor : fittedMinor
+            let fullH = widthIsMajor ? fittedMinor : fittedMajor
+            // W-FIT-4: scale 은 **그 뒤에** 나눈다(원본 하한 2, 여기는 위 주석의 의도적 편차로 1).
+            let s = Swift.max(1, scale)
+            return (Swift.max(1, fullW / s), Swift.max(1, fullH / s))
+        }
+
+        /// `(float)minor / (float)major * (float)fittedMajor` 를 float32 로 계산하고 0 방향 절단.
+        /// 원본 `cvtsi2ss`/`divss`/`mulss`/`cvttss2si`(`0x1401eb31e`–`0x1401eb33b`)와 같은 순서다.
+        /// `Int(exactly:)` 로 받는 이유: 입력이 effect.json(신뢰 경계 밖)에서 오므로 `Int(Float)`
+        /// 의 트랩을 원리적으로 배제한다. `major >= 1` 이라 0 나눗셈은 없고 결과는 `[0, minor]` 다.
+        private static func ratioTruncated(minor: Int, major: Int, fittedMajor: Int) -> Int {
+            let v = (Float(minor) / Float(major) * Float(fittedMajor)).rounded(.towardZero)
+            return Int(exactly: v) ?? 0
         }
     }
 
@@ -396,10 +506,16 @@ public struct EffectManifest: Equatable {
                 guard let n = safeInt(v), n > 0 else { return nil }
                 return Swift.min(n, 8192)
             }
-            var fixedW = clampedFixed(f["fit"])
-            var fixedH = fixedW
-            if let w = clampedFixed(f["width"]) { fixedW = w }
-            if let h = clampedFixed(f["height"]) { fixedH = h }
+            // W-FIT: `fit` 은 **정사각 치수가 아니라 봉투 한 변**이라 파스 시점에 치수로 접을 수
+            // 없다(dst 를 알아야 풀린다) — 세 값을 그대로 들고 `FBO.fittedBox` 가 소비처에서 푼다.
+            // 원본의 8192 대신 4096 이 아닌 이유: 원본은 값을 u16 에 담은 뒤(`0x1401e7804`) 쓰는
+            // 자리에서 `> 0x1000` 이면 **미선언 취급**한다(`0x1401eb301`). 즉 `fit:5000` 은 원본에서
+            // 무시되고 여기서는 5000 으로 살아남는다 — 다만 `fittedBox` 가 `min(fit, 긴 변)` 을
+            // 거치므로 4096 을 넘는 값은 사실상 "dst 그대로" 로 접혀 관측 가능한 차이가 없다
+            // (4096 을 넘는 긴 변에서만 갈리고, 그 구간은 8192 클램프가 다시 덮는다).
+            let declaredW = clampedFixed(f["width"])
+            let declaredH = clampedFixed(f["height"])
+            let fitBox = clampedFixed(f["fit"])
             let uvsRepeat = (f["uvs"] as? String) == "repeat"
             // X-⑧: 문자열은 있으나 **표에 없는** 값이면 nil — 원본이 해시맵 miss 에서 0(rgba8888)을
             // 돌려주는 것(`0x1401e546a`)과 같게, 소비처가 rgba8 로 폴백한다.
@@ -409,7 +525,8 @@ public struct EffectManifest: Equatable {
             // `unique` 는 프레임 간 지속 경로를 켜는 스위치라, 잘못 켜지면 워크샵 이펙트에
             // 원본에 없는 잔상이 쌓인다.
             let unique = isJSONBool(f["unique"]) && ((f["unique"] as? Bool) == true)
-            fbos.append(FBO(name: name, scale: Swift.max(1, scale), fixedWidth: fixedW, fixedHeight: fixedH,
+            fbos.append(FBO(name: name, scale: Swift.max(1, scale),
+                            declaredWidth: declaredW, declaredHeight: declaredH, fit: fitBox,
                             uvsRepeat: uvsRepeat, format: format, unique: unique,
                             clearColor: parseClearColor(f["clear"]),
                             conditions: parseConditions(f["conditions"])))

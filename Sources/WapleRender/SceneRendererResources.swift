@@ -60,23 +60,42 @@ extension SceneRenderer {
         /// 갱신(스크립트와 동일 위치, 레이어 origin/scale/alpha 애니와 동일 평가기).
         var animations: [(slot: Int, anim: PropertyAnimation)] = []
     }
-    /// X-①: 이름 있는 FBO 1개의 할당 스펙 — scale(dst 비례) 또는 fixedWidth/fixedHeight(절대 픽셀,
-    /// 실물 cursorripple fit:512·glitter width/height:256) 중 후자가 있으면 우선.
+    /// X-①: 이름 있는 FBO 1개의 할당 스펙 — 세 갈래다.
+    ///   ① `fit`(실물 cursorripple `fit:512`, fluidsimulation `fit:256`) — **정사각이 아니다**.
+    ///      dst 를 알아야 풀리므로 `fittedBox(base…)` 로 프레임/빌드 시점에 계산한다(W-FIT).
+    ///   ② `width`/`height`(실물 glitter 256×256) — 절대 픽셀.
+    ///   ③ 둘 다 없으면 종전 `dst/scale`.
     /// X-⑧: `format`(픽셀 포맷) · `unique`(프레임 간 지속) · `clearColor`(생성 1회 초기화) 추가.
     struct FBOSpec {
         let scale: Int
-        let fixedWidth: Int?
-        let fixedHeight: Int?
+        let declaredWidth: Int?
+        let declaredHeight: Int?
+        /// W-FIT: `fit:N` 봉투 한 변. **치수가 아니다** — `fittedBox(base…)` 로만 풀어라
+        /// (규약 전문·VA 는 `EffectManifest.FBO.fittedBox` 주석).
+        let fit: Int?
+        /// 하위호환 표현(= `width`/`height` 선언, 없으면 `fit` 봉투). `fit != nil` 이면
+        /// **정사각 봉투**라 실제 치수가 아니다.
+        var fixedWidth: Int? { declaredWidth ?? fit }
+        var fixedHeight: Int? { declaredHeight ?? fit }
         /// 이미 Metal 포맷으로 해석된 값 — `rgba_backbuffer` 의 HDR 분기는 빌드 시점에 끝난다
         /// (씬의 HDR 여부는 마운트 시 확정이고 프레임마다 바뀌지 않는다).
         let pixelFormat: MTLPixelFormat
         let unique: Bool
         let clearColor: SIMD4<Float>?
-        init(scale: Int, fixedWidth: Int?, fixedHeight: Int?,
+        init(scale: Int, declaredWidth: Int?, declaredHeight: Int?, fit: Int? = nil,
              pixelFormat: MTLPixelFormat = .rgba8Unorm, unique: Bool = false,
              clearColor: SIMD4<Float>? = nil) {
-            self.scale = scale; self.fixedWidth = fixedWidth; self.fixedHeight = fixedHeight
+            self.scale = scale
+            self.declaredWidth = declaredWidth; self.declaredHeight = declaredHeight; self.fit = fit
             self.pixelFormat = pixelFormat; self.unique = unique; self.clearColor = clearColor
+        }
+
+        /// W-FIT: `fit` 이 있으면 실제 치수, 없으면 `nil`(= 소비처가 종전 경로 유지).
+        func fittedBox(baseWidth: Int, baseHeight: Int) -> (width: Int, height: Int)? {
+            guard let fit = fit else { return nil }
+            return EffectManifest.FBO.fittedBox(fit: fit, declaredWidth: declaredWidth,
+                                                declaredHeight: declaredHeight, scale: scale,
+                                                baseWidth: baseWidth, baseHeight: baseHeight)
         }
     }
 
@@ -805,7 +824,8 @@ extension SceneRenderer {
         // encodeLayer 의 f_main 분기 하나로 충분하다 — f_compose/f_blend/f_lit/3D 빌보드 경로에는
         // 대응 변형을 두지 않았다(도달 0건). 도달이 생기면 그 경로는 종전 동작으로 남는다(무크래시).
         let specs = liveFbos.enumerated().map { i, f in
-            FBOSpec(scale: f.scale, fixedWidth: f.fixedWidth, fixedHeight: f.fixedHeight,
+            FBOSpec(scale: f.scale, declaredWidth: f.declaredWidth, declaredHeight: f.declaredHeight,
+                    fit: f.fit,
                     pixelFormat: fboFormats[i], unique: f.unique, clearColor: f.clearColor)
         }
         // T09-D1: `functions` 를 **fboSpecs 좌표**로 옮겨 둔다(소비는 applyEffect 의 pendingClear 블록).
@@ -1183,8 +1203,18 @@ extension SceneRenderer {
         var texWrap = [Float](repeating: 0, count: 8)
         for (slot, source) in binds where slot < 8 && source >= 0 {
             let fbo = fbos[source]
-            // X-①: fixedWidth/fixedHeight(fit·width/height) 가 있으면 dst 비례(scale) 대신 절대 크기.
-            if let fw = fbo.fixedWidth, let fh = fbo.fixedHeight {
+            // W-FIT(2026-08-21): `fit` 은 정사각이 아니라 "긴 변을 N 으로, 종횡비 보존, 확대 금지" 다
+            // (`EffectManifest.FBO.fittedBox` — 원본 `0x1401eb2cc`–`0x1401eb381`). 이 슬롯의
+            // `g_TextureNResolution` 이 곧 셰이더의 `aspect = res.y/res.x` 와 `texelSize` 라,
+            // 여기서 정사각을 실으면 유체 시뮬의 중력·염료 에미터·커서 반경이 전부 어긋난다.
+            //
+            // `fit` **미선언 FBO 는 아래 두 갈래 종전 그대로** 둔다 — 특히 scale 갈래의 나눗셈은
+            // 정수 바닥이 아니라 부동소수(`lh/s`)라, 여기서 정수화하면 dst 가 scale 로 나누어
+            // 떨어지지 않는 모든 씬에서 값이 움직인다(무회귀 규약).
+            if let box = fbo.fittedBox(baseWidth: texW, baseHeight: texH) {
+                let fw = Float(box.width), fh = Float(box.height)
+                texRes[slot] = SIMD4(fw, fh, fw, fh)
+            } else if let fw = fbo.fixedWidth, let fh = fbo.fixedHeight {
                 texRes[slot] = SIMD4(Float(fw), Float(fh), Float(fw), Float(fh))
             } else {
                 let s = Float(fbo.scale)
