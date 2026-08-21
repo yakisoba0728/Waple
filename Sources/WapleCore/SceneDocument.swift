@@ -159,6 +159,33 @@ public struct SceneLayer: Equatable {
     public var materialConstantScriptProps: [String: String] = [:]
     /// H1: 커스텀 머티리얼 텍스처 슬롯(material passes[0].textures).
     public var materialTextureNames: [String?] = []
+    /// 머티리얼 패스의 `usertextures` 슬롯 이름(평문 문자열 키 | `{name,type,…}` 딕셔너리 → name).
+    /// `materialTextureNames` 와 **같은 슬롯 인덱스**다. 이펙트 패스 쪽 짝은
+    /// `SceneEffectPass.userTextureNames`(F697) — 정규화 규약이 같다.
+    /// nil = 그 슬롯이 usertextures 를 안 쓴다(또는 name 이 없다).
+    public var materialUserTextureNames: [String?] = []
+    /// 같은 슬롯의 `keepaspect` 플래그. 참이면 유저가 꽂은 텍스처를 슬롯 크기에 늘이지 않고
+    /// 원본 종횡비를 유지해 맞춘다(동영상/GIF 배경용).
+    ///
+    /// WE 파서 `0x140154480`–`0x140155668`(머티리얼 패스: `combos`/`constantshadervalues`/
+    /// `usershadervalues`/`usertextures`): 슬롯 딕셔너리에 `Json::Value::find("keepaspect")`
+    /// (`0x140154871` → `0x140154878`), 없으면 정적 null 값(`0x140084AC0`), 태그 5(booleanValue)
+    /// 확인(`0x140154887`) → `asBool`(`0x140154890`) → `cmovne r12d, 1`(`0x1401548A0`).
+    /// r12b 는 슬롯 루프 진입 전 `xor r12b,r12b`(`0x140154717`)로 0 이고, 최종적으로 0x38바이트
+    /// 유저텍스처 레코드의 `[+0x30]` 바이트에 저장된다(`0x140154A09`). **부재 시 false.**
+    ///
+    /// 동봉 도달 **1건**(non-preview): `scenes/videoplayer/materials/background.json` 의
+    /// `passes[0].usertextures[0] = {"name":"videotex","keepaspect":true}`. 설치본 `projects/`
+    /// 349파일 0건. **파스·보존 전용** — 종횡비 맞춤 소비는 렌더러(`SceneRendererResources`
+    /// 의 유저 텍스처 슬롯 바인딩)의 몫이고, 도달 1건이라 우선순위가 낮다.
+    ///
+    /// **[미해결]** `resolveLayerTexture`(:2700)는 머티리얼 패스 `usertextures` 의 **딕셔너리
+    /// 형태**를 userProps 치환 대상으로 삼지 않는다(`rawUserKey as? String` — 문자열 형태만 본다.
+    /// instance 쪽 :2720 은 이미 둘 다 본다). 실피해는 **현재 0건**이다: 유일한 도달 자산의
+    /// 이름이 `videotex` 인데 그건 유저 프로퍼티가 아니라 렌더러가 넣는 라이브 동영상 텍스처라
+    /// `userProps["videotex"]` 가 애초에 없다. 그래도 비대칭 자체는 남으므로 여기에 적어 둔다 —
+    /// 고칠 때는 이 필드가 이미 이름을 정규화해 뒀으니 그 배열을 쓰면 된다.
+    public var materialUserTextureKeepAspect: [Bool] = []
     /// H2: usershadervalues — 머티리얼 상수 이름 → user property 키 매핑.
     public var materialUserShaderValues: [String: String] = [:]
     /// H4: REFRACT 콤보 + 노멀맵 + refractAmount. 노멀맵 없으면 refract=false.
@@ -213,6 +240,27 @@ public struct SceneLayer: Equatable {
     public var configIsSolidLayer: Bool = false
     public var configIsProjectLayer: Bool = false
     public var configIsInstanced: Bool = false
+    /// 모델 json **루트**의 `nopadding`(오브젝트의 `config` 가 아니다 — 이름이 비슷한 위쪽
+    /// `configAutosize`/`configPassthrough` 는 scene.json `objects[].config` 쪽이다).
+    ///
+    /// WE 모델 루트 파서 `0x1401FAC50`–`0x1401FB498`(`material`/`width`/`height`/`fullscreen`/
+    /// `nopadding`/`autosize`/`passthrough`/`solidlayer`/`projectlayer`/…): `operator[]`
+    /// (`0x140086DE0`)로 노드를 얻고(`0x1401FAE33` `lea rdx,"nopadding"`) 태그 5 확인
+    /// (`0x1401FAE44`) → `asBool`(`0x1401FAE4D`) → true 면 `or dword [model+0x304], 4`
+    /// (`0x1401FAE56`). 같은 플래그 워드의 이웃 비트가 `fullscreen`=2(`0x1401FAE1E`),
+    /// `autosize`=8(`0x1401FAE87`), `passthrough`=0x20(`0x1401FAEB8`), `solidlayer`=0x200
+    /// (`0x1401FAEE9`), `projectlayer`=0x400(`0x1401FAF19`)이다. **부재 시 false.**
+    ///
+    /// 의미: 베이크된 텍스처를 2의 거듭제곱/아틀라스 패딩 없이 원본 크기 그대로 쓰라는 요청.
+    /// 동봉 도달 **2건**(전건 non-preview, 전건 `true`) — `scenes/gifs/models/background.json`,
+    /// `scenes/videoplayer/models/background.json`. 설치본 `projects/` 2건
+    /// (`templates/flag/models/flag.json`, `templates/gif/models/background.json`, 전건 `true`).
+    /// 넷 다 **외부 프레임 소스(GIF/동영상/깃발)를 받는 배경 모델**이다 — 텍스처 크기가 런타임에
+    /// 정해지므로 패딩 규약이 안 맞는 그룹.
+    ///
+    /// **파스·보존 전용.** Waple 의 `.tex` 로더는 패딩 개념을 노출하지 않으므로 지금은 소비처가
+    /// 없다. 소비가 생긴다면 `WapleRender` 의 유저/동영상 텍스처 업로드 경로(NPOT 허용 여부)다.
+    public var noPadding: Bool = false
     /// F751(S-20): 모델 json 루트 `cropoffset` — 에디터 크롭 베이크(베이크된 텍스처=크롭 영역,
     /// autosize 동반) 시 **크롭 영역 중심 − 원본 이미지 중심**(px, 레이어 로컬). 실측 확정 근거:
     /// 전수 1386 컴포넌트(693파일/49wp — 퍼펫 모델 49파일 포함)가 전부 0.5 배수(정수 픽셀 rect 의
@@ -910,6 +958,139 @@ public struct SceneSprite: Equatable {
     }
 }
 
+/// `scene.general.lightconfig` — 씬이 쓰는 **라이트 종류별 개수** 요약(에디터가 적어 두는 힌트).
+///
+/// 실제 라이트는 `objects[]` 의 `lpoint`/`lspot`/`ltube`/`ldirectional` 이 만든다. 이 딕셔너리는
+/// 개수를 세지 않는다 — 그 개수로 **셰이더를 생성**한다. 라이팅 스니펫 생성기
+/// (`0x140169140`–`0x14016B0D4` — `.pdata` 조각 1개, `primary()` 실측. 종전 표기
+/// `0x1401691C0`–`0x14016B154` 는 시작을 함수 중간으로, 끝을 다음 함수까지로 잡은 것이다)가
+/// 이 값을 콤보 문자열로 받아 `atoi`(`0x1402C82C0`) 한 뒤 `uniform vec4 g_LPoint_Origin[`
+/// (`0x14048BE50`, HLSL 판은 `const float4 g_LPoint_Origin[` `0x140487658`) 뒤에 그대로 찍는다.
+/// 즉 WE 에는 라이트 슬롯 **고정 상한이 없고**, 씬마다 배열 길이가 다른 셰이더가 새로
+/// 컴파일된다(`WapleRender/Scene3DLighting.swift:267` 주석의 `maximumLights = 8` 은 Waple 쪽
+/// 캡이다 — WE 정본이 아니다).
+///
+/// 콤보 이름은 **아홉 키와 1:1**이다(exe 전수 문자열 검색으로 확인 — `LIGHTS_` 접두 문자열은
+/// 이 아홉 + `LIGHTS_COOKIE`/`LIGHTS_SHADOW_MAPPING`/`LIGHTS_SHADOW_MAPPING_QUALITY` 뿐):
+/// `LIGHTS_POINT`(`0x140487630`) · `LIGHTS_SPOT`(`0x140487678`) · `LIGHTS_TUBE`(`0x140487770`) ·
+/// `LIGHTS_DIRECTIONAL`(`0x1404877E8`) · `LIGHTS_SPOT_SHADOW`(`0x140487878`) ·
+/// `LIGHTS_SPOT_COOKIE`(`0x140487890`) · `LIGHTS_SPOT_SHADOW_COOKIE`(`0x1404877C8`) ·
+/// `LIGHTS_DIRECTIONAL_SHADOW`(`0x140487828`) · `LIGHTS_POINT_SHADOW`(`0x140487948`).
+///
+/// **파서**(씬 `general` 파서 `0x140186C90`–`0x140188816` 안):
+/// `lightconfig` 자체를 `Json::Value::find`(`0x140087490`)로 찾고(키 SSO 조립 `0x1401876A2`
+/// — `movsd`+`mov eax,[rip+…+7]`, 길이 11; 호출 `0x1401876D6`), 태그 7(objectValue)이 아니면
+/// (`0x140187732` `cmp byte [rbx+8],7`)
+/// **아홉 키를 통째로 건너뛴다**(→ 전건 0). 하위 아홉 키도 전부 `find` 이고, 키 문자열은
+/// `0x14048E4D8`–`0x14048E588` 에 몰려 있다. **[정정]** 종전 주석은 "전부 SSO 라 `lea` 가
+/// 한 건도 안 잡힌다" 고 적었는데 실측은 셋으로 갈린다:
+///   · ≤15자 일곱(`point`/`spot`/`tube`/`directional`/`spotshadow`/`spotcookie`/`pointshadow`)은
+///     `movsd`/`mov`/`movzx` 스택 조립 — `lea` xref 로 **안 잡힌다**.
+///   · `spotshadowcookie`(16자)는 `movups xmm0,[0x14048E518]`(`0x1401878D5`) + 힙 할당
+///     (`0x1400173F0`) — 이것도 `lea` 로 **안 잡힌다**.
+///   · `directionalshadow`(17자)만 진짜 `lea rdx,[0x14048E560]`(`0x140187A89`)다 — **잡힌다.**
+/// 즉 "SSO 라 놓친다" 는 방향은 맞지만 경계는 15자가 아니라 "SSO 조립이냐 아니냐" 이고,
+/// 16자 키도 `lea` 가 아니다(disp32 전수 스캔이 필요한 이유).
+///
+/// 값은 `isUInt`(`0x140088760`) 게이트 뒤 `asUInt`(`0x140085F70`)로 읽는다. 태그가 int(음수 아님)/
+/// uint/real(0…2³²−1) 이 아니면 **그 필드만 건너뛴다**(0 유지). 읽은 값은
+/// `[engine+0x121C]` 한 워드에 비트필드로 OR 된다:
+///
+/// | 키 | find VA | 비트 | 마스크 | OR VA |
+/// | --- | --- | --- | --- | --- |
+/// | `point` | `0x140187775` | 0–3 | `0xF` | `0x140187B7A` |
+/// | `spot` | `0x1401877B6` | 4–7 | `0xF` | `0x140187BAB` |
+/// | `tube` | `0x14018780B` | 8–11 | `0xF` | `0x140187BD7` |
+/// | `directional` | `0x140187877` | 12–15 | `0xF` | `0x140187C03` |
+/// | `spotshadow` | `0x14018799F` | 16–17 | `0x3` | `0x140187C93` |
+/// | `spotcookie` | `0x140187A31` | 18–19 | `0x3` | `0x140187C32` |
+/// | `spotshadowcookie` | `0x14018792A` | 20–21 | `0x3` | `0x140187C66` |
+/// | `directionalshadow` | `0x140187AD3` | 22–23 | `0x3` | `0x140187CB9` |
+/// | `pointshadow` | `0x140187B3E` | 24–25 | `0x3` | `0x140187D00` (shl `0x140187CDC`) |
+///
+/// 마스크는 **클램프가 아니라 절단**이다(`and eax,0xf` / `and eax,3`) — `"point": 16` 은 WE 에서
+/// 0 이 된다. 여기 저장하는 값도 절단 후 값이다(신뢰 경계 밖 숫자가 배열 길이로 새는 것을 막는
+/// 부수 효과도 있다).
+///
+/// `[engine+0x121C]` 를 가진 객체는 정사영 정수 크기 `+0x84/+0x88` 과 플래그 `+0x118` bit10 을 가진
+/// 쪽이다 — `+0xE0`/`+0x354` 를 가진 씬-프로퍼티 블록(`r14`)이 **아니다**.
+/// (`docs/re/unimplemented-json-keys.md` §5.2 는 이걸 `[scene+0x121C]` 라고 적었는데 객체가 다르다.)
+///
+/// **섀도우 게이트**: `0x140187C39` 의 `cmp byte [engine+0x1AC], 0` 이 0 이면 `pointshadow`/
+/// `spotshadow`/`directionalshadow` 세 필드를 **통째로 버리고** `spotshadowcookie` 를
+/// spotcookie 자리(bits 18–19)에 접어 넣는다(`0x140187CFD` — shl 0x12). 그 바이트가 무엇인지는
+/// **[미해결]** — 섀도우 지원/사용자 설정 플래그로 추정하나 확정하지 못했다. 그래서 여기서는
+/// 아홉 값을 **저작된 그대로** 담고, 이 접힘은 소비 시점의 몫으로 남긴다.
+///
+/// **소비처**(파스만 하는 우리와 달리 WE 가 실제로 읽는 자리, `+0x121C` 전수 16곳 중 읽기 7곳):
+/// `0x140190C80` 이 `test r9d,r9d`(`0x140190CA1`)로 "라이트가 하나라도 있나" 를 보고
+/// `and r11d,0xF`(`0x140190DFC`)로 point 수를 꺼낸다. `0x1401A5C40` 은 종류별로 꺼낸다 —
+/// point `and`(`0x1401A5E44`) · spot `shr 4`(`0x1401A5ED8`) · tube `shr 8`(`0x1401A5F66`) ·
+/// directional `shr 0xC`(`0x1401A5FFC`) · spotshadowcookie `shr 0x14`+`and 3`(`0x1401A6091`).
+/// 나머지 9곳은 위 표의 OR(쓰기)다.
+///
+/// **동봉 도달 2건**(WEAssets 1996 파일 = 설치본 `assets/` 와 동일 사본, 설치본 `projects/` 349
+/// 파일에는 0건): `scenes/modeleditor/scene.json` = `{"point":2}`(non-preview),
+/// `scenes/particleelementpreviews/collisionmodel/scene.json` = `{"point":1,"pointshadow":1}`(preview).
+/// 나머지 일곱 키는 동봉 도달 0 이다.
+public struct SceneLightConfig: Equatable {
+    public var point: Int = 0
+    public var spot: Int = 0
+    public var tube: Int = 0
+    public var directional: Int = 0
+    public var pointShadow: Int = 0
+    public var spotShadow: Int = 0
+    public var spotCookie: Int = 0
+    public var spotShadowCookie: Int = 0
+    public var directionalShadow: Int = 0
+    public init() {}
+
+    /// `general.lightconfig` 파스. **태그 7(objectValue)이 아니면 nil** — WE 는 그때 아홉 키를
+    /// `find` 조차 하지 않고 통째로 건너뛴다(`0x140187732` `cmp byte [rbx+8],7` → `jne 0x140187D0A`).
+    /// nil 과 "전건 0" 은 WE 안에서 동치지만(둘 다 `[engine+0x121C]` 가 0), 우리는 **저작 여부**를
+    /// 구분해 남긴다 — 소비 시점에 "미저작이면 종전 슬롯 상한 폴백" 을 고를 수 있어야 한다.
+    ///
+    /// 값 게이트는 `isUInt`(`0x140088760`)다. 통과 조건은 셋 중 하나뿐이다:
+    ///   · 태그 1(int) 이고 `0 ≤ v ≤ 0xFFFFFFFF`(`0x1400887D1`–`0x1400887E3`)
+    ///   · 태그 2(uint) 이고 `v ≤ 0xFFFFFFFF`(`0x1400887C1`)
+    ///   · 태그 3(real) 이고 `0 ≤ v ≤ 4294967295.0` **이고 소수부가 0**
+    ///     (`0x140088783`–`0x1400887A7`: 두 번의 `comisd` + `modf`(`0x1402D3B50`) 결과 비교)
+    /// bool(태그 5)·문자열(태그 4)·배열·객체·null 은 전부 탈락하고 **그 필드만** 0 으로 남는다.
+    /// 그래서 `{"user":…,"value":2}` 바인딩도 WE 에선 0 이다 — 여기서도 언랩하지 않는다.
+    ///
+    /// 통과한 값은 저장 폭만큼 **절단**한다(`and eax,0xF` / `and eax,3`) — 클램프가 아니다.
+    /// `{"point": 16}` 은 WE 에서 0 이 되고 여기서도 0 이 된다. 절단 후 값을 담는 덕분에
+    /// 신뢰 경계 밖 숫자가 배열 길이로 새지 않는다(`point` 최대 15, 섀도우류 최대 3).
+    public static func parse(_ raw: Any?) -> SceneLightConfig? {
+        guard let d = raw as? [String: Any] else { return nil }
+        var c = SceneLightConfig()
+        c.point = uintField(d["point"], mask: 0xF)                      // 0x140187775 → bits 0–3
+        c.spot = uintField(d["spot"], mask: 0xF)                        // 0x1401877B6 → bits 4–7
+        c.tube = uintField(d["tube"], mask: 0xF)                        // 0x14018780B → bits 8–11
+        c.directional = uintField(d["directional"], mask: 0xF)          // 0x140187877 → bits 12–15
+        c.spotShadow = uintField(d["spotshadow"], mask: 0x3)            // 0x14018799F → bits 16–17
+        c.spotCookie = uintField(d["spotcookie"], mask: 0x3)            // 0x140187A31 → bits 18–19
+        c.spotShadowCookie = uintField(d["spotshadowcookie"], mask: 0x3) // 0x14018792A → bits 20–21
+        c.directionalShadow = uintField(d["directionalshadow"], mask: 0x3) // 0x140187AD3 → bits 22–23
+        c.pointShadow = uintField(d["pointshadow"], mask: 0x3)          // 0x140187B3E → bits 24–25
+        return c
+    }
+
+    /// `isUInt` 게이트 + 저장 폭 절단. 게이트를 못 넘으면 0(= WE 의 "그 필드만 건너뜀").
+    ///
+    /// bool 을 `as? Int` 로 잡지 않으려고 `NSNumber` + `CFGetTypeID` 로 가른다 — 애플 플랫폼에서
+    /// JSON 의 `true` 는 `NSNumber(1)` 이라 `as? Int` 가 **성공한다**(리눅스 시임은
+    /// `objCType == "c"` 로 같은 판정: `scripts/dev/linux-shim/corefoundation.swift`).
+    /// `WallpaperProperties.parseNumber` 와 같은 규약이다.
+    private static func uintField(_ v: Any?, mask: Int) -> Int {
+        guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return 0 }
+        let d = n.doubleValue
+        guard d.isFinite, d >= 0, d <= 4294967295, d == d.rounded(.towardZero),
+              let i = safeInt(d) else { return 0 }
+        return i & mask
+    }
+}
+
 public struct SceneDocument: Equatable {
     public let projectionWidth: Int
     public let projectionHeight: Int
@@ -1046,6 +1227,160 @@ public struct SceneDocument: Equatable {
     public var gravityStrength: Float = 1
     public var gravityDirection: Vec3 = Vec3(x: 0, y: -1, z: 0)
 
+    /// `general.transparentsorting` — 반투명 오브젝트를 뎁스 정렬해서 그릴지. **파스·보존 전용**
+    /// (소비는 `WapleRender` 의 몫 — 아래 착지 지점 참조).
+    ///
+    /// 등록은 씬 `general` 프로퍼티 디스크립터 테이블(`0x140199780`–`0x14019B4D6`) 안이다:
+    /// 이름 세팅 `0x14019AD44`(`lea rdx,"transparentsorting"`, `r8d=0x12`) 직후
+    /// `mov dword [rbx+0x34], 0xE0`(`0x14019AD61` — 멤버 오프셋) · `mov dword [rbx+0x30], 6`
+    /// (`0x14019AD7A` — 타입 6 = bool) · 게터 `0x14019AD68`→**`0x14019C1C0`** ·
+    /// 세터 `0x14019AD81`→**`0x14019C290`**.
+    ///
+    /// **[정정] `docs/re/unimplemented-json-keys.md` §5.2 의 게터 `0x14019BFA0`/세터 `0x14019C070`
+    /// 은 이 키가 아니라 `camerafade` 의 것이다.** 이 테이블은 "다음 항목의 이름 문자열 `lea`" 가
+    /// 현재 항목의 오프셋/타입 스토어 **사이에 끼어드는** 형태로 스케줄돼 있어서(`0x14019ACC4` 의
+    /// `lea rdx,"transparentsorting"` 은 `camerafade` 디스크립터를 채우는 도중에 나온다),
+    /// `lea` 주변만 보면 한 칸씩 밀려 읽힌다. `rbx` 가 `[rbp-0x38]` 에서 다시 로드되는 지점
+    /// (`0x14019AD40`)이 항목 경계다.
+    ///
+    /// 게터 `0x14019C1C0` 이 실제로 쓰는 비트: `btr edx,0xc` / `bts ecx,0xc`(`0x14019C1F5`·
+    /// `0x14019C1F9`) → 씬 플래그 워드 `scene+0xE0` 의 **bit12**. 생성자가 그 워드를 `0x26` 으로
+    /// 깔므로(`0x140186D1F`) 부재 시 기본은 **false**. 교차 확인: 프로젝트 단위 플래그 집계
+    /// (`0x140183386`–`0x1401833C0` 루프. `0x14018B264`–`0x14018B297` 에 같은 코드가 한 벌 더
+    /// 있다 — 컴파일러가 두 호출부에 인라인한 쌍둥이)가 씬 플래그의 bit3(ortho)·
+    /// bit6(spritesheetrefreshsync)·**bit12** 를 각각 프로젝트 워드의 bit0(`0x140183393`)·
+    /// bit11(`0x14018339E`)·bit17(`0x1401833AF`)로 접는다.
+    ///
+    /// WE 소비 지점: `0x14018AC91` `mov eax,[rdi+0xE0]` / `and eax,0x1008` / `cmp eax,0x1000` —
+    /// 즉 **transparentsorting 이 켜져 있고 동시에 정사영이 아닐 때만**(bit3 clear = 원근) 별도
+    /// 정렬 경로(함수 `0x14018AAC0`–`0x14018B22C`, FNV-1a 로 드로우 키를 만드는 버킷팅)를 탄다.
+    /// 동봉 저작 2씬이 정확히 코퍼스의 **원근 씬 2개**와 같다는 게 이 게이트의 방증이다
+    /// (`scripts/spec/check_ortho_projection_census.py` 의 `EXPECT_PERSPECTIVE_SCENES`).
+    ///
+    /// 동봉 도달: WEAssets 2건(전건 non-preview, 전건 `true`) — `scenes/modeleditor/scene.json`,
+    /// `scenes/particleeditor3dscale/scene.json`. 설치본 `projects/` 349파일 0건.
+    ///
+    /// **착지 지점(미배선)**: `WapleRender/SceneRenderer3D.swift:510` 의 `draw3DOrder` — 지금은
+    /// `order` 오름차순 정렬 하나뿐이다. `doc.transparentSorting && !doc.orthoAuto` 일 때만
+    /// (= WE 의 `and eax,0x1008 / cmp eax,0x1000` 과 동형: bit12 set **이고** bit3 clear)
+    /// `additive`/`translucent` 인 아이템(:478 `additive`, :797 의 `blend` 판정)을 뷰공간 깊이
+    /// 역순으로 뒤에 붙이면 된다. 2D 정사영 씬은 켜져 있어도 원본이 무시한다.
+    /// **[미해결]** WE 의 정렬 키는 깊이가 아니라 FNV-1a 해시 버킷팅(`0x14018AAC0`–`0x14018B22C`,
+    /// 시드 `0xCBF29CE484222325` `0x14018ACBE`)이다 — 그게 뎁스 정렬인지 상태 변경 최소화용
+    /// 배칭인지 확정하지 못했다. 그래서 여기서는 파스만 하고 규약을 못박지 않는다.
+    public var transparentSorting: Bool = false
+
+    /// `general.spritesheetrefreshsync` — 스프라이트시트 레이어의 프레임 진행을 씬 전역 클록에
+    /// 묶을지. **파스·보존 전용**(소비는 `WapleRender` 의 몫).
+    ///
+    /// 파서: 씬 `general` 파서 `0x140186C90`–`0x140188816` 안, `operator[]`(`0x140086DE0`)로
+    /// 노드를 얻고(`0x140187656` `lea rdx,"spritesheetrefreshsync"`) 태그 5(booleanValue)일 때만
+    /// `asBool`(`0x140086300`) → true 면 `or dword [scene+0xE0], 0x40`(`0x140187674`) = **bit6**.
+    /// 생성자 `0x26` 에 bit6 이 없으므로 부재 시 **false**.
+    ///
+    /// 동봉 도달: WEAssets 2건(전건 non-preview, 전건 `true`) — `scenes/gifs/gifscene.json`,
+    /// `scenes/videoplayer/scene.json`. 설치본 `projects/` 1건(`templates/gif/gifscene.json`, `true`).
+    /// 셋 다 GIF/동영상 템플릿이다 — 스프라이트시트가 곧 프레임 소스인 씬.
+    ///
+    /// **착지 지점**: 없다 — Waple 은 이미 이 플래그가 켜진 것처럼 동작한다. 레이어 시트 프레임은
+    /// `SceneRendererFrameEncoder.spriteFrameTexture(:1848)` → `TexImage.spriteFrameIndex(:208)` 인데,
+    /// 그건 **절대 씬 시간의 순수 함수**(총 재생길이로 모듈로)라 레이어별 누적 시계 자체가 없다.
+    /// 같은 시트를 쓰는 레이어는 이미 위상까지 일치한다. 그래서 이 필드는 지금 **보존만** 하고,
+    /// 훗날 레이어별 시계(일시정지·개별 재생속도)를 도입할 때 그것을 끄는 스위치로 쓰면 된다 —
+    /// 도입 전에 이 값을 소비하면 아무것도 안 바뀌는 코드가 늘 뿐이다.
+    /// 무엇을 "전역 클록" 으로 삼는지는 **[미해결]** — bit6 의 소비 지점을 exe 에서 못 찾았다.
+    /// 근거: `.pdata` 함수 전수를 디스어셈해 `[reg+0xE0]` 접근 **928곳**을 모았고, 그중 마스크
+    /// `0x40` 이 근처에 있는 자리는 위 프로젝트 집계 두 벌(`0x140183393`·`0x14018B271` 의
+    /// `test al,0x40`)뿐이다. 그 둘은 씬의 가상 게터 `[vtbl+0x58]` 이 준 플래그를 접는 코드이지
+    /// 프레임 진행을 결정하는 자리가 아니다.
+    public var spritesheetRefreshSync: Bool = false
+
+    /// `general.orthogonalprojection.auto` — 정사영 크기를 씬이 아니라 **출력 뷰포트**가 정한다.
+    ///
+    /// WE 파서(`0x1401874EC`–`0x140187618`)는 `orthogonalprojection` 이 태그 7 일 때
+    /// `auto`/`width`/`height` **세 노드를 모두 `operator[]` 로 얻지만**(`0x140187519`/`0x140187532`/
+    /// `0x14018754B`), `auto` 가 태그 5 이고 참이면(`0x140187550` `cmp byte [rdi+8],5` →
+    /// `asBool` `0x14018755C`) `or dword [scene+0xE0], 0x18`(`0x140187565`) 후
+    /// **`0x140187602` 로 점프해 width/height 값을 아예 안 읽는다**. 그래서 그때
+    /// `scene+0x354`/`+0x358`(정사영 float 크기)와 `engine+0x84`/`+0x88`(정수 크기)은
+    /// 생성자 0 그대로다(`0x140186FCD` `mov qword [scene+0x350], 0` · `0x140186F61`
+    /// `mov qword [scene+0x358], 0` · `0x1401872DD` `mov qword [engine+0x84], 0`).
+    /// 0 = "엔진이 알아서" = 출력 해상도.
+    ///
+    /// `0x18` = bit3(정사영 유효) | bit4(auto). width/height 경로는 둘 다 0 이 아닐 때만 bit3 을
+    /// 세우고(`0x1401875DF`), 하나라도 0 이면 지운다(`0x1401875D5`).
+    ///
+    /// **Waple 은 여기서 `projectionWidth/Height` 를 0 으로 만들지 않는다.** 그 둘은 레이어 기본
+    /// 크기·풀스크린 FBO·파티클 좌표계까지 타는 `let` 이라 0 을 넣으면 씬이 붕괴한다. 대신
+    /// WE 와 같은 **키 읽기 규약**만 지킨다 — `auto == true` 면 `width`/`height` 를 읽지 않고
+    /// 종전 폴백(1920×1080)을 쓴다. 동봉 코퍼스에서 `auto` 를 저작한 2씬은 `orthogonalprojection`
+    /// 에 `auto` **하나뿐**이라(width/height 미저작) 이 변경으로 값이 달라지는 씬은 **0건**이다.
+    ///
+    /// 동봉 도달: WEAssets 의 씬 172개 중 2건(전건 non-preview, 전건 `true`, 전건 width/height
+    /// 미저작) — `scenes/gifs/gifscene.json`, `scenes/videoplayer/scene.json`. 설치본 `projects/`
+    /// 의 씬 18개 중 0건.
+    ///
+    /// **착지 지점(미배선)**: `WapleRender/SceneRenderer.swift:1403`
+    /// (`projW = Float(max(1, doc.projectionWidth))` · `projH = …projectionHeight`). `doc.orthoAuto`
+    /// 면 그 둘 대신 드로어블 크기를 쓰면 된다 — WE 가 `+0x84/+0x88` 을 0 으로 두고 엔진이
+    /// 출력 해상도로 메우는 것과 동형이다. 그 한 자리가 유일한 소비처라 배선 비용도 거기서 끝난다.
+    public var orthoAuto: Bool = false
+
+    /// project `general.properties.schemecolor.value` — WE 가 **이름으로 특수 취급**하는 유일한
+    /// 사용자 속성. 다른 속성은 제네릭 딕셔너리로만 들어가는데 이 키는 전용 슬롯이 있다.
+    ///
+    /// 파서는 프로젝트 속성 파서 `0x140181F30`–`0x140182F84`(§5.2 가 적은 `0x140181AF0` 은 바로
+    /// 앞의 **다른 함수**다 — `.pdata` 조각이 인접해서 붙어 보이는 것뿐이고 `primary()` 로 가르면
+    /// 갈린다). `operator[]("schemecolor")`(`0x1401821F9`) → 태그 7 확인(`0x14018220B`) →
+    /// `operator[]("value")` → 태그 4(stringValue) 확인(`0x14018222B`) → `strtod`(`0x1402D06AC`)를
+    /// 세 번 돌려 `[wallpaper+0x31B0/0x31B4/0x31B8]` 에 float3 저장(`0x140182311`–`0x140182323`).
+    /// 하나라도 어긋나면 슬롯을 건드리지 않고, 생성자가 그 셋을 0 으로 깔아 두므로
+    /// (`0x140110BD1`·`0x14012B9C8`) **부재 시 (0,0,0)** 이다.
+    ///
+    /// Waple 은 project.json 을 `SceneDocument.parse` 에 넘기지 않는다 — 대신 `userProps` 가
+    /// project.json 기본값 < preset < 유저 오버라이드를 이미 합쳐 온다
+    /// (`SceneRenderer.swift` 의 `UserPropertyStore.rawOverrides(id:projectDefaults:…)`).
+    /// 그래서 `userProps["schemecolor"]` 가 곧 `general.properties.schemecolor.value` 의 유효값이다.
+    /// 문자열이 아니면(WE 의 태그 4 검사와 동형) 무시하고 (0,0,0) 을 유지한다.
+    ///
+    /// 동봉 도달: WEAssets 162파일(그중 **non-preview 2건**뿐 — `scenes/modeleditor/project.json`
+    /// 과 `materials/util/fade.json`. 후자는 `passes[].usershadervalues` 의 값 `"tint"` 라 이 키가
+    /// 아니다). 161건은 전부 preview 프로젝트의 `{"order":0,"text":"ui_browse_properties_scheme_color",
+    /// "type":"color","value":"0 0 0"}` 로 **값이 전건 "0 0 0"** = 기본값과 동치다.
+    /// 실효 도달은 설치본 `projects/defaultprojects/` 쪽이다 — 47파일 중 `general/properties` 19건
+    /// (`"0.8 0.4 0.05"`, `"0.89 0 0.27"`, `"1 0.8 0.207…"` 등 비영 다수), 나머지 28건은
+    /// `passes[].usershadervalues` 의 **값**(`"tint"`/`"color1"`/`"ambientcolor"`)이라 무관하다.
+    ///
+    /// **파스·보존 전용.** **[정정]** 종전 주석은 "매 프레임 스크립트 바인딩에 싣는다" 고
+    /// 적었는데, `+0x31B0/0x31B4/0x31B8` 를 만지는 자리는 exe 전수(disp32 스캔)로 **다섯 곳**뿐이고
+    /// 스크립트 바인딩은 없다: 생성자 두 곳(`0x140110BD1`·`0x14012B9C8`, 0 으로 초기화),
+    /// 위 파서(`0x140182311`–`0x140182323`, 쓰기), 그리고 소비 한 곳이다.
+    ///
+    /// 그 소비는 `0x14017FA70` 안의 배경 채우기다: `0x14017FC58`–`0x14017FC75` 가 세 float 의
+    /// **주소**를 스택 슬롯 셋에 담고, `0x14018033A`–`0x140180351` 이 그걸 역참조해
+    /// `xmm1=r, xmm2=g, xmm3=b`, `[rsp+0x20]=1.0`(alpha)로 가상 호출 `[rax+0x118]` 을 부른다.
+    /// **[미해결]** 그 앞 `0x14017FC4C` 의 `test dword [wallpaper+0x124], 0xFFFFFFFD` 가
+    /// 게이트다 — `+0x124` 는 같은 파서가 `general.properties.alignment.value` 로 채우는 int
+    /// (`0x140181FBF`)인데, 값이 0/2 면 schemecolor 대신 `[[wallpaper]+0x35C/0x360/0x364]` 를
+    /// 쓴다. 즉 schemecolor 는 **정렬 모드에 따라 켜지는 레터박스/여백 색**으로 보이지만
+    /// `alignment` 열거값의 의미를 확정하지 못했다.
+    ///
+    /// 셰이더 유니폼 이름은 **[미해결]** — exe 전수 문자열 검색에서 `schemecolor` 는 JSON 키
+    /// 1건뿐이고(`0x140474560`) `g_SchemeColor` 류 심볼은 없다.
+    public var schemeColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
+
+    /// `general.lightconfig` — 라이트 종류별 개수(셰이더 퍼뮤테이션 힌트). nil = 미저작
+    /// (WE 에서도 전건 0 과 동치). 규약·비트 패킹·동봉 도달은 `SceneLightConfig` 선언부 주석 참조.
+    ///
+    /// **파스·보존 전용.** 착지 지점(미배선): `WapleRender/Scene3DLighting.swift:278`
+    /// (`static let maximumLights = 8`)과 그것을 쓰는 `:293`/`:295`/`:418`, 그리고 같은 상한을
+    /// 복제한 `WapleRender/QuadShaders.swift:193`. WE 는 캡이 없고 이 값으로 배열 길이를 찍으므로,
+    /// **저작된 씬은 이 카운트를 종류별 슬롯 상한으로 쓰고 미저작 씬만 8 캡으로 폴백**하는 게
+    /// 원본에 가깝다(그 파일 :267 주석이 이미 이 필요를 적어 뒀다). 다만 셰이더 배열 길이가
+    /// 컴파일 타임 상수라 슬롯을 **줄이는** 쪽은 퍼뮤테이션이 필요하다 — 늘리는 쪽(현재 캡을
+    /// 넘는 씬)부터 붙이는 게 비용 대비 효과가 크다.
+    public var lightConfig: SceneLightConfig? = nil
+
     /// H7: 품질 설정 — low/medium/high/ultra. 픽셀 포맷 분기에 사용. 부재 시 ultra(무회귀).
     ///
     /// **[2026-08-20 정정] 이것은 WE 키가 아니라 Waple 확장이다.** 종전 주석은
@@ -1103,8 +1438,13 @@ extension SceneDocument {
         }
         let general = scene["general"] as? [String: Any] ?? [:]
         let proj = general["orthogonalprojection"] as? [String: Any] ?? [:]
-        let pw = intVal(proj["width"]) ?? 1920
-        let ph = intVal(proj["height"]) ?? 1080
+        // `auto: true` 면 WE 는 width/height 를 **읽지 않고** 정사영 크기를 0(=출력 해상도)으로 둔다
+        // (`0x140187565` `or [scene+0xE0],0x18` 직후 `0x14018756D` 이 값 저장 블록을 건너뛴다).
+        // 우리는 크기를 0 으로 만들 수 없으므로(선언부 `orthoAuto` 주석) 종전 폴백을 쓰되,
+        // **키를 읽지 않는 것**만은 그대로 지킨다. 동봉 저작 2씬은 width/height 자체가 없어 무영향.
+        let orthoAuto = weBool(proj["auto"])
+        let pw = orthoAuto ? 1920 : (intVal(proj["width"]) ?? 1920)
+        let ph = orthoAuto ? 1080 : (intVal(proj["height"]) ?? 1080)
         let clear = vec3(general["clearcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         let ambientColor = vec3(general["ambientcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         // 부재 시 (0,0,0) — `ambientcolor` 폴백이 아니다(선언부 주석: 등록/저장/생성자 모두 독립).
@@ -1285,7 +1625,8 @@ extension SceneDocument {
         out.skylightColor = skylightColor
         out.hdr = hdr
         out.bloom = bloom
-        applyGeneralSettings(to: &out, general: general, quality: quality)
+        out.orthoAuto = orthoAuto   // #14: 위 pw/ph 계산과 같은 판정(선언부 주석의 착지 지점 참조)
+        applyGeneralSettings(to: &out, general: general, quality: quality, userProps: userProps)
         return out
     }
 
@@ -1402,10 +1743,17 @@ extension SceneDocument {
             if let sharedAssetProbe, case .data(let data) = sharedAssetProbe(name) { return data }
             return assets?(name)
         }
+        var noPadding = false
+        var materialUserTextureNames: [String?] = []
+        var materialUserTextureKeepAspect: [Bool] = []
         if let md = layerJSONData(imagePath),
            let mj = AssetJSON.dictionary(md) {
             puppetPath = mj["puppet"] as? String
             cropOffset = vec2(mj["cropoffset"])
+            // 모델 루트 `nopadding`(WE `0x1401FAE33` → `[model+0x304] |= 4`) — 선언부 주석 참조.
+            // 여기서 읽는 이유는 `resolveLayerTexture` 가 같은 JSON 을 이미 소비한 뒤라 시그니처를
+            // 넓히지 않고도 같은 딕셔너리(`mj`)에 손이 닿기 때문이다.
+            noPadding = weBool(mj["nopadding"])
             if let matPath = mj["material"] as? String {
                 if let matD = layerJSONData(matPath),
                    let matJ = AssetJSON.dictionary(matD),
@@ -1428,6 +1776,8 @@ extension SceneDocument {
                     materialConstantScripts = matResult.materialConstantScripts
                     materialConstantScriptProps = matResult.materialConstantScriptProps
                     materialTextureNames = matResult.materialTextureNames
+                    materialUserTextureNames = matResult.materialUserTextureNames
+                    materialUserTextureKeepAspect = matResult.materialUserTextureKeepAspect
                     materialUserShaderValues = matResult.materialUserShaderValues
                     refract = matResult.refract
                     normalTextureName = matResult.normalTextureName
@@ -1457,6 +1807,7 @@ extension SceneDocument {
         layer.name = (obj["name"] as? String) ?? ""
         layer.puppet = puppetPath
         layer.cropOffset = cropOffset
+        layer.noPadding = noPadding   // #12: 모델 루트 플래그(선언부 주석)
         if puppetPath != nil { layer.animationLayers = parseAllAnimationLayers(obj["animationlayers"]) }
         layer.propertyScripts = propScripts
         layer.propertyScriptProps = propScriptProps
@@ -1479,6 +1830,9 @@ extension SceneDocument {
         layer.materialConstantScripts = materialConstantScripts
         layer.materialConstantScriptProps = materialConstantScriptProps
         layer.materialTextureNames = materialTextureNames
+        // #19: 머티리얼 패스 usertextures 슬롯 이름 + keepaspect(슬롯 인덱스 정렬).
+        layer.materialUserTextureNames = materialUserTextureNames
+        layer.materialUserTextureKeepAspect = materialUserTextureKeepAspect
         // H2: usershadervalues — 머티리얼 상수 이름 → user property 키 매핑.
         layer.materialUserShaderValues = materialUserShaderValues
         // H4: REFRACT 콤보 + 노멀맵 + refractAmount.
@@ -2720,6 +3074,35 @@ extension SceneDocument {
     /// 실물 씬은 origin/alpha 등 대부분의 프로퍼티에 이 형태를 쓴다(애니메이션 재생은 후속 기능).
     /// (공용 JSONNumerics 위임 — 씬 규약: {value} 언랩 경유 + 문자열 숫자 관용)
     private static func unwrap(_ v: Any?) -> Any? { unwrapValue(v) }
+    /// WE 태그 5(booleanValue) 규약의 bool 읽기 — **부재·타입 불일치는 전부 false**.
+    ///
+    /// 원본은 이 계열 키를 `operator[]`(`0x140086DE0`) 또는 `find`(`0x140087490`)로 잡은 뒤
+    /// `cmp byte [node+8], 5` 로 태그를 확인하고 **그때만** `asBool`(`0x140086300`)을 부른다:
+    /// `orthogonalprojection.auto` `0x140187550` · `spritesheetrefreshsync` `0x140187662` ·
+    /// `nopadding` `0x1401FAE44` · `keepaspect` `0x140154887`. 즉 문자열 `"true"` 도 숫자 `1` 도
+    /// **참이 아니다** — 그래서 `float()`/`intVal()` 같은 문자열 관용을 여기엔 두지 않는다.
+    /// `unwrap` 만 태우는 이유: 씬 트리의 `{"user":…,"value":true}` 바인딩은 파스 전에
+    /// `resolveUserBindings` 가 이미 풀지만, 모델/머티리얼 JSON 은 그 경로를 안 타므로
+    /// 같은 형태가 남아 있을 수 있다.
+    ///
+    /// **맨 `as? Bool` 로는 안 된다.** `JSONSerialization` 은 JSON 의 `true` 도 `1` 도 똑같이
+    /// `NSNumber` 로 주고, `NSNumber(1) as? Bool` 은 **참을 돌린다**(리눅스 Swift 5.9·애플 공통).
+    /// 즉 `"transparentsorting": 1` 이 참으로 새서 WE 의 태그 5 게이트와 갈린다. `CFGetTypeID` 로
+    /// CFBoolean 만 통과시킨다 — `WallpaperProperties.parseNumber` 가 반대 방향(숫자에서 bool 배제)
+    /// 으로 쓰는 것과 같은 판별이고, 리눅스는 `objCType == "c"` 시임이 대신한다
+    /// (`scripts/dev/linux-shim/corefoundation.swift`).
+    ///
+    /// **[미해결]** 이 파일의 **기존** 씬 bool 키 20여 개(`hdr`/`bloom`/`clearenabled`/
+    /// `camerafade`/`perspective`/`clampuvs`/`config.*` …)는 아직 맨 `(unwrap(x) as? Bool) ?? false`
+    /// 라 숫자 `1` 을 참으로 읽는다. 동봉·설치본 코퍼스에서 그 키들을 숫자로 저작한 자산이
+    /// 0건이라 실피해는 없지만 규약이 갈려 있다. 여기서 한꺼번에 바꾸지 않은 이유는 그게
+    /// 이 작업의 범위 밖이고(20여 키의 무회귀를 따로 세워야 한다) 워크샵 자산에서만 드러날
+    /// 변경이기 때문이다 — 옮길 때는 이 헬퍼로 갈아 끼우면 된다.
+    private static func weBool(_ v: Any?) -> Bool {
+        let raw = unwrap(v)
+        if let n = raw as? NSNumber { return CFGetTypeID(n) == CFBooleanGetTypeID() && n.boolValue }
+        return (raw as? Bool) ?? false
+    }
     private static func floats(_ v: Any?) -> [Float] {
         floatList((unwrap(v) as? String) ?? "")
     }
@@ -2789,6 +3172,8 @@ extension SceneDocument {
         var materialConstantScripts: [String: String] = [:]
         var materialConstantScriptProps: [String: String] = [:]
         var materialTextureNames: [String?] = []
+        var materialUserTextureNames: [String?] = []
+        var materialUserTextureKeepAspect: [Bool] = []
         var materialUserShaderValues: [String: String] = [:]
         var refract: Bool = false
         var normalTextureName: String? = nil
@@ -2882,6 +3267,23 @@ extension SceneDocument {
         if let texs = p0["textures"] as? [Any] {
             result.materialTextureNames = texs.map { $0 as? String }
         }
+        // #19: 머티리얼 패스 `usertextures` 슬롯 이름 + 슬롯별 `keepaspect`(선언부 주석 참조).
+        // 이름 정규화는 이펙트 패스 쪽(F697, `parseEffects` 의 `p.userTextureNames`)과 **같은 규약**
+        // — 평문 문자열이면 그 자체가 유저 키, 딕셔너리면 `name`. 두 배열은 슬롯 인덱스가 같다.
+        //
+        // WE(`0x140154705`–`0x140154A09`)는 슬롯 원소가 태그 4(문자열) 또는 태그 7(객체)일 때만
+        // 처리하고, 루프 진입마다 `xor r12b,r12b`(`0x140154717`)로 keepaspect 를 0 으로 깐다.
+        // 문자열 형태는 `keepaspect` 를 **읽지 않는다**(항상 false) — 아래 `as? [String: Any]`
+        // 실패가 그 경로와 동치다.
+        //
+        // 한 가지 의도적 불일치: WE 는 이름이 비었거나 없으면(`0x1401548A4` `test rsi,rsi`,
+        // rsi = 이름 길이) 그 슬롯의 0x38바이트 레코드를 **아예 만들지 않는다.** 여기서는 슬롯
+        // 인덱스를 `materialTextureNames` 와 맞춰야 하므로 레코드를 지우는 대신 `nil`/`false` 를
+        // 남긴다(하류는 nil 슬롯을 이미 "안 쓰는 슬롯" 으로 읽는다 — 동치).
+        if let uts = p0["usertextures"] as? [Any] {
+            result.materialUserTextureNames = uts.map { ($0 as? String) ?? (($0 as? [String: Any])?["name"] as? String) }
+            result.materialUserTextureKeepAspect = uts.map { weBool(($0 as? [String: Any])?["keepaspect"]) }
+        }
         // H4: REFRACT 콤보 + 노멀맵(textures[1]) + refractAmount 파싱. 노멀맵 없으면 refract=false.
         // 콤보 값은 이 파일의 intVal(= unwrap + lenientInt)로 읽는다. 종전 `as? NSNumber`.intValue 는
         // 문자열 저작 `"REFRACT": "1"` 을 nil 로 떨어뜨려 **굴절을 끄는** 방향으로 조용히 틀렸고
@@ -2906,7 +3308,8 @@ extension SceneDocument {
 
     /// parse() 후반의 general 딕셔너리 기반 씬 글로벌 설정 적용(순수 할당, 흐름 제어 없음).
     /// 타입체커 식 깊이 분산 목적(기능 동치, 2026-07-31).
-    private static func applyGeneralSettings(to out: inout SceneDocument, general: [String: Any], quality: Quality) {
+    private static func applyGeneralSettings(to out: inout SceneDocument, general: [String: Any],
+                                             quality: Quality, userProps: [String: Any] = [:]) {
         // camerashake 전역 지터(D 재감사 #16, 코퍼스 활성 13/168씬). {"user"/"value"} 바인딩(클린룸 15씬)
         // 대비 unwrap. 수식은 렌더러(코퍼스 값분포 근사) — 여기선 원시 파라미터만 보존.
         out.cameraShake = (unwrap(general["camerashake"]) as? Bool) ?? false
@@ -2941,7 +3344,39 @@ extension SceneDocument {
         out.windDirection = vec3(general["winddirection"]) ?? Vec3(x: 0.707, y: 0.707, z: 0)
         out.gravityStrength = float(general["gravitystrength"]) ?? 1
         out.gravityDirection = vec3(general["gravitydirection"]) ?? Vec3(x: 0, y: -1, z: 0)
+        // #13/#15: 씬 플래그 워드 `scene+0xE0` 의 bit12 / bit6. 둘 다 **파스·보존 전용**이고
+        // 소비는 렌더러 몫이다(각 선언부 주석의 "착지 지점" 참조). `weBool` 이 WE 의 태그 5
+        // 게이트와 동형이라, 값이 문자열/숫자면 원본과 똑같이 false 로 떨어진다.
+        out.transparentSorting = weBool(general["transparentsorting"])
+        out.spritesheetRefreshSync = weBool(general["spritesheetrefreshsync"])
+        // #17/#22: general.lightconfig — 태그 7 이 아니면 nil(WE 는 아홉 키를 통째로 건너뛴다).
+        out.lightConfig = SceneLightConfig.parse(general["lightconfig"])
+        // #3: project `general.properties.schemecolor.value` 의 유효값. 값 채널이 userProps 라
+        // scene.json 의 general 이 아니지만, 씬 전역 상수라는 성격이 같아 같은 자리에서 얹는다
+        // (선언부 주석: WE 도 이 셋을 wallpaper 객체의 전용 슬롯에 둔다).
+        // WE 의 태그 4(stringValue) 검사와 동형 — 문자열이 아니면 (0,0,0) 유지.
+        if let raw = userProps["schemecolor"] as? String { out.schemeColor = schemeColorVec3(raw) }
         // H7: 품질 설정(general.quality).
         out.quality = quality
+    }
+
+    /// `schemecolor` 의 `"r g b"` → Vec3. WE 의 `strtod` 3연발(`0x14018228F` · `0x1401822D0` ·
+    /// `0x140182308`, 사이사이 비공백→공백 스캔)과 동형이다:
+    ///   · 성분이 모자라면 **남은 성분은 0**(`"1 0.5"` → (1, 0.5, 0)). 빈 문자열이면 (0,0,0)
+    ///     — WE 는 `0x140182283` 에서 첫 바이트가 NUL 이면 세 슬롯을 0 으로 채운다.
+    ///   · 숫자가 아닌 토큰은 `strtod` 가 0 을 준다(드롭이 아니라 0 — 자리는 유지된다).
+    /// 그래서 이 파일의 `vec3()`(3성분 미만이면 nil, 파스 실패 항목은 **드롭**)를 쓸 수 없다.
+    /// 동봉·설치본 실측은 전건 3성분이라 두 규약의 차이가 드러나는 자산은 0건이다.
+    ///
+    /// 구분자는 **스페이스(0x20)만**이다 — WE 의 전진 스캔이 `cmp byte [rbx], 0x20`(`0x1401822C0`)
+    /// 하나만 본다. 탭/개행이 섞인 값에서 우리와 WE 가 갈릴 수 있지만(WE 는 탭을 성분 내부로
+    /// 삼키고 우리는 그 토큰을 통째로 0 으로 떨어뜨린다) 실측 도달 0건이라 맞추지 않았다.
+    private static func schemeColorVec3(_ s: String) -> Vec3 {
+        let parts = s.split(separator: " ", omittingEmptySubsequences: true)
+        func comp(_ i: Int) -> Float {
+            guard i < parts.count else { return 0 }
+            return safeFloat(String(parts[i])) ?? 0
+        }
+        return Vec3(x: comp(0), y: comp(1), z: comp(2))
     }
 }
