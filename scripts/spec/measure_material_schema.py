@@ -965,8 +965,14 @@ def main():
         "크기 키 조합(전수)": {"번들최상위": freq(e_top["fboSizeShape"]),
                        "번들preview": freq(e_prev["fboSizeShape"]),
                        "코퍼스": freq(e_cor["fboSizeShape"])},
-        "크기 결정": "scale(=dst 나눗수) | fit(정사각 절대 픽셀) | width+height(절대 픽셀) | "
-                 "아무것도 없음. 넷 중 하나이고 조합은 관측되지 않았다(scale 과 fit 을 함께 쓴 fbo 0건)",
+        "크기 결정": "[정정 2026-08-21] **배타가 아니라 합성**이다. "
+                 "scale(=dst 나눗수) × fit(**긴 변**을 N 에 맞춘 종횡비 보존 봉투, 확대 금지) × "
+                 "width/height(fit 의 **입력**을 절대 픽셀로 대체). "
+                 "최종 = max(2, fit결과/scale) — 크기 계산(0x1401eb2cc-0x1401eb381)은 scale 을 "
+                 "전혀 안 보고, 나눗셈은 RT 생성자가 한다(0x1400d2ca1/0x1400d2cc9 idiv, "
+                 "0x1400d2cbc/0x1400d2cd3 cmovg 로 max(2,·)). "
+                 "종전 서술 'fit = 정사각 절대 픽셀' 도 틀렸다 — 1920x1080 에서 fit:256 은 256x144 다. "
+                 "다만 조합은 코퍼스에 관측되지 않는다(fit+scale 0건, width|height+scale 0건)",
     }, "확정", [asset_ev, corpus_ev, script_ev]))
 
     nosize = (e_top["fboSizeShape"]["(크기 키 없음)"], e_prev["fboSizeShape"]["(크기 키 없음)"],
@@ -982,19 +988,32 @@ def main():
         "경고": "크기 키를 필수로 보고 파싱하면 이 96건이 전부 '형식 오류'가 된다. 선택 키다",
     }, "확정", [asset_ev, corpus_ev, script_ev]))
 
+    # [2026-08-21] 추정 → 확정. **옛 키를 지우지 않는다** — 근거 축소 가드가 키 소멸을 잡고,
+    # 하나를 통과시키려고 allow_shrink 를 켜면 이 파일의 가드가 영구히 꺼진다(이 리포가 반복해서
+    # 잡아내는 '원격 스위치' 부류). hdr-bloom.json 의 upsampleWeightUnknown 묘비와 같은 처리다.
     add(specfmt.entry("effect.fbos.missingSizeDefault", {
         "질문": "크기 키가 없는 fbo 의 실제 해상도는 무엇인가",
-        "Waple 현행": "EffectManifest.swift:66 이 safeInt(f[\"scale\"]) ?? 1 → dst 전체 해상도",
+        "Waple 현행": "EffectManifest.swift 의 scale 기본 1 → dst 전체 해상도. **일치한다**.",
         "그럴듯한 이유": '이름이 _rt_FullCompoBuffer1("Full")이고 포맷이 rgba_backbuffer 다 — 풀해상도 의도로 읽힌다',
         "확정 못 한 것": "WE 가 정말 1(풀해상도)로 기본값을 잡는지. 에셋만으로는 판별 불가 — "
                     "wallpaper64.exe 의 fbo 생성 경로를 디컴파일해야 확정된다",
-    }, "추정", [specfmt.ev("asset", ASSETS.replace(os.sep, "/") + "/effects/blurprecise/effect.json"),
-                specfmt.ev("file", "Sources/WapleCore/EffectManifest.swift:66")]))
+        "결론": "**크기 키가 하나도 없는 fbo = dst 풀해상도**(축마다 max(4,·) 하한, RT 에서 max(2,·)).",
+        "근거": "0x1401eb2cc-0x1401eb2f4 가 미선언 축에 dst 를 그대로 넣고(width/height 는 u16 이라 "
+              "미선언 0xffff > 0x1000 이면 무시), 0x1401eb37d 가 fit 미선언에서 W'=W 로 통과시키며, "
+              "파서가 scale 부재를 1 로 채운다(0x1401e77e7).",
+        "closed": "**[2026-08-21] 위 '확정 못 한 것' 은 해소됐다** — 그 디컴파일을 했다. "
+                  "위 질문/그럴듯한 이유/확정 못 한 것은 당시 서술을 지우지 않고 남긴 것이다.",
+    }, "확정", [specfmt.ev("asset", ASSETS.replace(os.sep, "/") + "/effects/blurprecise/effect.json"),
+                specfmt.ev("file", "Sources/WapleCore/EffectManifest.swift"),
+                specfmt.ev("binary", "0x1401ea500-0x1401ebbb6 (크기 계산) · 0x1400d2c60 (RT 생성자)"),
+                specfmt.ev("doc", "docs/re/fluid-simulation.md §1.3")]))
 
     add(specfmt.entry("effect.fbos.scale", {
         "번들최상위": freq(e_top["fboScale"]), "번들preview": freq(e_prev["fboScale"]),
         "코퍼스": freq(e_cor["fboScale"]),
-        "의미": "dst 해상도 나눗수(4 = 1/4). fit/width/height 가 있으면 scale 은 없다",
+        "의미": "dst 해상도 나눗수(4 = 1/4). [정정 2026-08-21] fit/width/height 와 **배타가 아니다** — "
+              "원본은 크기 계산이 끝난 뒤 RT 생성자에서 나눈다(scale 이 0x1401eb9d4 로 4번째 인자에 "
+              "실려 0x1400d2ca1 idiv 에 닿는다). 코퍼스에 동시 선언이 0건일 뿐이다",
     }, "확정", [asset_ev, corpus_ev, script_ev]))
 
     add(specfmt.entry("effect.fbos.format", {
