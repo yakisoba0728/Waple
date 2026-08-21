@@ -152,6 +152,118 @@ pe=M.PE(M.BIN);s,d=M.blend_desc_sites(pe);print(json.dumps({'sites':s,'dropped':
 
 ---
 
+## 2.5 `passes[].usertextures[].keepaspect` — 소비처를 떴다 (2026-08-21)
+
+§2 가 "정본에 없던 키 1건" 으로 지목한 그 키다. 파스만 있고 규약이 비어 있었으므로
+`wallpaper64.exe` 에서 **파서와 소비처를 직접 다시 떴다**(선행 인용을 베끼지 않았다).
+
+### 2.5.1 파서 — 인용된 범위가 맞다
+
+`primary(0x140154871)` = **`0x140154480`–`0x140155668`**(단일 `.pdata` 조각). 머티리얼 패스
+파서이고 `combos` → `constantshadervalues` → `usershadervalues` → `usertextures` 순으로 읽는다.
+
+`usertextures[]`(`0x140154685`) 루프는 원소가 태그 4(문자열) 또는 7(객체)일 때만 처리하고,
+진입마다 `xor r12b, r12b`(`0x140154717`)로 플래그를 0 으로 깐다 — **부재 시 false**.
+객체 갈래에서만 `name`(`0x140154786`) · `type`(`0x1401547fc`, `stricmp "system"`→1 /
+`"usershortcut"`→2) · `keepaspect`(find `0x140154871` → 태그 5 확인 `0x140154887` →
+`asBool` `0x140154890` → `cmovne r12d, 1` `0x1401548a0`)를 읽는다. 문자열 갈래는
+`0x14015477a` 로 이 블록을 통째로 건너뛴다(= 항상 false).
+
+레코드는 **0x38바이트**(`mov ecx, 0x38` `0x1401549d9`)이고 `+0x30` 에 플래그가 들어간다
+(`mov byte [rax+0x30], r12b` `0x140154a09`). 그 레코드가 `pass+0x270` 의
+`unordered_map<int slot, UserTexture*>` 에 **슬롯 인덱스**로 꽂힌다
+(`sub_14004b8a0` = 4바이트 키 FNV-1a find, 노드 `+0x10`=키 `+0x18`=값 / 삽입 `0x140154b3c`).
+레코드 `+0x10` 은 유저 프로퍼티 `<name>.value` 문자열이다
+(`[engine+0x1718]` 에서 이름으로 찾고 `"value"` 를 다시 찾는다 — `0x140154a30`–`0x140154a96`).
+
+### 2.5.2 소비처 — `sub_1401556e0`
+
+**`primary()` 만으로는 안 잡힌다**(`0x1401556e0`–`0x140155745` 짜리 조각이 나온다).
+`merged()` 로 **6조각 = `0x1401556e0`–`0x140155fbb`** 가 한 몸이다. 패스의 `textures[]`
+(최대 10슬롯, `0x140155752`)를 돌면서 그 슬롯에 유저 텍스처가 있으면 이름을 갈아끼우는
+루틴이고, `keepaspect` 를 **두 자리에서** 읽는다.
+
+먼저 "레퍼런스 크기" 를 정한다 — 패스 JSON 의 `usertexturereference.width/height`
+(`0x140155909` — 그 객체 안의 `width` `0x140155974` / `height` `0x14015599a`), 없으면 슬롯의 기본 텍스처(`textures[i]`)
+파일을 프로브해서(`sub_14014d500` `0x140155a23`) 얻는다. 그 값을 `pass+0x2b0`/`+0x2b2`
+(u16 두 개)에 넣고(`0x140155a6d` / `0x140155a75`) 종횡비 `xmm6 = refW / refH`
+(`divss` `0x140155aaf`)를 만든다.
+
+| # | VA | 조건 | 하는 일 |
+| --- | --- | --- | --- |
+| ① | `0x140155d23` `cmp byte [rcx+0x30], 0` | 참 | 텍스처 로드 디스크립터의 float `[rsp+0x54]` 를 **0.0f** 로 덮는다(`0x140155d29`). 거짓이면 `xmm6`(= 레퍼런스 종횡비)이 그대로 실린다(`0x140155c10`) |
+| ② | `0x140155daf` `cmp byte [rax+0x30], 0` | 참 | `pass+0x2b0/+0x2b2` 를 **실제로 로드된 텍스처의 `[tex+0x2c]`/`[tex+0x30]`**(= imageW/imageH)으로 덮는다(`0x140155db5`–`0x140155dcb`) |
+
+그리고 유저 텍스처가 실제로 붙으면 `pass+0x1f8` 비트 2 를 세운다(`or` `0x140155e41`,
+진입 시 `and …,0xfffffffb` `0x1401556fd` 로 리셋).
+
+### 2.5.3 그 크기가 셰이더로 가는 길
+
+`sub_140209360` 이 텍스처 바인드마다 도는 "해상도 상수" 루틴이다:
+
+```
+0x140209423  mov  rcx, [rcx+0x498]          ; 현재 머티리얼 패스
+0x14020942a  test byte [rcx+0x1f8], 4       ; 유저 텍스처 있음?
+0x140209433  movzx eax, word [rcx+0x2b0]    ; 있으면 그 u16 쌍을
+0x140209449  movzx eax, word [rcx+0x2b2]    ;   [ctx+0x2f0]/[ctx+0x2f4] 로
+0x140209459  (없으면) [ctx+0x2f0] = [tex+0x2c], [ctx+0x2f4] = [tex+0x30]
+...
+0x1402094f8  call [vtable+0xb0](this, imgW/paddedW, imgH/paddedH,
+                                 [tex+0x20], [tex+0x24], (int)ctx+0x2f0, (int)ctx+0x2f4)
+```
+
+인자 배열이 Waple 의 `g_TextureNResolution = (paddedW, paddedH, imageW, imageH)` 규약과
+정확히 겹친다(`[tex+0x20]/[tex+0x24]` = padded, `[tex+0x2c]/[tex+0x30]` = image,
+xmm1/xmm2 = `image/padded` UV 스케일 — `divss` `0x1402094b4` / `0x1402094c0`).
+
+**즉 `keepaspect` 는 UV 도 쿼드 크기도 직접 건드리지 않는다.** 하는 일은 딱 둘이다.
+
+1. 텍스처 로더에 넘기는 **목표 종횡비를 0(= 강제하지 않음)** 으로 만든다.
+2. 셰이더가 보는 `g_TextureNResolution.zw` 를 레퍼런스 크기가 아니라 **실제 이미지 크기**로
+   바꾼다.
+
+즉 기본값(false)이 "유저가 꽂은 그림을 슬롯의 레퍼런스 종횡비에 **맞춰 넣는다**" 이고
+`true` 가 "원본 비율 그대로 두고 원본 크기를 그대로 보고한다" 다.
+
+### 2.5.4 `fit` 과는 다른 계산이다
+
+`fbos[].fit`(`EffectManifest.FBO.fittedBox`, 원본 `0x1401eb2cc`–`0x1401eb381`)은
+`W' = min(fit, 긴 변)` + `짧은 변 = trunc(비율 × W')` 로 **치수를 만든다**.
+`keepaspect` 에는 그런 산술이 **하나도 없다** — `min` 도 클램프도 절단도 없고, 어느 쪽
+크기를 고르느냐의 선택만 있다. **재사용할 계산이 없다.**
+
+### 2.5.5 [미해결] · Waple 도달
+
+* **[미해결] 크롭이냐 레터박스냐** — 디스크립터 `+0x54`(종횡비)를 읽는 로더 본체는
+  `*(engine+0x1518)` 의 가상함수 `+0x50`(`0x140155d81` 간접 호출)이고, 그 구체 구현을
+  정적으로 잡지 못했다. 다만 로드 전 캐시 조회 키가
+  `[usershortcut_]<value>x<trunc(종횡비×10)>`(`0x140155ab6` `mulss xmm7 = 10.0` →
+  `0x140155ac3` `cvttss2si`)라 **종횡비별로 다른 텍스처를 만든다**는 것까지는 확정이다.
+* **[미해결] 캐시 히트 비대칭** — 위 캐시 조회(`sub_14014cf90` `0x140155be3`)가 성공하면
+  `0x140155e3a` 로 점프해 소비처 ②(`0x140155daf`)를 **건너뛴다.** 즉 캐시가 이미 그 키를
+  들고 있으면 `keepaspect` 가 참이어도 `pass+0x2b0` 이 레퍼런스 크기로 남는다. 원본의
+  결함으로 보이지만 실행 관측을 못 했으므로 확정으로 쓰지 않는다.
+* **Waple 도달 = 그림 변화 0건.** 근거 셋:
+  1. `SceneLayer.materialUserTextureNames` / `materialUserTextureKeepAspect` 는
+     **렌더러 소비처가 0** 이다(`Sources/**/*.swift` 전수 — 파스·보존 전용).
+     렌더러가 읽는 유저 텍스처는 **이펙트 패스** 쪽
+     (`SceneEffectPass.userTextureNames`, `SceneRendererResources.swift:1285`)이고
+     `keepaspect` 는 **머티리얼 패스 전용**이다(문자열 `keepaspect` xref 1건 = `0x140154871`).
+  2. 유일한 도달 자산 `scenes/videoplayer/materials/background.json` 을 Waple 은 **마운트하지
+     않는다**. `videoplayer` 라는 문자열이 Waple 소스에 코드로 0건이고(주석·테스트만),
+     비디오는 `SceneVideoLayer` 가 `video` 레이어에 직접 프레임을 공급한다(`55a025d`).
+  3. WE 에서도 이 경로는 엔진이 런타임에 `wproperties.videotex.value` 를 써 넣어야 켜진다
+     (`0x140120050`, 리터럴 `"videotex"` `0x140489d38`). 값이 비면
+     `cmp qword [rdx+0x20], 0` / `je`(`0x1401558b1`)로 슬롯 전체를 건너뛴다.
+  4. `usertexturereference` 는 동봉+설치본 JSON 3655건에 **0건**이다 — 레퍼런스 크기는
+     실측 코퍼스에서 항상 "슬롯 기본 텍스처 프로브" 갈래로만 온다.
+
+그래서 **구현하지 않았다.** 지금 붙이면 도달 0인 코드가 되고, 켜지는 조건(머티리얼 유저
+텍스처 배선 + 비디오 씬 마운트)이 둘 다 없는 상태에서는 옳은지 그른지 검증할 방법도 없다.
+배선이 생기는 시점에 위 표 ①②를 그대로 옮기면 된다.
+
+---
+
 ## 3. 동봉 자산의 `blending` 값 전수
 
 | 값 | 전체 | effects | materials | presets | scenes |

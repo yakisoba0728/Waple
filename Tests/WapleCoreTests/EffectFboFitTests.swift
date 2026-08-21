@@ -175,6 +175,67 @@ final class EffectFboFitTests: XCTestCase {
         XCTAssertNil(boolish.fit, "boolean 은 fit 이 아니다")
     }
 
+    // MARK: - 의도적 편차: 하한이 원본 2 가 아니라 1 이다
+
+    /// **편차가 관측되는 구간을 정확히 못박는다(2026-08-21 재확인).**
+    ///
+    /// 원본은 렌더타깃 생성자가 축마다 `max(2, full/scale)` 을 건다(`0x1400d2cac` / `0x1400d2ccc`,
+    /// 리사이즈 경로 `0x140161f83`–`0x140161f9e`). Waple 의 `fittedBox` 는 `max(1, ·)` 이다
+    /// (사유는 `FBO.fittedBox` 주석의 "의도적 편차"). 두 값이 갈리는 **필요충분조건**은
+    /// "그 축의 계산 결과가 0 또는 1" 이다. `fit` FBO 는 코퍼스 전건이 `scale` 미선언(=1)이므로
+    /// (`fit`+`scale` 동시 선언 0건, 아래 전수 테스트가 지킨다) 갈리는 축은 **파생되는 짧은 변**
+    /// 뿐이고, 조건은 `trunc(minor/major × min(fit,major)) ≤ 1` 이다.
+    ///
+    /// 긴 변은 `min(fit, major)` 이고 `fit ≥ 1`·`major ≥ 1` 이라 **항상 ≥ 1** 이며
+    /// (dst 는 `max(4, ·)` 로, `width`/`height` 선언은 `max(1, ·)` 로 하한이 걸린다),
+    /// 원본과 갈리려면 `min(fit, major) == 1` 이어야 한다 — 그 경우도 여기서 같이 고정한다.
+    func testLowerBoundDeviationBoundaryIsTheDerivedShortSide() throws {
+        let f = try fbo(#"{"name":"_rt","fit":256,"format":"rgba8888"}"#)
+        // 경계 바로 위/아래를 float32 산술 그대로 짚는다(정수 `minor*fit/major` 로는 재현 못 한다).
+        XCTAssertEqual(box(f, 1920, 16), [256, 2], "16/1920×256 = 2.133 → 2 — 하한과 무관, 원본과 동일")
+        XCTAssertEqual(box(f, 1920, 15), [256, 2], "15/1920×256 = 2.0 정확 → 2 — 여기까지 원본과 동일")
+        XCTAssertEqual(box(f, 1920, 14), [256, 1], "14/1920×256 = 1.866 → 1 — **여기부터 편차**(원본 2)")
+        XCTAssertEqual(box(f, 1920, 4), [256, 1], "4/1920×256 = 0.533 → 0 → 하한 1(원본 2)")
+        // 종횡비로 다시 쓰면 `major:minor` 가 `fit/2 : 1` 보다 극단일 때다 — fit 256 이면 128:1.
+        XCTAssertEqual(box(f, 1280, 10), [256, 2], "128:1 정확 — 아직 아니다")
+        XCTAssertEqual(box(f, 1280, 9), [256, 1], "142:1 — 편차 구간")
+        // 긴 변 쪽 편차는 `fit == 1` 이라는 병리 입력에서만 난다.
+        let one = try fbo(#"{"name":"_rt","fit":1,"format":"rgba8888"}"#)
+        XCTAssertEqual(box(one, 1920, 1080), [1, 1], "원본이면 2x2 — fit:1 은 코퍼스 0건")
+    }
+
+    /// **동봉+설치 코퍼스에서 그 편차 구간에 닿는 자리가 하나도 없다**는 재확인(2026-08-21).
+    ///
+    /// `fit` 을 선언한 이펙트는 `fluidsimulation`(256) · `cursorripple`(512) 두 종뿐이고,
+    /// 그 둘을 **쓰는** 씬은 각자의 `preview/scene.json` 4건(동봉 2 + 설치본 2)이며 전부
+    /// **256×256 정사각 레이어**다(`size:"256 256"`, `orthogonalprojection 256×256`,
+    /// `scale:"1 1 1"`). 정사각이면 `minor == major` 라 짧은 변도 `min(fit, 256)` 이므로
+    /// 256 또는 256 — 하한 근처에 **64배 이상** 여유가 있다.
+    ///
+    /// 여기서는 그 site 기하와 실사용 디스플레이 기하 전부에서 **양 축이 2 이상**임을 지킨다.
+    /// 하나라도 2 미만이 되면 하한 편차가 관측 가능해지므로 `fittedBox` 의 `max(1,·)` 를
+    /// 원본대로 `max(2,·)` 로 올릴지 다시 판단해야 한다.
+    func testLowerBoundDeviationHasNoCorpusReach() throws {
+        let geometries: [(Int, Int)] = [
+            (256, 256),      // 동봉/설치 실사용 site 4건 전부
+            (1920, 1080), (1080, 1920), (2560, 1440), (3840, 2160), (3440, 1440),
+            (1366, 768), (5120, 1440),   // 32:9 슈퍼울트라와이드
+        ]
+        for fit in [256, 512] {
+            let f = try fbo(#"{"name":"_rt","fit":\#(fit),"format":"rgba8888"}"#)
+            for (w, h) in geometries {
+                let b = try XCTUnwrap(f.fittedBox(baseWidth: w, baseHeight: h))
+                XCTAssertGreaterThanOrEqual(b.width, 2, "fit:\(fit) @ \(w)x\(h) 폭이 하한 편차 구간에 들어갔다")
+                XCTAssertGreaterThanOrEqual(b.height, 2, "fit:\(fit) @ \(w)x\(h) 높이가 하한 편차 구간에 들어갔다")
+            }
+        }
+        // 실사용 site 기하에서의 실제 답도 같이 못박는다(여유가 얼마나 되는지가 판단 근거다).
+        let fluid = try fbo(#"{"name":"_rt_SmokeVelocity1","fit":256,"format":"rg1616f"}"#)
+        XCTAssertEqual(box(fluid, 256, 256), [256, 256], "하한 1 과 128배 여유")
+        let ripple = try fbo(#"{"name":"_rt_EightBuffer1","fit":512,"format":"rgba8888"}"#)
+        XCTAssertEqual(box(ripple, 256, 256), [256, 256], "확대 금지로 256 — 하한 1 과 128배 여유")
+    }
+
     // MARK: - 동봉 자산 전수 — `fit` 을 쓰는 FBO 를 하나도 빠뜨리지 않는다
 
     private static func bundledEffectsRoot() -> URL? {

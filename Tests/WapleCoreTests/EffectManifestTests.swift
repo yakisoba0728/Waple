@@ -498,4 +498,78 @@ final class EffectManifestTests: XCTestCase {
             XCTAssertEqual(byName[rel]?.passes.map(\.compose), [true, false], rel)
         }
     }
+
+    // MARK: - 이펙트 패스 콤보 키의 대소문자 — `resolvePassCombos.canonical()` 제거 근거
+
+    /// **2026-08-21: `SceneRendererResources.resolvePassCombos` 의 `canonical(_:)` 삭제를 지키는 잠금.**
+    ///
+    /// 그 헬퍼는 저작 콤보 키를 셰이더 `[COMBO]` **선언 이름 집합 안에서만** 대소문자 무시로
+    /// 접었다. 지금은 `GLSLTranslator.translate` 진입의 `uppercasedComboKeys`(실물 파스 시점
+    /// `toupper` 루프 `0x14015458c`–`0x1401545aa` 의 이행)가 **선언 유무와 무관하게 전건**을
+    /// 접으므로 그 근사는 잉여다. 다만 렌더 계층은 리눅스에서 타입체크조차 안 되므로,
+    /// 삭제가 안전한 **전제 조건**만 여기서 코어 레인에 못박는다.
+    ///
+    /// 전제: `resolvePassCombos` 가 실제로 보는 두 모집단에 **대문자가 아닌 콤보 키가 없다**.
+    ///   · A = `effect.json passes[].material` 이 가리키는 머티리얼의 `passes[0].combos`
+    ///   · B = 씬 `objects[].effects[].passes[].combos`
+    /// 하나라도 소문자·혼합 키가 들어오면 여기서 깨지고, 그때는 `uppercasedComboKeys` 를
+    /// `public` 으로 올려 이 함수에서 **딕셔너리별로** 접는 정본 수정안을 실행해야 한다
+    /// (`SceneRendererResources.swift` 의 `resolvePassCombos` 주석 참조).
+    ///
+    /// 동봉 실측(2026-08-21): A **3종/7회** · B **24종/64회** · 소문자 0.
+    /// 설치본 `assets`+`projects` 까지 넓히면 A 3종/14회 · B 25종/134회이고 역시 소문자 0이다
+    /// (설치본은 CI 에 없어 여기서는 동봉만 잰다).
+    func testEffectPassComboKeysAreAllUppercaseInBundledAssets() throws {
+        let effects = try XCTUnwrap(Self.bundledEffectsRoot(), "동봉 WEAssets/effects 를 못 찾았다")
+        let assets = effects.deletingLastPathComponent()          // …/WEAssets
+        let fm = FileManager.default
+        let walker = try XCTUnwrap(fm.enumerator(at: assets, includingPropertiesForKeys: nil))
+        let jsons = walker.compactMap { $0 as? URL }.filter { $0.pathExtension == "json" }
+
+        func dict(_ url: URL) -> [String: Any]? {
+            guard let d = try? Data(contentsOf: url) else { return nil }
+            return AssetJSON.dictionary(d)
+        }
+
+        var popA: [String: Int] = [:]      // 이펙트 머티리얼 combos
+        var popB: [String: Int] = [:]      // 씬 이펙트 패스 combos
+        for url in jsons {
+            guard let j = dict(url) else { continue }
+            if url.lastPathComponent == "effect.json" {
+                for case let mp as [String: Any] in (j["passes"] as? [Any] ?? []) {
+                    guard let rel = mp["material"] as? String else { continue }
+                    // 이펙트-로컬 → 팩 루트 순(렌더러 `effectScopedData` 와 같은 순서).
+                    let cands = [url.deletingLastPathComponent().appendingPathComponent(rel),
+                                 assets.appendingPathComponent(rel)]
+                    guard let hit = cands.first(where: { fm.fileExists(atPath: $0.path) }),
+                          let m = dict(hit),
+                          let p0 = (m["passes"] as? [Any])?.first as? [String: Any],
+                          let cb = p0["combos"] as? [String: Any] else { continue }
+                    for k in cb.keys { popA[k, default: 0] += 1 }
+                }
+            }
+            for case let o as [String: Any] in (j["objects"] as? [Any] ?? []) {
+                for case let e as [String: Any] in (o["effects"] as? [Any] ?? []) {
+                    for case let ps as [String: Any] in (e["passes"] as? [Any] ?? []) {
+                        guard let cb = ps["combos"] as? [String: Any] else { continue }
+                        for k in cb.keys { popB[k, default: 0] += 1 }
+                    }
+                }
+            }
+        }
+
+        XCTAssertEqual(popA.count, 3, "A 모집단(이펙트 머티리얼 combos) 종수가 바뀌었다: \(popA.keys.sorted())")
+        XCTAssertEqual(popA.values.reduce(0, +), 7, "A 모집단 도수가 바뀌었다")
+        XCTAssertEqual(popB.count, 24, "B 모집단(씬 이펙트 패스 combos) 종수가 바뀌었다: \(popB.keys.sorted())")
+        XCTAssertEqual(popB.values.reduce(0, +), 64, "B 모집단 도수가 바뀌었다")
+        // `DIRECTDRAW` 는 호출부가 **정확일치**로 조회하는 유일한 콤보다
+        // (`SceneRendererResources.swift` 의 `combos["DIRECTDRAW"] == 1`) — 소문자로 저작되면
+        // 번역기는 접어서 보는데 그 자리만 못 본다. 지금은 전건 대문자다.
+        XCTAssertTrue(popB.keys.contains("DIRECTDRAW"), "DIRECTDRAW 가 B 모집단에서 사라졌다")
+
+        let lower = (Array(popA.keys) + Array(popB.keys)).filter { $0 != $0.uppercased() }.sorted()
+        XCTAssertTrue(lower.isEmpty,
+                      "이펙트 패스 콤보에 대문자가 아닌 키가 생겼다 — resolvePassCombos 의 대소문자 접기를 "
+                      + "되살려야 한다(정본 수정안은 그 함수 주석): \(lower)")
+    }
 }

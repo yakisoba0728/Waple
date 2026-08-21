@@ -779,7 +779,9 @@ extension SceneRenderer {
                   let vert = String(data: vData, encoding: .utf8),
                   let frag = String(data: fData, encoding: .utf8) else { return nil }
             let scenePass = SceneRenderer.sceneOverride(forRawPassIndex: i, in: eff.passList)
-            let combos = resolvePassCombos(vert: vert, frag: frag, scenePass: scenePass,
+            // `vert` 는 더 넘기지 않는다 — 종전엔 `[COMBO]` 선언 이름 집합을 만드느라 필요했는데
+            // 그 정규화가 `GLSLTranslator` 로 옮겨가면서 이 함수는 `frag` 만 본다(:1042 주석).
+            let combos = resolvePassCombos(frag: frag, scenePass: scenePass,
                                            matCombos: meta.matCombos, matTextures: meta.matTextures,
                                            effectRoot: effectRoot, package: package)
             guard let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: combos, include: include) else {
@@ -1037,34 +1039,40 @@ extension SceneRenderer {
         return nil
     }
 
-    private func resolvePassCombos(vert: String, frag: String, scenePass: SceneEffectPass,
+    private func resolvePassCombos(frag: String, scenePass: SceneEffectPass,
                                    matCombos: [String: Int], matTextures: [String?],
                                    effectRoot: String?, package: ScenePackage) -> [String: Int] {
-        // G-A3-1: 저작 콤보 키의 **대소문자가 선언과 다를 수 있다.**
-        // 실측(동봉 WEAssets + WE 설치본 씬 전수):
-        //  · 셰이더 `[COMBO]` 선언 이름은 **82종 전부 대문자**(소문자·혼합 0종).
-        //  · 그런데 씬이 저작하는 콤보 키는 66종 중 **15종이 소문자**이고 그 사용이 **56회**다
-        //    (`paintwork` `normalmap` `lightmap` `reflection` `spritesheet` `metal` `selfillum` …).
-        // 즉 WE 는 대소문자를 무시하고 맞춘다. 종전의 정확일치 조회는 그 56회를 통째로 놓쳐
-        // 선언 기본값(대개 0)으로 굳혔다 — WE 자기 배경 `fantasticcar` 가 `"paintwork":1` 로
-        // 저작하는데 셰이더는 `#ifdef PAINTWORK` 라서 **차체가 칠해지지 않는다**.
+        // G-A3-1(2026-08-21 정리): 저작 콤보 키의 **대소문자가 선언과 다를 수 있다.**
+        // 이 자리에는 종전 `canonical(_:)` 헬퍼가 있었다 — 두 셰이더의 `[COMBO]` **선언 이름
+        // 집합 안에서만** 대소문자를 접던 근사다. 그건 이제 **잉여**다: 실물의 접기 자리는
+        // JSON 파스 시점의 `toupper` 루프(`0x14015458c`–`0x1401545aa`, `toupper` `0x1402bfb48`)
+        // 인데, Waple 은 그 계약을 **주입 직전**인 `GLSLTranslator.translate` 진입에서
+        // `uppercasedComboKeys` 로 이행한다(선언 유무와 무관하게 전건을 접으므로 종전
+        // `canonical` 보다 **넓다** — 저작 소문자 15종 중 canonical 이 잡던 건 1종뿐이었다).
         //
-        // 규약: **정확일치 우선**, 없을 때만 선언 이름 집합에서 대소문자 무시로 찾아 그 철자로
-        // 정규화한다. 이러면 (a) 기존 대문자 저작은 비트동일이고 (b) 혼합 케이스 선언(워크샵
-        // 셰이더에 있을 수 있다 — 동봉 자산엔 0종)도 자기 철자로 정확히 맞는다.
-        let declared = ShaderPreprocessor.parseComboDefaults(vert)
-            .merging(ShaderPreprocessor.parseComboDefaults(frag), uniquingKeysWith: { a, _ in a })
-        var canonicalByLowercased: [String: String] = [:]
-        for name in declared.keys where canonicalByLowercased[name.lowercased()] == nil {
-            canonicalByLowercased[name.lowercased()] = name
-        }
-        func canonical(_ key: String) -> String {
-            if declared[key] != nil { return key }                 // 정확일치 우선
-            return canonicalByLowercased[key.lowercased()] ?? key  // 선언에 없으면 원문 보존
-        }
+        // **삭제 전 전수 확인**(동봉 WEAssets + 설치본 `assets`/`projects`, JSON 3655건 전건 파스):
+        //  · 셰이더 `[COMBO]` 선언 이름 68종 — **전건 대문자**(소문자·혼합 0종).
+        //  · `resolvePassCombos` 가 실제로 보는 두 모집단, 즉 `effect.json passes[].material` 이
+        //    가리키는 머티리얼의 `passes[0].combos`(A: 3종/14회)와 씬
+        //    `objects[].effects[].passes[].combos`(B: 25종/134회) 안에 **대문자가 아닌 키는 0건**이다.
+        //  · 코퍼스 전체(모든 `combos` 딕셔너리 66종/462회)로 넓혀도 `canonical` 이 철자를 바꿀
+        //    키는 **`reflection` 1건뿐**이고, 그건 `projects/defaultprojects/arsenal/materials/
+        //    pistols/planks.json` — **어떤 effect.json 도 참조하지 않는** 3D 모델 머티리얼이라
+        //    이 함수의 모집단이 아니다(모델 머티리얼 콤보는 `SceneDocument.parseMaterial` 소관).
+        // 즉 이 삭제는 동봉+설치 코퍼스 전건에서 **비트동일**이다.
+        //
+        // **[미해결] 남는 틈 두 곳** — 둘 다 `canonical` 도 (선언된 키에 한해서만 접었으므로)
+        // 제대로 막지 못하던 자리라 이번 삭제로 나빠지지 않는다. 코퍼스 도달은 위 실측대로 0.
+        //   ① 이 함수가 돌려준 딕셔너리를 호출부가 `combos["DIRECTDRAW"] == 1` 로 **정확일치**
+        //      조회한다(:810). 워크샵이 `"directdraw":1` 로 저작하면 번역기는 접어서 보는데
+        //      여기만 못 본다.
+        //   ② 아래 `samplerCombos`/`formatComboSlots` 게이트의 `combos[...] == nil` 도 정확일치다.
+        //   정본 수정안: `GLSLTranslator.uppercasedComboKeys` 를 `public` 으로 올리고
+        //   matCombos/scenePass.combos 를 **딕셔너리별로** 접은 뒤 병합하는 것(= 실물의 파스
+        //   시점 접기와 같은 위치). 그 파일은 이번 소유 밖이라 보고서로 넘긴다.
         var combos: [String: Int] = [:]
-        for (k, v) in matCombos { combos[canonical(k)] = v }
-        for (k, v) in scenePass.combos { combos[canonical(k)] = v }
+        for (k, v) in matCombos { combos[k] = v }
+        for (k, v) in scenePass.combos { combos[k] = v }
         for (slot, comboName) in GLSLTranslator.samplerCombos(frag) where combos[comboName] == nil {
             let sceneBound = slot < scenePass.textureNames.count && scenePass.textureNames[slot] != nil
             let matBound = slot < matTextures.count && matTextures[slot] != nil
@@ -1201,6 +1209,29 @@ extension SceneRenderer {
         // F162/F163: bind(fbo/previous) 슬롯은 TexImage 가 없는 파이프라인-내부 렌더타깃 — 항상 clamp
         // (콘텐츠 경계 밖 랩은 아티팩트, W4a 실측). aux(실 자산) 슬롯은 아래에서 TexImage.clampUVs 로 채운다.
         var texWrap = [Float](repeating: 0, count: 8)
+        // **[2026-08-21 확정] 아래 fbo 갈래가 채우는 `texRes` 는 translated 경로에서 죽은 값이다.**
+        // 근거(전수 추적):
+        //   · 이 함수의 `texRes` 는 `TranslatedPass.texRes` 로만 흘러간다(:814 이 유일한 소비).
+        //     `CustomLayerShader.texRes`(:1811)는 **다른 함수**가 따로 만든다.
+        //   · `TranslatedPass.texRes` 를 읽는 자리는 `SceneRendererFrameEncoder.swift:2316` 하나뿐이고
+        //     (`:2000` 은 `WAPLE_MP_TRUNC` 디버그 재포장이라 결국 같은 :2316 으로 간다), 그 자리는
+        //     **`runtimeTexRes(for:src:fboTex:)`(:69–:81)를 통과시킨다** — 그 함수가 `pass.binds` 의
+        //     모든 슬롯(`source == -1` → src, `source >= 0` → `fboTex[source]`)과 `pass.aux` 의 모든
+        //     슬롯을 **실제 MTLTexture 치수로 덮어쓴다.**
+        //   · `source >= 0 && source < fboTex.count` 는 항상 참이다: `fboSpecs` 는
+        //     `liveFbos.enumerated().map`(:828)이라 `fbos`(= `liveFbos`)와 인덱스 공간·개수가 같고,
+        //     프레임 시점 `fboTex` 는 `fboSpecs` 전건에 1장씩 채워진다(FrameEncoder :2029–).
+        //   ⇒ 즉 bind 슬롯의 빌드 시점 값은 예외 없이 프레임 시점 값으로 대체된다.
+        //
+        // 그래서 여기 남은 세 갈래(`fittedBox` / `fixedWidth` / `scale` 부동소수 나눗셈)의 차이는
+        // **관측 가능한 표면이 없다.** `990aa2a` 가 `[미해결]` 로 넘긴 "`texRes` scale 갈래의
+        // 부동소수 나눗셈(`lh/s`)이 실제 텍스처 크기(정수 바닥)와 어긋나는 구간" 은 그래서
+        // **고칠 것이 아니라 도달이 없는 것**이다 — 정수화해도, 안 해도 셰이더가 보는 값은
+        // `fboTex[source]` 의 실제 치수다. 손대지 않는 이유가 "무회귀" 에서 "무관측" 으로 바뀌었다.
+        //
+        // 그럼에도 코드를 지우지 않는 이유: 이 배열은 `runtimeTexRes` 가 덮기 **전**의 기본값이고
+        // (bind/aux 어디에도 없는 선언 슬롯은 그대로 남는다), 프레임 시점 덮어쓰기가 미래에
+        // 좁아지면 여기가 유일한 방어선이 된다. 값이 규약과 어긋난 채로 남는 쪽이 더 나쁘다.
         for (slot, source) in binds where slot < 8 && source >= 0 {
             let fbo = fbos[source]
             // W-FIT(2026-08-21): `fit` 은 정사각이 아니라 "긴 변을 N 으로, 종횡비 보존, 확대 금지" 다
