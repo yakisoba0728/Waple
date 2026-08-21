@@ -230,7 +230,13 @@ public struct SceneLayer: Equatable {
     /// 이기는지는 확인 못 했다 — 소비를 붙일 때 먼저 정해야 한다.
     public var clampUVs: Bool = true
     public var noInterpolation: Bool = false
-    public var spacing: Float? = nil
+    /// **엔진에 이미지 레이어 `spacing` 은 없다.** 디스크립터 이름 문자열 `"spacing"` 은
+    /// 이미지 전체에 **`0x140491878` 한 곳뿐**이고 그 disp32 참조 2건(`0x140259458` ·
+    /// `0x1402594e6`)이 **둘 다 텍스트 등록부 안**이다(전-이미지 바이트 스캔 — `lea` 선형
+    /// 디스어셈은 함정 #8 로 놓친다). 이미지 등록부 `0x1401ee520` 의 12개 프로퍼티에도 없다.
+    /// 즉 이 필드는 파스·보존만 하는 **유령 키**다 — 소비처 0. 그래도 형(型)은 텍스트와
+    /// 맞춰 vec2 로 둔다(같은 이름의 키가 두 타입에서 다른 모양이면 그게 더 나쁘다).
+    public var spacing: Vec2? = nil
     public var lockTransforms: Bool = false
     public var isSolid: Bool = false
     public var ledSource: Bool = false
@@ -389,7 +395,29 @@ public struct SceneTextLayer: Equatable {
     /// 기본 true — 위 SceneLayer.clampUVs 주석 참조(렌더러블 ctor 0x8040 의 bit15).
     public var clampUVs: Bool = true
     public var noInterpolation: Bool = false
-    public var spacing: Float? = nil
+    /// 텍스트 `spacing` — **vec2 다**(종전 `Float?` 은 형상 자체가 틀렸다).
+    ///
+    /// 디스크립터 등록 `0x1402594f4`: `[desc+0x30] = 1`(=vec2) · `[desc+0x34] = 1272`(=`+0x4f8`) ·
+    /// 주입기 `[desc+0x38] = 0x1401a3fc0`(vec2 주입기) · raw set/get `0x1401a4200`/`0x1401a4220`.
+    /// 형제 키 `padding` 이 같은 타입 1(`0x140259421`, `+0x4e8`)이라 파스 규약도 그쪽과 같다.
+    ///
+    /// vec2 주입기 `0x1401a3fc0`–`0x1401a41f8` 의 실제 규약:
+    ///   · 태그 4(문자열): 두 성분을 **0 으로 깔고**(`mov qword [rdi+rsi], 0` @`0x1401a4025`)
+    ///     `strtod`(`0x1402d06ac`)로 첫 토큰 → x, 그 뒤 **스페이스(0x20)** 를 만나야만 둘째 토큰 → y.
+    ///   · 태그 1/2/3(정수/실수): `asFloat`(`0x140086220`) 한 값을 **두 성분에 브로드캐스트**
+    ///     (`movss [rdi+rsi+4]` / `movss [rdi+rsi]` @`0x1401a40a4`–`0x1401a40aa`).
+    ///   · 그 외 태그: 멤버를 **안 건드린다** → 여기서는 nil(호출부 기본값 유지).
+    ///
+    /// 도달: 동봉·설치본 씬 186개 전건 **0**. 워크샵 코퍼스는 13씬 171건이고 **전건
+    /// `"0.00000 0.00000"` 문자열**(`spec/corpus/scene-schema.json` `text.spacing`) —
+    /// 종전 `float()` 은 그 2성분 문자열을 `Float(_:)` 로 통째 파스하다 실패해 **전건 nil** 이었다.
+    /// 소비처가 아직 없으므로 그림이 바뀌는 씬은 **0건**이고, 바뀌는 것은 보존 값의 형상뿐이다.
+    ///
+    /// **[미해결]** 1-토큰 문자열(`"3"`)에서 실물은 `(3, 0)`(둘째 성분이 0 으로 남는다)인데
+    /// `uniformVec2` 는 `(3, 3)` 으로 브로드캐스트한다. 형제 키 `padding` 이 쓰는 규약을
+    /// 그대로 따른 것이고, 두 키 모두 그 형태의 도달이 동봉·워크샵 코퍼스에 0 이라 맞추지 않았다
+    /// (맞추려면 `strtod` 의 **접두 파스**까지 흉내내야 해서 `padding` 쪽 회귀 위험이 생긴다).
+    public var spacing: Vec2? = nil
     public var lockTransforms: Bool = false
     public var isSolid: Bool = false
     /// 텍스트 오브젝트 `depthtest`(scene-json-schema.md:123 텍스트 키 목록 — SceneLayer.depthTest 의
@@ -1452,15 +1480,15 @@ extension SceneDocument {
         // HDR/블룸 플래그 — 종전 조용히 폐기(lane-04 §2.1). {"user":…,"value":Bool} 바인딩은 unwrap 이 처리.
         // `hdr` 은 flags bit10(게터 `0x14019b900`)이라 생성자 `0x26` 에서 clear = false.
         // `bloom` 은 bit1 이라 WE 기본은 **true** 인데 여기만 의도적으로 false 다 — 선언부 주석 참조.
-        let hdr = (unwrap(general["hdr"]) as? Bool) ?? false
-        let bloom = (unwrap(general["bloom"]) as? Bool) ?? false
+        let hdr = weBool(general["hdr"])
+        let bloom = weBool(general["bloom"])   // 실물 기본은 bit1=true 인데 여기만 의도적 false(위 주석)
         // {"user":…,"value":Bool} 바인딩 형태(실물 21씬)는 unwrap 이 value 를 꺼낸다(평문 Bool 은 그대로).
         // 패럴랙스 3종 기본값은 씬 생성자 실측이다 — amount `scene+0x334`=0.5(`0x140186fa5`),
         // mouseinfluence `scene+0x33c`=0.5(`0x140186fbb`, qword 스토어의 하위 dword),
         // delay `scene+0x338`=0.1(`0x140186fb0`). 종전 1/1/0 은 이동량·마우스 추종을 2배로,
         // 추종을 즉시 스냅으로 만들었다. 동봉 172씬 중 이 셋을 생략하는 4씬(gifs · particleeditor ·
         // particleeditor3dscale · videoplayer)은 `cameraparallax` 도 생략해 비활성이라 **영향 0건**.
-        let parallaxEnabled = (unwrap(general["cameraparallax"]) as? Bool) ?? false
+        let parallaxEnabled = weBool(general["cameraparallax"])
         let parallaxAmount = float(general["cameraparallaxamount"]) ?? 0.5
         let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 0.5
         let parallaxDelay = max(0, float(general["cameraparallaxdelay"]) ?? 0.1)
@@ -1503,12 +1531,14 @@ extension SceneDocument {
             // `visible` 은 평문 불리언 | 바인딩 객체 {"value":Bool, "script":JS} 두 형태. 스크립트가 있는
             // 이미지 레이어는 정적 false 여도 유지(런타임 토글 + 컨트롤러 top-level 사이드이펙트 —
             // 실물 3394601417 'bt') — 그 외 오브젝트는 정적 false 시 기존대로 드롭.
-            var initialVisible = true
             var visibleScript: String? = nil
             var visibleScriptProps: String? = nil
-            if let b = obj["visible"] as? Bool { initialVisible = b }
-            else if let vis = obj["visible"] as? [String: Any] {
-                if let v = vis["value"] as? Bool { initialVisible = v }
+            // `weBool(_:_:)` 이 실물의 두 단계를 그대로 접는다 — ① 평문 태그 5 면 그 값,
+            // ② 태그 7 이면 `find("value")` 가 태그 5 일 때만(그래서 `unwrap` 후 재판별),
+            // ③ 어느 쪽도 아니면 **생성자 기본값 유지** = bit0 기본 true(`0x1401e1a9d`–`0x1401e1b2d`).
+            // 종전 맨 `as? Bool` 은 ③ 에서 `"visible": 1` 을 참으로 읽어 우연히 맞았을 뿐이다.
+            let initialVisible = weBool(obj["visible"], true)
+            if let vis = obj["visible"] as? [String: Any] {
                 visibleScript = vis["script"] as? String
                 if visibleScript != nil { visibleScriptProps = Self.scriptPropsJSON(vis["scriptproperties"]) }
             }
@@ -1848,23 +1878,23 @@ extension SceneDocument {
         layer.id = intVal(obj["id"]) ?? 0
         layer.alignment = (obj["alignment"] as? String) ?? "center"
         // F692/F696: perspective 플래그·명시 렌더 의존 id 목록 파스 보존(소비는 렌더러 책임 — 필드 주석 참조).
-        layer.perspective = (unwrap(obj["perspective"]) as? Bool) ?? false
+        layer.perspective = weBool(obj["perspective"])
         layer.dependencies = (obj["dependencies"] as? [Any])?.compactMap { intVal($0) } ?? []
         // M7/M5: object-level render flags + config passthrough.
-        layer.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
-        layer.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? true
-        layer.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? true   // WE ctor 0x8040 bit15 — 선언부 주석 참조
-        layer.noInterpolation = (unwrap(obj["nointerpolation"]) as? Bool) ?? false
-        layer.spacing = float(obj["spacing"])
-        layer.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
-        layer.isSolid = (unwrap(obj["solid"]) as? Bool) ?? false
-        layer.ledSource = (unwrap(obj["ledsource"]) as? Bool) ?? false
+        layer.disablePropagation = weBool(obj["disablepropagation"])
+        layer.copyBackground = weBool(obj["copybackground"], true)
+        layer.clampUVs = weBool(obj["clampuvs"], true)   // WE ctor 0x8040 bit15 — 선언부 주석 참조
+        layer.noInterpolation = weBool(obj["nointerpolation"])
+        layer.spacing = uniformVec2(obj["spacing"])   // vec2 — 선언부 주석(유령 키, 소비처 0)
+        layer.lockTransforms = weBool(obj["locktransforms"])   // 유령 키(엔진 문자열 0바이트) — weBool 주석
+        layer.isSolid = weBool(obj["solid"])
+        layer.ledSource = weBool(obj["ledsource"])
         if let config = obj["config"] as? [String: Any] {
-            layer.configPassthrough = (unwrap(config["passthrough"]) as? Bool) ?? false
-            layer.configAutosize = (unwrap(config["autosize"]) as? Bool) ?? false
-            layer.configIsSolidLayer = (unwrap(config["solidlayer"]) as? Bool) ?? false
-            layer.configIsProjectLayer = (unwrap(config["projectlayer"]) as? Bool) ?? false
-            layer.configIsInstanced = (unwrap(config["instanced"]) as? Bool) ?? false
+            layer.configPassthrough = weBool(config["passthrough"])
+            layer.configAutosize = weBool(config["autosize"])
+            layer.configIsSolidLayer = weBool(config["solidlayer"])
+            layer.configIsProjectLayer = weBool(config["projectlayer"])
+            layer.configIsInstanced = weBool(config["instanced"])
         }
         return layer
     }
@@ -1921,7 +1951,7 @@ extension SceneDocument {
             // F434: volume 과 동일하게 {user,value} 바인딩 언랩 경유 — 평문 캐스트만이면 바인딩
             // 형태가 기본값(single/false = 자동재생)으로 오판된다.
             playbackMode: (unwrap(obj["playbackmode"]) as? String) ?? "single",
-            startSilent: (unwrap(obj["startsilent"]) as? Bool) ?? false,
+            startSilent: weBool(obj["startsilent"]),
             minTime: float(obj["mintime"]) ?? 0,
             maxTime: float(obj["maxtime"]) ?? 0)
         // 이펙트 상수(:1323)·레이어(:731-739)와 동일 비대칭 수정: float() 의 {value} 언랩이 형제 script 를
@@ -1931,7 +1961,7 @@ extension SceneDocument {
             if let j = Self.scriptPropsJSON(bind["scriptproperties"]) { snd.volumeScriptProps = j }
         }
         // 공간화 키(json-keys.txt:935/933/928 — 실측 3737268876 등 32오브젝트) — 파스만(필드 주석 참조).
-        snd.spatialization = (unwrap(obj["spatialization"]) as? Bool) ?? false
+        snd.spatialization = weBool(obj["spatialization"])
         snd.attenuation = float(obj["attenuation"]) ?? 1
         snd.minDistance = float(obj["mindistance"]) ?? 1
         return snd
@@ -2117,9 +2147,9 @@ extension SceneDocument {
         }
         cam.path = obj["path"] as? String
         cam.queueMode = (obj["queuemode"] as? String) ?? "random"
-        cam.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
-        cam.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
-        cam.isSolid = (unwrap(obj["solid"]) as? Bool) ?? false
+        cam.disablePropagation = weBool(obj["disablepropagation"])
+        cam.lockTransforms = weBool(obj["locktransforms"])
+        cam.isSolid = weBool(obj["solid"])
         return cam
     }
 
@@ -2167,10 +2197,10 @@ extension SceneDocument {
         // 에디터 기본(maxwidth 500 — 1468건 / maxrows 1 — 1628건). 부재/미체크 nil = 무제한(무회귀).
         // 체크 플래그도 unwrap 경유 — 코퍼스 전수 평문 Bool 이라 무회귀지만, 값(maxwidth/maxrows)만
         // 바인딩을 읽고 게이트는 못 읽는 비대칭을 없앤다(이 파일의 hdr/bloom/cameraparallax 와 동형).
-        if (unwrap(obj["limitwidth"]) as? Bool) == true, case let mw = float(obj["maxwidth"]) ?? 500, mw > 0 { t.maxWidth = mw }
-        if (unwrap(obj["limitrows"]) as? Bool) == true, case let mr = intVal(obj["maxrows"]) ?? 1, mr > 0 { t.maxRows = mr }
-        t.overflowEllipsis = (obj["limituseellipsis"] as? Bool) ?? false
-        t.justify = (obj["blockalign"] as? Bool) ?? false
+        if weBool(obj["limitwidth"]), case let mw = float(obj["maxwidth"]) ?? 500, mw > 0 { t.maxWidth = mw }
+        if weBool(obj["limitrows"]), case let mr = intVal(obj["maxrows"]) ?? 1, mr > 0 { t.maxRows = mr }
+        t.overflowEllipsis = weBool(obj["limituseellipsis"])
+        t.justify = weBool(obj["blockalign"])
         // 프로퍼티 스크립트(origin/scale/alpha/color/angles, F218): parseLayer(:731-739)와 동형 캡처 —
         // 렌더러가 재래스터 없이 인코드 시점 트랜스폼/알파 적용(buildTexts/encodeText 참조). visible(F219)
         // 은 위 578행 게이트에서 이미 판정된 값을 그대로 기록.
@@ -2190,13 +2220,13 @@ extension SceneDocument {
         // F693: 텍스트 이펙트 체인 파스·보존(레이어/3D 와 동일 parseEffects 경로 — 렌더 적용은 별도 그룹).
         t.effects = parseEffects(obj["effects"], userProps: userProps)
         // M7: object-level render flags.
-        t.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
-        t.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? true
-        t.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? true   // WE ctor 0x8040 bit15 — 선언부 주석 참조
-        t.noInterpolation = (unwrap(obj["nointerpolation"]) as? Bool) ?? false
-        t.spacing = float(obj["spacing"])
-        t.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
-        t.isSolid = (unwrap(obj["solid"]) as? Bool) ?? false
+        t.disablePropagation = weBool(obj["disablepropagation"])
+        t.copyBackground = weBool(obj["copybackground"], true)
+        t.clampUVs = weBool(obj["clampuvs"], true)   // WE ctor 0x8040 bit15 — 선언부 주석 참조
+        t.noInterpolation = weBool(obj["nointerpolation"])
+        t.spacing = uniformVec2(obj["spacing"])   // 디스크립터 타입 1 = vec2 `+0x4f8` — 선언부 주석
+        t.lockTransforms = weBool(obj["locktransforms"])   // 유령 키 — weBool 주석
+        t.isSolid = weBool(obj["solid"])
         // 텍스트 오브젝트 depthtest(scene-json-schema.md:123) — 실측 문자열 "enabled"(1394건)이 정본,
         // 불리언 형태도 관용. 기본 true(항등). 파스·보존 전용(SceneTextLayer.depthTest 주석 참조).
         if let s = obj["depthtest"] as? String { t.depthTest = s != "disabled" }
@@ -2204,10 +2234,10 @@ extension SceneDocument {
         // C⑥: colorBlendMode — 이미지 레이어(:1157 인근)와 동일 파스 규약.
         t.colorBlendMode = blendModeVal(obj["colorBlendMode"])
         // C⑨: 아웃라인/배경 박스 파스·보존(실측 스키마: outlinecolor/backgroundcolor 는 "r g b" 벡터).
-        t.outline = (unwrap(obj["outline"]) as? Bool) ?? false
+        t.outline = weBool(obj["outline"])
         t.outlineColor = vec3(obj["outlinecolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         t.outlineThickness = float(obj["outlinethickness"]) ?? 0
-        t.opaqueBackground = (unwrap(obj["opaquebackground"]) as? Bool) ?? false
+        t.opaqueBackground = weBool(obj["opaquebackground"])
         t.backgroundColor = vec3(obj["backgroundcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         // F4-polish①: anchor/padding/backgroundbrightness — 파스·보존만(SceneTextLayer 필드 주석 참조).
         t.anchor = (obj["anchor"] as? String) ?? "none"
@@ -2234,7 +2264,7 @@ extension SceneDocument {
             // 하나도 빠짐없이 `castshadow` 키를 생략한다** — 즉 종전 `?? false` 는 WE 자체 3D
             // 배경의 그림자를 100% 없애고 있었다(접지감 소실 = 육안 차이 최대급).
             // {user,value} 바인딩도 읽는다(종전 평문 Bool 만 — 바인딩은 전부 false 로 접혔다).
-            castShadow: (unwrap(obj["castshadow"]) as? Bool) ?? true,
+            castShadow: weBool(obj["castshadow"], true),
             parent: intVal(obj["parent"]),
             effects: parseEffects(obj["effects"], userProps: userProps),
             order: order)
@@ -2272,11 +2302,11 @@ extension SceneDocument {
             exponent: float(obj["exponent"]) ?? 1,
             innerCone: float(obj["innercone"]) ?? 0,
             outerCone: float(obj["outercone"]) ?? 0,
-            castShadow: (unwrap(obj["castshadow"]) as? Bool) ?? false,   // {user,value} 바인딩도 읽는다(종전 평문 Bool 만 — 바인딩은 전부 false 로 접혔다)
+            castShadow: weBool(obj["castshadow"]),   // {user,value} 바인딩도 읽는다(종전 평문 Bool 만 — 바인딩은 전부 false 로 접혔다)
             parent: intVal(obj["parent"]),
             order: order,
             cascadeDistances: cascades,
-            castVolumetrics: (unwrap(obj["castvolumetrics"]) as? Bool) ?? false,   // castshadow 와 동일 사유
+            castVolumetrics: weBool(obj["castvolumetrics"]),   // castshadow 와 동일 사유
             volumetricsExponent: float(obj["volumetricsexponent"]) ?? 1,
             density: float(obj["density"]) ?? 2,
             // ltube 세그먼트 단점 B(WE g_LTube_OriginB — 키는 wallpaper64.exe 스트링 실측 소문자).
@@ -2612,8 +2642,7 @@ extension SceneDocument {
         var best: (name: String, rate: Float, blend: Float, clipId: Int?)? = nil
         for case let layer as [String: Any] in layers {
             // 바인딩 객체 {"value":false,...} 언랩 — parseAllAnimationLayers 와 동일 해석(숨긴 클립 오선택 방지)
-            let visible = (layer["visible"] as? Bool)
-                ?? ((layer["visible"] as? [String: Any])?["value"] as? Bool) ?? true
+            let visible = weBool(layer["visible"], true)   // 등록 0x14026ca3e, `+0xd0` bit0 기본 true
             guard visible else { continue }
             let blend = float(layer["blend"])  // 딕셔너리 blend(스크립트/애니 커브) = 이벤트 트리거 → 제외
             guard let bl = blend, bl >= 0.5 else { continue }
@@ -2631,10 +2660,9 @@ extension SceneDocument {
         guard let layers = raw as? [Any] else { return [] }
         return layers.compactMap { any in
             guard let l = any as? [String: Any] else { return nil }
-            let visible = (l["visible"] as? Bool)
-                ?? ((l["visible"] as? [String: Any])?["value"] as? Bool) ?? true
+            let visible = weBool(l["visible"], true)   // 등록 0x14026ca3e, `+0xd0` bit0 기본 true
             var al = AnimationLayer(name: (l["name"] as? String) ?? "",
-                                    additive: (l["additive"] as? Bool) ?? false,
+                                    additive: weBool(l["additive"]),   // 등록 0x14026cb0b, `+0xd0` bit1
                                     // F435: 스크립트-only blend(바인딩 객체인데 정적 value 없음)의 기본은 0 — 형제
                                     // 선택 경로 parseAnimationLayers 가 같은 입력을 "시작≈0"으로 간주하는 것과
                                     // 대칭(엔진 생성 실패 시 풀블렌드 포즈 지속 방지). 키 부재는 종전대로 1.
@@ -2744,7 +2772,7 @@ extension SceneDocument {
         }
         if name.hasPrefix("_rt_") {
             // 프레임버퍼 참조(fullscreen/compose/project layer) → 컴포지션 레이어.
-            let fullscreen = (model["fullscreen"] as? Bool) ?? (model["autosize"] as? Bool) ?? false
+            let fullscreen = weBoolOpt(model["fullscreen"]) ?? weBoolOpt(model["autosize"]) ?? false
             return .frameBuffer(fullscreen: fullscreen)
         }
         if name.hasPrefix("/") {
@@ -2797,12 +2825,12 @@ extension SceneDocument {
             if p.visibleScript != nil { p.visibleScriptProps = Self.scriptPropsJSON(vis["scriptproperties"]) }
         }
         // M7: object-level render flags.
-        p.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
-        p.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? true
-        p.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? true   // WE ctor 0x8040 bit15 — 선언부 주석 참조
-        p.noInterpolation = (unwrap(obj["nointerpolation"]) as? Bool) ?? false
-        p.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
-        p.isSolid = (unwrap(obj["solid"]) as? Bool) ?? false
+        p.disablePropagation = weBool(obj["disablepropagation"])
+        p.copyBackground = weBool(obj["copybackground"], true)
+        p.clampUVs = weBool(obj["clampuvs"], true)   // WE ctor 0x8040 bit15 — 선언부 주석 참조
+        p.noInterpolation = weBool(obj["nointerpolation"])
+        p.lockTransforms = weBool(obj["locktransforms"])   // 유령 키 — weBool 주석
+        p.isSolid = weBool(obj["solid"])
         return p
     }
 
@@ -2839,15 +2867,32 @@ extension SceneDocument {
     /// controlpointN). 색 배수는 colorn(0..1) × brightness(스칼라) × color(0..255 → /255) 합성.
     /// id 는 인스턴스 식별자(미적용). 유효 필드 없으면 nil.
     ///
-    /// `controlpointangleN` 은 **여전히 미구현**이지만, 종전 주석의 "실코퍼스 전건 0" 은 동봉 자산
-    /// 기준으로 **거짓**이다(2026-08-20 재측정). 이 키를 가진 오브젝트 6건 중 **2건이 0 이 아니다**:
-    ///   `presets/water/previewdrippingwater/scene.json`  angle1 "0 0 −0.52360" · angle2 "0 0 0.52360"
-    ///   `presets/magic/previewvortexorb/scene.json`      angle1 "2.47837 −0.62832 0.02213"(애니 바인딩)
-    /// 둘 다 `preview*` 씬이라 **non-preview 도달은 0** 이고, WE 는 이 키를 실제로 읽는다
-    /// (문자열 `controlpointangle0..7` @0x140491490+, 프로퍼티 등록 `lea rdx` @0x14024e08e —
-    /// 짝이 되는 `controlpoint0` 은 @0x14024dfb6). 그래서 "도달 0 이라 안 읽는다" 가 아니라
-    /// "**preview 도달 2건, 미구현**" 이 정확한 상태다. Waple 의 CP 모델이 위치만 들고 회전을
-    /// 들지 않으므로 착지하려면 CP 표현부터 넓혀야 한다 — 별건.
+    /// **[2026-08-21] `controlpointangleN` 착지 — 파스·보존 + 적용 게이트까지.**
+    /// 인스턴스 디스크립터 등록부 `0x14024d940`–`0x14024e96e` 를 재덤프해 24개 전수를 다시 확인했다
+    /// (**항목 경계는 `call 0x14000f880`(이름 대입)이다** — `mov rbx,[rbp-0x30]` 을 경계로 잡으면
+    /// 컴파일러가 다음 항목의 이름 `lea` 를 현재 항목 스토어 사이에 끼워 넣어 **한 칸 밀린다**):
+    /// `controlpointangle0..7` 은 타입 2(vec3) · `instance+0x150 + 12·i` · 등록
+    /// `0x14024e09f` · `0x14024e20a` · `0x14024e375` · `0x14024e498` · `0x14024e5bb` ·
+    /// `0x14024e6de` · `0x14024e801` · `0x14024e924`. 짝인 `controlpointN` 은 `+0xf0 + 12·i`.
+    ///
+    /// 값 언랩은 위치 쪽과 **같은 `vec3()`** 다 — 실물도 같은 vec3 주입기(`0x1401a4230`)를 쓰고,
+    /// 그 주입기는 `strtod` 3연발일 뿐 **단위 변환을 하지 않는다**(라디안 그대로).
+    /// 객체가 오면 바인딩 파서(`0x1401a4db0`)를 태운 뒤 `value` 를 초기값으로 꺼내는데,
+    /// `vec3()` 의 `unwrap` 이 같은 자리를 본다.
+    ///
+    /// **동봉 도달 실측**(설치본 186 + 동봉 172 씬 전수): `controlpointangle*` 를 가진
+    /// 씬 오브젝트 **7건**(설치본·동봉 동일 파일):
+    ///   `particleelementpreviews/{inheritcontrolpointvelocity,remapvalue,
+    ///    inheritinitialvaluefromevent,inheritvaluefromevent}` angle1 `"0.00000 -0.00000 0.00000"` (영각 4건)
+    ///   `presets/water/previewdrippingwater` angle1 `"0 0 -0.52360"` · angle2 `"0 0 0.52360"` (∓π/6)
+    ///   `presets/magic/previewvortexorb`     angle1 `{animation:{c0,…}}` (키프레임 바인딩)
+    /// 전건 `preview*` 라 non-preview 도달은 **0**. 그리고 **소비처가 아직 없으므로
+    /// 그림이 바뀌는 씬은 0건**이다 — 이 라운드가 바꾸는 것은 보존되는 값뿐이다.
+    ///
+    /// **[미해결]** CP 프레임 방향을 실제로 읽는 이미터/오퍼레이터를 특정하지 못했다.
+    /// 런타임 CP 레코드(`[sys+0x400] + i·0xD0`)의 `+0x80` 에 4×4 가 만들어지고 그 뒤
+    /// `0x14022c0b6`–`0x14022c148` 이 그것을 오브젝트/부모 행렬과 합성해 `+0x00` 에 굽는 것까지는
+    /// 봤지만, `+0x00`/`+0x80` 을 읽는 쪽을 못 찾았다. 그래서 **소비는 붙이지 않았다**.
     private static func particleInstanceOverride(_ raw: Any?) -> ParticleInstanceOverride? {
         guard let io = raw as? [String: Any], !io.isEmpty else { return nil }
         var ov = ParticleInstanceOverride()
@@ -2870,6 +2915,9 @@ extension SceneDocument {
         ov.colorMultiplier = colorMul
         for i in 0..<8 {
             if let v = vec3(io["controlpoint\(i)"]) { ov.controlPoints[i] = v }
+            // 위치와 **개별 센티널**이다(생성자 0x14024d760 이 두 슬롯의 `.x` 를 따로 FLT_MAX 로 깐다).
+            // 각도만 지정하거나 위치만 지정하는 저작이 유효하므로 두 루프를 합치지 않는다.
+            if let a = vec3(io["controlpointangle\(i)"]) { ov.controlPointAngles[i] = a }
         }
         return ov.isEmpty ? nil : ov
     }
@@ -2898,12 +2946,10 @@ extension SceneDocument {
             // 이미 정적 value 로 해석). 종전 무시 → 꺼진 post-process(예 3489263099 halftone)가 적용돼 전화면 흑화.
             // visibleScript!=nil 이면 오브젝트 레벨 게이트(:565-570/578)와 동일하게 정적 false 라도 드롭하지
             // 않고 보존 — {script,value} 로 시작이 false 인 이펙트가 SceneEffect[] 에서 영구 제외되던 결함.
-            var effInitialVisible = true
+            let effInitialVisible = weBool(e["visible"], true)   // 이펙트 `visible` = `+0x118` bit0, 등록 0x1401efd60
             var effVisibleScript: String? = nil
             var effVisibleScriptProps: String? = nil
-            if let vb = e["visible"] as? Bool { effInitialVisible = vb }
-            else if let vis = e["visible"] as? [String: Any] {
-                if let v = vis["value"] as? Bool { effInitialVisible = v }
+            if let vis = e["visible"] as? [String: Any] {
                 effVisibleScript = vis["script"] as? String
                 // X-⑥: 레이어/텍스트 visible 파스(:788-789)와 동형 — scriptproperties 미포집이면 스크립트가
                 // scriptProperties.<name> 참조 시 항상 기본값으로 폴백(무동작 수정 방지).
@@ -3092,16 +3138,81 @@ extension SceneDocument {
     /// 으로 쓰는 것과 같은 판별이고, 리눅스는 `objCType == "c"` 시임이 대신한다
     /// (`scripts/dev/linux-shim/corefoundation.swift`).
     ///
-    /// **[미해결]** 이 파일의 **기존** 씬 bool 키 20여 개(`hdr`/`bloom`/`clearenabled`/
-    /// `camerafade`/`perspective`/`clampuvs`/`config.*` …)는 아직 맨 `(unwrap(x) as? Bool) ?? false`
-    /// 라 숫자 `1` 을 참으로 읽는다. 동봉·설치본 코퍼스에서 그 키들을 숫자로 저작한 자산이
-    /// 0건이라 실피해는 없지만 규약이 갈려 있다. 여기서 한꺼번에 바꾸지 않은 이유는 그게
-    /// 이 작업의 범위 밖이고(20여 키의 무회귀를 따로 세워야 한다) 워크샵 자산에서만 드러날
-    /// 변경이기 때문이다 — 옮길 때는 이 헬퍼로 갈아 끼우면 된다.
-    private static func weBool(_ v: Any?) -> Bool {
+    /// **[2026-08-21 전수 이관 완료]** 종전 이 자리의 `[미해결]` — "기존 bool 키 20여 개가
+    /// 아직 맨 `as? Bool`" — 은 닫혔다. 이 파일의 씬 bool 판독은 **전건 `weBool` 을 탄다**
+    /// (남은 `as? Bool` 은 bool 이 아닌 키의 관용 파스 하나뿐 — `depthtest`, 아래 참조).
+    ///
+    /// **왜 `fallback` 인자가 필요한가 — 여기가 함정이다.** 실물은 태그가 5 가 아니면
+    /// **멤버를 건드리지 않는다**(`jne` 로 스토어 블록을 통째로 건너뛴다, `0x1401e1ab7`).
+    /// 즉 "거짓" 이 아니라 **"생성자 기본값 유지"** 다. 그래서 기본값이 참인 키
+    /// (`clearenabled` bit5 · `camerafade` bit2 · `copybackground` bit6 · `clampuvs` bit15 ·
+    /// `visible` bit0 …)에 인자 없는 `weBool` 을 걸면 `"visible": 1` 이 **레이어를 지워 버린다**.
+    /// 종전 맨 `as? Bool` 은 그 경우 우연히 맞았다(`NSNumber(1) as? Bool == true`).
+    /// `wraploop` 라운드의 회귀와 같은 부류다 — 게이트만 옮기고 **실패 분기의 값**을 안 옮기면 깨진다.
+    ///
+    /// 이관한 키의 실물 근거(전건 디스크립터 타입 6 = 플래그 워드 1비트, 주입기 템플릿은
+    /// `0x1401e1a90` 과 동형이고 **비트 인덱스만** 다르다. `and 0x?????`/`bts`+`btr`+`cmove`):
+    ///
+    /// | 키(등록 VA) | 멤버·비트 | 생성자 기본 |
+    /// |---|---|---|
+    /// | `general.bloom` `0x140199836` | `scene+0xE0` bit1 | **true**(ctor `0x26` @`0x140186d1f`) |
+    /// | `general.camerafade` `0x14019acad` | bit2 | true |
+    /// | `general.clearenabled` `0x14019a04e` | bit5 | true |
+    /// | `general.camerashake` `0x14019aea5` | bit7 | false |
+    /// | `general.cameraparallax` `0x14019b0d9` | bit8 | false |
+    /// | `general.hdr` `0x14019990e` | bit10 | false |
+    /// | `general.transparentsorting` `0x14019ad55` | bit12 | false |
+    /// | `general.customsortorder` `0x14019adfd` | bit13 | false |
+    /// | `general.windenabled` `0x14019b3b7` | bit16 | false |
+    /// | `visible`(타입별) | `+0x120`/`+0x118`/`+0xd0` bit0 | true |
+    /// | `solid` `0x1401e1283` | `+0x120` bit13 | false |
+    /// | `disablepropagation` `0x1401e132b` | `+0x120` bit14 | false |
+    /// | `image.perspective` `0x1401ee9b5` | `+0x120` bit7 | false |
+    /// | `image.castshadow` `0x1401eea8f` | `+0x120` bit11 | — |
+    /// | `image.copybackground` `0x1401eeb6b` | `+0x304` bit6 | true(ctor `0x8040`) |
+    /// | `image.nointerpolation` `0x1401eec51` | `+0x304` bit14 | false |
+    /// | `image.clampuvs` `0x1401eed1e` | `+0x304` bit15 | true(ctor `0x8040`) |
+    /// | `image.ledsource` `0x1401eedf7` | `+0x304` bit8 | false |
+    /// | `text.opaquebackground` `0x140258e3d` | `+0x594` bit1 | false |
+    /// | `text.limitwidth`/`limitrows`/`limituseellipsis` `0x140258f1e`·`0x140258ff7`·`0x1402590d9` | `+0x594` bit2/3/4 | false |
+    /// | `text.blockalign` `0x1402591b3` | `+0x594` bit5 | false |
+    /// | `text.outline` `0x1402597e3` | `+0x518` bit1 | false |
+    /// | `light.castshadow` `0x14025e64e` | `+0x2c4` bit0 | false |
+    /// | `light.castvolumetrics` `0x14025e7cc` | `+0x2c4` bit2 | false |
+    /// | `sound.startsilent` `0x1401f76b5` | `+0x310` bit1 | false |
+    /// | `sound.spatialization` `0x1401f7792` | `+0x310` bit2 | false |
+    /// | `animationlayers[].visible` `0x14026ca3e` | `+0xd0` bit0 | true |
+    /// | `animationlayers[].additive` `0x14026cb0b` | `+0xd0` bit1 | false |
+    /// | `effects[].visible` `0x1401efd60` | `+0x118` bit0 | true |
+    ///
+    /// 디스크립터가 아니라 **손으로 읽는** 여섯 개도 같은 게이트다 — 모델 `.json` 파서
+    /// `0x1401fac50`–`0x1401fb498` 이 `operator[]`(`0x140086de0`) → `cmp byte [rax+8], 5` →
+    /// `asBool` → **참일 때만 `or`**(거짓은 비트를 지우지 않는다):
+    /// `fullscreen` `0x1401fae0c`(`+0x304` bit1) · `nopadding` `0x1401fae44`(bit2) ·
+    /// `autosize` `0x1401fae75`(bit3) · `passthrough` `0x1401faea6`(bit5) ·
+    /// `solidlayer` `0x1401faed7` · `projectlayer` `0x1401faf07`(bit10) · `instanced` `0x1401faf42`(bit11).
+    ///
+    /// **동봉+설치본 도달 실측**(JSON 3,777개 전수, 2026-08-21): 위 키 전건이 **평문 불리언
+    /// 또는 `{value:불리언}`** 으로만 저작돼 있다. 유일한 비-불리언은 `general.clearenabled: null`
+    /// (설치본 씬 141 중 **45**, 동봉 136 중 **44**)인데 null 은 태그 0 이라 실물도 우리도
+    /// 기본값(true)으로 떨어져 **결과가 같다**.
+    /// 즉 이 이관으로 **그림이 바뀌는 동봉 씬은 0건**이고, 갈리는 것은 워크샵 자산이 숫자/문자열로
+    /// 저작했을 때뿐이다.
+    ///
+    /// **손대지 않은 것**: `objects[].locktransforms` 는 문자열이 바이너리에 **0바이트**라
+    /// 실물 근거가 없다(유령 키). 그래도 저작 형태가 전건 불리언이고 이 파일의 다른 오브젝트
+    /// 플래그와 형태를 맞추는 편이 읽기 쉬워 같이 옮겼다 — **규약 근거가 아니라 일관성**이다.
+    /// `depthtest` 는 실물이 enum(타입 5 문자열, `0x140259e22`)이라 애초에 bool 키가 아니다.
+    /// Waple 의 bool 관용 파스는 우리 확장이므로 `as? Bool` 그대로 뒀다.
+    private static func weBool(_ v: Any?, _ fallback: Bool = false) -> Bool {
+        weBoolOpt(v) ?? fallback
+    }
+    /// 위 게이트의 **원형**: 태그 5 가 아니면 `nil`(= "이 키는 없는 것과 같다").
+    /// 실물이 스토어를 건너뛰는 것과 1:1 이라, 기본값이 무엇이든 호출부가 정할 수 있다.
+    private static func weBoolOpt(_ v: Any?) -> Bool? {
         let raw = unwrap(v)
-        if let n = raw as? NSNumber { return CFGetTypeID(n) == CFBooleanGetTypeID() && n.boolValue }
-        return (raw as? Bool) ?? false
+        if let n = raw as? NSNumber { return CFGetTypeID(n) == CFBooleanGetTypeID() ? n.boolValue : nil }
+        return raw as? Bool
     }
     private static func floats(_ v: Any?) -> [Float] {
         floatList((unwrap(v) as? String) ?? "")
@@ -3312,7 +3423,7 @@ extension SceneDocument {
                                              quality: Quality, userProps: [String: Any] = [:]) {
         // camerashake 전역 지터(D 재감사 #16, 코퍼스 활성 13/168씬). {"user"/"value"} 바인딩(클린룸 15씬)
         // 대비 unwrap. 수식은 렌더러(코퍼스 값분포 근사) — 여기선 원시 파라미터만 보존.
-        out.cameraShake = (unwrap(general["camerashake"]) as? Bool) ?? false
+        out.cameraShake = weBool(general["camerashake"])
         out.cameraShakeAmplitude = float(general["camerashakeamplitude"]) ?? 0.5
         out.cameraShakeRoughness = float(general["camerashakeroughness"]) ?? 1
         out.cameraShakeSpeed = float(general["camerashakespeed"]) ?? 3
@@ -3335,11 +3446,11 @@ extension SceneDocument {
         out.perspectiveOverrideFov = float(general["perspectiveoverridefov"]) ?? 95
         // clearenabled/camerafade(json-keys.txt:667/686) — clearenabled=false 는 acc 미클리어(잔상)라
         // 렌더러가 소비(SceneRenderer.clearEnabled). camerafade 는 의미 미확정이라 파스만(소비 보류).
-        out.clearEnabled = (unwrap(general["clearenabled"]) as? Bool) ?? true
-        out.cameraFade = (unwrap(general["camerafade"]) as? Bool) ?? true
+        out.clearEnabled = weBool(general["clearenabled"], true)   // bit5 기본 true — 태그 5 아니면 유지
+        out.cameraFade = weBool(general["camerafade"], true)       // bit2 기본 true
         // wind/gravity(json-keys.txt:696-700) — 소비자 의미론 미확정, 파스·보존 전용(필드 주석 참조).
         // direction 실측 형태는 "x y z" vec3 문자열(코퍼스 109/161씬) — float()/vec3() 가 {value} 언랩 공통 처리.
-        out.windEnabled = (unwrap(general["windenabled"]) as? Bool) ?? false
+        out.windEnabled = weBool(general["windenabled"])           // `scene+0xE0` bit16, 등록 0x14019b3b7
         out.windStrength = float(general["windstrength"]) ?? 1
         out.windDirection = vec3(general["winddirection"]) ?? Vec3(x: 0.707, y: 0.707, z: 0)
         out.gravityStrength = float(general["gravitystrength"]) ?? 1

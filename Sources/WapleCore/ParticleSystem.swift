@@ -1278,10 +1278,35 @@ public struct ParticleInstanceOverride: Equatable {
     public var colorMultiplier: Vec3? = nil
     /// controlpointN "x y z" — CP 오프셋 절대 대체(id 0..7).
     public var controlPoints: [Int: Vec3] = [:]
+    /// `controlpointangleN` "x y z" — CP **프레임 방향** 절대 대체(id 0..7), 단위 **라디안**.
+    ///
+    /// 인스턴스 디스크립터 등록부 `0x14024d940`–`0x14024e96e` 의 24개 중 17..24번이 이것이고,
+    /// 타입 2(vec3) · `instance+0x150 + 12·i` 다(`controlpointangle0` 등록 `0x14024e09f`,
+    /// 이후 `0x14024e20a` · `0x14024e375` · `0x14024e498` · `0x14024e5bb` · `0x14024e6de` ·
+    /// `0x14024e801` · `0x14024e924`). 짝인 `controlpointN` 은 `+0xf0 + 12·i` 다.
+    /// 생성자 `0x14024d760` 이 **`.x` 만** `FLT_MAX`(`0x14024d813`–`0x14024d8a9`)로 깔아
+    /// "지정 안 됨" 을 값 0 과 구분한다 — 그래서 위치와 각도는 **서로 독립**으로 지정된다.
+    /// 여기서는 Optional 사전 자체가 그 센티널 역할을 한다.
+    ///
+    /// 소비(런타임): CP 갱신 `0x14022bd40`–`0x14022c30a` 가 `[sys+0x400] + i·0xD0` 레코드의
+    /// `+0x80` 부터에 **회전 3행**을 쓰고(`0x14022bfcd`·`0x14022bff6`·`0x14022bfff` /
+    /// `0x14022c00b`·`0x14022c031`·`0x14022c03a` / `0x14022c057`·`0x14022c060`·`0x14022c069`),
+    /// `+0xb0` 에 위치 행을 쓴다(`0x14022c08f`–`0x14022c0af`). 두 소스가 독립이라
+    /// **각도가 CP 위치를 회전시키는 게 아니라 CP 프레임의 방향을 준다**.
+    /// 식은 `SceneDocument` 의 오브젝트 `angles`(`setAngles` `0x1401dd630`)와 **완전히 동일** —
+    /// `cz·cy, cy·sz, −sy / sy·cz·sx−cx·sz, sy·sz·sx+cx·cz, sx·cy / cx·cz·sy+sx·sz, cx·sz·sy−sx·cz, cx·cy`
+    /// (`0x14041a2e0`=cosf, `0x14041a9c0`=sinf). 즉 **라디안 · 파일 순서 (x,y,z) · `Rz(z)·Ry(y)·Rx(x)`**.
+    ///
+    /// **[미해결] Waple 은 아직 소비하지 않는다.** 런타임 CP 레코드에 4×4 가 생긴다는 것까지는
+    /// 확정했지만, 그 회전을 **읽는** 이미터/오퍼레이터를 바이너리에서 특정하지 못했다
+    /// (`controlpointattract` 계열은 위치만 읽는다 — `docs/re/particle-operator-vm.md`).
+    /// 그래서 이 라운드는 **파스·보존 + 적용 게이트**까지만이다.
+    public var controlPointAngles: [Int: Vec3] = [:]
     public init() {}
     public var isEmpty: Bool {
         count == nil && rate == nil && size == nil && alpha == nil && speed == nil
-            && lifetime == nil && colorMultiplier == nil && controlPoints.isEmpty
+            && lifetime == nil && colorMultiplier == nil
+            && controlPoints.isEmpty && controlPointAngles.isEmpty
     }
 }
 
@@ -1478,6 +1503,20 @@ public struct ParticleSystemDef: Equatable {
     public let children: [ChildLink]
     /// 컨트롤포인트 오프셋(id 0..7, 시스템 로컬 좌표). mapsequence/트리거류가 참조.
     public var controlPoints: [Vec3] = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
+    /// 컨트롤포인트 **프레임 방향**(id 0..7, 라디안, `Rz·Ry·Rx`). 위치와 **쌍**이다.
+    ///
+    /// 정의 단계에서부터 쌍이다 — 파티클 `.json` 의 `controlpoint[]` 파서
+    /// (`0x1401c5490`–`0x1401d152c` 안 `0x1401d04ec`–`0x1401d0814`, 고정 8회 루프,
+    /// 슬롯 = `shl rdi,5` = 인덱스×32)가 `offset`(`0x1401d05b6` → `+0xac+32i`) 옆에서
+    /// **`angles`** 를 읽어 `+0xb8+32i` 에 심는다(판독 `0x1401d06ce`, 스토어 `0x1401d07c9`).
+    /// 씬 쪽 짝은 `ParticleInstanceOverride.controlPointAngles`(그 주석에 런타임 소비 VA 정리).
+    ///
+    /// 동봉 도달 **0** — 파티클 250파일 1,836 CP 원소 중 `angles` 를 저작한 것이 하나도 없다.
+    /// 그래도 스키마의 정본이라 파스해 둔다(유령 필드가 아니라 **실물 등록 키**다).
+    ///
+    /// **[미해결] 소비처 미확정.** 위 오버라이드 주석과 같은 이유로 아직 아무도 안 읽는다.
+    /// 자식 CP 부착(`flags & 4`)이 위치만 복사하는 것도 그대로 뒀다 — 그건 소비 쪽 결정이다.
+    public var controlPointAngles: [Vec3] = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
     /// `controlpoint[].flags`. 실물 CP 구조체 `+0xc0`(런타임) / 디스크립터 `+0xa4`(파스).
     /// 마스터 디스패치 0x14022e3e0 이 비트로 갈라진다 — 이 저장소에서 직접 확인한 것:
     ///   `bt edx, 0x10` @0x14022e468 → **bit16**: 이 CP 는 엔진 갱신을 통째로 건너뛴다(remap 출력 대상)
@@ -2548,22 +2587,46 @@ public struct ParticleSystemDef: Equatable {
         // 1816 원소가 전건 `id == 배열인덱스`라 도달이 0이지만 모델이 틀렸다.
         //
         // 읽는 키는 offset·angles·flags·parentcontrolpoint 넷이다(0x1401d0552·0x1401d06ce·
-        // 0x1401d0561·0x1401d0573 — 뒤 둘은 uint 주입기 0x1401d8280, 기본 0). Waple 은 아직
-        // offset 만 소비한다 — 나머지 셋은 **의미 미측정**이라 파스도 하지 않는다(유령 필드를
-        // 만드느니 안 읽는 편이 낫다. `spec` 과 fixplan §2-A B5 에 남겨 뒀다).
+        // 0x1401d0561·0x1401d0573 — 뒤 둘은 uint 주입기 0x1401d8280, 기본 0).
+        // **[2026-08-21] `angles` 도 파스한다.** 종전 주석의 "의미 미측정" 은 닫혔다 —
+        // 씬 쪽 `controlpointangleN` 의 런타임 소비(`0x14022bf3d`–`0x14022c0b6`)가 이 슬롯과
+        // **같은 CP 레코드 `+0x80`** 을 채우므로 의미가 같다(라디안, `Rz·Ry·Rx`).
+        // 소비는 아직 없다 — `ParticleSystemDef.controlPointAngles` 선언부의 `[미해결]` 참조.
+        var controlPointAngles = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
         var controlPointFlags = Array(repeating: 0, count: 8)
         var controlPointParent = Array(repeating: 0, count: 8)
         for (slot, element) in (json["controlpoint"] as? [Any] ?? []).enumerated() where slot < 8 {
             guard let cp = element as? [String: Any] else { continue }   // 비-오브젝트는 그 자리를 비운다
             if let off = pvec3(cp["offset"]) { controlPoints[slot] = off }
+            if let ang = pvec3(cp["angles"]) { controlPointAngles[slot] = ang }   // +0xb8+32i, 0x1401d07c9
             // 둘 다 uint 주입기(0x1401d8280)로 기본 0 — 부재는 "값 없음" 이 아니라 0 이다.
             controlPointFlags[slot] = pint(cp["flags"]) ?? 0
             controlPointParent[slot] = pint(cp["parentcontrolpoint"]) ?? 0
         }
         // 인스턴스 CP 오버라이드(절대 대체)는 attract target 재베이크 **전에** — 재베이크 후면 attract 가
         // 프리셋 CP 를 계속 본다(실측: CP 오버라이드 51오브젝트 중 22가 attract 보유).
+        //
+        // **[2026-08-21] 적용 게이트.** 실물은 CP 갱신 진입부에서
+        //   `test dword [rdi + i*0xD0 + 0xC0], 0x10005` / `jne` (`0x14022bf26`, 건너뛰기 대상 `0x14022c17d`)
+        // 로 **위치도 각도도 통째로 건너뛴다**. `0x10005` = bit0|bit2|bit16 이고 의미는
+        // `controlPointFlags` 선언부 주석과 같다 — bit0 마우스 구동 · bit2 부모 CP 부착 ·
+        // bit16 remap 출력(엔진이 로드 시 `|= 0x10000`, `0x1401d086c`). 종전 Waple 은 무조건
+        // 대체라 마우스 구동 CP 나 부모 부착 CP 까지 덮어썼다.
+        //
+        // **값 16 을 bit16 으로 읽지 말 것** — 동봉 파티클 250파일 1,856 CP 원소의 `flags` 분포는
+        // 부재 44 · 0:1757 · 1:28 · 2:10 · 4:7 · **16:10** 이고, `16` 은 **bit4**(0x10)라
+        // 게이트 대상이 **아니다**. 비트로 풀어 걸리는 것은 `1`(bit0) 28 + `4`(bit2) 7 = 35 원소뿐이다.
+        // 실측(동봉+설치본 전수): `instanceoverride.controlpoint*` 를 가진 35 오브젝트가
+        // 참조하는 CP 중 `flags & 0x10005` 가 서는 것은 **0건** — 그림이 바뀌는 씬 0.
+        //
+        // **[미해결]** bit16 은 Waple 이 아직 세지 않는다(remap 출력 CP 표시 미구현). 마스크는
+        // 실물대로 `0x10005` 로 두되, 현재 유효한 것은 저작 가능한 bit0·bit2 둘뿐이다.
         if let ov = instanceOverride {
-            for (id, off) in ov.controlPoints where id >= 0 && id < 8 { controlPoints[id] = off }
+            func cpOverrideBlocked(_ id: Int) -> Bool { controlPointFlags[id] & 0x10005 != 0 }
+            for (id, off) in ov.controlPoints
+            where id >= 0 && id < 8 && !cpOverrideBlocked(id) { controlPoints[id] = off }
+            for (id, ang) in ov.controlPointAngles
+            where id >= 0 && id < 8 && !cpOverrideBlocked(id) { controlPointAngles[id] = ang }
         }
         let cpBindings = attractCPIds.map { ControlPointBinding(op: $0.op, cp: $0.cp) }
         Self.bakeControlPointTargets(&ops, bindings: cpBindings, controlPoints: controlPoints)
@@ -2595,6 +2658,7 @@ public struct ParticleSystemDef: Equatable {
             maxCount: maxCount, startTime: pfloat(json["starttime"]) ?? 0, material: material,
             children: children)
         def.controlPoints = controlPoints
+        def.controlPointAngles = controlPointAngles
         // 인스턴스 오버라이드는 emitters 를 .map(순서/개수 보존)만 하므로 emitterAudio 병렬성 유지.
         def.emitterAudio = emitterAudio
         def.emitterSpeed = emitterSpeed
