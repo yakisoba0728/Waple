@@ -104,9 +104,29 @@ public enum GLSLTranslator {
         memoCache.removeAll(); memoComputeCount = 0
     }
 
+    /// G3 — **콤보 키는 무조건 대문자화한다.** 실물은 패스 `combos` 딕셔너리를 읽을 때 키를
+    /// 한 글자씩 `toupper` 로 돌려 새 버퍼에 담는다(0x14015458c-0x1401545aa, `toupper`=0x1402bfb48:
+    /// `lea eax,[rcx-0x61]; cmp eax,0x19; add ecx,-0x20` = `'a'..'z'` 만 −0x20). 선언(`[COMBO]`)이
+    /// 있든 없든 무관하다 — 그래서 `"normalmap":1` 저작이 셰이더의 `#ifdef NORMALMAP` 에 닿는다.
+    ///
+    /// 왜 여기인가: 실물의 대문자화 자리는 JSON 파스 시점이고 Waple 의 대응 자리
+    /// (`WapleRender/SceneRendererResources.resolvePassCombos`)는 이 파일 밖이다. 주입 결과가
+    /// 관측 대상이므로 **주입 직전**인 번역기 진입에서 접으면 같은 계약이 성립하고, 메모 키도
+    /// 함께 정규화되어 `normalmap`/`NORMALMAP` 두 철자가 캐시를 가르지 않는다.
+    /// (`resolvePassCombos` 의 `canonical()` 은 선언 이름 집합 안에서만 접던 근사인데, 저작된
+    /// 소문자 15종 중 14종이 어떤 셰이더에도 선언이 없어 대부분 놓치고 있었다. 이제 그 함수는
+    /// 잉여가 된다 — 소유 밖이라 제거는 안 했다. **[미해결]** 정리는 별건.)
+    ///
+    /// 충돌 규약: 접었을 때 이미 대문자 철자가 있으면 **대문자 쪽이 이긴다.** 근거는 실물의
+    /// `#define` 방출 순서다 — 값 있는 패스 콤보(0x14016c400-0x14016c7fe)를 먼저 쏟고 그 다음
+    /// 텍스처 유래 콤보(0x14016c800-0x14016c984, 값 항상 1)를 쏟으므로 뒤에 오는 쪽이 이긴다.
+    /// Waple 에서 텍스처 유래 키는 셰이더 어노테이션 철자(= 전건 대문자)로 들어온다.
+    /// 실측: 동봉 자산의 `[COMBO]` 67종·샘플러 `combo` 9종·`components` 5종 **전부 대문자**라
+    /// 동봉 코퍼스에서 이 접기로 바뀌는 번역 결과는 0건이다(변화는 씬 저작 키에서만 난다).
     public static func translate(vertex: String, fragment: String, combos: [String: Int],
                                  include: (String) -> String? = { _ in nil },
                                  premultiplyOutput: Bool = false) -> TranslatedShader? {
+        let combos = uppercasedComboKeys(combos)
         guard WapleProfiler.enabled else {
             return _memoizedTranslate(vertex: vertex, fragment: fragment, combos: combos, include: include,
                                       premultiplyOutput: premultiplyOutput)
@@ -115,6 +135,24 @@ public enum GLSLTranslator {
         defer { WapleProfiler.recordTranslate(seconds: CFAbsoluteTimeGetCurrent() - t0) }
         return _memoizedTranslate(vertex: vertex, fragment: fragment, combos: combos, include: include,
                                   premultiplyOutput: premultiplyOutput)
+    }
+
+    /// 실물 0x140154599 의 `toupper` 접기. 이미 전건 대문자면 원본을 그대로 돌려준다(할당 회피).
+    /// `uppercased()` 는 로케일 무관 유니코드 대문자화라 ASCII 밖 문자도 건드리는데, 실물은
+    /// `'a'..'z'` 만 −0x20 한다. 콤보 이름은 JSON 키이고 동봉/설치본 전건 ASCII 라 실측 차이는
+    /// 없지만, 차이가 나는 입력(워크샵의 비-ASCII 콤보 키)에서는 우리가 더 공격적이다 — 그 경우
+    /// 실물도 셰이더의 `#if` 이름과 못 맞추므로 어느 쪽이든 미정의(0)로 같은 결말이다.
+    static func uppercasedComboKeys(_ combos: [String: Int]) -> [String: Int] {
+        guard combos.keys.contains(where: { $0 != $0.uppercased() }) else { return combos }
+        var out: [String: Int] = [:]
+        out.reserveCapacity(combos.count)
+        // 대문자 철자를 먼저 심고, 접힌 소문자는 빈 자리에만 채운다(위 충돌 규약).
+        for (k, v) in combos where k == k.uppercased() { out[k] = v }
+        for (k, v) in combos where k != k.uppercased() {
+            let up = k.uppercased()
+            if out[up] == nil { out[up] = v }
+        }
+        return out
     }
 
     /// 메모이즈 진입: 키(인라인 소스+combos) 조회 → 히트 반환, 미스 시 실번역 후 저장. 실패(nil)도 캐시

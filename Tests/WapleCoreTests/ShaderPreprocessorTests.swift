@@ -55,11 +55,18 @@ final class ShaderPreprocessorTests: XCTestCase {
     }
 
     // T-B7: 악성 `#if` 리터럴의 오버플로가 트랩(크래시)하면 안 된다 — 랩 값이면 충분(분기 결정만 하면 됨).
+    //
+    // **[G2 2026-08-21] 리터럴 누적 폭이 64비트 → 32비트로 바뀌었다.** 실물 렉서
+    // (0x140166f90-0x14016708b)는 수를 32비트 `esi` 에 쌓는다(`esi = esi*10 + d` @0x140167007,
+    // 16진은 `shl esi,4` @0x140166fe7). 그래서 `9223372036854775807`(= 2⁶³−1)은 실물에서
+    // **하위 32비트 = 0xFFFFFFFF = −1** 이다. 아래 기대값이 그 −1 을 출발점으로 다시 계산된 것이다.
+    // 계약 자체(트랩하지 않는다·분기 결정만 하면 된다)는 그대로다.
     func testExprEvalOverflowDoesNotTrap() {
-        XCTAssertEqual(ExprEval.eval("9223372036854775807 + 1", defines: [:]), Int.min)     // &+ 랩
-        XCTAssertEqual(ExprEval.eval("9223372036854775807 * 2", defines: [:]), -2)          // &* 랩
-        XCTAssertEqual(ExprEval.eval("0 - 9223372036854775807 - 2", defines: [:]), Int.max) // &- 랩
+        XCTAssertEqual(ExprEval.eval("9223372036854775807 + 1", defines: [:]), 0)           // (−1) &+ 1
+        XCTAssertEqual(ExprEval.eval("9223372036854775807 * 2", defines: [:]), -2)          // (−1) &* 2
+        XCTAssertEqual(ExprEval.eval("0 - 9223372036854775807 - 2", defines: [:]), -1)      // 0 &− (−1) &− 2
         XCTAssertEqual(ExprEval.eval("1 / 0", defines: [:]), 0)                             // 0 나눗셈 가드(기존)
+        // defines 로 들어오는 값은 여전히 64비트다(리터럴 렉싱을 안 거친다) — 아래 두 가드가 그 증인.
         XCTAssertEqual(ExprEval.eval("A / -1", defines: ["A": Int.min]), 0)                 // Int.min / -1 가드
         XCTAssertEqual(ExprEval.eval("-A", defines: ["A": Int.min]), Int.min)               // 단항 랩
     }

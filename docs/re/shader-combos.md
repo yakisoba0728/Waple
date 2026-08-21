@@ -28,13 +28,17 @@
    `toupper` 루프). 바이너리 전체에서 `toupper` 호출부는 두 곳뿐이고 콤보 경로는 이
    한 곳이다. Waple 은 "선언된 `[COMBO]` 이름과 대소문자 무시 매칭"으로 근사하는데,
    설치본 실측 **소문자 저작 15종·56회 중 14종이 어떤 셰이더에서도 `[COMBO]` 선언이
-   없어** 그 근사로는 안 맞는다.
+   없어** 그 근사로는 안 맞았다. **[2026-08-21 착지]** `GLSLTranslator.translate` 진입에서
+   무조건 대문자화로 바꿨다(§8-G3). 저작 자리 기준으로 다시 세니 종전 규약이 접던 것은
+   **56건 중 0건**이었다.
 3. **주입은 텍스트다** — 콤보마다 `#define <NAME> <10진값>\n` 을 소스 앞에 붙인다
    (`0x14016c400`). 값 0 도 붙으므로 **명시 0 인 콤보는 `#ifdef` 에서 참**이다.
 4. **`#if` 식은 C 정수식 전문법이다** — `% & | ^ ~ << >> defined() 16진리터럴` 전부
-   지원한다(렉서 `0x140166a90`, 파서 `0x140167e10`). Waple 의 `ExprEval` 은 그중
-   **8종을 명시 거부**해 셰이더를 통째로 폴백시킨다. 동봉 1,634개 `#if/#elif` 식에서는
-   그 8종이 **0회**라 오늘은 잠복이고, 워크샵에서 조용히 깨지는 부류다.
+   지원하고 우선순위 사슬도 C 와 같다(렉서 `0x140166a90`, 진입 `0x140167e10`, 사슬은
+   `0x1401670c0`…`0x140167c00` — §3.7 표). 산술 폭은 **32비트**다.
+   Waple 의 `ExprEval` 은 그중 8종을 명시 거부해 셰이더를 통째로 폴백시켰다.
+   **[2026-08-21 착지]** 8종을 전부 평가하도록 넓혔다(§8-G2). 동봉 1,634개 `#if/#elif`
+   식에서 그 8종은 **0회**라 회귀 폭 0(717 구성 MSL 지문 전건 동일), 워크샵에서만 효과가 있다.
 5. **디스크 퍼뮤테이션 캐시가 실재한다** — `<pkg>/shaders/blobsSM40/<sha1 40자>.dxs`,
    매직 `SHDV0069`. 동봉 도달 **5건**(`assets/scenes/videoplayer/shaders/blobsSM40/`).
    키는 SHA-1(백엔드 정수 ‖ 셰이더 이름 ‖ 값≠0 콤보의 이름+값 ‖ 텍스처 콤보 블록).
@@ -343,6 +347,75 @@ Waple 은 이 선언을 읽지 않는다(그림자 패스는 `Mesh3DShaders` 네
 
 `#undef` 1건은 `shaders/genericparticle.frag:64`(`#undef DOUBLESIDEDLIGHTING`, depth 2).
 
+#### 3.5.1 [2026-08-21 확정] 호출 규약 — 게이트·삽입 위치·미지의 이름
+
+디스패처 쪽(`0x14016c0d2`–`0x14016c1e2`)을 끝까지 읽었다. 종전 절이 "삽입한다"까지만
+적고 넘어간 것들이 전부 관측 가능한 계약이다.
+
+**① 호출.** 이름 길이 7 + `memcmp "require"`(`0x14016c0ec`) → 빈 `std::string` 을 스택에
+만들고(`0x14016c100`–`0x14016c11a`, SSO: size 0 @`[rbp+0x20]`, cap 0xf @`[rbp+0x28]`)
+`0x140169140(요청이름, 매크로맵, &out)` 호출(`0x14016c127`).
+
+**② 생성기가 빈 문자열을 돌려주는 조건이 셋이다** — 전부 `0x14016b0b2`(= `out` 을 손대지
+않고 바로 에필로그)로 점프한다:
+
+| 조건 | 판정 자리 |
+|---|---|
+| 요청 이름 길이 ≠ 10 | `0x1401691eb` (`cmp r8, 0xa`) |
+| `memcmp "LightingV1"` 불일치 | `0x1401691f5` → `0x1401691ff` |
+| 매크로맵에 **`LIGHTING` 이 없다** | 조회 `0x1401691b8`(`"LIGHTING"`=`0x140486930`) → `0x14016920c` `cmp rbx, r12` |
+| `LIGHTING` 의 값 문자열을 정수로 읽어 **0** | `0x140169223` → `0x14016922a` `test eax,eax; je` |
+
+즉 **`#require` 는 `LIGHTING` 콤보가 켜져 있을 때만 코드를 만든다.** 이름이 다르면
+(`#require Whatever`) 조용히 아무것도 안 한다 — 에러도 경고도 없다.
+
+**③ 삽입 위치는 "그 줄 자리"다, 파일 머리가 아니다.** 결과가 비어 있지 않으면
+(`0x14016c12c` `cmp qword [rbp+0x20], 0`) 출력 버퍼(`[rbp+0x260]`)에 대해
+`std::string::insert(줄시작오프셋, 생성문자열)`(`0x14016c15c` → `0x1400f9070`)을 부른다.
+줄 시작 포인터 `[rbp-0x68]` 와 커서 `[rsp+0x70]` 를 데이터 포인터 기준 인덱스로 바꿨다가
+(`0x14016c144`/`0x14016c159`) 삽입 길이만큼 밀어 되돌린다(`0x14016c16a`–`0x14016c18c`).
+
+**자산이 이 사실을 독립적으로 증언한다**: 생성 코드가 쓰는 `COOKIE_SAMPLER` 를
+8개 소비처가 전부 **`#require` 줄보다 앞에서** `#define` 한다
+(`fluidsimulation_combine.frag:17` < `:52`, `foliage4.frag:30` < `:74`,
+`genericparticle.frag:51` < `:68` …). 파일 머리에 주입한다면 그 매크로가 아직 없다.
+
+**④ 지시문 줄은 언제나 소비된다.** require 분기는 `bl = 1`(`0x14016c1cc`)을 세우고 공통
+꼬리(`0x14016bbb7`)로 간다. 거기서 `memset(줄시작, ' ', 줄끝-줄시작)`
+(`0x14016bc63`–`0x14016bc71`, `0x1404217a0`=memset)로 **줄을 지우는 대신 공백으로 덮는다**
+— 줄 번호를 보존하는 방식이다. 주입이 있었으면 위 ③ 에서 포인터가 이미 밀렸으므로
+주입된 텍스트는 안 지워진다.
+
+**⑤ `#require` 에는 emitting 가드가 없다.** 형제 `#define`(`0x14016b8f7`)·
+`#undef`(`0x14016c215`)는 `test r13b, r13b` 로 비활성 분기를 건너뛰는데 require 경로에는
+그 검사가 없다 — **거짓 `#if` 안의 `#require` 도 생성기를 부른다.** 동봉의 depth 1 두 건
+(`genericparticle.frag:68` · `genericropeparticle.frag:56`)은 `#if LIGHTING` 안이라 관측
+차이가 없다(가드가 있었어도 `LIGHTING==0` 이면 ② 에서 어차피 빈 문자열).
+
+**⑥ 생성 내용 전수**(문자열은 전부 `0x14048b…`–`0x14048c…`, 방출 순서):
+`uniform vec4 g_LPoint_Color[`/`g_LPoint_Origin[`(`0x140169573`/`0x1401695e3`) →
+`g_LSpot_Color[`/`Origin[`/`Direction[`/`Exponent[`(`0x140169671`–`0x140169792`) →
+`g_LTube_Color[`/`OriginA[`/`OriginB[`(`0x140169822`–`0x1401698fa`) →
+`g_LDirectional_Color[`/`Direction[`(`0x140169987`/`0x1401699d0`) →
+`uniform mat4 g_LFeature_ShadowProjection[` · `vec4 g_LFeature_ShadowProjectionTransform[` ·
+`vec4 g_LFeature_ShadowPointProjection[` · `…PointProjectionTransform[`
+(`0x140169a42`–`0x140169b3b`) → 본문 머리 `vec3 PerformLighting_V1(...)`(`0x14048c070`,
+`0x140169bb2`) → 라이트마다 `{ const uint i = <n>u; … }` **언롤 블록** → `return light;\n}`
+(`0x14016b0a3`).
+
+배열 길이와 언롤 횟수는 매크로맵에서 읽는다 — `LIGHTS_POINT`(`0x140487630`, 12자 SSO
+`movsd`+`mov dword` 로 스택에 조립 @`0x140169258`/`0x140169266`) ·
+`LIGHTS_DIRECTIONAL`(`0x1404877e8`) · `LIGHTS_POINT_SHADOW`(`0x140487948`) ·
+`LIGHTS_SPOT_SHADOW`(`0x140487878`) · `LIGHTS_SPOT_COOKIE`(`0x140487890`) ·
+`LIGHTS_SPOT_SHADOW_COOKIE`(`0x1404877c8`) · `LIGHTS_DIRECTIONAL_SHADOW`(`0x140487828`).
+그림자/쿠키 유무로 블록 본문이 갈린다(예: 그림자 포인트 = `CalculateProjectedCoordsPoint`
++ `PerformPointShadowMapping` + `ComputePBRLightShadow(..., shadowFactor)`,
+비그림자 = 같은 호출에 `1.0`; 디렉셔널 그림자는 3-캐스케이드 `mix` 조립).
+호출되는 헬퍼는 전부 `shaders/common_pbr_2.h` 에 있다 — `ComputePBRLightShadow`(:256) ·
+`ComputePBRLightShadowInfinite`(:317) · `PointSegmentDelta`(:9) · `PerformShadowMapping`(:44) ·
+`CalculateProjectedCoords`(:118) · `…Cascades`(:131) · `…Point`(:149). 그래서 8개 소비처가
+전부 `#require` 앞에서 `#include "common_pbr_2.h"` 한다.
+
 ### 3.6 미정의 콤보 참조 = 0, `defined()` 지원
 
 식 평가의 원자 파서는 `0x140167c00`–`0x140167e0c` 다.
@@ -373,8 +446,49 @@ Waple 은 이 선언을 읽지 않는다(그림자 패스는 `Mesh3DShaders` 네
 | 그 외 문자 | 0x19 | `0x140166f78` |
 
 주석(`//`, `/* */`)도 렉서가 건너뛴다(`0x140166aff`–`0x140166b28`).
-파서는 재귀하강 우선순위 사슬 `0x140167e10`(||) → `0x140167390`(&&) → … →
-`0x140167ad0`(단항/곱나눗) → `0x140167b80` → `0x140167c00`(원자).
+
+**[2026-08-21 정정·확장] 파서 사슬을 단계별로 확정했다.** 종전 서술(`0x140167e10`(||) →
+`0x140167390`(&&) → … → `0x140167ad0`(단항/곱나눗))은 중간이 "…" 로 비었고 마지막 두 단계의
+이름이 틀렸다(`0x140167ad0` 은 단항이 아니라 **가감**, `0x140167b80` 이 곱나눗). 실제 사슬은
+**C 와 완전히 같다** — 각 함수가 자기 토큰만 보고 다음 단계를 부른다(컴파일러가 아래 단계를
+인라인해 놓아 한 함수 안에 여러 `cmp` 가 보이지만, 진입 시 첫 호출이 그 함수의 "다음 단계"다):
+
+| 단계(느슨→촘촘) | VA | 토큰 판정 |
+|---|---|---|
+| `\|\|` | `0x1401670c0`→`0x1401670d0` | 0xd |
+| `&&` | `0x140167390` | `cmp [rbx+8], 0xc` |
+| `\|` | `0x140167520` | `cmp [rbx+8], 0x14` |
+| `^` (같은 함수에 `&` 루프 인라인) | `0x1401675e0` | `cmp eax, 0x15` @`0x14016761a` |
+| `&` | 〃 | `cmp eax, 0x13` @`0x1401675f7` |
+| `==` `!=` | `0x140167680` | `lea edx,[rbp-6]; cmp edx,1` @`0x1401676a9` |
+| `<` `<=` `>` `>=` | `0x140167850` | `lea ecx,[rbx-8]; cmp ecx,3` @`0x1401676d7` |
+| `<<` `>>` | `0x1401679d0` | `lea edx,[r13-0x17]; cmp edx,1` @`0x1401679f4` |
+| `+` `-` | `0x140167ad0` | `lea ecx,[rbp-0xe]; cmp ecx,1` @`0x140167a17` |
+| `*` `/` `%` | `0x140167b80` | `lea eax,[rdi-0x10]; cmp eax,2` @`0x140167ba3` |
+| 단항·원자 | `0x140167c00` | `!`(5)@`0x140167c10` · `~`(0x16)@`0x140167c17` · `-`(0xf)@`0x140167c20` · `+`(0xe)@`0x140167c29` · 수(1) · 이름(2) · `(`(3)@`0x140167d48` |
+
+`0x140167e10` 은 사슬의 한 단계가 아니라 **`#if`/`#elif` 진입점**(디스패처가 `0x14016bfbc`/
+`0x14016c080` 에서 부른다)이다.
+
+**산술 폭은 32비트다.** 전 구간 `eax`/`esi` — `imul ebx,ecx`(`0x140167bc2`) ·
+`cdq; idiv ecx`(`0x140167bd2`) · `and esi,eax`(`0x140167610`) · `xor esi,edi`(`0x14016765a`) ·
+`not eax`(`0x140167e04`) · `neg eax`(`0x140167de2`). 세 가지 가드가 특히 관측 가능하다:
+
+* **0 나눗셈은 트랩이 아니라 0.** `/`(`0x140167bcc`)·`%`(`0x140167bdc`) 둘 다
+  `test ecx,ecx; je 0x140167be9`(`xor ebx,ebx`)로 빠진다 — `idiv` 를 아예 안 돈다.
+* **시프트량은 부호 없는 비교로 31 초과면 결과 0.** `cmp ebp,0x1f; ja 0x140167aaa`
+  (`xor r15d,r15d`) @`0x140167a8e`. 음수 시프트량도 u32 로는 > 0x1f 라 0 이다.
+  통과하면 `shl`(`<<`) / **`sar`**(`>>`, 산술) 이다(`0x140167a98`–`0x140167aa1`).
+* **미정의 이름·미지 문자는 0**, 그리고 **파서는 잔여 토큰을 그냥 버린다**(관용).
+
+**수 리터럴 문법**(`0x140166f90`–`0x14016708b`):
+`'0'` 뒤 `add al,0xa8; test al,0xdf`(`0x140166f9c`)로 `x`/`X` 를 가려 16진 분기 →
+`esi = esi*16 + digit`(`shl esi,4` @`0x140166fe7`), 아니면 10진 `esi = esi*10 + digit`
+(`0x140167007`–`0x140167019`). 그 다음 **`.` 이 오면 소수부를 읽고 버린다**
+(`0x140167021`–`0x140167046` — `esi` 를 안 건드린다. 즉 `#if 1.5` 는 **1**). 마지막으로
+`tolower(c) ∈ {u, f, l}` 접미를 **여러 개** 소비한다(`0x140167058`/`68`/`78`).
+접미가 아닌 글자가 붙으면(`1e5`) 수는 거기서 끝나고 나머지는 **식별자 토큰**이 된다.
+
 **삼항 `?:` 는 없다** — `?`/`:` 는 코드 0x19 로 떨어진다.
 
 **동봉 실측 — 등장 vs 미등장.** `#if`/`#elif` 식 **1,634건** 기준:
@@ -634,69 +748,140 @@ SHA-1 초기화 `0x14016c9ae`–`0x14016c9ef`, 블록 압축 `0x1400802f0`. 입�
 
 ## 8. Waple 갭 — 우선순위 순
 
-### G1 (P0) `#require` 미지원 → `fluidsimulation` 최종 패스가 조용히 깨진다
+### G1 (P0·**착지 2026-08-21**) `#require` — 소비까지. 주입은 [미해결]
 
-`Sources/WapleCore/ShaderPreprocessor.swift:200-329` 의 지시문 사슬에 `#require` 가 없다.
-`#if`/`#elif`/`#else`/`#endif`/`#undef`/`#define` 중 어느 것도 아니므로 마지막
-`else if emitting() { out.append(line) }`(`:327-329`)로 떨어져 **`#require LightingV1`
-줄이 그대로 MSL 로 방출**된다. Metal 전처리기는 `invalid preprocessing directive` 로 죽는다.
+**[정정] 종전 서술의 피해 판정이 틀렸다.** 이 절은 "`#require LightingV1` 줄이 그대로 MSL 로
+방출 → Metal 전처리기가 `invalid preprocessing directive` 로 죽는다" 고 적었다. **MSL 에는 안
+간다.** `GLSLTranslator` 의 조립부(`GLSLTranslator.swift:2059`)는 파스된 유니폼·varying·함수만
+문자열로 엮어 내보내므로, 전처리를 통과한 **인식 불가 최상위 줄은 어디에도 안 실리고 조용히
+사라진다**. 실측으로 확인했다 — 동봉 239쌍 × 3구성(기본값/allOn/allOff) = 717 구성의 방출
+MSL 에서 `^\s*#\s*require` 는 **0건**이다. 그래서 아래 "린트에 `require` 를 넣어라" 도
+그 자체로는 안 문다(넣었지만 동봉 도달 0 — 잠복 게이트다).
 
-* 실효 도달: `Sources/WapleRender/Resources/WEAssets/effects/fluidsimulation/shaders/effects/fluidsimulation_combine.frag:52`
-  — `#if LIGHTING` **밖**(depth 0)이라 콤보와 무관하게 항상 방출된다. 이 셰이더는
-  `effects/fluidsimulation/materials/effects/fluidsimulation_combine.json` →
-  `SceneRendererResources.swift:762` 의 `GLSLTranslator.translate` 경로를 탄다
-  (모델·파티클 계열 6건은 `Mesh3DShaders`/`ParticleShaders` 네이티브라 무관).
-* **테스트가 못 잡는다**: `Tests/WapleCoreTests/GLSLBundledShaderRegressionTests.swift:158`
-  의 "전처리 잔재" 패턴이
-  `^[ \t]*#[ \t]*(?:if|ifdef|ifndef|else|elif|endif|define|extension|version)\b` 라
-  **`require` 가 목록에 없다**. 그리고 그 스윕은 `.vert`+`.frag` 쌍만 모으는데
-  `fluidsimulation_combine` 은 쌍이 있으므로 대상에는 들어가지만, 린트 항목이 없어 통과한다.
-* 착지: `ShaderPreprocessor.swift:266` 앞에 `else if t.hasPrefix("#require") { /* 소비 */ }`
-  분기를 넣어 **최소한 줄을 삼킨다**. 그 다음 단계로 `LightingV1` 요청 시
-  `PerformLighting_V1` 스텁(또는 `ScenePBRLighting` 과 같은 계산)을 주입한다.
-  동시에 위 린트 패턴에 `require`(와 `pragma`·`error`·`line`)를 추가해 재발을 막는다.
+진짜 갭은 더 좁다: **`LIGHTING != 0` 일 때 실물이 주입하는 코드가 없다**(§3.5.1-②). 그 구성
+12개(8 셰이더 × 도달 구성)에서 `PerformLighting_V1` 호출부가 미정의로 남아 MSL 컴파일이 실패한다
+— 이건 종전에도 그랬고 지금도 그렇다. `GLSLBundledShaderRegressionTests.knownGaps["엔진 주입 함수"]`
+가 그 8건을 이미 이름으로 들고 있다.
 
-### G2 (P0) `#if` 식 문법 8종 미지원 — 워크샵에서 조용히 폴백
+**착지한 것**: `ShaderPreprocessor` 에 `#require` 분기를 추가해 **줄을 소비**한다(실물의 공백
+memset 과 같은 결말, §3.5.1-④). `LIGHTING` 게이트가 열려 있는데 주입을 못 하는 자리에서는
+`WapleLog.warn` 을 남긴다 — 실물과 갈리는 지점을 조용히 두지 않기 위해서다.
 
-`ShaderPreprocessor.swift:620-651`(`ExprEval.tokenize`)이 `unsupported = true` 로 만드는 것:
-`%` · 단일 `&` · 단일 `|` · `^` · `~` · `<<` · `>>` · 16진/접미 숫자 리터럴. 그리고
-`:569` 가 `#define X 0x10` 참조를 실패로 표시한다. 결과는 `preprocessStrict → nil`
-→ 번역 실패 → 이펙트 폴백(`SceneRendererResources.swift:762-765`).
+**"제거만으로 충분한가" 판정**: `LIGHTING == 0`(GLSL 번역 레인을 타는 유일한 동봉 도달
+`fluidsimulation_combine` 의 선언 기본값)에서는 **실물도 주입하지 않으므로 소비가 정확히
+일치한다**. `LIGHTING != 0` 에서는 호출부가 남아 **컴파일이 확정 실패 → 이펙트 폴백**이다.
+즉 소비만으로 "조용히 틀린 그림"이 되는 경로는 없다. 반대로 **주입을 어설프게 하면** 그때
+조용히 틀린다 — `LIGHTS_*` 를 시딩하지 않은 채 생성기를 흉내내면 길이 0 배열 +
+`return CAST3(0.0)` = 검은 라이팅이 되고, 컴파일은 성공한다.
 
-WE 는 **전부 지원**한다(§3.7 토큰표). 삼항 `?:` 만 양쪽 다 미지원이라 동률이다.
-동봉 코퍼스 등장 0회라 오늘의 회귀는 없지만, 워크샵 셰이더가 `#if (FLAGS & 2)`
-하나만 써도 그 이펙트가 통째로 사라진다.
+**[미해결] 주입 미구현.** 하려면 (a) `LIGHTS_POINT`/`LIGHTS_SPOT`/`LIGHTS_TUBE`/
+`LIGHTS_DIRECTIONAL`(+ `_SHADOW`/`_COOKIE` 변형) 매크로를 씬 `general.lightconfig` 로 시딩하고,
+(b) `g_LPoint_*`/`g_LSpot_*`/`g_LTube_*`/`g_LDirectional_*`/`g_LFeature_*` 유니폼 **배열**을
+렌더러가 채워야 한다. (b) 는 `WapleRender` 의 유니폼 빌더 소관이라 이 레인 밖이다.
 
-* 착지: `ExprEval` 에 `%`·비트연산·시프트·단항 `~`·16진/접미 리터럴을 **추가**한다
-  (파서 우선순위는 `|| → && → | → ^ → & → ==/!= → 비교 → 시프트 → +- → */% → 단항`
-  로 WE 와 같게). `defined()` 는 이미 있다(`:559-567`).
+#### 검토한 선택지 셋과 판정
 
-### G3 (P1) 콤보 키 정규화 규약이 다르다
-
-`SceneRendererResources.swift:1031-1040` 의 `canonical()` 은 **`[COMBO]` 로 선언된
-이름 집합**에서만 대소문자 무시 매칭을 한다. WE 는 `0x140154599` 에서 **선언과 무관하게
-무조건 대문자화**한다.
-
-실측 차이: 저작된 소문자 콤보 15종 중 **14종이 어떤 셰이더에서도 `[COMBO]` 선언이 없다**
-(선언이 있는 것은 `reflection`→`REFLECTION` 하나뿐, 10파일). 그런데 그 14종은
-셰이더 `#if*` 지시문에서 대문자로 참조된다:
-
-| 저작 키 | 대문자 참조 파일 수 | 그중 `[COMBO]` 선언 |
+| | 선택지 | 판정 |
 |---|---|---|
-| `normalmap` | 25 | 0 |
-| `spritesheet` | 10 | 0 |
-| `vertexcolor` | 6 | 0 |
-| `clouds` `detailinalpha` `dots` `lightmap` `rays` `version` | 각 2 | 0 |
-| `maskpaintcolor` `metal` `paintwork` `selfillum` `specularalpha` | 각 1 | 0 |
-| `reflection` | 24 | 10 |
+| 1 | `#require LightingV1` 을 **Waple 손-포팅 라이팅 함수 선언으로 치환** | **불가.** Waple 의 손-포팅은 GLSL 텍스트가 아니라 **네이티브 MSL** 이다(`WapleRender/Mesh3DShaders.swift` 의 `pbrDirect`/`mf_main`). 시그니처도 유니폼 모델도 다르다 — `Scene3DLighting.Light` 구조체 버퍼 + `maximumLights = 8` 캡이고, 실물이 요구하는 `g_LPoint_Color[N]` 류 **배열 유니폼이 없다**. `GLSLTranslator` 의 유니폼 모델은 배열을 스칼라 머티리얼 슬롯으로 접으므로(같은 이유로 `g_MorphOffsets[12]` 도 못 싣는다 — 회귀 테스트 `knownGaps` 주석) 치환할 대상 자체가 존재하지 않는다. |
+| 2 | 지시문은 소비하고 **`knownGaps` 로 명시 등록** | **채택.** 이미 등록돼 있었다 — `knownGaps["엔진 주입 함수"]`(선언 기본값 4건) / `knownGapsSweep`(스윕 8건)이 `XCTAssertEqual(ids, …)` 로 **양방향** 고정한다. 여기에 (i) 게이트 조건을 주석으로 확정하고, (ii) `LIGHTING != 0` 에서 호출부가 MSL 에 **살아남는지** 를 명시 단정으로 추가했다(`testLightingCallSiteSurvivesSoTheFailureStaysLoud`), (iii) 게이트가 열린 자리에서 `WapleLog.warn` 을 낸다. |
+| 3 | `preprocessStrict` **거부** | **미채택.** 관측 결과가 2 와 동일하다 — 거부해도, 미정의 호출로 MSL 컴파일이 실패해도 결말은 **폴백 + 로그**다. 반면 비용은 크다: `testEveryBundledShaderPairTranslatesAtDeclaredCombos` 의 "동봉 전건 번역 성공" 불변식이 선언 기본값에서 4건 깨져 예외 목록이 필요해지고, 이 갭을 표현하던 `knownGaps` 두 집합이 통째로 무의미해진다. 강한 불변식을 약화시켜 이미 표현된 사실을 다시 말하는 셈이다. |
 
-`SceneRendererResources.swift:1023-1027` 의 주석이 예시로 든 `fantasticcar` 의
-`paintwork` 는 **동봉/설치본 셰이더 어디에도 `[COMBO] PAINTWORK` 선언이 없다** —
-그 pkg 가 자체 셰이더에 선언을 실었다면 맞고, 아니면 그 예시는 지금 규약으로 안 고쳐진다.
+**"소비만 하면 조용히 틀린 그림" 인가 — 아니다.** 근거 둘.
+* 소비는 **오늘의 방출물에 대해 무동작**이다. 도입 전후 717 구성의 MSL 지문이 전건 동일하다.
+  `#require` 줄은 종전에도 MSL 에 안 갔다(조립부가 안 싣는다). 즉 소비가 새 오답을 만들 수 없다.
+* `LIGHTING != 0` 에서 `PerformLighting_V1(...)` **호출부는 그대로 남는다** → Metal 컴파일 확정
+  실패 → 폴백. 조용한 오답이 되는 쪽은 그 반대다 — 호출부까지 지우거나, `LIGHTS_*` 시딩 없이
+  생성기를 흉내내(길이 0 배열 + `return CAST3(0.0)`) **컴파일에 성공하는 검은 라이팅**을 만드는 것.
+  그래서 "호출부가 살아 있어야 한다" 를 테스트로 못 박았다.
 
-* 착지: `canonical()` 을 **무조건 `uppercased()`** 로 바꾼다. 선언 이름이 81/81 전건
-  대문자라 기존 동작과 충돌하지 않는다. (혼합 케이스 선언을 쓰는 워크샵 셰이더는
-  WE 에서도 안 맞으므로 흉내가 정답이다.)
+**곁가지 확인**: `Sources/WapleRender/Scene3DLighting.swift:13` 의 "엔진이 `#require LightingV1`
+(generic4.frag:75)로 주입하는 `PerformLighting_V1` → `common_pbr_2.h:256 ComputePBRLightShadow`"
+는 **맞다**(§3.5.1-⑥ 의 방출 문자열이 정확히 그 함수를 부른다). 다만 그 서술에 빠진 조건이
+하나 있다 — 주입은 **`LIGHTING` 콤보가 0 이 아닐 때만** 일어난다. `generic4` 는
+`[COMBO] LIGHTING default 1` 이라 기본 구성에서 게이트가 열리므로 서술 자체는 성립한다.
+
+**게이트**: 회귀 린트의 "전처리 잔재" 패턴에 `require`(와 `undef`·`pragma`·`error`·`line`)를
+추가했다 — 다만 위 이유로 동봉 도달 0. 대신 **전처리 출력을 직접 보는 게이트**를 새로 넣었다
+(`testNoEngineDirectiveSurvivesPreprocessing` — WE 9종 지시문이 전처리를 통과하면 실패).
+되돌림 실측: `#require` 소비를 빼면 그 게이트가 6 파일, 짝인
+`ShaderPreprocessorRequireTests.testAllBundledRequireFilesLoseTheDirective` 가 14 조합을 잡는다
+(합계 5 테스트 케이스 / 23 단정).
+
+### G2 (P0·**착지 2026-08-21**) `#if` 식 문법 8종 — 평가기 확장
+
+`ExprEval` 을 §3.7 의 실물 사슬과 같게 넓혔다: `%` · 단일 `&`/`|`/`^` · 단항 `~` ·
+`<<`/`>>` · 16진(`0x`/`0X`) · 접미(`u`/`f`/`l`, 반복 가능) 리터럴, 그리고 단항 `+`.
+우선순위는 실물 그대로 `|| → && → | → ^ → & → ==/!= → 비교 → 시프트 → +- → */% → 단항`
+— 종전에는 `==`/`!=` 와 비교가 **한 단계로 뭉쳐 좌결합**이었다(`2 == 1 < 1` 이 실물 0, 종전 1).
+32비트 규약도 같이 옮겼다: 비트·시프트·`~` 는 `Int32` 절단, 시프트량 >31·음수면 0,
+0 나눗셈/나머지는 0, 리터럴 누적은 32비트 랩(`0xFFFFFFFF` = −1).
+`#define X 0x10` / `1u` / `(0x10)` 도 이제 `#if` 평가값으로 등록된다.
+
+**거부 규약은 유지**했다 — 남은 거부는 삼항 `?:`(실물에도 없다) · 잔여 토큰(실물은 관용,
+우리는 "오역보다 폴터") · 소수 리터럴(**[미해결]** — 실물은 소수부를 버리고 1.5→1,
+§3.7. 흉내내지 않았다).
+
+회귀 폭: 동봉 등장 0회라 **717 구성의 MSL 지문이 변경 전후 전건 동일**(FNV-1a 비교).
+되돌림 실측 7 테스트 케이스 / 31 단정.
+
+### G3 (P1·**착지 2026-08-21**) 콤보 키 정규화 — 무조건 대문자화
+
+**[정정] 종전 절의 "선언이 있는 것은 `reflection`→`REFLECTION` 하나뿐" 은 집계 단위가 틀렸다.**
+`canonical()` 은 **그 패스가 쓰는 셰이더의** 선언 집합만 본다. 저작 자리별로 다시 세면
+소문자 저작 **56건 중 종전 규약이 접던 것은 0건**이다 — `planks.json` 의 `reflection` 도
+셰이더가 `generic` 이라 `[COMBO] REFLECTION` 이 없다(선언은 `generic4` 계열에 있다).
+
+착지: `GLSLTranslator.translate` 진입에서 콤보 키를 `uppercased()` 로 접는다
+(`GLSLTranslator.uppercasedComboKeys`). 실물의 접기 자리는 JSON 파스(`0x140154599`)지만
+Waple 의 대응 자리 `SceneRendererResources.resolvePassCombos` 는 이 레인 밖이라, 관측 대상인
+**주입 직전**에서 접었다 — 결과는 같고 메모 키도 함께 정규화된다.
+
+**이 자리가 오히려 넓다.** `resolvePassCombos` 를 타는 것은 이펙트 패스 하나뿐이고,
+`GLSLTranslator.translate` 호출부는 넷이다 — 이펙트 패스(`SceneRendererResources.swift:766`) ·
+**커스텀 레이어 셰이더**(`:1699`) · **커스텀 메시 셰이더**(`SceneRenderer3D.swift:1084`) ·
+스캐너(`WapleCompatCore/DeepScan.swift:534`). 뒤 셋은 `layer.materialCombos`/`mat.customCombos`
+를 **정규화 없이 그대로** 넘기던 자리라 종전 `canonical()` 근사가 아예 닿지 않았다.
+충돌 규약은 **대문자 철자 우선**(실물 `#define` 방출 순서 §3.2 → §3.3, 뒤가 승. Waple 에서
+텍스처 유래 키는 셰이더 어노테이션 철자 = 전건 대문자).
+**[미해결]** `resolvePassCombos.canonical()` 은 이제 잉여다 — 제거는 별건.
+
+**바뀌는 자리 전수.**
+
+* **셰이더 파일(.vert/.frag 쌍) 번역 결과: 0건.** 동봉 `[COMBO]` 선언 67종 · 샘플러
+  `combo` 어노테이션 9종 · `components.combo` 5종이 **전부 대문자**라 접기가 무동작이다.
+  717 구성 MSL 지문 전건 동일(위 G2 와 같은 측정). 회귀 테스트도 `parseComboDefaults` 로
+  콤보를 만들므로 스윕은 이 변경을 못 본다 — 그래서 계약을 `ShaderPreprocessorRequireTests`
+  의 G3 절이 따로 든다(되돌림 2 테스트 케이스 / 4 단정).
+* **머티리얼 JSON(저작 키): 동봉 9건 중 5건이 실제로 그림을 바꾼다.**
+
+  | 동봉 파일 | 셰이더 | 키:값 | 셰이더가 대문자 이름을 참조? |
+  |---|---|---|---|
+  | `materials/util/solidlayer_instance.json` | `genericimage2` | `version:2` | ✔ `#ifndef VERSION`(frag:7, :68) |
+  | `materials/util/solidlayer_instance_depthtest.json` | `genericimage2` | `version:2` | ✔ 〃 |
+  | `materials/util/flatalphavertexcolor.json` | `flat` | `vertexcolor:1` | ✔ `#ifdef VERTEXCOLOR`(vert:7,:13 · frag:10) |
+  | `materials/util/gizmovertexcolor.json` | `flat` | `vertexcolor:1` | ✔ 〃 |
+  | `scenes/gifs/materials/background.json` | `genericimage` | `spritesheet:1` | ✔ `#if SPRITESHEET`(vert:29) |
+  | `materials/util/solidlayer_instance_3.json` · `_4` · `_depthtest_3` · `_depthtest_4` | `genericimage3`/`4` | `version:2` | ✘ 참조 없음 → 무변화 |
+
+  실효 도달은 그보다 더 좁다: 앞 넷은 동봉 자산 어디에서도 **참조되지 않는다**(엔진이 이름으로
+  집는 내부 머티리얼). 다섯째 `gifs` 만 씬 체인(`gifscene.json` → `models/background.json`)에
+  있는데, Waple 은 SPRITESHEET 를 이미 **네이티브 레인**에서 처리한다
+  (`SceneDocument.swift:3197` 이 대소문자 무시로 읽어 `layer.spritesheet` → `resolveTextureWithFrames`).
+  `genericimage2` 의 `#else` 가지가 쓰는 `g_Color4` 는 `GLSLTranslator.engineNeutralDefault`
+  에 이미 (1,1,1,1) 중립값이 있어(`GLSLTranslator.swift:1494`) 두 가지가 기본값에서 동형이다.
+* **설치본(`assets/` + `projects/`) 저작 전수: 56건 중 52건이 그림을 바꾼다.**
+  `genericimage2`/`version` 13 · `generic`/`lightmap` 6 · `generic`/`normalmap` 5 ·
+  `genericimage2`/`spritesheet` 9 · `car`/`normalmap` 4 · `genericimage`/`spritesheet` 2 ·
+  `generic`/`detailinalpha` 2 · `flat`/`vertexcolor` 2 · 나머지 각 1
+  (`car`/{`metal`,`paintwork`,`maskpaintcolor`,`specularalpha`} · `generic`/`reflection` ·
+  `retro`/`dots` · `ricepod`/`selfillum` · `technoorbit`/{`clouds`,`rays`}).
+  안 바뀌는 4건은 셰이더가 그 이름을 `#if*` 로 안 보는 경우다.
+  **위험 고지**: 이 52건은 대부분 모델 머티리얼이라, 켜진 가지가 요구하는 텍스처 슬롯이
+  실제로 묶여 있어야 그림이 좋아진다(저작자가 콤보를 켠 이유가 그것이므로 정상 경로다).
+  다만 `flat`+`VERTEXCOLOR` 는 `a_Color` 정점 속성을 요구하는데 Waple 소스에 그 속성 이름이
+  **한 번도 안 나온다** — 기즈모 전용이라 도달 0 이지만 규약 차이로 적어 둔다. **[미해결]**
+
 
 ### G4 (P2) `#include` include-once 부재
 
@@ -732,7 +917,8 @@ WE 는 `<pkg>/shaders/blobsSM40/<sha1>.dxs` 로 **디스크에 남긴다**.
 | `"default": "1"` | 태그 4 → **0** | `jsonInt` 가 `1` | 자산 도달 0 |
 | `TEXnFORMAT` 값 0 | 그래도 주입 | `code != 0` 필터(`SceneRendererResources.swift:1068-1077`) | `#if` 값은 동일. `#ifdef TEXnFORMAT` 만 갈리고 자산 도달 0 |
 | 슬롯 번호 | `g_TextureN` 의 N | 동일(`GLSLTranslator.samplerCombos`) | 일치 |
-| 라이팅 생성기 범위 인용 | `0x140169140`–`0x14016b0d4` | `ScenePBRLighting.swift:221` 이 `0x140168000–0x14016b154` | 상한이 전처리기(`0x14016b0e0`) 안까지 넘어간다. 정정 권장 |
+| 라이팅 생성기 범위 인용 | `0x140169140`–`0x14016b0d4` | `ScenePBRLighting.swift:221` 이 `0x140168000–0x14016b154` | 상한이 전처리기(`0x14016b0e0`) 안까지 넘어간다. **[2026-08-21 재확인]** `primary(0x140169140)` = `(0x140169140, 0x14016b0d4)`, `primary(0x14016b0e0)` = `(0x14016b0e0, 0x14016c3f8)` — 두 함수가 인접하고 겹치지 않는다. 하한 `0x140168000` 도 근거가 없다(그 자리는 `#if` 파서 사슬이다). 정정 권장(파일 소유 밖이라 미수행) |
+| `#require` 줄의 MSL 유출 | 줄을 공백으로 덮는다(`0x14016bc63`) | 종전엔 전처리를 통과했지만 **번역기 조립부가 삼켜** MSL 엔 안 갔다 | **[2026-08-21 착지]** 이제 전처리가 소비한다(§8-G1). 방출 MSL 은 전후 동일 |
 
 ---
 
@@ -772,6 +958,19 @@ WE 는 `<pkg>/shaders/blobsSM40/<sha1>.dxs` 로 **디스크에 남긴다**.
 6. **씬 `objects[].effects[].passes[].combos` 오버라이드**가 `0x140154480` 을 타는지
    (=대문자화되는지). `0x1401515b0` 의 두 호출 자리는 "씬 인라인 패스"와 "머티리얼 JSON"
    으로 갈리는데, 이펙트 패스 오버라이드가 그중 어느 쪽으로 들어오는지 못 짚었다.
+   (Waple 은 `GLSLTranslator.translate` 진입에서 접으므로 **어느 경로로 들어오든 대문자화된다**
+   — 실물이 한쪽만 접는다면 우리가 더 공격적이다. §8-G3.)
+7. **[2026-08-21] `#require LightingV1` 의 주입 미구현**(§8-G1). 생성기의 입력
+   (`LIGHTS_*` 매크로)과 출력(`g_L*` 유니폼)을 Waple 렌더러가 아직 다루지 않는다.
+   구현 전까지 `LIGHTING != 0` 구성은 `PerformLighting_V1` 미정의로 MSL 컴파일 실패 →
+   폴백이다(조용한 오답은 아니다).
+8. **[2026-08-21] `#if` 소수 리터럴**(§3.7) — 실물은 `.` 뒤 소수부를 읽고 **버린다**
+   (`0x140167021`–`0x140167046`) → `#if 1.5` 는 1. Waple 은 `.` 를 모르는 문자로 남겨
+   거부한다. 어느 자산도 안 쓰므로 도달 0 이지만 규약 차이다.
+9. **[2026-08-21] 잔여 토큰 관용**(§3.7) — 실물 파서는 식을 다 못 먹어도 그냥 값을
+   돌려준다(`#if 2 x` → 2). Waple 은 거부한다("오역보다 폴터" — 의도적 이탈).
+10. **[2026-08-21] `resolvePassCombos.canonical()` 잉여**(§8-G3) — 대문자화가 번역기
+   진입으로 옮겨져 이 함수는 더 이상 하는 일이 없다. 제거는 파일 소유 밖이라 별건.
 
 ---
 

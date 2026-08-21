@@ -3,6 +3,14 @@ import Foundation
 /// WE GLSL 전처리기: `[COMBO]` 기본값 + `#include` 인라인 + `#if/#ifdef/#else/#elif/#endif` 평가.
 /// 순수(테스트 가능). 미발견 인클루드/미지원 #include 는 안전 무시(빈 줄)하고 로그. 단, F421:
 /// 미지원 #if 식은 안전 무시가 아니라 전처리 "거부"(오분기 = 오역 — "오역보다 폴터" 위반) — preprocessStrict nil.
+///
+/// **실물이 인식하는 지시문은 9종뿐이다**(디스패처 0x14016b0e0-0x14016c3f8, 줄 인식 정규식
+/// `^\s*#\s*([a-z]+)\b\s*(.*)` @0x14048d048): `define`(0x14016b8e3) `ifdef`(0x14016bd26)
+/// `ifndef`(0x14016bde0) `else`(0x14016be73) `endif`(0x14016bf30) `if`(0x14016bf9e)
+/// `elif`(0x14016c00b) `require`(0x14016c0ec) `undef`(0x14016c201).
+/// `#version`/`#extension`/`#pragma`/`#error`/`#line` 은 **지시문이 아니다** — 실물은 인식하지
+/// 못해 본문에 그대로 남긴다(0x14016c1f8 → 0x14016bbb0 의 "미지의 지시문" 경로).
+/// 이 파일은 그 9종을 전부 다룬다(`#require` 는 소비만 — 아래 분기의 [미해결] 참조).
 public enum ShaderPreprocessor {
     /// - combos: scene.json 에서 온 명시적 콤보 값(소스의 [COMBO] 기본값보다 우선).
     /// - include: `#include "name"` → 헤더 소스(없으면 nil → 빈 인라인).
@@ -263,6 +271,57 @@ public enum ShaderPreprocessor {
                 stack.append(f)
             } else if t == "#endif" || t.hasPrefix("#endif ") || t.hasPrefix("#endif//") {
                 if !stack.isEmpty { stack.removeLast() }
+            } else if t == "#require" || t.hasPrefix("#require ") || t.hasPrefix("#require\t") {
+                // G1 — `#require <Name>` 은 **지시문이 아니라 코드 생성기 호출**이다.
+                // 실물(`wallpaper64.exe`, imagebase 0x140000000):
+                //  · 지시문 인식 = 이름 길이 7 + `memcmp "require"`(0x14016c0ec).
+                //  · 생성기 호출 `0x140169140(요청이름, 매크로맵, &out)`(0x14016c127). 결과가 **비어 있지
+                //    않을 때만**(0x14016c12c `cmp qword [rbp+0x20], 0`) `std::string::insert`
+                //    (0x14016c15c → 0x1400f9070)로 **그 줄 자리에 그대로 끼워 넣는다** — 파일 머리가
+                //    아니다. 삽입 뒤 줄 시작/끝 포인터를 삽입 길이만큼 밀어(0x14016c16a-0x14016c18c)
+                //    지시문 줄 자신은 뒤이어 공백으로 memset 된다(0x14016bc63-0x14016bc71, `bl=1` 은
+                //    0x14016c1cc). 즉 **줄은 언제나 소비**되고, 주입은 그 자리에 선행한다.
+                //  · 생성기(0x140169140-0x14016b0d4)의 **빈 문자열 반환 조건 3가지**(전부 0x14016b0b2
+                //    로 점프 = out 을 손대지 않고 ret):
+                //      (a) 요청 이름 길이 != 10 또는 `memcmp "LightingV1"` 불일치(0x1401691eb/0x1401691f5)
+                //      (b) 매크로맵에 `LIGHTING` 이 **없다**(0x1401691b8 조회 → 0x14016920c `cmp rbx, r12`)
+                //      (c) `LIGHTING` 의 값 문자열을 정수로 읽어(0x140169223) **0 이면**(0x14016922a)
+                //    → **미지의 이름도, `LIGHTING` 이 0/미정의여도 아무것도 주입하지 않고 줄만 삼킨다.**
+                //  · `LIGHTING != 0` 일 때 주입하는 것: `uniform vec4 g_LPoint_Color[N];` 류 라이트 배열
+                //    선언(0x140169573-0x140169b4f, 길이 N 은 `LIGHTS_POINT`/`LIGHTS_SPOT`/`LIGHTS_TUBE`/
+                //    `LIGHTS_DIRECTIONAL` 등 매크로맵 값)과 `vec3 PerformLighting_V1(...)`(0x14048c070)
+                //    본문 — 라이트마다 `const uint i = <n>u;` 로 **언롤**한 `ComputePBRLightShadow` 누적.
+                //  · **emitting 가드가 없다**: 형제 `#define`(0x14016b8f7)·`#undef`(0x14016c215)는
+                //    `test r13b, r13b` 로 비활성 분기를 건너뛰는데 `#require` 경로에는 그 검사가 없다.
+                //    즉 거짓 `#if` 안의 `#require` 도 실물은 주입한다(동봉 도달: genericparticle.frag:68 ·
+                //    genericropeparticle.frag:56 의 depth 1 — 둘 다 Waple 은 네이티브 레인이라 무해).
+                //    여기서도 `emitting()` 을 보지 않고 무조건 소비해 같은 형태를 유지한다.
+                //
+                // Waple 이 하는 것: **줄을 소비만 한다.** 주입은 하지 않는다 — 근거는 아래 [미해결].
+                // 종전에는 마지막 `else if emitting()` 로 떨어져 줄이 본문에 남았다. 그 잔재가 MSL 을
+                // 깨지는 않았다(GLSLTranslator 는 파스된 선언·함수만 조립해 방출한다 — :2059 — 인식
+                // 못 한 최상위 줄은 어디에도 안 실린다. 실측: 동봉 239쌍 × 3구성에서 `#require` 방출 0건).
+                // 그래도 소비로 바꾸는 이유는 셋이다: (a) 실물과 형태가 같아지고, (b) 번역기 조립부가
+                // 관대해서 우연히 안 새던 것을 명시 계약으로 바꾸며, (c) 아래 회귀 린트의
+                // `require` 패턴이 "잠복" 이 아니라 "여기서 소비된다" 는 뜻이 된다.
+                //
+                // **[미해결] `LIGHTING != 0` 일 때의 주입은 구현하지 않았다.** 주입하려면 라이트 배열
+                // 유니폼(`g_LPoint_*`/`g_LSpot_*`/`g_LTube_*`/`g_LDirectional_*`/`g_LFeature_*`)을
+                // 렌더러가 씬 라이트로 채워야 하는데 그 바인딩은 GLSL 레인에 없다(WapleRender 의
+                // 유니폼 빌더 소관 — 이 파일 밖). `LIGHTS_*` 매크로도 시딩되지 않아 지금 주입하면
+                // 길이 0 배열 + `return CAST3(0.0)` = **조용히 검은 라이팅**이 된다("오역보다 폴터" 위반).
+                // 그래서 소비만 하고, 실물이 주입했을 자리에서는 경고를 남긴다 → 호출부 참조가
+                // 미정의로 남아 MSL 컴파일이 실패하고 이펙트가 폴백한다(= 지금과 같은 결말, 다만 시끄럽게).
+                // 판정: **소비만으로 조용히 틀린 그림이 되지는 않는다.** `LIGHTING == 0`(동봉 GLSL 레인
+                // 도달 유일건 fluidsimulation_combine 의 기본값)에서는 실물도 주입하지 않으므로 소비가
+                // 정확히 일치하고, `LIGHTING != 0` 에서는 `PerformLighting_V1` 호출부가 남아 컴파일이
+                // 확정 실패한다(조용한 오답이 아니라 폴백).
+                let requested = token(after: "#require", t)
+                if requested == "LightingV1", let lighting = d["LIGHTING"], lighting != 0 {
+                    WapleLog.warn("[Waple] GLSL #require LightingV1 (LIGHTING=\(lighting)): "
+                                  + "PerformLighting_V1 주입 미구현 — 소비만 한다(호출부는 미정의로 남는다)")
+                }
+                // 주입 여부와 무관하게 줄은 삼킨다(실물 0x14016bc63 의 공백 memset 과 같은 결말).
             } else if t.hasPrefix("#undef ") {
                 if emitting() {
                     let name = token(after: "#undef", t)
@@ -313,9 +372,16 @@ public enum ShaderPreprocessor {
                             // F422: `#define MODE (2)` — 괄호 감싼 10진 정수도 #if 평가값으로 등록.
                             // (종전 Int("(2)") == nil → d 미등재라 #if MODE 는 0 인데 본문 치환은 "(2)" 라 불일치.)
                             d[name] = v
+                        } else if let v = ExprEval.numericLiteral(value) {
+                            // G2: `#define X 0x10` / `1u` / `2UL` — 실물 렉서(0x140166f90-0x14016708b)가
+                            // 아는 수치 리터럴 문법이므로 여기서도 값으로 등록한다. 종전에는 아래
+                            // suspect 로 몰려 이 이름을 쓰는 `#if` 가 통째로 거부됐다(= 이펙트 폴백).
+                            d[name] = v
                         } else if value.first?.isNumber == true {
-                            // F421: 숫자로 시작하지만 10진 정수가 아닌 값(0x10·1.5·2u 류) —
+                            // F421: 숫자로 시작하지만 위 어느 문법도 아닌 값(1.5·1e5 류) —
                             // #if 에서 참조 시 오평가 방지를 위해 거부 대상으로 표시.
+                            // (실물은 `1.5` 를 소수부를 버린 1 로 본다 — 0x140167021-0x140167046.
+                            //  흉내내지 않는다: **[미해결]**, 별건.)
                             suspectDefines.insert(name)
                         }
                         textDefines[name] = value
@@ -458,15 +524,16 @@ public enum ShaderPreprocessor {
         return source.range(of: pattern, options: .regularExpression) != nil
     }
 
-    /// F422: `#define MODE (2)` / `((3))` — 바깥 괄호로 감싼 10진 정수 리터럴을 벗겨 파스.
-    /// 괄호가 아니거나 안쪽이 정수가 아니면 nil(`(2)+(3)`, `(0x10)` 등).
+    /// F422: `#define MODE (2)` / `((3))` — 바깥 괄호로 감싼 정수 리터럴을 벗겨 파스.
+    /// 괄호가 아니거나 안쪽이 정수가 아니면 nil(`(2)+(3)` 등).
+    /// G2: 안쪽은 10진뿐 아니라 실물 문법(16진·`u`/`f`/`l` 접미)도 받는다 — `(0x10)`.
     private static func parenthesizedDecimalInt(_ value: String) -> Int? {
         var v = value.trimmingCharacters(in: .whitespaces)
         guard v.hasPrefix("(") else { return nil }
         while v.hasPrefix("("), v.hasSuffix(")") {
             v = v.dropFirst().dropLast().trimmingCharacters(in: .whitespaces)
         }
-        return Int(v)
+        return Int(v) ?? ExprEval.numericLiteral(v)
     }
 
     private static func token(after kw: String, _ line: String) -> String {
@@ -520,9 +587,45 @@ public enum ShaderPreprocessor {
 }
 
 /// `#if` 식 평가기. **안전**: 임의 코드 실행이 아니라 직접 작성한 재귀하강 정수 파서다.
-/// 정수 리터럴 + 식별자(defines 룩업, 미정의=0) + `!  *  /  +  -  <  >  <=  >=  ==  !=  &&  ||` + 괄호만
-/// 다룬다. 함수 호출/문자열/부수효과 없음 → 셰이더 입력으로부터 코드 인젝션 불가.
+/// 정수 리터럴(10진·16진·`u`/`f`/`l` 접미) + 식별자(defines 룩업, 미정의=0) + `defined()` +
+/// `!  ~  *  /  %  +  -  <<  >>  <  >  <=  >=  ==  !=  &  ^  |  &&  ||` + 괄호만 다룬다.
+/// 함수 호출/문자열/부수효과 없음 → 셰이더 입력으로부터 코드 인젝션 불가.
+///
+/// **우선순위와 토큰 집합은 실물 렉서·파서에서 그대로 뜬 것이다**(`wallpaper64.exe`, imagebase
+/// 0x140000000). 렉서 0x140166a90-0x1401670ba, 파서는 느슨→촘촘 순으로 한 단계씩 함수가 있다:
+///
+/// | 단계 | 실물 VA | 토큰(코드) |
+/// |---|---|---|
+/// | `\|\|`            | 0x1401670d0 | 0xd |
+/// | `&&`              | 0x140167390 | 0xc |
+/// | `\|`              | 0x140167520 | 0x14 |
+/// | `^`               | 0x1401675e0 (같은 함수에 `&` 인라인) | 0x15 |
+/// | `&`               | 0x1401675e0 | 0x13 |
+/// | `==` `!=`         | 0x140167680 (`lea edx,[rbp-6]; cmp edx,1`) | 6·7 |
+/// | `<` `<=` `>` `>=` | 0x140167850 (`lea ecx,[rbx-8]; cmp ecx,3`) | 8·9·0xa·0xb |
+/// | `<<` `>>`         | 0x1401679d0 (`lea edx,[r13-0x17]; cmp edx,1`) | 0x17·0x18 |
+/// | `+` `-`           | 0x140167ad0 (`lea ecx,[rbp-0xe]; cmp ecx,1`) | 0xe·0xf |
+/// | `*` `/` `%`       | 0x140167b80 (`lea eax,[rdi-0x10]; cmp eax,2`) | 0x10·0x11·0x12 |
+/// | 단항·원자          | 0x140167c00 | `!`(5) `~`(0x16) `-`(0xf) `+`(0xe) 수(1) 이름(2) `(`(3) |
+///
+/// 즉 **C 와 같은 사슬**이다(종전 Waple 은 `==`/`!=` 와 비교를 한 단계로 뭉쳤고 비트·시프트·`%`
+/// 가 아예 없었다). 삼항 `?:` 는 실물에도 없다 — `?`/`:` 는 렉서에서 "그 외 문자"(0x19)로 떨어진다.
+///
+/// **산술 폭은 32비트다.** 실물은 전 구간 `eax`/`esi` 로 돌린다(`imul ebx,ecx`@0x140167bc2,
+/// `idiv`@0x140167bd3, `and esi,eax`@0x140167610, `xor esi,edi`@0x14016765a, `not eax`@0x140167e04,
+/// `neg eax`@0x140167de2). 여기서는 **새로 넣는 비트·시프트·`~` 만** `Int32` 로 절단해 맞춘다 —
+/// 기존 `+ - * /` 는 종전 `Int` 랩핑 그대로 둔다(값 도메인이 콤보 정수라 실측 차이 0, 무회귀 우선).
+/// 0 나눗셈은 실물도 트랩이 아니라 **0**(0x140167bcc-0x140167be9 `test ecx,ecx; je → xor ebx,ebx`) —
+/// 종전 Waple 규약과 같다. `%` 도 같은 가드를 공유한다.
 enum ExprEval {
+    /// 실물이 32비트로 도는 자리(비트·시프트·`~`·리터럴 누적)의 폭 맞춤. 둘 다
+    /// `truncatingIfNeeded:` 라 **트랩이 원리적으로 불가능**하다 — 셰이더 소스는 신뢰 경계 밖이고
+    /// `Int32(_:)`/`Int(_:)` 맨 이니셜라이저는 범위를 넘으면 클램프가 아니라 크래시다.
+    /// (`wide` 는 Int32→Int 확대라 절단이 일어날 수 없지만, 좁힘 인구조사 게이트가 맨 `Int(` 를
+    /// 세므로 같은 라벨을 달아 의도를 코드에 적어 둔다.)
+    private static func w32(_ v: Int) -> Int32 { Int32(truncatingIfNeeded: v) }
+    private static func wide(_ v: Int32) -> Int { Int(truncatingIfNeeded: v) }
+
     /// 관용 래퍼(기존 호환): 거부 대상 식은 0. 파이프라인(#if/#elif)은 evalChecked 를 써야 한다.
     static func eval(_ expr: String, defines: [String: Int], definedNames: Set<String>? = nil) -> Int {
         evalChecked(expr, defines: defines, definedNames: definedNames) ?? 0
@@ -530,8 +633,9 @@ enum ExprEval {
 
     /// 엄격 평가 — 미지원 패턴이면 nil(분기 선택 거부). F421: 종전에는 미지 문자를 조용히 버리고
     /// 잔여 토큰도 무시해 `#if A % 2`→A, `#if 0x10`→0 처럼 오분기가 "성공"으로 빠졌다.
-    /// 거부 조건: 미지 문자(`% & | ^ ~ ? :` 등)·시프트(`<<`/`>>`, 비교 이중 토큰으로 오평가됨)·
-    /// 숫자+문자 리터럴(`0x10`, `1u`, `1e5`)·비-10진 수치 define(suspect) 참조·잔여 토큰.
+    /// **[G2] 거부 규약은 유지하되 아는 문법을 넓혔다.** 이제 거부는 이것뿐이다:
+    /// 렉서가 모르는 문자(`? : . ; @ …`)·10진으로 못 읽는 수치 define(suspect) 참조·잔여 토큰.
+    /// (`% & | ^ ~ << >>`·16진/접미 리터럴은 **더 이상 거부가 아니라 평가**된다 — 실물과 같게.)
     static func evalChecked(_ expr: String, defines: [String: Int], definedNames: Set<String>? = nil,
                             suspect: Set<String> = []) -> Int? {
         let lexed = tokenize(expr)
@@ -540,14 +644,13 @@ enum ExprEval {
         let knownNames = definedNames ?? Set(defines.keys)
         var pos = 0
         var failed = false   // suspect define 참조 — 값은 내지만 결과는 nil 로 거부
-        // 중첩 깊이(괄호 `(`·단항 `!`/`-` 재귀 공용) — 악성 중첩 입력(`#if ((((…))))`)의 스택
+        // 중첩 깊이(괄호 `(`·단항 `!`/`-`/`~` 재귀 공용) — 악성 중첩 입력(`#if ((((…))))`)의 스택
         // 오버플로 방지. 256 은 SceneDocument.world() 의 32 캡을 본떴으되 넉넉히 잡음(실제 식은 10 미만 중첩).
         var depth = 0
         let maxDepth = 256
         func peek() -> String? { pos < toks.count ? toks[pos] : nil }
         func next() -> String? { defer { pos += 1 }; return peek() }
 
-        // 재귀 하강(우선순위: || , && , 비교 , 가감 , 곱나눗 , 단항)
         func parsePrimary() -> Int {
             depth += 1
             defer { depth -= 1 }
@@ -555,7 +658,9 @@ enum ExprEval {
             guard let t = next() else { return 0 }
             if t == "(" { let v = parseOr(); if peek() == ")" { pos += 1 }; return v }
             if t == "!" { return parsePrimary() == 0 ? 1 : 0 }
+            if t == "~" { return wide(~w32(parsePrimary())) }   // 실물 `not eax`(0x140167e04)
             if t == "-" { return 0 &- parsePrimary() }  // 랩핑 — defines 에 Int.min 이 실릴 수 있음
+            if t == "+" { return parsePrimary() }       // 실물 0x140167c29: 단항 `+` 는 그냥 통과
             if t == "defined" {
                 if peek() == "(" {
                     pos += 1
@@ -566,16 +671,21 @@ enum ExprEval {
                 return knownNames.contains(next() ?? "") ? 1 : 0
             }
             if let n = Int(t) { return n }
-            if suspect.contains(t) { failed = true; return 0 }  // F421: `#define X 0x10` 류 — 10진 평가 불가
+            if suspect.contains(t) { failed = true; return 0 }  // `#define X 1.5` 류 — 10진 평가 불가
             return defines[t] ?? 0
         }
         // 산술은 랩핑(&*, &+, &-) + 나눗셈 트랩 가드 — #if 는 분기 결정만 하면 되므로 근사면 충분하고,
         // 악성 리터럴(`#if 9223372036854775807+1`)의 오버플로 트랩(크래시) 방지가 우선.
         func parseMul() -> Int {
             var v = parsePrimary()
-            while let op = peek(), op == "*" || op == "/" {
+            while let op = peek(), op == "*" || op == "/" || op == "%" {
                 pos += 1; let r = parsePrimary()
-                v = op == "*" ? v &* r : (r == 0 ? 0 : (v == Int.min && r == -1 ? 0 : v / r))
+                switch op {
+                case "*": v = v &* r
+                // 실물 0x140167bcc/0x140167bdc: 제수 0 이면 idiv 를 아예 안 돌고 결과 0.
+                case "/": v = r == 0 ? 0 : (v == Int.min && r == -1 ? 0 : v / r)
+                default:  v = r == 0 ? 0 : (v == Int.min && r == -1 ? 0 : v % r)
+                }
             }
             return v
         }
@@ -586,13 +696,22 @@ enum ExprEval {
             }
             return v
         }
-        func parseCmp() -> Int {
+        // 실물 0x140167a8e: `cmp ebp, 0x1f; ja → 결과 0`. **부호 없는 비교**라 음수 시프트량도 0 이다.
+        // 그 밖에는 `shl`(<<) / `sar`(>>, 산술) 32비트.
+        func parseShift() -> Int {
             var v = parseAdd()
-            while let op = peek(), ["==", "!=", "<", ">", "<=", ">="].contains(op) {
+            while let op = peek(), op == "<<" || op == ">>" {
                 pos += 1; let r = parseAdd()
+                if r < 0 || r > 31 { v = 0 }
+                else { v = wide(op == "<<" ? w32(v) << w32(r) : w32(v) >> w32(r)) }
+            }
+            return v
+        }
+        func parseRel() -> Int {
+            var v = parseShift()
+            while let op = peek(), ["<", ">", "<=", ">="].contains(op) {
+                pos += 1; let r = parseShift()
                 switch op {
-                case "==": v = v == r ? 1 : 0
-                case "!=": v = v != r ? 1 : 0
                 case "<": v = v < r ? 1 : 0
                 case ">": v = v > r ? 1 : 0
                 case "<=": v = v <= r ? 1 : 0
@@ -601,9 +720,31 @@ enum ExprEval {
             }
             return v
         }
+        func parseEq() -> Int {
+            var v = parseRel()
+            while let op = peek(), op == "==" || op == "!=" {
+                pos += 1; let r = parseRel(); v = (op == "==" ? v == r : v != r) ? 1 : 0
+            }
+            return v
+        }
+        func parseBitAnd() -> Int {
+            var v = parseEq()
+            while peek() == "&" { pos += 1; let r = parseEq(); v = wide(w32(v) & w32(r)) }
+            return v
+        }
+        func parseBitXor() -> Int {
+            var v = parseBitAnd()
+            while peek() == "^" { pos += 1; let r = parseBitAnd(); v = wide(w32(v) ^ w32(r)) }
+            return v
+        }
+        func parseBitOr() -> Int {
+            var v = parseBitXor()
+            while peek() == "|" { pos += 1; let r = parseBitXor(); v = wide(w32(v) | w32(r)) }
+            return v
+        }
         func parseAnd() -> Int {
-            var v = parseCmp()
-            while peek() == "&&" { pos += 1; let r = parseCmp(); v = (v != 0 && r != 0) ? 1 : 0 }
+            var v = parseBitOr()
+            while peek() == "&&" { pos += 1; let r = parseBitOr(); v = (v != 0 && r != 0) ? 1 : 0 }
             return v
         }
         func parseOr() -> Int {
@@ -612,9 +753,52 @@ enum ExprEval {
             return v
         }
         let value = parseOr()
-        // 잔여 토큰(`#if 1 0`·`A -> 2` 류)도 오평가 신호 — 전량 소비됐을 때만 유효 평가.
+        // 잔여 토큰(`#if 1 0`·`A -> 2`·`#if 1e5` 류)도 오평가 신호 — 전량 소비됐을 때만 유효 평가.
+        // 실물은 잔여를 그냥 버리지만(관용) 여기서는 "오역보다 폴터" 규약대로 거부한다.
         guard !failed, pos == toks.count else { return nil }
         return value
+    }
+
+    /// WE 수치 리터럴 문법(렉서 0x140166f90-0x14016708b)으로 `chars[i...]` 를 읽는다.
+    /// - `0x`/`0X` 접두(0x140166f9c `add al,0xa8; test al,0xdf` = `x`/`X` 판정) → 16진 누적
+    ///   `esi = esi*16 + digit`(0x140166fe7).
+    /// - 그 밖엔 10진 누적 `esi = esi*10 + digit`(0x140167007-0x140167019).
+    /// - 뒤이어 `u`/`f`/`l`(대소문자 무관, 0x140167058/68/78) 접미를 **여러 개** 소비한다.
+    /// - 누적은 실물과 같이 32비트 랩핑(`Int32`) — `0xFFFFFFFF` 는 실물에서 -1 이다.
+    /// 반환: (값, 다음 인덱스). `.` 소수점은 **일부러 안 먹는다** — 실물은 소수부를 읽고 버려
+    /// `#if 1.5` 를 1 로 보지만(0x140167021-0x140167046), 그 관용은 이 게이트 밖이라 여기서는
+    /// `.` 를 모르는 문자로 남겨 거부시킨다(**[미해결]** — 넓히려면 별건으로).
+    private static func weNumericLiteral(_ chars: [Character], _ start: Int) -> (value: Int, next: Int)? {
+        // 실물은 `isdigit`/`isxdigit`(ASCII) 로 판정한다 — Swift 의 `isNumber`/`hexDigitValue` 는
+        // 유니코드 숫자(전각·아라비아-인도 숫자 등)까지 먹으므로 ASCII 로 좁힌다. 좁힌 결과
+        // 그런 문자는 아래 토크나이저에서 "모르는 문자"로 떨어져 식이 거부된다(보수적 = 실물과 같은 결말).
+        func asciiDigit(_ c: Character, radix: Int) -> Int? {
+            guard c.isASCII, let v = c.hexDigitValue, v < radix else { return nil }
+            return v
+        }
+        var i = start
+        guard i < chars.count, asciiDigit(chars[i], radix: 10) != nil else { return nil }
+        var acc: Int32 = 0
+        if chars[i] == "0", i + 1 < chars.count, chars[i + 1] == "x" || chars[i + 1] == "X" {
+            i += 2
+            while i < chars.count, let d = asciiDigit(chars[i], radix: 16) {
+                acc = acc &* 16 &+ w32(d); i += 1
+            }
+        } else {
+            while i < chars.count, let d = asciiDigit(chars[i], radix: 10) {
+                acc = acc &* 10 &+ w32(d); i += 1
+            }
+        }
+        while i < chars.count, "uUfFlL".contains(chars[i]) { i += 1 }
+        return (wide(acc), i)
+    }
+
+    /// 문자열 **전체**가 하나의 WE 수치 리터럴일 때 그 값. `#define X 0x10` 을 `#if` 평가값으로
+    /// 등록하기 위한 진입점(종전엔 suspect 로 몰아 그 `#if` 를 통째로 거부했다).
+    static func numericLiteral(_ s: String) -> Int? {
+        let chars = Array(s.trimmingCharacters(in: .whitespaces))
+        guard let r = weNumericLiteral(chars, 0), r.next == chars.count else { return nil }
+        return r.value
     }
 
     private static func tokenize(_ s: String) -> (tokens: [String], unsupported: Bool) {
@@ -622,29 +806,29 @@ enum ExprEval {
         let chars = Array(s)
         var i = 0
         var unsupported = false
-        let two: Set<String> = ["==", "!=", "<=", ">=", "&&", "||"]
+        // 2글자 토큰은 1글자보다 **먼저** 본다 — `<<` 가 `<`+`<` 로 쪼개지면 `A << 2` 가 `A < 0` 처럼
+        // 오평가된다(F421 이 종전에 시프트를 통째로 거부한 이유). 이제 쪼개지 않고 제대로 읽는다.
+        let two: Set<String> = ["==", "!=", "<=", ">=", "&&", "||", "<<", ">>"]
         while i < chars.count {
             let c = chars[i]
             if c.isWhitespace { i += 1; continue }
             if i + 1 < chars.count, two.contains(String([c, chars[i + 1]])) {
                 toks.append(String([c, chars[i + 1]])); i += 2; continue
             }
-            // F421: 시프트 — `<`/`>` 이중 토큰으로 오평가(`A << 2` 가 `A < 0` 처럼)되므로 명시 거부.
-            if i + 1 < chars.count, (c == "<" && chars[i + 1] == "<") || (c == ">" && chars[i + 1] == ">") {
-                unsupported = true; i += 2; continue
-            }
-            if "()!*/+-<>".contains(c) { toks.append(String(c)); i += 1; continue }
+            // 1글자 연산자 — `%`·비트(`& | ^ ~`)가 여기 들어오면서 "모르는 문자" 거부에서 빠졌다.
+            if "()!*/%+-<>&|^~".contains(c) { toks.append(String(c)); i += 1; continue }
             if c.isLetter || c == "_" {
                 var id = ""; while i < chars.count, chars[i].isLetter || chars[i].isNumber || chars[i] == "_" { id.append(chars[i]); i += 1 }
                 toks.append(id); continue
             }
             if c.isNumber {
-                var n = ""; while i < chars.count, chars[i].isNumber { n.append(chars[i]); i += 1 }
-                // F421: 숫자 런 뒤 문자 = 16진(`0x10`)·접미(`1u`/`2L`)·지수(`1e5`) 리터럴 — 10진 정수 파서로는 오평가.
-                if i < chars.count, chars[i].isLetter || chars[i] == "_" { unsupported = true }
-                toks.append(n); continue
+                // 16진/접미 리터럴을 실물 문법대로 읽는다. 접미가 아닌 글자가 붙으면(`1e5`) 수는
+                // 거기서 끝나고 나머지는 식별자 토큰이 된다 — 실물과 같고, 그 결과 잔여 토큰이
+                // 생겨 위 `pos == toks.count` 가 거부한다(종전의 명시 거부와 결말 동일).
+                guard let r = weNumericLiteral(chars, i) else { unsupported = true; i += 1; continue }
+                toks.append(String(r.value)); i = r.next; continue
             }
-            unsupported = true  // F421: 알 수 없는 문자(%, 비트 &, |, ^, ~, 삼항 ?, : 등) — 조용히 버리면 오분기
+            unsupported = true  // 렉서가 모르는 문자(`?` `:` `.` `@` 등 — 실물 코드 0x19)
             i += 1
         }
         return (toks, unsupported)
