@@ -34,7 +34,8 @@ import Foundation
 ///
 /// 세 버퍼는 서로 다른 힙이고 크기도 다르다(memset 0x300/0x180/0xc0 B = 192/96/48 float —
 /// `0x14011540c`, `0x140115420`, `0x140115434`). 각 버퍼는 [Left | Right | Mono] 3분면이며
-/// mono 분면은 셰이더 유니폼으로 노출되지 않는다.
+/// mono 분면은 셰이더 유니폼으로 노출되지 않는다 — **씬 스크립트에는 `average` 라는 이름으로
+/// 나간다**(`Output.scriptBuffers(_:)` 주석 참조). 그게 이 사분면의 유일하게 확인된 소비처다.
 ///
 /// ### 정규화 분모는 순간 피크가 아니라 **시간 엔벨로프**다
 ///
@@ -56,6 +57,24 @@ import Foundation
 /// 남은 차이 하나: 원본은 `rcpps`(≈12비트 근사 역수, 상대오차 ≤ 3.7e-4)를 쓰고 우리는 정확한
 /// 나눗셈을 쓴다. 눈에 보이는 차이가 아니라 맞추지 않았다.
 ///
+/// ### 상한 클램프도 dB 변환도 **없다**
+///
+/// 2026-08-21 재대조에서 `0x140110630–0x140113bc0`(merged 7조각)을 함수 시작부터 선형으로 떠
+/// 오디오 구간 `0x140111662–0x1401131bf` 의 `minss`/`minps` 를 전수로 셌다 — **13개뿐**이고
+/// 전부 시간 계수 아니면 슬루 제한이다: `min(dt,1)` 1개(`0x140111e68`), 엔벨로프 스텝
+/// `min(step,|d|)` **명령 8개**(8배 언롤 — 바깥 루프가 2회 돌아 16그룹, `0x140111eeb` 외 7),
+/// 슬루 상한 `minps` 4개(`0x140112495`·`500`·`562`·`5c4`). 계수 셋(`min(dt·20,1)` `0x140112377` · `min(dt·40,1)`
+/// `0x1401123f9` · `max(dt·(−40),−1)` `0x14011241d`)은 `comiss`/`ja`/`movaps` 분기형이다.
+/// **출력값 자체를 1.0 으로 자르는 자리는 한 곳도 없다** — 엔벨로프가 상승률 1.0/초로만 쫓아오므로
+/// 갑자기 커진 대역은 정상적으로 1.0 을 넘겨 나간다. 우리 구현이 클램프를 안 두는 것이 맞다.
+///
+/// dB(로그) 변환도 없다. 프로듀서 소비 루프 `0x1400d1bff–0x1400d1e00` 의 라이브러리 호출은
+/// 정확히 셋 — `powf`(`0x1400d1c90`), `cosf`(`0x1400d1ccd`), `sqrtf` 폴백(`0x1400d1cf7`) — 이고
+/// `log`/`log10` 계열은 없다. 진폭은 `sqrt(w·power)` 선형 스케일 그대로 간다.
+///
+/// 무신호 바닥값은 0 이다(무음 분기 `0x140112646` 의 `memset(out, 0, 0x200)`). 바닥을
+/// `0.001` 로 두는 것은 **분모**뿐이고(`0x1401121b8`) 출력이 아니다.
+///
 /// dt 에 대해서도 한 가지: 원본의 dt 는 `[rbp+0x378]` = `rate · fadeIn · frameDelta`
 /// (`0x1401114c3–0x14011150f`)다. `rate` 는 씬 프로퍼티(`0x1401152d9`, 기본 1.0), `fadeIn` 은
 /// 0↔1 램프다. 둘 다 기본값이면 그냥 프레임 dt 이고, 우리는 그 기본값 경로만 쓴다.
@@ -65,6 +84,11 @@ public struct AudioSpectrumProcessor {
     public static let bandCount = 64
     /// 정규화 그룹 하나가 덮는 밴드 수. 128 float 을 **연속 8개씩** 16그룹으로 나눈다 —
     /// 즉 그룹 0..7 은 Left, 8..15 는 Right 다.
+    ///
+    /// 근거(2026-08-21 독립 재측정): 피크 루프 `0x1401116f0–0x140111bb2` 의 적재 주소가
+    /// `[rbx + ecx*4 + K]`, `K ∈ {0x00, 0x20, 0x40, …, 0x1e0}`(16개, 스트라이드 0x20 = 8 float)
+    /// 이고 그룹마다 `K+0, +4, +8, +0xc` 넷을 읽는다. 카운터는 `add ecx, 4`(`0x140111b81`) 로
+    /// **4씩** 오르고 `cmp ecx, 8` / `jl`(`0x140111baf`)로 두 바퀴만 돈다 → 그룹당 4×2 = 8 float.
     public static let groupSize = 8
     /// 그룹 피크의 하한 계수. `peak[g] = max(peak[g], 0.333·globalPeak)` (`0x140111c7d`).
     public static let groupPeakFloorRatio: Float = 0.333
@@ -124,6 +148,85 @@ public struct AudioSpectrumProcessor {
         public var mono64: [Float] { Array(spec64[128..<192]) }
         public var mono32: [Float] { Array(spec32[64..<96]) }
         public var mono16: [Float] { Array(spec16[32..<48]) }
+
+        /// 씬 스크립트가 `engine.registerAudioBuffers(res)` 로 받는 세 배열.
+        ///
+        /// **실물은 이 자리에서 아무것도 접지 않는다.** `scenescript64.dll` 의
+        /// `registerAudioBuffers`(`0x181655170–0x18165580f`, merged 9조각)는 해상도 하나만 받아
+        /// **미리 할당해 둔 9개 버퍼**(3해상도 × 3배열, `0x181655360–0x1816553ca` 루프) 중 한 벌을
+        /// 골라 JS 객체 프로퍼티로 꽂을 뿐이다. 즉 스크립트가 보는 값은 이 소비단이 이미
+        /// 정규화·스무딩·MAX 축약까지 끝낸 `spec16/32/64` 그대로다.
+        ///
+        /// 세 프로퍼티 이름도 실물에서 그대로 떴다 — 엔진 객체의 인터닝된 이름 슬롯
+        /// `[engine+0x2b8]`=`"left"`(`0x18164895b`), `[+0x2c0]`=`"right"`(`0x18164899a`),
+        /// `[+0x2c8]`=`"average"`(`0x1816489d9`) 이고, `registerAudioBuffers` 가 그 셋을 각각
+        /// 버퍼 슬롯 `+0x630`/`+0x638`/`+0x640` 에 물린다(`0x181655642`, `0x181655679`,
+        /// `0x1816556a0`). 슬롯 인덱스는 `3·(res>>5)` 라 16→`0x630`, 32→`0x648`, 64→`0x660`
+        /// 이다(`0x1816553e2` 의 `shr r15d, 5`, `0x1816553f6` 의 `lea eax,[r15+r15*2]`).
+        ///
+        /// **셋째 배열이 `average` 라는 것이 mono 사분면의 두 번째 독립 증거다.** 소비단이
+        /// `0.5·(L+R)` 로 만드는 그 사분면(`0x1401126b6`)이 셰이더 유니폼으로는 안 나가지만
+        /// (등록표에 오디오는 0x62…0x67 여섯 개뿐) 스크립트에는 `average` 로 나간다.
+        ///
+        /// **접는 순서 주의.** `average32/16` 은 `average64` 를 MAX 로 접은 것이지, 접힌 L/R 을
+        /// 다시 평균한 것이 아니다. 32→16 언롤 사슬이 `[rax+0x160]`·`[rax+0x168]`,
+        /// `[rax+0x170]`·`[rax+0x178]`(= 96 float 버퍼의 셋째 사분면)까지 도는 것이 그 증거다
+        /// (`0x14011315e`, `0x1401131aa`). 두 순서는 갈린다 — L=[1,0], R=[0,1] 이면
+        /// 실물은 `max(0.5, 0.5) = 0.5`, 뒤바꾼 순서는 `0.5·(1+1) = 1.0` 이다.
+        public func scriptBuffers(_ resolution: ScriptResolution)
+            -> (left: [Float], right: [Float], average: [Float]) {
+            switch resolution {
+            case .bands16: return (left16, right16, mono16)
+            case .bands32: return (left32, right32, mono32)
+            case .bands64: return (left64, right64, mono64)
+            }
+        }
+    }
+
+    /// `engine.registerAudioBuffers(resolution)` 이 받는 해상도.
+    ///
+    /// 실물은 셋 중 하나가 아니면 **던진다** — 폴백하지 않는다
+    /// (`"Resolution must be either 16, 32 or 64."` @`0x1819a3b38` — `0x181655297` 의 `lea r8`).
+    /// 전역 스코프 밖에서 부르는 것도 예외다
+    /// (`"registerAudioBuffers can only be called from global scope."` @`0x1819a3af8`).
+    ///
+    /// 상수 `engine.AUDIO_RESOLUTION_16/32/64` = 0x10/0x20/0x40 도 같은 등록 함수가 심는다
+    /// (`0x181649c05`/`0x181649c65`/`0x181649cc5` 의 `mov r8d, imm`).
+    public enum ScriptResolution: Int, CaseIterable, Sendable {
+        case bands16 = 16
+        case bands32 = 32
+        case bands64 = 64
+
+        /// 인자를 생략했을 때 실물이 쓰는 값. `0x181655221: mov r15d, 0x10` 이 argc 검사
+        /// (`0x181655216: cmp dword [rcx], 0` → `jle`)보다 **앞에** 있어서, 인자가 없으면 16 이다.
+        /// **64 가 아니다** — 무인자 호출은 16밴드 한 벌을 받는다.
+        public static let fallback = ScriptResolution.bands16
+
+        /// 실물의 검사를 그대로 옮긴 것(`0x18165527e–0x181655291`):
+        ///
+        /// ```
+        ///   mov  eax, 0xfffffff0
+        ///   add  eax, r15d          ; eax = res − 16
+        ///   test eax, 0xffffffcf    ; 4·5비트 말고 다른 비트가 서면 → 오류
+        ///   jne  <throw>
+        ///   cmp  r15d, 0x30         ; 48 은 마스크를 통과하므로 따로 걷어낸다
+        ///   jne  <ok>
+        /// ```
+        ///
+        /// **두 게이트가 다 필요하다.** 마스크만으로는 `res-16 ∈ {0,0x10,0x20,0x30}`,
+        /// 즉 `{16, 32, 48, 64}` 가 통과한다 — 48 은 그 다음 `cmp` 가 따로 걷어낸다.
+        /// 그래서 아래도 `rawValue:` 로 우회하지 않고 두 게이트를 그대로 태운다(하나만 빼도
+        /// 48 이나 17 이 `.bands64` 로 새어 나가고, 테스트가 그 둘을 잡는다).
+        ///
+        /// 산술은 **int32** 다(`r15d`) — 그래서 32비트로 자른 뒤 검사한다.
+        /// 유효하지 않으면 `nil`; 호출부가 실물처럼 오류를 내면 된다(폴백이 아니다).
+        public static func validate(_ raw: Int) -> ScriptResolution? {
+            let r32 = Int32(truncatingIfNeeded: raw)
+            guard UInt32(bitPattern: r32 &- 16) & 0xffff_ffcf == 0 else { return nil }
+            guard r32 != 0x30 else { return nil }
+            // 두 게이트를 통과한 것은 16 · 32 · 64 뿐이다(마스크가 남긴 넷에서 48 을 뺀 셋).
+            return r32 == 16 ? .bands16 : (r32 == 32 ? .bands32 : .bands64)
+        }
     }
 
     /// - raw: 128 float(64L + 64R). 길이가 모자라면 0 으로 채우고, 넘치면 앞 128 만 쓴다.

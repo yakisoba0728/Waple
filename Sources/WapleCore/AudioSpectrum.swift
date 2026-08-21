@@ -213,6 +213,15 @@ public enum AudioSpectrum {
     /// B=627 · 44.1 kHz B=683 이 전부 그 안이라 테스트가 29 를 고정할 수 있는 것이지,
     /// 매핑의 불변식이 아니다 — 32 kHz(B=940)나 96 kHz(B=314)에서는 깨진다.
     /// `% 64` 는 기본 지수 0.25 에서는 발동하지 않지만(raw ≤ 63) 원본에 있으므로 남긴다.
+    ///
+    /// **32·16밴드 경계는 여기서 유도된다.** 소비단이 인접 2개씩 `maxss` 로 두 번 접으므로
+    /// (`AudioSpectrumProcessor` 참조) 32밴드 j 는 64밴드 2j·2j+1 의 빈 합집합, 16밴드 j 는
+    /// 4j…4j+3 의 합집합이다. B=640·44.1 kHz 기준 전체 표는 `docs/re/audio-capture.md` §8.4 에
+    /// 있고, 요점은 **16밴드 0…6 이 정확히 등간격 91.875 Hz(각 4빈)** 이고 그 위가 급격히
+    /// 벌어진다는 것이다(밴드 15 는 빈 145개, 11.4–14.7 kHz). 그 등간격은 위 `prev+1` 클램프의
+    /// 1:1 구간(밴드 0…28)이 만든 그림자라 `B` 를 따라 변한다.
+    /// `AudioSpectrumWEParityTests.testThirtyTwoAndSixteenBandBinBoundariesMatchTheDocumentedTable`
+    /// 이 그 표를 고정한다.
     public static func bandOfBin(binCount B: Int) -> [Int] {
         guard B >= 2 else { return [Int](repeating: 0, count: max(B, 0)) }
         var out = [Int](repeating: 0, count: B)

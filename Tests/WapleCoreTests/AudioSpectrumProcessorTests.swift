@@ -302,4 +302,55 @@ final class AudioSpectrumProcessorTests: XCTestCase {
         XCTAssertEqual(out.mono32, [Float](repeating: 0.5, count: 32))
         XCTAssertEqual(out.mono16, [Float](repeating: 0.5, count: 16))
     }
+
+    // MARK: 씬 스크립트 버퍼 — `registerAudioBuffers`
+
+    /// 해상도 검사는 실물의 마스크 그대로다(`0x18165527e–0x181655291`).
+    /// **48 이 함정이다** — `test eax, 0xffffffcf` 만으로는 통과하고 뒤의 `cmp r15d, 0x30` 이
+    /// 따로 걷어낸다. 마스크만 옮겨 적으면 48밴드를 받아들이는 구현이 된다.
+    func testScriptResolutionValidationMatchesTheEngineMask() {
+        XCTAssertEqual(AudioSpectrumProcessor.ScriptResolution.validate(16), .bands16)
+        XCTAssertEqual(AudioSpectrumProcessor.ScriptResolution.validate(32), .bands32)
+        XCTAssertEqual(AudioSpectrumProcessor.ScriptResolution.validate(64), .bands64)
+        XCTAssertNil(AudioSpectrumProcessor.ScriptResolution.validate(48), "마스크는 통과하지만 cmp 0x30 이 걷어낸다")
+        for bad in [-64, -1, 0, 1, 8, 15, 17, 24, 31, 33, 63, 65, 80, 96, 128, 1 << 20] {
+            XCTAssertNil(AudioSpectrumProcessor.ScriptResolution.validate(bad), "res=\(bad) 는 실물이 던진다")
+        }
+        // 인자를 생략하면 16 이다(`0x181655221: mov r15d, 0x10` 이 argc 검사보다 앞).
+        XCTAssertEqual(AudioSpectrumProcessor.ScriptResolution.fallback, .bands16)
+    }
+
+    /// 스크립트 버퍼는 **이미 접힌** 사분면을 슬라이스만 한 것이다 — 스크립트 쪽 재축약은 없다.
+    /// 실물은 미리 할당한 9개 버퍼 중 한 벌을 프로퍼티로 꽂을 뿐이다(`0x181655360` 루프).
+    func testScriptBuffersAreTheAlreadyReducedQuadrants() {
+        var stereo = [Float](repeating: 0, count: 128)
+        for i in 0..<128 { stereo[i] = Float(i % 7) * 0.1 }
+        let out = AudioSpectrumProcessor.reduce(stereo)
+        let b16 = out.scriptBuffers(.bands16)
+        let b32 = out.scriptBuffers(.bands32)
+        let b64 = out.scriptBuffers(.bands64)
+        XCTAssertEqual(b16.left, out.left16); XCTAssertEqual(b16.right, out.right16)
+        XCTAssertEqual(b32.left, out.left32); XCTAssertEqual(b32.right, out.right32)
+        XCTAssertEqual(b64.left, out.left64); XCTAssertEqual(b64.right, out.right64)
+        // 셋째 배열의 실물 이름이 `average` 이고 값은 mono 사분면이다(`[engine+0x2c8]` @0x1816489d9).
+        XCTAssertEqual(b16.average, out.mono16)
+        XCTAssertEqual(b32.average, out.mono32)
+        XCTAssertEqual(b64.average, out.mono64)
+        XCTAssertEqual(b16.left.count, 16); XCTAssertEqual(b32.left.count, 32); XCTAssertEqual(b64.left.count, 64)
+    }
+
+    /// `average32/16` 은 **`average64` 를 MAX 로 접은 것**이지 접힌 L/R 을 다시 평균한 게 아니다.
+    /// 두 순서는 하드 팬이 교차하는 신호에서 정확히 2배 갈린다.
+    func testScriptAverageMixesBeforeFoldingNotAfter() {
+        var stereo = [Float](repeating: 0, count: 128)
+        stereo[0] = 1.0          // Left  밴드 0
+        stereo[64 + 1] = 1.0     // Right 밴드 1
+        let out = AudioSpectrumProcessor.reduce(stereo)
+        let avg32 = out.scriptBuffers(.bands32).average
+        XCTAssertEqual(avg32[0], 0.5, accuracy: 1e-6, "max(0.5·(1+0), 0.5·(0+1)) = 0.5")
+        // 순서를 뒤집었다면: 0.5·(max(L0,L1) + max(R0,R1)) = 0.5·(1+1) = 1.0
+        let wrongOrder = 0.5 * (out.left32[0] + out.right32[0])
+        XCTAssertEqual(wrongOrder, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(wrongOrder, avg32[0] * 2, accuracy: 1e-6, "뒤바꾼 순서는 정확히 2배다")
+    }
 }
