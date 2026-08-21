@@ -1464,7 +1464,10 @@ public enum GLSLTranslator {
     }
     static func engineReplacement(_ name: String) -> String {
         if name == "g_Time" { return "eng.timeAndPad.x" }
-        if name == "g_PointerPosition" { return "eng.timeAndPad.yz" }  // 마우스 UV(0..1), 미구동 시 0.5,0.5
+        // 마우스 UV(0..1). **미구동 시 (0,0)** — renderState ctor `0x14017c6d0` 이 `xor eax,eax`
+        // (`0x14017c73d`) 후 qword 0 을 심는다(`0x14017c77d`/`0x14017c784`). 종전 이 주석은 0.5,0.5
+        // 라고 적었는데 틀렸다. 값은 `SceneRenderer` 가 공급하므로 이 줄의 동작은 무영향이다.
+        if name == "g_PointerPosition" { return "eng.timeAndPad.yz" }
         // 실물 depthparallax: 엔진이 매프레임 채우는 시차 위치 — 포인터 UV alias(중앙 0.5,0.5 = 시차 정지).
         // 머티리얼-0 고정이면 코너 고정 시차 왜곡.
         if name == "g_ParallaxPosition" { return "eng.timeAndPad.yz" }

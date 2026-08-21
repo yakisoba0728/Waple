@@ -29,13 +29,18 @@ renderState 슬롯(`+0x8c`, 유니폼 id 105, y = `1 − pointer.y`, 소비부 c
 | 9 | `controlpoint[].locktopointer` 는 **어느 바이너리에도 문자열이 없다** — 에디터 표기용 잔재 (`bundled-key-coverage.md` §11 재확인) | 확정(재확인) |
 | 10 | 레이어 히트테스트는 존재한다. 게이트는 `solid` = 오브젝트 플래그워드 `[obj+0x120]` **bit13**, 전파 차단은 `disablepropagation` = **bit14** | 확정 · 신규 |
 | 11 | 판정은 **알파 임계가 아니다** — 오브젝트 변환을 먹인 **쿼드(±size/2)** 와 커서 광선의 교차다. 회전을 존중한다 | 확정 |
+| 11b | 그 교차는 삼각형 둘이 아니라 **평행사변형 하나**다 — `u`·`v` 를 각각 `[0,det]` 에 대고 볼 뿐 `u+v ≤ det` 검사가 없다(`0x14019d6fa`·`0x14019d761`). 코너도 3개만 만든다. 퇴화(`|det| ≤ FLT_EPSILON`)는 미스, `det < 0`(음수 스케일)은 정상 히트 | **확정 · 신규(§4.3)** |
+| 11c | 히트 결과 `out` 은 월드가 아니라 **로컬 픽셀** `(u·width, (1−v)·height)` 다 — `CursorEvent.localPosition` 의 y 가 뒤집혀 있다(`0x14019df36`–`0x14019df5f`) | **확정 · 신규** |
 | 12 | 히트테스트는 레이어 시차 오프셋 `(origin − focus)·amount·parallaxDepth` 를 **똑같이 적용**하고 나서 판정한다 — 클릭이 그려진 자리에 맞는다 | 확정 |
+| 12b | 단, 그 오프셋이 붙는 곳은 **쿼드 중심**이지 광선 원점이 아니다(`0x14019dd79` 의 `addss` 피연산자 = 오브젝트 4×4 의 평행이동 행). 이전 판의 "광선 원점" 은 오기 | **확정 · 정정(§4.2)** |
 | 13 | `config.fullscreen` 모델(`[obj+0x304]` bit1)은 히트테스트를 **건너뛰고 항상 맞는다**. 그때 커서 월드좌표는 `pointer × 표면크기` | 확정 |
 | 14 | 씬스크립트 훅 테이블은 **19개**이고, `lib.sceneScript.d.ts` 에 없는 **`cursorHitTest`(idx 7)** 와 `animationEvent`(idx 6)가 들어 있다 | 확정 · 신규 |
 | 15 | **`cursorHitTest` 는 exe 어디에서도 발화되지 않는다** — 등록만 된 죽은 훅 | 확정 · 신규 |
 | 16 | 커서 훅은 **히트한 오브젝트에 바인딩된 스크립트**(또는 `[inst+8] == 0` 인 스크립트)에만 간다. 전 스크립트 브로드캐스트가 아니다 | 확정 |
 | 17 | WE 는 **`WH_MOUSE_LL` 전역 저수준 마우스 훅**(`SetWindowsHookExW(14, …)` @ `0x140126902`)을 설치해 데스크톱 클릭을 최대 16개 벽지 창에 `PostMessageW(WM_LBUTTONUP)` 로 되쏜다 | 확정 |
-| 18 | `disablepropagation` 의 실물 의미는 **커서 히트 전파 차단**이지 부모 트랜스폼 상속 차단이 아니다 — Waple 이 다른 뜻으로 쓰고 있다(§7 W-4) | 확정 · 미해소 |
+| 18 | `disablepropagation` 의 실물 의미는 **커서 히트 전파 차단**이지 부모 트랜스폼 상속 차단이 아니다 | 확정 · **해소**(`object-propagation.md` §9.1, 클러스터 M) |
+| 19 | 호버 맵과 홀드 맵을 이전 판이 **바꿔** 적었다 — 호버 = `scene+0x280`(버킷 `0x298`/마스크 `0x2b0`), 홀드 = `scene+0x2c0`(`0x2d8`/`0x2f0`). 삽입 호출부 `0x14018a530` / `0x14018a78b` 가 못박는다 | **확정 · 정정(§4.2)** |
+| 20 | `solid`(bit13)의 **생성자 기본값은 `true`** 다 — 기저 ctor `0x1401ddc72` `mov word [r14+0x120], 0x2001`(= bit0 visible + bit13 solid). §9 의 `dino_run` 수수께끼가 이걸로 풀린다 | **확정 · 신규**(재확인. `object-propagation.md` §2.1 과 독립 일치) |
 
 확정 못 한 것은 §9 에 모아 뒀다.
 
@@ -365,6 +370,18 @@ CP[0x30..0x38] = world                           ; 0x14022e656–0x14022e662
 | `solid` | **13** | `0x14019c3f0` | `btr/bts …, 0xd` @ `0x14019c425` / `0x14019c429` | `0x1401e1283` |
 | `disablepropagation` | **14** | `0x14019bb40` | `btr/bts …, 0xe` @ `0x14019bb75` / `0x14019bb79` | `0x1401e132b` |
 
+**생성자 기본값**(2026-08-21 재확인 — 바이트 직독 `0x1401ddc72` = `66 41 c7 86 20 01 00 00 01 20`
+= `mov word [r14+0x120], 0x2001`):
+
+| 비트 | 키 | 기본 |
+|---:|---|---|
+| 0 | `visible` | **true** |
+| 13 | **`solid`** | **true** — 명시하지 않은 오브젝트는 전부 히트테스트에 **참가**한다 |
+| 14 | `disablepropagation` | false |
+
+이것이 §9 의 `dino_run` 수수께끼(`solid` 키가 0건인 씬에서 `cursorDown` 이 발화하는 이유)에 대한
+답이다. 태그5 게이트가 실패해 "저장을 건너뛰는" 경로도 이 기본값을 유지한다(브리프 함정 15).
+
 스크립트 게터도 같은 비트를 본다 — `solid` → `test dword [rcx], 0x2000` @ `0x14019c4ca`,
 `disablepropagation` → `test dword [rcx], 0x4000` @ `0x14019bc1a`.
 
@@ -407,33 +424,107 @@ if (!rs[0x1838]) return                          ; 0x140189e31
 ```
 
 호버 상태는 오브젝트 포인터의 **FNV-1a 64** 해시(`0x14018a122`–`0x14018a1bf`,
-basis `0xcbf29ce484222325` · prime `0x100000001b3`)로 두 개의 해시맵을 친다 —
-"지금 호버 중" (`scene[0x2d8]`/mask `scene[0x2f0]`)과 "누른 채로 잡고 있는"
-(`scene[0x298]`/mask `scene[0x2b0]`).
+basis `0xcbf29ce484222325` · prime `0x100000001b3`)로 두 개의 `std::unordered_map` 을 친다.
 
-**시차 보정.** ⑤ 가 켜지면 오브젝트 origin(`[obj+0x128]`)에서 씬 초점(`scene[0x340]`)을 빼고
-`scene[0x334]`(amount)를 곱한 뒤 `[obj+0x170]`(parallaxDepth)를 다시 곱해
-(`0x14018a0c3`–`0x14018a115`) 커서 광선 원점에 더한다(`0x14019dd79`). camera-motion §3 이 확정한
-레이어 오프셋 식과 **같은 식**이다 — 그래서 시차로 밀린 레이어도 눈에 보이는 자리에서 클릭된다.
+> **정정(2026-08-21, O 재확인).** 이전 판은 두 맵을 **바꿔** 적었다. 맵 베이스는
+> `scene+0x280` 과 `scene+0x2c0` 이고(MSVC 레이아웃: `+0x8` `_Myhead` · `+0x10` `_Mysize` ·
+> `+0x18` 버킷 벡터 · `+0x30` 마스크), 삽입 호출부가 어느 쪽인지 못박는다 —
+>
+> | 맵 | 베이스 | 버킷 / 마스크 | 정체 | 근거 |
+> |---|---|---|---|---|
+> | 호버 | `scene+0x280` | `0x298` / `0x2b0` | 지금 커서 아래 | `cursorEnter` 직전 삽입 `0x14018a530`(`rcx = [rbp-0x30] = rbx+0x280`, `0x140189ffe`) |
+> | 홀드 | `scene+0x2c0` | `0x2d8` / `0x2f0` | 이 오브젝트에서 눌렀다 | `down` 확인 후 삽입 `0x14018a78b`(`rcx = [rbp-0x28] = rbx+0x2c0`, `0x14018a007`) |
+>
+> `cursorClick` 조회(`0x14018a7aa`)와 드래그용 `cursorMove`(`0x14018a31c`)가 보는 것은 **홀드 맵**이다.
 
-### 4.3 실제 판정 `0x14019dbb0` – `0x14019df86` — **쿼드**다
+**시차 보정.** ⑤ 가 켜지면 오브젝트 origin(`[obj+0x128]`/`[obj+0x12c]`)에서 씬 초점
+(`scene[0x340]`/`scene[0x344]`)을 빼고 `scene[0x334]`(amount)를 곱한 뒤
+`[obj+0x170]`/`[obj+0x174]`(parallaxDepth — **성분별 vec2**)를 다시 곱한다
+(`0x14018a0b3`–`0x14018a115`). z 성분은 항상 0(`xmm6` 은 `0x140189f3b` 에서 `xorps` 된 0).
+camera-motion §3 이 확정한 레이어 오프셋 식과 **같은 식**이다 — 그래서 시차로 밀린 레이어도
+눈에 보이는 자리에서 클릭된다.
+
+> **정정(2026-08-21, O 재확인).** 이 문서의 이전 판은 그 오프셋을 "커서 광선 원점에 더한다" 고
+> 적었다. 틀렸다. `0x14019dd79`–`0x14019d84`(`addss xmm8/xmm10/xmm9, [rdi]/[rdi+4]/[rdi+8]`)의
+> 피연산자는 **오브젝트 4×4 의 평행이동 행**이다 — 즉 **쿼드가 움직이고 광선은 그대로**다.
+> 부호가 반대이므로 이 차이는 실제 클릭 좌표를 바꾼다.
+
+**인자 규약**(`sub_14019dbb0`, 호출부 `0x14018a242`):
+`(rcx = renderState, rdx = obj, r8 = parallaxOffset*(nullable), r9 = rayOrigin*,
+[rsp+0x20] = rayDir*, [rsp+0x28] = out localPosition*)`.
+광선 2벌은 워커 진입부가 만들어 둔다 — 정사영용 `(origin [rbp+0x78], dir [rbp+0x58])`
+(`camera->vtbl[0xb0]` @`0x140189e5f`), 원근용 `(origin [rbp+0x88], dir [rbp+0x68])`
+(`scene->vtbl[0x40]` @`0x140189e76`). `perspective`(bit7)가 둘 중 하나를 고른다(`0x14018a08f`/`0x14018a0a5`).
+
+### 4.3 실제 판정 `0x14019dbb0` – `0x14019df86` — **평행사변형**이다
+
+2026-08-21(클러스터 O)에 전문을 다시 떠서 확정했다. 이전 판보다 세 군데가 더 정확하다:
+코너는 **3개**만 만들고 · 교차 검사는 삼각형이 아니라 **평행사변형**이며 · `out` 은 월드가 아니라
+**로컬 픽셀**이다.
 
 ```
+sub_14019dbb0(rs, obj, parallaxOffset*, rayOrigin*, rayDir*, out*)
+
 if (obj[0x304] & 2) {                     ; config.fullscreen  → §4.4
     out = (rs[0x8c] * rs[0x74], rs[0x90] * rs[0x78], 0);
     return true;                          ; 0x14019dbc1 – 0x14019dc11
 }
-M   = obj->vtbl[0x80]()                   ; 오브젝트 4×4(scene-object-model §4.4)
-sz  = obj[0x2f0]                          ; (width, height)
-c0..c3 = M.axisX * (±0.5*sz.x) + M.axisY * (±0.5*sz.y) + M.origin + parallaxOffset
-hit = 0x14019d5a0(rayOrigin, rayDir, c0, c1, c2, c3, &t)
-return t >= 0;                            ; 0x14019deef – 0x14019df2d
+M = obj->vtbl[0x80]()                     ; 오브젝트 4×4(row-vector) — 0x14019dc85
+E = identity;                             ; 0x14019dc12 – 0x14019dc81 (rbp-0x40 .. rbp-0x10)
+if (obj->vtbl[0xa8](obj, &E))             ; 0x14019dcc6 — 채우면 true
+    M = M · E                             ; 0x14019dcd4 – 0x14019dd6f (행·행렬 곱 3행)
+t = M.row3.xyz                            ; 평행이동
+if (parallaxOffset) t += *parallaxOffset  ; 0x14019dd79 – 0x14019dd84  **쿼드 중심**
+sz = obj[0x2f0]                           ; (width, height) — 0x14019dd8a
+X  = M.row0 * sz.x                        ; 0x14019dde3 – 0x14019de24
+Y  = M.row1 * sz.y                        ; 0x14019de31 – 0x14019de68
+c0 = t − 0.5·X − 0.5·Y                    ; [rsp+0x68]  (r8)
+c1 = t + 0.5·X − 0.5·Y                    ; [rsp+0x58]  (r9)
+c2 = t − 0.5·X + 0.5·Y                    ; [rsp+0x48]  (스택 인자)
+ok = sub_14019d5a0(rayOrigin, rayDir, c0, c1, c2, &uv, &tHit)   ; 0x14019deef
+if (tHit < 0) return false;                                     ; 0x14019deff / 0x14019df2d
+out = (uv.x · sz.x, (1 − uv.y) · sz.y, 0);                      ; 0x14019df36 – 0x14019df5f
+return ok;
 ```
 
-`±0.5` 상수는 `0x140493000`(-0.5 ×4)와 `0x140492dd0`(+0.5 ×4)에서 온다.
+`±0.5` 상수는 `0x140493000`(−0.5 ×4)와 `0x140492dd0`(+0.5 ×4)에서 온다.
+
+#### 교차기 `0x14019d5a0` – `0x14019d8e6` — Möller–Trumbore 의 평행사변형 변형
+
+`(rcx = O, rdx = D, r8 = v0, r9 = v1, [+0x28] = v2, [+0x30] = &uv, [+0x38] = &t)`.
+
+```
+e1 = v1 − v0                      ; 0x14019d5e2 / 0x14019d5f2 / 0x14019d650
+e2 = v2 − v0                      ; 0x14019d631 / 0x14019d63f / 0x14019d64c
+P  = D × e2                       ; 0x14019d655 – 0x14019d68f
+det = P · e1                      ; 0x14019d68a – 0x14019d6a9
+if (det >  +FLT_EPSILON) { T = O − v0;  u = T·P;  ok &= (0 ≤ u ≤ det);
+                           Q = T × e1;  v = Q·D;  ok &= (0 ≤ v ≤ det); }
+else if (det < −FLT_EPSILON) { … 부호만 뒤집은 같은 검사 …          ; 0x14019d779 – 0x14019d83f }
+else { uv = (0,0); t = −1.0f; return false; }                     ; 0x14019d891 – 0x14019d8a4
+inv = 1/det;  u *= inv;  v *= inv;  t = (Q·e2) * inv;             ; 0x14019d843 – 0x14019d88b
+```
+
+- **`u + v ≤ det`(삼각형) 검사가 없다.** `u` 와 `v` 를 각각 `[0, det]` 에 대고 볼 뿐이다
+  (`0x14019d6fa`·`0x14019d761`). 그래서 판정 도형은 삼각형 둘이 아니라 **평행사변형 하나**이고,
+  네 번째 코너를 만들 필요가 없다(그래서 `sub_14019dbb0` 도 `c3` 를 만들지 않는다).
+- 경계는 **포함**이다 — `ja`/`jbe` 조합이라 `u = 0`·`u = det` 가 히트다.
+- `FLT_EPSILON` 은 `0x1404925e0`(+)/`0x1404929a4`(−). `|det| ≤ FLT_EPSILON`(퇴화 쿼드 —
+  `scale = 0`, `size = 0`, 축 평행)이면 **미스**로 친다.
+- `det < 0` 분기가 따로 있으므로 **음수 스케일(축 반전)도 정상 히트**다. 절댓값을 씌우면 안 된다.
+
+정사영(2D) 씬에서 광선이 쿼드 평면 법선과 나란하면 위 3D 검사는 2D 크래머 공식과 대수적으로 같다 —
+`det = X.x·Y.y − X.y·Y.x`, `u = (T.x·Y.y − T.y·Y.x)/det`, `v = (X.x·T.y − X.y·T.x)/det`.
+Waple 은 그 축약형을 `Sources/WapleCore/PointerHit.swift:81`(`localUV`)에 구현했다.
+
+#### 그 밖에
 
 - **알파 임계가 없다.** 텍스처를 한 번도 샘플링하지 않는다.
-- **바운딩 박스도 아니다** — 오브젝트 4×4 를 그대로 먹인 **회전/스케일된 쿼드**다.
+- **바운딩 박스도 아니다** — 오브젝트 4×4 를 그대로 먹인 회전/스케일된 쿼드다.
+- `out` 은 **로컬 픽셀**이다 — `(u·width, (1−v)·height)`, 즉 `CursorEvent.localPosition` 의 y 가
+  뒤집혀 있다(로컬 좌상단 원점). `config.fullscreen` 지름길만 `pointer × 표면크기`(=스크린 픽셀)를 준다.
+- `vtbl[0xa8]` 이 참을 주면 오브젝트 행렬에 4×4 하나가 더 곱해진다. **무엇인지는 `[미해결]`**
+  (§9). 정사영 2D 레이어에서 그것이 항등이라는 증거는 아직 없다.
 - 모델/퍼펫(kind 5)은 별도 함수 `0x140185520`–`0x14018593c` 를 타고, 그 결과의 뼈 이름이
   `CursorEvent.hitBox` 로 실린다(`vtbl+0x88` 이 `std::string` 을 채운다 — SSO 판정 `0x14018a2cc`).
 
@@ -600,20 +691,22 @@ return wcsicmp(cls, L"Progman") == 0;                  ; 0x1404755d8
 
 ## 7. Waple 대조
 
-읽기만 했다. 파일:줄은 이번 라운드 기준.
+파일:줄은 이번 라운드 기준. **2026-08-21(클러스터 O)에 W-1/W-2/W-3/W-6/W-7 을 닫았고
+W-5 를 부분적으로 닫았다** — 무엇을 어떻게 고쳤는지는 §7.2, 소유 밖이라 넘긴 것은 §7.3.
 
 | # | 항목 | 실물 | Waple | 판정 | 착지 지점 |
 |---|---|---|---|---|---|
-| **W-1** | `g_PointerPosition` 기본 | **`(0,0)`** (renderState ctor `0x14017c77d`) | `(0.5, 0.5)` (`SceneRenderer.swift:760`, `GLSLTranslator.swift:1402` 주석) | **확정 · 미해소** | 미구동 씬에서 `cursorripple` 파문이 화면 중앙에 생긴다. `(0,0)` 으로 바꾸면 좌상단 = 화면 밖 취급이라 실물과 같아진다 |
-| **W-2** | `g_PointerPositionLast` 기본 | `(0,0)` | `(0.5,0.5)` (`SceneRenderer.swift:777`) | 확정 · 미해소 | W-1 과 한 쌍 |
-| **W-3** | `g_PointerState.z` | **누른 첫 프레임만 1.0**(`0x140181623`–`0x14018162d`) | 누르고 있는 동안 계속 `pointerDown`(`SceneRenderer.swift:779`·`GLSLTranslator.swift:1411`) | **확정 · 미해소** | 클릭 유지 시 `cursorripple` 이 실물보다 훨씬 강하게 계속 밀어낸다. `pointerDownEdge = down && !downLast` 를 한 프레임만 세우면 된다 |
-| **W-3b** | `g_PointerState.x/.y` | 누름 유지 동안 1.0 | 항상 0 | 확정 · 무해 | 동봉 셰이더 소비 0건. 기록만 |
-| **W-4** | `disablepropagation` 의미 | **커서 히트 전파 차단**(`[obj+0x120]` bit14, 유일 소비 `0x14018a86f`) | **부모 트랜스폼 상속 차단**(`SceneDocument.swift:2420-2436`·`2553`·`2564`·`2600`·`2627`) | **확정 · 미해소** | 워크샵 코퍼스 `true` 34건(63씬)이 잘못된 좌표로 합성된다. 실물은 트랜스폼과 무관하다 — 계층 합성에서 이 필드를 떼고, 히트테스트 쪽으로 옮겨야 한다 |
-| **W-5** | `solid` 게이트 | 히트테스트가 **`solid` 아닌 오브젝트를 건너뛴다**(`0x14018a02d`) | `isSolid` 를 파스만 하고 이벤트는 **전 엔진 브로드캐스트**(`SceneRenderer.swift:294-295`, 주석이 "WE 규약 — 스크립트가 스스로 히트테스트" 라고 적었다) | **확정 · 미해소** | 주석의 전제가 실물과 반대다. `eventEngines` 대신 `solid` + 쿼드 히트 결과로 좁혀야 한다 |
-| **W-6** | 히트 판정 도형 | 오브젝트 4×4 를 먹인 **쿼드**(회전 존중), `size` ±0.5 | 축정렬 AABB, **회전 무시**(`SceneRenderer.swift:324-328` `layerHitRect`) | 확정 · 미해소 | 회전 레이어에서 어긋난다. `angleZ` 를 먹인 4점 + point-in-quad 로 대체 |
-| **W-7** | 히트 시 시차 보정 | 광선 원점에 `(origin−focus)·amount·depth` 를 더한다(`0x14018a0b3`–`0x14018a115`) | 없음 | 확정 · 미해소 | camera-motion W-2/W-4 를 해소한 뒤 같은 함수를 히트테스트에서도 부르면 된다 |
-| **W-8** | `cursorEnter/Leave` 대상 | **모든 `solid` 오브젝트**가 자동 호버 대상 | 훅을 export 한 엔진의 **바인드 레이어 1개**만(`SceneRenderer.swift:214-218`·`330-336`) | 확정 · 부분 | 실물은 스크립트가 없어도 히트테스트를 돌린다(유저 숏컷용). 스크립트 배달만 보면 근사치는 맞다 |
-| **W-9** | `cursorClick` 타이밍 | **뗄 때**, 같은 오브젝트에서 눌렀을 때만 | **누를 때** `cursorDown` 과 함께(`SceneRenderer.swift:572-573`) | 확정 · 미해소 | 한 줄 이동. 누른 오브젝트를 기억했다가 up 에서 비교 |
+| **W-1** | `g_PointerPosition` 기본 | **`(0,0)`** (renderState ctor `0x14017c77d` — 재확인: `xor eax,eax` @`0x14017c73d` 후 `mov qword [rcx+0x8c], rax`) | **`(0,0)`** (`SceneRenderer.swift:823`) | **해소**(O) | `GLSLTranslator.swift:1467` 의 "미구동 시 0.5,0.5" **주석은 아직 스테일**(그 파일은 소유 밖 — §7.3) |
+| **W-2** | `g_PointerPositionLast` 기본 | `(0,0)` (`0x14017c784`) | **`(0,0)`** (`SceneRenderer.swift:841`) | **해소**(O) | W-1 과 한 쌍 |
+| **W-3** | `g_PointerState.z` | **누른 첫 프레임만 1.0**(핸들러 `0x1400d9e59`, 프레임 꼬리 `0x140181623`–`0x14018162d` → 저장 `0x14018169e`) | **엣지**(`PointerButtonState`, `PointerHit.swift:118-144`; 소비 `SceneRendererFrameEncoder.swift:60`; 꼬리 `SceneRenderer.swift:1978`) | **해소**(O) | `cursorripple`(`× 5.0`)/`fluidsimulation`(게인 1)이 누른 채 있어도 한 프레임만 밀어낸다 |
+| **W-3b** | `g_PointerState.x/.y` | 누름 유지 동안 1.0 | 항상 0 (`GLSLTranslator.swift:1476` 이 `float4(0,0,z,0)` 을 방출) | 확정 · 미해소 · **무해** | 동봉·설치본 셰이더 4파일 전건이 `.z` **만** 읽는다(전수 grep, §2.4). `PointerButtonState.heldValue` 로 값은 준비돼 있다 |
+| **W-4** | `disablepropagation` 의미 | **커서 히트 전파 차단**(`[obj+0x120]` bit14, 유일 소비 `0x14018a877`) | 트랜스폼 가드 제거됨 | **해소**(클러스터 M, `object-propagation.md` §9.1) | 남은 것은 "커서 순회에서 실제로 쓰기" — §7.3 |
+| **W-5** | `solid` 게이트 | 히트테스트 순회의 **첫 관문**(`0x14018a00b` `mov r8d,0x2000` → `0x14018a02d`). ctor 기본 **true** | 파스 기본 true(M) + 호버 타깃 구성이 `l.isSolid` 로 게이트(`SceneRenderer.swift:373`) + 스크립트 `ILayer.solid` 실값 배선(`:244`·`:260`) | **부분 해소**(O) | 종전 `solid: layer.textureEntryName.isEmpty`(근거 없는 추측)를 걷어냈다. 이벤트 **배달 타겟팅**은 아직 브로드캐스트 — W-5b |
+| **W-5b** | 커서 훅 배달 대상 | 히트 오브젝트에 바인딩된 스크립트만(`inst[0x48] == hitObj \|\| inst[8] == 0`, `0x14018a709`·`0x14018a70f`; 5개 훅 전건 동일) | 전 엔진 브로드캐스트(`SceneRenderer.swift:320`) | **확정 · 미해소** | 고치면 기존 macOS E2E 2건이 깨진다(그 테스트가 잘못된 계약을 굳혀 뒀다). 정확한 패치안은 §7.3 |
+| **W-6** | 히트 판정 도형 | 오브젝트 4×4 를 먹인 **평행사변형**(회전·음수 스케일 존중), `size` ±0.5, 경계 포함, 퇴화 미스 | **동형**(`PointerHit.localUV`, `PointerHit.swift:81`; 쿼드 구성 `SceneRenderer.layerHitQuad`, `:356`) | **해소**(O) | `alignment`(9점 앵커)도 같이 반영했다 — 종전 AABB 는 origin=중심으로 가정했다 |
+| **W-7** | 히트 시 시차 보정 | **쿼드 중심**에 `(origin−focus)·amount·depth` 를 더한다(`0x14018a0b3`–`0x14018a115` → `0x14019dd79`) | 그리기와 **같은 식** `cameraOffset × parallaxDepth` 를 씬 픽셀로 환산해 쿼드를 옮긴다(`SceneRenderer.hoverParallaxShift`, `:411`) | **해소**(O) | 실물의 초점 식 자체(camera-motion W-2/W-4)와 무관하게 "그려진 자리 = 클릭되는 자리" 는 성립한다 |
+| **W-8** | `cursorEnter/Leave` 대상 | **모든 `solid` 오브젝트**가 자동 호버 대상 | 훅을 export 한 엔진의 **바인드 레이어 1개**만(`SceneRenderer.swift:216-219`·`368-383`) | 확정 · 부분 | 실물은 스크립트가 없어도 히트테스트를 돌린다(유저 숏컷용). 스크립트 배달만 보면 근사치는 맞다 |
+| **W-9** | `cursorClick` 타이밍 | **뗄 때**, 같은 오브젝트에서 눌렀을 때만 | **누를 때** `cursorDown` 과 함께(`SceneRenderer.swift:630-631`) | 확정 · 미해소 | 한 줄 이동. 누른 오브젝트를 기억했다가 up 에서 비교 |
 | **W-10** | 파티클 CP bit0 | 매 프레임 CP 평행이동을 커서로 교체 | **의도적 미구현**(`ParticleSystem.swift` `controlPointFlags` 주석 `:1520-1528` — "bit0 은 헤드리스에 커서가 없고") + CP 를 로드 시 1회 **베이크**(`bakeControlPointTargets`, `:2632`) | 확정 · 미해소 | 동봉 28파일이 정적 CP 로 돈다 — `examplecursorfollow` 류는 아예 움직이지 않는다. 베이크를 유지하려면 bit0 CP 만 매 프레임 재베이크가 필요하다 |
 | **W-11** | `controlpoint[].flags`/`parentcontrolpoint` 파스 | uint 주입기 기본 0 | 파스함(`ParticleSystem.swift` CP 루프 `:2598` 이하), bit2 만 소비 | 확정 · 부분 | bit0 소비만 추가하면 된다 |
 | **W-12** | `xray` 이펙트 | `g_PointerPosition` + `g_PointerScale` | `g_PointerScale` 은 머티리얼 파라미터로 흐름. 배선 자체는 있음 | 보고 | `shader-uniforms.md:675` 의 "cursorripple·fluidsimulation 만" 문장을 정정 |
@@ -621,16 +714,86 @@ return wcsicmp(cls, L"Progman") == 0;                  ; 0x1404755d8
 | **W-14** | 커서 소유권(데스크톱 판정) | `WindowFromPoint` + 셸 클래스 검사 | 없음(전역 클릭 모니터가 무조건 받는다) | 확정 · macOS 제약 | §8 |
 | **W-15** | `config.fullscreen` 항상-히트 | `[obj+0x304]` bit1 | `configPassthrough`/`configAutosize` 는 파스, `fullscreen` 은 모델 루트 키로만 인지(`SceneDocument.swift:251-256`) | 보고 | 동봉 도달 1건이라 우선순위 낮음 |
 
-### 7.1 우선순위
+### 7.1 코퍼스 도달 — 각 격차가 실제로 몇 건을 건드리는가
 
-1. **W-4(`disablepropagation`)** — 의미 자체가 다르다. 워크샵 코퍼스 34건이 영향받고,
-   고치는 방향은 "쓰지 않기"라 회귀 위험이 오히려 낮다.
-2. **W-1/W-2/W-3(포인터 유니폼 기본·엣지)** — 세 줄 수정. `cursorripple`/`fluidsimulation` 을
-   쓰는 씬의 무입력 상태 픽셀이 실물과 달라져 있다.
-3. **W-5/W-9(이벤트 배달 규약)** — 주석의 전제가 뒤집혔으므로 문서부터 정정.
-4. **W-10(파티클 CP bit0)** — 동봉 28파일. 다만 헤드리스 캡처 결정성과 충돌하므로
+분모는 **동봉 씬 프로젝트 170개**(`scripts/spec/check_scene_mount_parity.py` 의 정의와 동일 —
+`project.json` 옆에 `scene.json`/`gifscene.json` 이 있는 디렉터리)와 **설치본
+`projects/defaultprojects` 14개**, 그리고 워크샵 코퍼스 **162씬**(`spec/corpus/scene-schema.json`).
+
+| 격차 | 동봉 170 | 설치본 14 | 워크샵 162 |
+|---|---|---|---|
+| W-1/W-2/W-3 (`g_Pointer*` 유니폼) | **3** — `effects/{cursorripple,fluidsimulation,xray}/preview/scene.json`. 그 셋 **밖의 동봉 씬에서 이 이펙트를 참조하는 건 0건**(전 `*.json` grep) | **0** | 미측정 |
+| W-5b (커서 훅 배달) | **0** — `cursorEnter/Leave/Move/Down/Up/Click` 문자열 보유 씬 0 | **1** — `dino_run`(`cursorDown`) | 미측정 |
+| W-5 (`solid` 게이트) | `solid: true` 명시 **15오브젝트 / 14씬**, `solid: false` **0**. 나머지는 ctor 기본 true | `solid: true` **22오브젝트 / 3씬** | image `solid` **149건 / 26씬** |
+| W-6 (회전 쿼드) | `angles.z ≠ 0` 오브젝트 **5건** — 회전 레이어가 호버/클릭 타깃이면 AABB 와 갈린다 | **14건** | 미측정 |
+| W-7 (시차 보정) | 시차 활성 씬 전부(camera-motion 참조). 헤드리스 캡처는 `cameraOffset = 0` 이라 골든 무영향 | 〃 | 〃 |
+| W-4/전파 차단 순회 | `disablepropagation: true` **0** | **0** | image **34건 / 63씬** |
+
+**즉 W-1/W-2/W-3 의 동봉 도달은 3씬, W-5b 는 0씬, 전파 차단 순회는 0씬이다.**
+셰이더 쪽 도달은 §2.4 에 이미 파일 단위로 있다(`g_PointerState` = 4파일, 전건 `.z` 만 읽음).
+
+### 7.2 무엇이 닫혔나(2026-08-21, 클러스터 O)
+
+| 파일 | 변경 |
+|---|---|
+| `Sources/WapleCore/PointerHit.swift` (신규) | 히트 기하 `PointerHit`(평행사변형 UV·로컬 픽셀·코너) + `PointerButtonState`(bit0/bit1 2비트 모델). 전부 순수 — 리눅스 테스트로 덮인다 |
+| `Tests/WapleCoreTests/PointerHitTests.swift` (신규) | 13테스트. 회전/음수 스케일/경계 포함/퇴화 임계/ y 뒤집기 / 임펄스 엣지 |
+| `Sources/WapleRender/SceneRenderer.swift` | 유니폼 기본 `(0,0)`(`:823`·`:841`) · `pointerButton`(`:845`) · 프레임 꼬리 `endFrame()`(`:1978`) · `layerHitQuad`(`:356`) · `buildHoverTargets` 의 `solid` 게이트(`:373`) · `hoverParallaxShift`(`:411`) · `ILayer.solid` 실값(`:244`·`:260`) |
+| `Sources/WapleRender/SceneRendererFrameEncoder.swift` | `e[22] = pointerButton.clickImpulse`(`:60`) |
+
+### 7.3 넘기는 것(소유 밖 — 클러스터 O 가 손대지 않았다)
+
+**① W-5b 커서 훅 타겟팅.** 실물 규약은 확정됐다(`0x14018a709`–`0x14018a723`, 5개 훅 동일):
+
+```
+if (inst[0x48] != hitObject && inst[8] != 0) continue;   // 소유 오브젝트 일치 또는 무바인딩
+if (!(inst[0x40] & (1 << hookIdx)))          continue;   // 훅 보유 비트마스크
+if (inst[0x44] != 2)                         continue;
+```
+
+Waple 패치안(`SceneRenderer.swift` — O 소유이나 **테스트를 같이 못 고쳐서 보류**했다):
+
+1. `makeScriptEngine` 이 `eventEngines.append(engine)` 할 때 `(engine, layerName)` 쌍으로 모은다
+   (지금 `hoverEngineLayers` 가 `cursorEnter/Leave` 에 대해서만 하고 있는 그것).
+2. `dispatchPointerEvent(hook:x:y:)` 를 `dispatchSceneEvent` 브로드캐스트에서 떼고,
+   `layerName == nil`(= `inst[8] == 0`) 이거나 `PointerHit.contains(layerHitQuad(그 레이어), p)`
+   인 엔진에만 배달한다. `solid` 게이트도 같이(`l.isSolid`).
+3. `media*Changed`/`animationEvent` 는 계속 `dispatchSceneEvent` 를 쓴다 — 그건 오브젝트 스코프가
+   아니다.
+
+**같이 고쳐야 하는 테스트**(`Tests/WapleRenderTests/` — O 소유 아님):
+
+- `SceneInteractionMediaE2ETests.testSimulatedClickTogglesSyntheticScene` — 스크립트가 붙은
+  오브젝트가 `origin "4 4 0" size "2 2"` 인데 `simulateCursorClick(x: 960, y: 540)` 을 부른다.
+  **실물이라면 이건 발화하지 않는다.** 컨트롤 레이어를 전면(`origin "960 540 0" size "1920 1080"`)으로
+  키우든지 클릭 좌표를 `(4, 4)` 로 옮겨야 한다.
+- `SceneInteractionMediaE2ETests.testRealDayNightToggle3394601417` — 실 패키지. 클릭 좌표
+  `(960,540)` 이 스크립트 소유 레이어를 실제로 덮는지 확인이 필요하다.
+- `SceneSharedScriptTests` `:538` 의 `simulateCursorClick(x: 1, y: 1)` 도 같은 검토 대상.
+
+**② 전파 차단 순회.** 위 ①이 들어간 뒤라야 의미가 있다. 규약은
+`object-propagation.md` §10 이 갖고 있다(z-순서 역순 · `solid` 게이트 · 히트 시 발화 ·
+`disablePropagation && visible && 조상 visible` 이면 순회 중단). 동봉 도달 0건이므로 우선순위 최하.
+
+**③ `GLSLTranslator.swift:1467` 주석 스테일.** `// 마우스 UV(0..1), 미구동 시 0.5,0.5` →
+`미구동 시 (0,0)`. 값 자체는 `SceneRenderer` 가 공급하므로 동작 영향은 없다.
+
+**④ `SnapshotPipeline.capturePointerUV = (0.5, 0.5)`**(`Sources/WapleCompatCore/SnapshotPipeline.swift:49`).
+캡처 결정성 핀이라 런타임 기본값과는 **별개 결정**이다. 실물의 "커서 미진입" 상태와 맞추려면
+`(0, 0)` 이 맞지만, 그러면 위 3씬의 골든 픽셀이 바뀐다. 골든 재생성과 묶어서 판단할 것.
+
+**⑤ `shader-uniforms.md:675`** — "cursorripple·fluidsimulation 만" 문장에 `xray` 를 더해야 한다
+(§2.3, 이전 판에서 이미 지적됨).
+
+### 7.4 남은 우선순위
+
+1. **W-5b(커서 훅 타겟팅)** — 규약은 확정. 테스트 계약 정정이 선행돼야 한다.
+2. **W-10(파티클 CP bit0)** — 동봉 28파일. 헤드리스 캡처 결정성과 충돌하므로
    `SceneRenderer.capturePointerUV` 핀과 같은 계약이 필요하다.
-5. **W-6/W-7(히트 도형·시차)** — camera-motion W-2/W-4 해소와 묶어야 이득이 난다.
+3. **W-9(cursorClick 타이밍)** — 실물은 **뗄 때** + 같은 오브젝트에서 눌렀을 때만
+   (`0x14018a787` `test dl,dl` → `je` 로 클릭 블록 진입, 홀드 맵 조회 `0x14018a7aa`).
+   Waple 은 누를 때 `cursorDown` 과 함께 쏜다. ①과 같은 커밋에서 고치는 게 맞다.
+4. **전파 차단 순회** — 동봉 도달 0.
 
 ---
 
@@ -655,7 +818,7 @@ return wcsicmp(cls, L"Progman") == 0;                  ; 0x1404755d8
 
 따라서 `cursorDown`/`cursorUp`/`cursorClick`/`g_PointerState.z` 는 **권한 없는 기본 구성에서는
 발화하지 않는 것이 정상**이라고 못박아 두는 편이 낫다. `SceneRenderer.setPointerButtonDown`
-(`SceneRenderer.swift:316`)과 `simulateCursorClick`(`:312`)이 이미 그 전제로 만들어져 있다.
+(`SceneRenderer.swift:344`)과 `simulateCursorClick`(`:338`)이 이미 그 전제로 만들어져 있다.
 
 ---
 
@@ -667,6 +830,7 @@ S=/tmp/claude-0/-home-user/abe2d757-2792-5050-8baf-0be7e33c5b76/scratchpad
 # 0) 평문부터 — x86 파기 전에
 cd /home/user/Waple-wallpaper-source/wallpaper_engine
 grep -rl "g_Pointer" assets/                    # → cursorripple · fluidsimulation · xray
+grep -rn "g_PointerState" assets/               # → 4파일 전건 `.z` 만 읽는다(.x/.y/.w 소비 0)
 grep -rn "locktopointer" assets/ | head
 python3 - <<'PY'                                # 바이너리 전수: locktopointer 0건
 import glob,os
@@ -694,8 +858,18 @@ python3 $S/vdis2.py 0x14022e3e0 0x14022e6e0     # bit16/bit0/bit2 분기 + 언�
 python3 $S/vdis2.py 0x14022eb20 0x14022ebde     # 루프 꼬리
 
 # 5) 히트테스트 워커와 쿼드 판정
-python3 $S/vdis2.py 0x140189e10 0x14018a460
-python3 $S/vdis2.py 0x14019dbb0 0x14019df2f
+#    주의: vdis2 는 **명령어 경계**에서 시작해야 한다. 0x14018a460 은 경계가 아니다 —
+#    워커는 0x140189e10 에서 한 번에 떠라(merged() 로 9조각 = 0x140189e10..0x14018aab9 확인).
+python3 $S/vdis2.py 0x140189e10 0x14018aab9      # solid 게이트 0x14018a02d · 시차 0x14018a0b3 · 전파 0x14018a877
+python3 $S/vdis2.py 0x14019dbb0 0x14019df90      # 쿼드 구성(c0/c1/c2 만) · out = (u·w, (1−v)·h)
+python3 $S/vdis2.py 0x14019d5a0 0x14019d8e6      # 평행사변형 교차: u+v 검사 **없음**, |det| ≤ FLT_EPSILON → 미스
+
+# 5b) solid ctor 기본값 — 리터럴 직독(디스어셈블 불요)
+python3 -c "import sys;sys.path.insert(0,'$S');from wpe import pe;print(pe.read(0x1401ddc72,10).hex(' '))"
+#   → 66 41 c7 86 20 01 00 00 01 20  =  mov word [r14+0x120], 0x2001  (bit0 visible + bit13 solid)
+
+# 5c) renderState ctor 의 포인터 기본값 — 함수 **시작**에서 떠라(중간 주소는 쓰레기가 나온다)
+python3 $S/vdis2.py 0x14017c6d0 0x14017c7c0      # 0x14017c73d xor eax,eax → 0x14017c77d/0x14017c784 qword 0
 
 # 6) solid / disablepropagation / perspective 비트
 python3 $S/vdis2.py 0x1401e11f0 0x1401e1360     # 등록부
@@ -756,7 +930,13 @@ PY
 | 마우스 CP 가 CP 의 회전도 바꾼다 | `0x14022e47b`–`0x14022e4ae` 가 저작 4×4 를 통째로 복사한 **뒤** `+0x30..+0x38`(평행이동)만 덮어쓴다 |
 | 마우스 CP 언프로젝션이 z=near 평면 | `xmm12 = 0`(`0x14022e413`)이 z 입력이다 — NDC **z = 0** |
 | 히트테스트가 알파 임계를 쓴다 | `0x14019dbb0` 전 구간에서 텍스처 샘플이 없다. 입력은 4×4 · `size` · 광선뿐 |
-| 히트테스트가 축정렬 바운딩 박스 | 쿼드 4점을 오브젝트 4×4 의 X/Y 축으로 만든다(`0x14019de24`·`0x14019de68`) — 회전이 들어간다 |
+| 히트테스트가 축정렬 바운딩 박스 | 쿼드 코너를 오브젝트 4×4 의 X/Y 축으로 만든다(`0x14019de24`·`0x14019de68`) — 회전이 들어간다 |
+| 히트테스트가 삼각형 2개(쿼드를 쪼갠 것) | `sub_14019d5a0` 에 `u+v` 를 `det` 와 비교하는 명령이 **없다**. `u`(`0x14019d6fa`)와 `v`(`0x14019d761`)를 각각 `[0,det]` 에 댈 뿐이다. 그래서 `sub_14019dbb0` 도 코너를 **3개**만 만든다(`c3` 를 만드는 명령이 없다) |
+| 히트테스트가 코너 4점을 만든다 | 스택에 쓰이는 벡터는 `[rsp+0x68]`·`[rsp+0x58]`·`[rsp+0x48]` 셋뿐이고, 교차기 인자도 `r8`/`r9`/스택 하나다 |
+| 음수 `scale` 레이어는 히트가 안 된다 | `det < −FLT_EPSILON` 전용 분기(`0x14019d779`–`0x14019d83f`)가 부호만 뒤집은 같은 검사를 한다. 절댓값을 씌우는 코드가 없다 |
+| 히트 결과가 월드 좌표 | `0x14019df36`–`0x14019df5f` 가 `uv` 에 `size` 를 곱해 **로컬 픽셀**을 쓴다. 월드를 주는 것은 `config.fullscreen` 지름길뿐이다 |
+| 시차 오프셋이 커서 광선에 붙는다 | `0x14019dd79` 의 `addss` 대상은 `xmm8/xmm10/xmm9` = 직전 `0x14019dd5d`–`0x14019dd6f` 에서 만든 **변환된 평행이동 행**이다. 광선(`rcx`/`rdx`)은 교차기까지 그대로 간다 |
+| `solid` 기본값이 false | ctor 리터럴 `0x2001`(`0x1401ddc72`)의 bit13 이 1 이다. 기본이 false 였다면 `dino_run` 의 `cursorDown` 이 영원히 안 뜬다 |
 | `solid` 없는 레이어도 커서 이벤트를 받는다 | `test word [r15+0x120], 0x2000; je` (`0x14018a02d`)가 루프의 첫 관문이다. **단** 동봉 `dino_run` 이 반례로 남아 있다(§9) |
 | 커서 훅이 전 스크립트에 브로드캐스트된다 | `cmp [inst+0x48], r15`(`0x14018a709`) — 히트 오브젝트와 소유자가 같아야 한다(`[inst+8]==0` 예외) |
 | `cursorHitTest` 가 히트테스트를 스크립트에 위임하는 훅 | 등록만 되고 exe 발화 지점이 0곳. 범용 디스패처 `0x140177ad0` 의 호출 9곳도 인덱스 7 을 넘기지 않는다 |
@@ -771,7 +951,9 @@ PY
 |---|---|
 | `renderState+0x1838`(커서 상호작용 마스터 게이트)를 **쓰는** 지점 | `[미해결]`. `.pdata` 등재 전 함수를 선형 스윕해도 읽기 2곳(`0x140189e31`·`0x1401802af`)만 나온다. 설정 역직렬화가 오프셋 계산으로 쓰는 것으로 보이나 확정 못 했다 |
 | `renderState+0x74/+0x78` 에 표면 크기를 **쓰는** 지점 | `[미해결]`. 생성자 기본 `(1.0,1.0)`(`0x14017c76f`)과 두 소비처(나눗셈·되곱셈)로 정체는 확정, 기록 지점은 미확정 |
-| 동봉 `dino_run/scene.json` 의 `cursorDown` 이 `solid` 없이 어떻게 발화하나 | `[미해결]`. 해당 오브젝트(`mario_walk_1`)에 `solid` 키가 없고 씬 전체에 `solid` 가 0건인데, 워커는 `solid` 없는 오브젝트를 건너뛴다. `solid` 의 **기본값이 true** 이거나(오브젝트 ctor 에서 `+0x120` 에 상수를 심는 지점을 못 찾았다), 로더가 스크립트 훅을 보고 bit13 을 얹거나, 이 기본 프로젝트가 현행 빌드에서 실제로 동작하지 않거나 — 셋 중 하나다 |
+| ~~동봉 `dino_run/scene.json` 의 `cursorDown` 이 `solid` 없이 어떻게 발화하나~~ | **해소**(2026-08-21). 셋 중 첫 번째가 맞다 — `solid` 의 ctor 기본값이 **true** 다(`0x1401ddc72` 리터럴 `0x2001`, §4.1). `object-propagation.md` §2.1 이 같은 결론에 독립적으로 도달했다 |
+| `sub_14019dbb0` 의 `vtbl[0xa8]`(오브젝트 행렬에 한 번 더 곱하는 4×4)의 정체 | `[미해결]`. 인자로 항등을 넘기고 채워지면 true 를 받는 out 파라미터라는 것까지만 확정(`0x14019dcc6`). 2D 레이어에서 항등이라는 증거는 없다 — Waple 의 2D 축약 히트테스트는 **항등 가정** 위에 있다 |
+| `sub_140185010`(전파 차단 시 조상 visible 재귀)의 정확한 종료 조건 | `[부분]`. 호출부 `0x14018a892` 와 반환값 사용(`jne` → 루프 탈출)만 확인했다. 함수 본문은 `object-propagation.md` §10 이 `test byte [rcx+0x120],1` → `rcx=[rcx+0x180]` 로 적었고 이 문서는 그것을 재확인하지 않았다 |
 | CP0 이 "시스템 방출 원점" 이라는 것의 코드 근거 | `[미해결]`. 코퍼스 근거는 강하다(`examplecursorfollow.json` 이 CP0 bit0 만 갖고 이미터 `origin` 이 `0 0 0`). 이미터가 CP0 행렬을 읽는 지점은 못 짚었다 |
 | `[inst+8] == 0`(어느 오브젝트가 맞아도 이벤트를 받는 스크립트)의 정체 | `[미해결]`. 프로퍼티 바인딩이 없는 스크립트로 보이나 확정 못 했다 |
 | `[inst+0x44] == 2` 게이트의 의미 | `[미해결]`. 스크립트 인스턴스 종류 코드로 보인다 |

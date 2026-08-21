@@ -672,7 +672,7 @@ Lights(라이트). **다만 140개 유니폼이 각각 어느 cbuffer 로 가는
 | `g_Time` (ID 3) | 씬 클록(초) | 프레임 | 소비처 190파일. 피드 VA `[미해결]` |
 | `g_Frametime` (ID 4) | 직전 프레임 Δt | 프레임 | 소비처 20파일 |
 | `g_Daytime` (ID 5) | 하루 중 시각 | 프레임(추정) | **동봉 셰이더 소비 0건** — 재생목록 `daytime` 모드와 같은 소스로 보이나 확정 못 함 |
-| `g_PointerPosition` / `…Last` / `g_PointerState` (105/104/106) | 커서 | 프레임 | `cursorripple`·`fluidsimulation` 만 소비(각 12·8·8파일) |
+| `g_PointerPosition` / `…Last` / `g_PointerState` (105/104/106) | 커서 | 프레임 | `cursorripple`·`fluidsimulation`·**`xray`** 가 소비(각 12·8·8파일). **[2026-08-21] `g_PointerState` 는 `.z` 만 읽힌다** — 설치본·동봉 4파일 전건이 `.z` 뿐이고 `.x/.y/.w` 소비 0건(`cursorripple_apply_force.frag:83` ×5.0 · `fluidsimulation_vorticity.frag:198` 게인 1 + 프리뷰 사본). 그 `.z` 는 **누른 첫 프레임에만 1.0**(엣지) — `docs/re/pointer-interaction.md` §4 |
 | `g_ParallaxPosition` (107) | 시차 컨트롤러 | 프레임 | `depthparallax` 4파일 |
 | `g_AudioSpectrum{16,32,64}{Left,Right}` (98..103) | 오디오 캡처 | 프레임 | `docs/re/audio-capture.md` |
 | `g_TexelSize` / `…Half` (7/6) | 풀해상도 프레임버퍼 역수 | 리사이즈 | `spec/engine/uniform-feed.json` — **피드부 미독**이라 그쪽도 "보고" 상태 |

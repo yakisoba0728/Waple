@@ -212,7 +212,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if !engine.hookNames.isEmpty {
             eventEngines.append(engine)
             // cursorEnter/Leave 는 엔진이 바인드 레이어를 히트테스트(WE 규약 — 스크립트는 반응만).
-            // 레이어명을 기억했다가 mount 말미에 AABB 로 해석(buildHoverTargets).
+            // 레이어명을 기억했다가 mount 말미에 회전 히트 쿼드로 해석(buildHoverTargets).
             if let layerName,
                !engine.hookNames.isDisjoint(with: ["cursorEnter", "cursorLeave"]) {
                 hoverEngineLayers.append((engine, layerName))
@@ -237,7 +237,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 scale: SIMD3<Float>(layer.scale.x, layer.scale.y, 1),
                 angles: SIMD3<Float>(0, 0, layer.angleZ),
                 size: SIMD2<Float>(layer.size.x, layer.size.y),
-                solid: layer.textureEntryName.isEmpty,
+                // O-W5: `ILayer.solid` 는 오브젝트 플래그워드 `+0x120` **bit13**(등록 `0x1401e1283`,
+                // ctor 기본 true — `0x1401ddc72` `mov word [r14+0x120], 0x2001`)이고 커서 히트테스트
+                // 참가 게이트다(`0x14018a02d`). 종전 `textureEntryName.isEmpty` 는 근거 없는 추측이라
+                // 스크립트가 읽는 `thisLayer.solid` 가 텍스처 유무를 되비추고 있었다.
+                solid: layer.isSolid,
                 // F743(S-36/S-33): JS getParent()/getAnimationLayerCount() 실값 배선(파스 필드 소비).
                 id: layer.id, parentId: layer.parent,
                 animationLayerCount: layer.animationLayers.count
@@ -253,6 +257,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 origin: SIMD3<Float>(text.origin.x, text.origin.y, 0),
                 scale: SIMD3<Float>(text.scale.x, text.scale.y, 1),
                 size: SIMD2<Float>(0, 0),
+                solid: text.isSolid,   // O-W5: 텍스트도 같은 bit13 — 종전엔 인자 누락으로 항상 false 였다
                 text: text.text,
                 // G15: `ITextLayer.pointsize`/`font`(d.ts:1606·1611)는 디스크립터 실값이어야 한다.
                 // 종전엔 두 인자를 아예 안 넘겨 API 기본값(16 / "systemfont_arial")이 들어갔고,
@@ -278,13 +283,27 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     // ── 씬 이벤트(클릭/미디어) ───────────────────────────────────────────────
-    /// 이벤트 훅을 export 한 스크립트 엔진들(mount 중 수집). 훅 이벤트는 전 엔진 브로드캐스트
-    /// (WE 규약 — 스크립트가 worldPosition 으로 스스로 히트테스트한다: 실물 2902406982 드래그).
+    /// 이벤트 훅을 export 한 스크립트 엔진들(mount 중 수집). 훅 이벤트는 전 엔진 브로드캐스트.
+    ///
+    /// O-W5b **정정**: 종전 주석은 "WE 규약 — 스크립트가 worldPosition 으로 스스로 히트테스트한다"
+    /// 고 적었는데 **실물은 반대**다. 커서 훅 5종(`cursorEnter`/`Move`/`Click`/`Down`/`Up`)은
+    /// 엔진이 먼저 히트테스트를 하고 **히트한 오브젝트에 바인딩된 스크립트에만** 배달한다 —
+    /// `cmp [inst+0x48], r15`(히트 오브젝트) `je` / `cmp [inst+8], 0` `jne skip`
+    /// (`0x14018a709`–`0x14018a714`, 5개 훅 전건 동형). 무바인딩(`inst[8] == 0`) 인스턴스만 예외다.
+    /// 여기를 좁히려면 기존 macOS E2E 2건의 계약도 같이 고쳐야 한다 —
+    /// 정확한 패치안은 `docs/re/pointer-interaction.md` §7.3 ①.
+    /// (`media*Changed`/`animationEvent` 는 오브젝트 스코프가 아니므로 브로드캐스트가 맞다.)
     var eventEngines: [TextScriptEngine] = []
-    /// cursorEnter/Leave 훅을 export 한 (엔진, 바인드 레이어명) — mount 중 수집, buildHoverTargets 가 AABB 해석.
+    /// cursorEnter/Leave 훅을 export 한 (엔진, 바인드 레이어명) — mount 중 수집, buildHoverTargets 가 쿼드 해석.
     var hoverEngineLayers: [(engine: TextScriptEngine, layerName: String)] = []
-    /// 호버 히트테스트 타깃: 엔진 + 레이어 스크린 AABB(씬 픽셀) + 현재 내부 여부(경계 넘을 때만 발송).
-    struct HoverTarget { let engine: TextScriptEngine; let bounds: CGRect; var inside: Bool }
+    /// 호버 히트테스트 타깃: 엔진 + 레이어 히트 쿼드(씬 픽셀, 회전 포함) + 그 레이어의 시차 깊이
+    /// + 현재 내부 여부(경계 넘을 때만 발송).
+    struct HoverTarget {
+        let engine: TextScriptEngine
+        let quad: PointerHit.Quad
+        let parallaxDepth: Vec2
+        var inside: Bool
+    }
     var hoverTargets: [HoverTarget] = []
     var clickMonitor: Any?
     var mediaPoller: MediaPoller?
@@ -320,38 +339,63 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         dispatchPointerEvent(hook: "cursorClick", x: x, y: y)
     }
 
-    /// 포인터 버튼 상태 주입점(g_PointerState.z 로 전달 — 시뮬/헤드리스 e2e 용, pointerUV 위치 주입과 대칭).
-    public func setPointerButtonDown(_ down: Bool) { pointerDown = down }
+    /// 포인터 버튼 상태 주입점(g_PointerState 로 전달 — 시뮬/헤드리스 e2e 용, pointerUV 위치 주입과 대칭).
+    /// 임펄스(`.z`)는 다음 draw 의 프레임 꼬리(`pointerButton.endFrame()`)까지만 산다.
+    public func setPointerButtonDown(_ down: Bool) { pointerButton.setDown(down) }
 
     // ── cursorEnter/cursorLeave (레이어 호버 — 코퍼스 47패키지) ────────────────────
-    /// 레이어 스크린 AABB(씬 픽셀 y-up/하단원점, pointerSceneCoords 와 동일 공간 — W1-yaxis 정정,
-    /// 종전 "y-down" 문구는 스테일). origin=중심, 반너비=|size×scale|/2. origin 중심 대칭 AABB 라
-    /// 규약 반전에 값 자체는 불변 — 문구만 어긋나 있었음.
-    /// 회전(angleZ)은 무시 — 축정렬 근사(호버 존은 대개 축정렬 UI). scale 은 mount 정적 스냅샷(퍼펫 합성 후 값).
-    static func layerHitRect(origin: Vec2, size: Vec2, scale: Vec2) -> CGRect {
-        let hw = abs(size.x * scale.x) * 0.5, hh = abs(size.y * scale.y) * 0.5
-        return CGRect(x: Double(origin.x - hw), y: Double(origin.y - hh), width: Double(2 * hw), height: Double(2 * hh))
+    /// 레이어 히트 쿼드(씬 픽셀 y-up/하단원점, pointerSceneCoords 와 동일 공간).
+    ///
+    /// O-W6(실측 2026-08-21): 실물은 **축정렬 AABB 가 아니다.** `sub_14019dbb0` 이 오브젝트 4×4 로
+    /// 코너 3점(`c0=−X−Y` · `c1=+X−Y` · `c2=−X+Y`, ±0.5 상수 `0x140493000`/`0x140492dd0`)을 만들고
+    /// `sub_14019d5a0` 이 **평행사변형** 교차를 푼다(`u`·`v` 각각 `[0,det]` — 삼각형 `u+v` 검사 없음).
+    /// 그래서 회전(`angleZ`)과 음수 `scale` 을 전부 존중한다. 판정 본체는 `WapleCore/PointerHit.swift`.
+    ///
+    /// `alignment` 도 여기서 반영한다(종전 AABB 는 origin=중심으로 가정해 9점 앵커 레이어에서 어긋났다).
+    /// `scale` 은 mount 정적 스냅샷(퍼펫 합성 후 값) — 종전과 동일.
+    static func layerHitQuad(origin: Vec2, size: Vec2, scale: Vec2, angleZ: Float,
+                             alignment: String) -> PointerHit.Quad {
+        let hw = size.x * scale.x * 0.5, hh = size.y * scale.y * 0.5
+        let ca = cos(angleZ), sa = sin(angleZ)
+        let c = Self.alignedCenter(origin: origin, alignment: alignment, hw: hw, hh: hh, ca: ca, sa: sa)
+        return PointerHit.Quad.layer(center: SIMD2(c.x, c.y),
+                                     size: SIMD2(size.x, size.y),
+                                     scale: SIMD2(scale.x, scale.y), angleZ: angleZ)
     }
 
-    /// mount 말미: 수집한 (엔진, 레이어명) → 레이어 AABB 로 호버 타깃 구성(이름 매칭 레이어 없으면 드롭).
+    /// mount 말미: 수집한 (엔진, 레이어명) → 레이어 히트 쿼드로 호버 타깃 구성(이름 매칭 레이어 없으면 드롭).
+    /// `parallaxDepth` 를 같이 들고 있어야 O-W7(시차 보정)을 호버 시점에 적용할 수 있다.
     func buildHoverTargets(doc: SceneDocument) {
         guard !hoverEngineLayers.isEmpty else { return }
-        var rects: [String: CGRect] = [:]
-        for l in doc.layers where !l.name.isEmpty {
-            rects[l.name] = Self.layerHitRect(origin: l.origin, size: l.size, scale: l.scale)
+        var quads: [String: (quad: PointerHit.Quad, depth: Vec2)] = [:]
+        // O-W5: 실물 순회의 **첫 관문**이 `solid`(bit13)다 — `0x14018a00b` `mov r8d,0x2000` →
+        // `0x14018a02d` `test word [r15+0x120], r8w`, 아니면 `je` 로 다음 오브젝트. ctor 기본 true.
+        for l in doc.layers where !l.name.isEmpty && l.isSolid {
+            quads[l.name] = (Self.layerHitQuad(origin: l.origin, size: l.size, scale: l.scale,
+                                               angleZ: l.angleZ, alignment: l.alignment),
+                             l.parallaxDepth)
         }
         hoverTargets = hoverEngineLayers.compactMap { pair in
-            rects[pair.layerName].map { HoverTarget(engine: pair.engine, bounds: $0, inside: false) }
+            quads[pair.layerName].map {
+                HoverTarget(engine: pair.engine, quad: $0.quad, parallaxDepth: $0.depth, inside: false)
+            }
         }
     }
 
     /// 포인터가 바인드 레이어 경계를 넘을 때만 cursorEnter/Leave 발송(WE 규약 — 엔진이 히트테스트).
     /// p=nil(창 밖)이면 내부였던 타깃 전부 이탈. 상태 변화 없으면 no-op(프레임마다 폴링해도 저비용).
+    ///
+    /// O-W7(실측 2026-08-21): 실물은 히트 판정 전에 레이어 시차 오프셋을 **쿼드 중심에 더한다**
+    /// (`0x14018a0b3`–`0x14018a115` 가 `(origin−focus)·amount·depth` 를 만들고 `0x14019dd79` 가
+    /// 오브젝트 평행이동에 `addss` — 광선이 아니라 쿼드가 움직인다). 그래서 시차로 밀린 레이어도
+    /// **눈에 보이는 자리**에서 클릭된다. Waple 의 등가물은 그리기와 같은 식
+    /// `cameraOffset × parallaxDepth`(QuadShaders.swift:17)이며, 그 값은 NDC 단위라 씬 픽셀로 환산한다.
     func updateHover(at p: SIMD2<Float>?) {
         guard !hoverTargets.isEmpty else { return }
         var changed = false
         for i in hoverTargets.indices {
-            let inside = p.map { hoverTargets[i].bounds.contains(CGPoint(x: Double($0.x), y: Double($0.y))) } ?? false
+            let quad = hoverTargets[i].quad.translated(by: hoverParallaxShift(hoverTargets[i].parallaxDepth))
+            let inside = p.map { PointerHit.contains(quad, $0) } ?? false
             guard inside != hoverTargets[i].inside else { continue }
             hoverTargets[i].inside = inside
             let pos = p ?? SIMD2<Float>(0, 0)
@@ -360,6 +404,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             changed = true
         }
         if changed { mtkView?.needsDisplay = true }
+    }
+
+    /// 레이어 시차 오프셋(NDC) → 씬 픽셀. 시차가 꺼져 있으면 0(실물 게이트 `0x140189f17`,
+    /// `scene[0xe0]` bit8 && bit3 = 시차 사용 && 2D 에 대응). 헤드리스 캡처는 cameraOffset 이 항상 0.
+    func hoverParallaxShift(_ depth: Vec2) -> SIMD2<Float> {
+        guard parallaxEnabled else { return .zero }
+        return SIMD2(cameraOffset.x * depth.x * projW * 0.5, cameraOffset.y * depth.y * projH * 0.5)
     }
 
     /// cursorMove + cursorEnter/Leave 시뮬(테스트/헤드리스 — 씬 픽셀 좌표 직접 주입).
@@ -573,7 +624,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     func deliverGlobalMouse(isDown: Bool) {
-        pointerDown = isDown  // g_PointerState.z 라이브 배관(위치 무관 물리 버튼 상태) — 헤드리스는 모니터 미설치라 미도달.
+        pointerButton.setDown(isDown)  // g_PointerState 라이브 배관(위치 무관 물리 버튼 상태) — 헤드리스는 모니터 미설치라 미도달.
         guard let p = pointerSceneCoords() else { return }
         if isDown {
             dispatchPointerEvent(hook: "cursorDown", x: p.x, y: p.y)
@@ -763,8 +814,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// WE cameraparallaxdelay(초). 0 = 즉시. >0 = 프레임 dt 기반 지수 스무딩.
     var parallaxDelay: Float = 0
     let parallax = ParallaxController()
-    /// WE 포인터 UV(0..1, 상단 원점). 마우스 미구동/헤드리스 = 중앙(0.5,0.5).
-    var pointerUV = SIMD2<Float>(0.5, 0.5)
+    /// WE 포인터 UV(0..1, 상단 원점). 마우스 미구동/헤드리스 = **`(0,0)`**.
+    /// O-W1(실측 2026-08-21): renderState 생성자 `0x14017c6d0` 이 `xor eax,eax` 후
+    /// `mov qword [rcx+0x8c], rax`(`0x14017c77d`) 로 두 float 을 0 으로 심는다 —
+    /// 실물의 "커서가 아직 씬에 들어오지 않은" 상태는 화면 중앙이 아니라 **좌상단(=화면 밖 취급)** 이다.
+    /// 종전 `(0.5,0.5)` 는 미구동 씬에서 `cursorripple` 파문을 화면 한복판에 앉혔다.
+    /// (캡처 골든은 `SnapshotPipeline.capturePointerUV` 가 따로 핀하므로 이 값과 무관 — §보고서 넘길 것)
+    var pointerUV = SIMD2<Float>(0, 0)
     /// 캡처 하네스용 포인터 핀 — 설정하면 mount 가 **마우스 모니터를 아예 켜지 않고** pointerUV 를
     /// 이 값으로 고정한다(nil = 라이브 커서, 기존 동작).
     ///
@@ -781,9 +837,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 경로는 설계상 존재하지 않는다(존재하면 결정성 자체가 무너진다).
     nonisolated(unsafe) public static var capturePointerUV: SIMD2<Float>?
     /// 직전 draw 프레임의 포인터 UV(g_PointerPositionLast — cursorripple 이전 위치). draw 종료 시 이월.
-    var pointerUVLast = SIMD2<Float>(0.5, 0.5)
-    /// 포인터 좌버튼 다운 상태(g_PointerState.z — cursorripple/fluidsim 클릭 힘). 미주입/헤드리스 = false(무클릭).
-    var pointerDown = false
+    /// 기본값은 pointerUV 와 한 쌍이다 — 실물 ctor `0x14017c784` 도 같은 자리에서 qword 0 을 심는다.
+    var pointerUVLast = SIMD2<Float>(0, 0)
+    /// 포인터 좌버튼 상태 2비트(renderState `+0xa4`) — `g_PointerState` 합성원.
+    /// O-W3: `.z`(클릭 힘)는 **누른 첫 프레임에만 1.0** 인 임펄스지 홀드가 아니다. 자세한 근거 VA 는
+    /// `PointerButtonState`(WapleCore/PointerHit.swift) 주석. 미주입/헤드리스 = 무클릭.
+    var pointerButton = PointerButtonState()
+    /// 물리 버튼 눌림(레벨) — 스크립트 `input.cursorLeftDown` 용. `g_PointerState.z` 와 다르다.
+    var pointerDown: Bool { pointerButton.isDown }
     /// 현재 프레임 dt 초(g_Frametime — fluidsim 시간적분). draw 가 갱신, 캡처는 1/30 고정(결정적).
     var frameDT: Float = 0
     /// cursorMove 훅 보유 씬만 이동 이벤트 배달(마운트 시 캐시 — 매 마우스무브 스캔 회피).
@@ -1684,7 +1745,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
         startClickMonitorIfNeeded()
         hasCursorMoveHook = eventEngines.contains(where: { $0.hookNames.contains("cursorMove") })
-        buildHoverTargets(doc: doc)   // cursorEnter/Leave 레이어 AABB 해석
+        buildHoverTargets(doc: doc)   // cursorEnter/Leave 레이어 히트 쿼드 해석
         if hasCursorMoveHook || !hoverTargets.isEmpty {
             startPointerMonitor()  // 이미 켜져 있으면 no-op(내부 nil 가드)
         }
@@ -1911,7 +1972,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // g_PointerPositionLast: 이번 프레임 인코딩이 쓴 포인터를 함수 종료 시 다음 프레임의 '직전'으로 이월
         // (이후의 인코딩 실패 조기 return 포함. 이 지점 앞 가드 return(가림 등)은 프레임 자체가 없어 미이월 —
         // 히스토리는 '마지막으로 그린 프레임'의 포인터를 유지).
-        defer { pointerUVLast = pointerUV }
+        // 프레임 꼬리 2종은 실물 `0x140181615`–`0x14018169e` 와 같은 자리다:
+        // ① g_PointerPositionLast 이월 ② g_PointerState 의 "이미 소비했다" 비트(bit1) 갱신 —
+        //    `if (s & 1) s |= 2; else s &= ~2;` 이것이 `.z` 를 한 프레임짜리 임펄스로 만든다.
+        defer { pointerUVLast = pointerUV; pointerButton.endFrame() }
 
         // 애니메이션 이벤트 마커(라이브 재생 전용): 일시정지 중엔 발화 금지 —
         // pause() 후에도 needsDisplay 재드로(호버/리사이즈)가 여길 지나므로 명시 가드.
