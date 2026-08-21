@@ -51,6 +51,18 @@ import simd
 /// 정점 포맷(formatFlag 하위 바이트 0x0f = pos+normal+tangent+uv; 비트 0x01800000 = 스키닝):
 ///   정적(stride 48): pos 3f | normal 3f | tangent 4f | uv 2f
 ///   스키닝(stride 80): pos 3f | normal 3f | tangent 4f | boneIndices 4×u32 | weights 4f | uv 2f
+/// 일반형은 **`vertexLayoutTable` 26엔트리**가 정본이다(마스크·크기·속성이름·시맨틱을 .rdata 에서
+/// 전수 덤프 — 그 주석 참조). 요약: 전 채널 32비트 float(BLENDINDICES 만 uint4), 정규화·팩 포맷
+/// 없음, 채널 순서는 테이블 인덱스 오름차순(pos → normal → tangent → blendIndices → blendWeights →
+/// TEXCOORD0..5 → color).
+///
+/// 머티리얼 바인딩: 메시마다 cstring 경로 `skinCount` 개(스킨 = 같은 메시의 재질 변형).
+///   • 경로는 **프로젝트 루트 상대**다(`project.json` 이 있는 폴더 기준. 엔진 자산은 `assets/` 기준).
+///     설치본 실측: 45메시 46경로 중 45개가 그 규칙으로 디스크에 실재하고, 유일한 미스는 배포에서
+///     빠진 에디터 기즈모(`assets/models/editor/camera` → `materials/models/editorcamera/...`)다.
+///   • **서브메시 = 메시**다. 인덱스 범위(baseVertex/firstIndex)를 나눠 갖는 구조가 아니라 메시마다
+///     자기 정점 블롭 + 자기 인덱스 블롭을 통째로 싣는다(설치본 45메시 전부 maxIndex == vCount−1).
+///     즉 드로우콜 1개 = 메시 1개 = 머티리얼 1개다.
 ///
 /// 확정 근거(교차검증): 174/174 파스; 단일메시 40개 전부 maxIndex == vertexCount-1;
 ///   vsize % stride == 0(전수); normal/tangent 단위길이·weights 합 1.0(3개 witness); 6바이트 구분자 전수 0.
@@ -79,14 +91,26 @@ public struct Model3D: Equatable {
         public let position: SIMD3<Float>
         public let normal: SIMD3<Float>
         public let tangent: SIMD4<Float>       // xyz + w(handedness, 실측 ±1)
-        public let uv: SIMD2<Float>
+        public let uv: SIMD2<Float>            // TEXCOORD0 의 .xy
         public let boneIndices: SIMD4<UInt32>  // 정적: (0,0,0,0)
         public let weights: SIMD4<Float>       // 정적: (0,0,0,0)
+        /// 두 번째 UV 세트(라이트맵). **TEXCOORD0 이 float4(`a_TexCoordVec4`, 마스크 0x20)일 때의
+        /// `.zw`** 다 — 채널이 없으면 (0,0). 소비처가 셰이더에 그대로 적혀 있다:
+        /// `assets/shaders/generic.vert` 은 `#if LIGHTMAP` 에서 `attribute vec4 a_TexCoordVec4` 를
+        /// 받아 `v_TexCoord = a_TexCoordVec4` 로 흘리고, `generic.frag` 이
+        /// `texSample2D(g_LightmapMapSampler, v_TexCoord.zw)` 로 **.zw 만** 샘플한다(비 LIGHTMAP 은
+        /// `attribute vec2 a_TexCoord` = 마스크 0x08). 설치본 도달: arsenal `pistols.mdl`
+        /// (v0014, flag 0x27, 메시 6개) — 모델 옵션 `models/pistols/pistols.json` 이
+        /// `"seconduvchannel": true`, 재질 6개 중 4개가 `"lightmap": 1` 콤보다.
+        /// 파스·보존 전용 — 렌더 소비(라이트맵 패스)는 범위 밖이다.
+        public let uv1: SIMD2<Float>
 
         public init(position: SIMD3<Float>, normal: SIMD3<Float>, tangent: SIMD4<Float>,
-                    uv: SIMD2<Float>, boneIndices: SIMD4<UInt32> = .zero, weights: SIMD4<Float> = .zero) {
+                    uv: SIMD2<Float>, boneIndices: SIMD4<UInt32> = .zero, weights: SIMD4<Float> = .zero,
+                    uv1: SIMD2<Float> = .zero) {
             self.position = position; self.normal = normal; self.tangent = tangent
             self.uv = uv; self.boneIndices = boneIndices; self.weights = weights
+            self.uv1 = uv1
         }
     }
 
@@ -330,56 +354,120 @@ public struct Model3D: Equatable {
     /// 스트라이드 여유(skinFieldsFit)로 최종 판정).
     private static let skinMask: UInt32 = 0x0180_0000
 
-    /// 정점 채널 — 아는 채널만 읽고 미지 채널(.skip)은 크기만큼 건너뛴다.
+    /// 정점 채널 — 아는 채널만 읽고 안 쓰는 채널(.skip)은 크기만큼 건너뛴다.
     private enum VertexChannel { case position, normal, tangent, boneIndices, weights, uv, skip }
 
-    /// 정점 레이아웃 테이블(wallpaper64.exe .rdata 원본 덤프로 확정 — FUN_1400d8060.c:81-96 의
-    /// ⚠️ 파일명은 Ghidra 주소공간 — 원본에서는 `0x1400d7f90`(−0xD0, 위 MDL 디코더 주석과 같은 사유).
-    /// (마스크,기여) 26엔트리 누산 루프와 동일 데이터: stride = set bit 기여 합산, 채널 오프셋은
-    /// **테이블 인덱스 오름차순** 누적(비트 값 순이 아님 — idx5 0x800000 이 idx9 0x20 보다 앞).
+    /// 정점 속성 테이블 — **wallpaper64.exe 의 병렬 .rdata 배열 4개를 직접 덤프해 전 26엔트리 확정**
+    /// (2026-08-21). 종전 표는 11엔트리뿐이었고 나머지 15개(TEXCOORD1-5)를 "비트 대응 미대조" 로
+    /// 비워 뒀는데, 그 비트를 단 플래그는 테이블 불해결 → `inferStride` 추측 경로로 떨어져
+    /// **꼬리고정 오프셋으로 조용히 오독**됐다(uv 를 stride−8 에서 읽으므로 TEXCOORD1 을 uv0 으로 읽는다).
+    ///
+    /// 배열 주소(이번 세션에 직접 스캔·덤프. Ghidra 보정 불필요 — 원본 이미지에서 뜬 값이다):
+    ///   `0x140484a20` u32 마스크 ×26     — 스트라이드 누산 루프가 `[r11+rax*4+0x484a20]` 로 읽는다
+    ///   `0x1404849b0` u32 바이트크기 ×26 — 같은 루프의 `[r11+rax*4+0x4849b0]`
+    ///   `0x140484a90` char* 속성이름 ×26 — 셰이더 소스 스캐너가 `[rcx+r12*8+0x484a90]` 로 읽는다
+    ///   `0x140482fa0` 16B 디스크립터 ×26 = {nameIdx, typeIdx, semanticIdx, semanticNumber}
+    ///                                      (스캐너가 매치 시 통째로 복사: `0x1400f461c`)
+    /// 스트라이드 산식도 같은 자리에서 확인했다 — MDL 디코더 `0x140261880` 안의
+    /// `0x140261a3a`–`0x140261b2b`: SSE 로 idx0..23 을 4개씩 6묶음 누산하고
+    /// (`test`/`pcmpeqd`+`andnps`+`andps`) 남은 idx24·25 는 스칼라 루프
+    /// (`0x140261b10 test dword [r11+rax*4+0x484a20], r10d` / `0x140261b1a add ecx, [r11+rax*4+0x4849b0]`
+    ///  / `0x140261b25 cmp rax, 0x1a`)로 더한 뒤 `0x140261b2b mov [rbp+0xac], ecx` 로 메시 구조체 +0x3c 에 넣는다.
+    /// 같은 산식의 독립 사본이 `0x1400ea5b0`(스트라이드 전용 헬퍼)에도 있다.
+    ///
+    /// | idx | 마스크 | 크기 | 속성 이름 | HLSL 타입 : 시맨틱 |
+    /// |---|---|---|---|---|
+    /// | 0 | 0x00000001 | 12 | `a_Position` | float3 : POSITION0 |
+    /// | 1 | 0x00010000 | 16 | `a_PositionVec4` | float4 : POSITION0 |
+    /// | 2 | 0x02000000 | 12 | `a_PositionC1` | float3 : POSITION1 |
+    /// | 3 | 0x00000002 | 12 | `a_Normal` | float3 : NORMAL0 |
+    /// | 4 | 0x00000004 | 16 | `a_Tangent4` | float4 : TANGENT0 |
+    /// | 5 | 0x00800000 | 16 | `a_BlendIndices` | uint4 : BLENDINDICES0 |
+    /// | 6 | 0x01000000 | 16 | `a_BlendWeights` | float4 : BLENDWEIGHT0 |
+    /// | 7 | 0x00000008 | 8 | `a_TexCoord` | float2 : TEXCOORD0 |
+    /// | 8 | 0x00000010 | 12 | `a_TexCoordVec3` | float3 : TEXCOORD0 |
+    /// | 9 | 0x00000020 | 16 | `a_TexCoordVec4` | float4 : TEXCOORD0 |
+    /// | 10‥24 | 0x40/0x80/0x100 · 0x200/0x400/0x800 · 0x1000/0x2000/0x4000 · 0x20000/0x40000/0x80000 · 0x100000/0x200000/0x400000 | 8/12/16 | `a_TexCoord[Vec3\|Vec4]C1‥C5` | float2/3/4 : TEXCOORD1‥5 |
+    /// | 25 | 0x00008000 | 16 | `a_Color` | float4 : COLOR0 |
+    ///
+    /// 읽어 낼 것이 없다:
+    ///  • **전 채널이 32비트 float**(BLENDINDICES 만 uint4)다 — 정규화·팩된 포맷이 아예 없다.
+    ///    `a_Color` 도 u8×4 가 아니라 float4 다.
+    ///  • 채널 오프셋은 **테이블 인덱스 오름차순** 누적이지 비트 값 순이 아니다(idx5 0x800000 이
+    ///    idx9 0x20 보다 앞, idx25 `a_Color` 0x8000 은 항상 **맨 뒤**).
     /// 검산(전부 일치): 0x0f→48, 0x0f|skinMask→80, 0x09|skin→52, Kirby 0x00800021→44(pos@0,
-    /// boneIdx@12, TEXCOORD0 float4@28), sl_puppet 0x0181000e→84. TEXCOORD1-5(idx10-24)는 비트
-    /// 대응 미대조라 미포함 — 해당 비트를 달리는 플래그는 테이블 불해결 → 기존 추측 경로 유지(무회귀).
+    /// boneIdx@12, TEXCOORD0 float4@28), sl_puppet 0x0181000e→84. 설치본 28파일 45메시 실측 플래그는
+    /// 0x09(20) 19메시 · 0x0b(32) 10 · 0x0f(48) 10 · 0x27(56) 6 — 넷 다 이 표로 산출된다.
     private static let vertexLayoutTable: [(bit: UInt32, size: Int, ch: VertexChannel)] = [
-        (0x0000_0001, 12, .position),     // idx0 POSITION float3
-        (0x0001_0000, 16, .position),     // idx1 16B pos계열(morph 후보 — idx0 부재 시 pos 로 읽음, sl_puppet)
-        (0x0200_0000, 12, .position),     // idx2 12B pos계열(〃)
-        (0x0000_0002, 12, .normal),       // idx3 NORMAL float3
-        (0x0000_0004, 16, .tangent),      // idx4 TANGENT float4(w=handedness)
-        (0x0080_0000, 16, .boneIndices),  // idx5 BLENDINDICES uint4(R32G32B32A32_UINT)
-        (0x0100_0000, 16, .weights),      // idx6 BLENDWEIGHT float4
-        (0x0000_0008,  8, .uv),           // idx7 TEXCOORD0 float2
-        (0x0000_0010, 12, .uv),           // idx8 TEXCOORD0 float3(uv=.xy)
-        (0x0000_0020, 16, .uv),           // idx9 TEXCOORD0 float4(uv=.xy — Kirby)
-        (0x0000_8000, 16, .skip),         // idx25 float4 채널(color 후보 — 미독)
+        (0x0000_0001, 12, .position),     // idx0  a_Position      float3 POSITION0
+        (0x0001_0000, 16, .position),     // idx1  a_PositionVec4  float4 POSITION0(idx0 부재 시 pos, sl_puppet)
+        (0x0200_0000, 12, .position),     // idx2  a_PositionC1    float3 POSITION1
+        (0x0000_0002, 12, .normal),       // idx3  a_Normal        float3 NORMAL0
+        (0x0000_0004, 16, .tangent),      // idx4  a_Tangent4      float4 TANGENT0(w=handedness)
+        (0x0080_0000, 16, .boneIndices),  // idx5  a_BlendIndices  uint4  BLENDINDICES0
+        (0x0100_0000, 16, .weights),      // idx6  a_BlendWeights  float4 BLENDWEIGHT0
+        (0x0000_0008,  8, .uv),           // idx7  a_TexCoord      float2 TEXCOORD0
+        (0x0000_0010, 12, .uv),           // idx8  a_TexCoordVec3  float3 TEXCOORD0(uv=.xy)
+        (0x0000_0020, 16, .uv),           // idx9  a_TexCoordVec4  float4 TEXCOORD0(uv0=.xy, uv1=.zw)
+        (0x0000_0040,  8, .skip),         // idx10 a_TexCoordC1     float2 TEXCOORD1
+        (0x0000_0080, 12, .skip),         // idx11 a_TexCoordVec3C1 float3 TEXCOORD1
+        (0x0000_0100, 16, .skip),         // idx12 a_TexCoordVec4C1 float4 TEXCOORD1
+        (0x0000_0200,  8, .skip),         // idx13 a_TexCoordC2     float2 TEXCOORD2
+        (0x0000_0400, 12, .skip),         // idx14 a_TexCoordVec3C2 float3 TEXCOORD2
+        (0x0000_0800, 16, .skip),         // idx15 a_TexCoordVec4C2 float4 TEXCOORD2
+        (0x0000_1000,  8, .skip),         // idx16 a_TexCoordC3     float2 TEXCOORD3
+        (0x0000_2000, 12, .skip),         // idx17 a_TexCoordVec3C3 float3 TEXCOORD3
+        (0x0000_4000, 16, .skip),         // idx18 a_TexCoordVec4C3 float4 TEXCOORD3
+        (0x0002_0000,  8, .skip),         // idx19 a_TexCoordC4     float2 TEXCOORD4
+        (0x0004_0000, 12, .skip),         // idx20 a_TexCoordVec3C4 float3 TEXCOORD4
+        (0x0008_0000, 16, .skip),         // idx21 a_TexCoordVec4C4 float4 TEXCOORD4
+        (0x0010_0000,  8, .skip),         // idx22 a_TexCoordC5     float2 TEXCOORD5
+        (0x0020_0000, 12, .skip),         // idx23 a_TexCoordVec3C5 float3 TEXCOORD5
+        (0x0040_0000, 16, .skip),         // idx24 a_TexCoordVec4C5 float4 TEXCOORD5
+        (0x0000_8000, 16, .skip),         // idx25 a_Color          float4 COLOR0(항상 맨 뒤 — 미독)
     ]
+
+    /// 테이블이 덮는 비트 합집합 — 위 26엔트리를 OR 하면 **정확히 하위 26비트**(0x03FF_FFFF)다.
+    /// 나머지 상위 6비트는 엔진 누산 루프가 아예 보지 않으므로(`0x140261b25 cmp rax, 0x1a` — 26엔트리를
+    /// 돌 뿐이다) **스트라이드에 0 을 기여한다.** 우리도 똑같이 무시한다(종전엔 그런 비트가 하나라도
+    /// 있으면 테이블을 통째로 포기하고 추측 경로로 갔다).
+    /// 리터럴로 적지 않고 표에서 뽑는다 — 표만 고치고 이 상수를 안 고치면 새 엔트리가 조용히
+    /// 무시되기 때문이다(돌연변이 검증에서 실제로 그 형태를 만들어 봤다).
+    private static let vertexLayoutKnownBits: UInt32 = vertexLayoutTable.reduce(0) { $0 | $1.bit }
 
     /// 테이블 산출 레이아웃(오프셋은 정점 선두 기준 바이트). uv 는 float2/3/4 공통 선두 .xy 만 읽는다.
     private struct VertexLayout {
         var stride = 0
         var pos: Int? = nil, normal: Int? = nil, tangent: Int? = nil
         var boneIndices: Int? = nil, weights: Int? = nil, uv: Int? = nil
+        /// TEXCOORD0 이 float4(idx9)일 때의 `.zw` 오프셋 = 라이트맵 UV(generic.frag `v_TexCoord.zw`).
+        var uv1: Int? = nil
     }
 
-    /// 테이블로 stride/채널 오프셋 산출 — set bit 가 전부 기지 테이블에 있을 때만 성공. 미지 비트가
-    /// 하나라도 있으면 nil(호출측이 기존 축약 공식 + inferStride 추측 경로로 분기 — 무회귀).
+    /// 테이블로 stride/채널 오프셋 산출. 상위 6비트(테이블 밖)는 엔진과 같이 무시하고, 위치 채널이
+    /// 하나도 없는 플래그만 nil 로 돌려 호출측 추측 경로에 맡긴다(pos 없이 `.pos ?? 0` 으로
+    /// 다른 채널을 좌표로 읽는 것을 막는다).
     private static func vertexLayout(for flag: UInt32) -> VertexLayout? {
-        var known: UInt32 = 0
-        for e in vertexLayoutTable { known |= e.bit }
-        guard flag != 0, flag & ~known == 0 else { return nil }
+        let effective = flag & vertexLayoutKnownBits
+        guard effective != 0 else { return nil }
         var l = VertexLayout()
-        for e in vertexLayoutTable where flag & e.bit != 0 {
+        for e in vertexLayoutTable where effective & e.bit != 0 {
             switch e.ch {
             case .position: if l.pos == nil { l.pos = l.stride }   // pos계열 다수 시 첫 채널(idx0 우선)
             case .normal: l.normal = l.stride
             case .tangent: l.tangent = l.stride
             case .boneIndices: l.boneIndices = l.stride
             case .weights: l.weights = l.stride
-            case .uv: if l.uv == nil { l.uv = l.stride }
+            case .uv:
+                if l.uv == nil {
+                    l.uv = l.stride
+                    if e.size == 16 { l.uv1 = l.stride + 8 }       // float4 TEXCOORD0 → .zw = 라이트맵 UV
+                }
             case .skip: break
             }
             l.stride += e.size
         }
+        guard l.pos != nil else { return nil }
         return l
     }
 
@@ -441,7 +529,9 @@ public struct Model3D: Equatable {
                 guard let m = cstring(&o) else { return nil }
                 materialList.append(m)
             }
-            guard let material = materialList.first else { return nil }
+            // skinCount==0 이면 엔진도 이름을 안 읽는다(Model3DFormat.materialCount 주석) — 파스를
+            // 버리지 말고 빈 경로로 진행한다. 렌더는 머티리얼 로드 실패로 이 메시만 건너뛴다.
+            let material = materialList.first ?? ""
             // u32 gateWord(v≥4, 설치본 45메시 전건 0, Kirby mesh1 은 2). **버리면 안 된다** —
             // 인덱스 원소 폭이 이 워드의 bit0 에서 나온다(아래 참조).
             guard let gateWord = u32(o) else { return nil }
@@ -623,6 +713,17 @@ public struct Model3D: Equatable {
 
         var model = Model3D(meshes: meshes)
 
+        // 섹션 루프(MDLS/MDAT/MDLA/MDMP/MDLE)는 **v≥13 에서만** 존재한다. 엔진은 메시 루프를 빠져나온
+        // 직후 `0x140262382 cmp edi, 0x0d` / `0x140262385 jl 0x140265a0c` 로 v<13 이면 섹션 리드를
+        // 통째로 건너뛰고 함수를 끝낸다(v≥13 경로는 `0x1402623d8 call 0x14009c500` 으로 섹션 매직을
+        // cstring 으로 읽고, `0x1402623ec cmp qword [rbp+0x258], 0` 에서 **빈 문자열이면 종료** —
+        // 이것이 실물 v0014/0017/0023 파일 말미의 단일 NUL 이다. v0004 파일은 그 NUL 이 없고 마지막
+        // 인덱스 바이트가 곧 EOF 다 — 설치본 8/8 실측).
+        // → v<13 에서 매직 스캔을 돌리면 정점/인덱스 블롭 한복판의 우연한 "MDLS000x" 를 물 수 있다.
+        //   설치본 v0004 8개는 메시 끝 == EOF 라 종전에도 스캔이 0바이트를 훑었지만, 규칙은 엔진과
+        //   같은 자리에서 닫는다.
+        let hasSections = Model3DFormat.hasSections(version: version)
+
         // 스켈레톤(스키닝 모델). MDLA 와 동일하게 메시 끝 이후 매직 스캔으로 찾는다 — V0021(MDLS0003)은
         // 마지막 메시와 스켈레톤 사이에 비제로 부가 블록이 있어(실물 3384019940 5/5 실측) 종전
         // '제로-스킵 후 정확 착지'로는 도달 불가였다. 실패/구조 불일치는 본 없이 반환(정적 메시 렌더 가능).
@@ -632,7 +733,7 @@ public struct Model3D: Equatable {
         // parseSkeletonTail 로 정식 파스해 skeletonTail 에 노출 — 종전의 '13+80×본수 꼬리' 기록은
         // T1..T6 블록의 조합 근사치이고, '꼬리는 파스하지 않는다'는 정식 파스로 대체(실물 418파일
         // 전수 착지 검증 2026-07-28). 수용 버전 0002/0003/0004 — 미목격 버전은 계속 거부(추측 파스 금지).
-        if let si = findMagic("MDLS000", in: bytes, from: o), si + 9 <= bytes.count,
+        if hasSections, let si = findMagic("MDLS000", in: bytes, from: o), si + 9 <= bytes.count,
            (UInt8(ascii: "2")...UInt8(ascii: "4")).contains(bytes[si + 7]) {
             var p = si + 8 + 1  // magic + lead u8(0) — 매직은 cstring 이라 종단 NUL 이 1B 더 붙는다
             // 커서 정렬은 엔진과 같다: 매직 cstring → `strncmp(…, "MDLS", 4)`(0x1402624af/0x1402624bc)
@@ -679,14 +780,14 @@ public struct Model3D: Equatable {
 
         // 부착점 섹션(MDAT0001) — 스켈레톤 트레일러 뒤·MDLA 앞(실측: attachment 28씬 47 mdl 전수).
         // 씬 오브젝트 `attachment`(이름 본-슬롯 부착)의 슬롯 정의. 실패/부재는 빈 배열(무부착 폴백).
-        if !model.bones.isEmpty, let mi = findMagic("MDAT0001", in: bytes, from: o) {
+        if hasSections, !model.bones.isEmpty, let mi = findMagic("MDAT0001", in: bytes, from: o) {
             model.attachments = parseAttachments(bytes: bytes, at: mi, boneCount: model.bones.count)
         }
 
         // 애니 섹션(MDLA000N) — 스켈레톤 유무와 무관하게 메시 끝 이후 탐색(스키닝 모델만 존재).
         // 버전별 매직: 0016→MDLA0003, 0017→0004, 0019→0005, 0023→0006(실측). 헤더·레코드 레이아웃은
         // 전 버전 동일(36B 키, 코퍼스 전수 트레이스 일치) — 숫자만 다르니 접두 스캔으로 통합.
-        if let ai = findMagic("MDLA000", in: bytes, from: o),
+        if hasSections, let ai = findMagic("MDLA000", in: bytes, from: o),
            ai + 8 <= bytes.count, (0x31...0x39).contains(bytes[ai + 7]) {
             model.hasAnimation = true
             model.animations = parseAnimations(bytes: bytes, at: ai, boneCount: model.bones.count)
@@ -1102,6 +1203,13 @@ public struct Model3D: Equatable {
                 else { return nil }
                 tan = SIMD4(tx, ty, tz, tw)
             }
+            // 두 번째 UV(라이트맵) — TEXCOORD0 이 float4 일 때의 `.zw`. 추론 경로는 채널 위치를
+            // 모르므로 (0,0) 그대로(`Vertex.uv1` 주석의 generic.vert/frag 근거 참조).
+            var uv1 = SIMD2<Float>.zero
+            if let u1 = layout?.uv1 {
+                guard let a = f32(b + u1), let c = f32(b + u1 + 4) else { return nil }
+                uv1 = SIMD2(a, c)
+            }
             if skinFieldsFit {
                 // 테이블: 채널 오프셋 직독 / 추론 경로: 종전 꼬리고정.
                 let bo = b + (layout?.boneIndices ?? stride - 40)
@@ -1111,13 +1219,14 @@ public struct Model3D: Equatable {
                       let w0 = f32(wo), let w1 = f32(wo + 4), let w2 = f32(wo + 8), let w3 = f32(wo + 12),
                       let u = f32(uo), let v = f32(uo + 4) else { return nil }
                 vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: SIMD2(u, v),
-                                       boneIndices: SIMD4(b0, b1, b2, b3), weights: SIMD4(w0, w1, w2, w3)))
+                                       boneIndices: SIMD4(b0, b1, b2, b3), weights: SIMD4(w0, w1, w2, w3),
+                                       uv1: uv1))
             } else if let uo = layout?.uv ?? (stride >= 8 ? stride - 8 : nil) {
                 // TEXCOORD0 가 float3/float4 여도 선두 .xy 만 읽는다(Kirby float4@28 — RE 테이블).
                 guard let u = f32(b + uo), let v = f32(b + uo + 4) else { return nil }
-                vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: SIMD2(u, v)))
+                vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: SIMD2(u, v), uv1: uv1))
             } else {
-                vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: .zero))
+                vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: .zero, uv1: uv1))
             }
         }
         return vertices
