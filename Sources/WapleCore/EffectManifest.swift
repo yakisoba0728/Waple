@@ -106,10 +106,31 @@ public struct EffectManifest: Equatable {
         /// X-⑪: 거짓이면 이 패스를 통째로 건너뛴다. **단 씬 오버라이드 인덱스는 그대로 증가한다**
         /// (원본도 `0x1401e7a04` → `0x1401e814e` 로 인덱스만 올리고 continue 한다).
         public let conditions: Conditions?
+        /// T09-D2: `passes[].compose` — **원본이 실제로 소비한다**(선행 스윕의 "안 읽는다" 는 틀렸다).
+        ///
+        /// 세 군데가 이 값을 쓴다:
+        ///  ① 파스 `0x1401e7d96`–`0x1401e7dcf` — 타입 태그 **5(boolean)** 일 때만 읽는다
+        ///     (`0x1401e7dac` `cmp byte [rax+8], 5`; 값 추출은 jsoncpp `asBool` `0x140086300`).
+        ///     참이면 패스 플래그 워드(pass 레코드 +0x14)에 **비트 0x2** 를 세우고(`0x1401e7dc3`),
+        ///     이펙트의 compose 개수(effect+0x140)를 하나 올린다(`0x1401e7dc7`).
+        ///     **숫자 1 은 안 받는다** — `fbos[].unique` 와 같은 규약이라 `isJSONBool` 로 가른다.
+        ///  ② 렌더 타깃 풀 산정 `0x1401e6300`–`0x1401e63a6` — 켜진 이펙트마다
+        ///     `composeCount + 1` 을 누산하고(`0x1401e633f`·`0x1401e6345`) 캐시값(+0x320)과
+        ///     다르면 재할당 가상호출(`0x1401e639b`)로 간다. 즉 **compose 패스 하나당 중간 렌더
+        ///     타깃이 하나 더 필요하다**.
+        ///  ③ 이펙트 체인 루프 `0x1401e9b8f`–`0x1401e9bf0` — 패스를 그린 직후 플래그의 비트 0x2 를
+        ///     보고(`shr eax, 1` + `test al, 1`), 뒤에 패스가 더 남아 있으면 핑퐁 렌더 타깃 쌍
+        ///     (`effect+0x2c8` 2칸)에서 **반대쪽으로 갈아탄다**. 꺼진 패스는 같은 타깃에 계속 그린다.
+        ///
+        /// 동봉 자산 도달은 2건 — `effects/refraction/effect.json` 과 그 preview 사본
+        /// `effects/refraction/preview/effects/refract/effect.json`. 둘 다 `passes[0].compose = true`.
+        public let compose: Bool
         public init(material: String?, shader: String?, target: String?, binds: [Bind],
-                    command: String? = nil, source: String? = nil, conditions: Conditions? = nil) {
+                    command: String? = nil, source: String? = nil, conditions: Conditions? = nil,
+                    compose: Bool = false) {
             self.material = material; self.shader = shader; self.target = target; self.binds = binds
             self.command = command; self.source = source; self.conditions = conditions
+            self.compose = compose
         }
     }
 
@@ -225,6 +246,55 @@ public struct EffectManifest: Equatable {
         }
     }
 
+    /// T09-D1: 최상위 `functions` — **원본이 실제로 소비한다**(선행 스윕의 "안 읽는다" 는 틀렸다).
+    ///
+    /// 정체는 **스크립트 API `executeMaterialFunction(name)` 의 대상 테이블**이다. 등록 지점이
+    /// `0x1401f0156`(명령 이름 문자열 `"executeMaterialFunction"`, 길이 0x17) + `0x1401f016c`
+    /// (네이티브 구현 포인터 `0x1401ee3a0`), 인자 1개(`0x1401f0173` 의 `mov [rbx+0x70], 1`).
+    /// 동봉 `fluidsimulation` 이 정의하는 `clearVelocity`/`clearDye` 는 **바이너리에 문자열이
+    /// 아예 없다** — 저작자가 지은 이름이고, 스크립트가 문자열로 부른다.
+    ///
+    /// 파서 `0x1401e8248`–`0x1401e88a1` 실측 규약:
+    ///   · 루트 문서(`[rbp+0xc0]` — `fbos` `0x1401e735c` · `passes` `0x1401e7996` 와 같은 객체)에서
+    ///     `functions` 를 찾고(`0x1401e824f`) jsoncpp `getMemberNames`(`0x1401e8272`)로 키를 훑는다.
+    ///     jsoncpp 객체는 `std::map` 이라 **키가 사전순**으로 나온다 — 그래서 우리도 이름순 정렬한다.
+    ///     키가 없으면 태그 0(null) 이 돌아오고 `getMemberNames` 는 빈 벡터다(`0x14008837e`).
+    ///   · 값이 타입 태그 **7(object)** 이 아니면 그 항목을 버린다(`0x1401e83f9`).
+    ///   · `action` 이 타입 태그 **4(string)** 이고(`0x1401e842d`) 길이가 정확히 5(`0x1401e8454`),
+    ///     `memcmp("clear") == 0`(`0x1401e845a`) 이어야 한다. 아니면 항목째 버린다 —
+    ///     **원본이 아는 action 은 `clear` 하나뿐이다.**
+    ///   · `fbos` 가 타입 태그 **6(array)** 이 아니면 항목째 버린다(`0x1401e84df`).
+    ///   · 배열 원소는 문자열(태그 4)만 본다(`0x1401e8593`). 이펙트가 **선언한 fbo 목록**에서
+    ///     이름 완전 일치로 선형 탐색해(`0x1401e8630`–`0x1401e867d`, stride 0x50) 찾은
+    ///     **인덱스**를 담는다. 못 찾은 이름은 그냥 빠진다. `functions` 파스가 `fbos` 파스보다
+    ///     **뒤**라(0x1401e735c < 0x1401e8248) 인덱스는 파스가 끝난 목록 기준이다 —
+    ///     name/format 없어 버려진 선언(X-⑧)은 애초에 목록에 없다.
+    ///   · 인덱스가 하나도 안 남으면 그 항목을 **push 하지 않는다**(`0x1401e884a` `je 0x1401e88a1`).
+    ///     레코드는 stride 0x40 = { int action; std::string name; std::vector<int> fboIndices; }.
+    ///
+    /// 소비 `0x1401ee3a0`–`0x1401ee51b`: 이름으로 항목을 선형 탐색해 **첫 일치**를 쓰고
+    /// (`0x1401ee3d0`–`0x1401ee40a`), 인덱스마다 그 FBO 를 렌더 타깃으로 밀고(`0x1401ee468`
+    /// vtbl+0x48), fbo 레코드의 float 4개(+0x14·+0x18·+0x1c·+0x20 = `fbos[].clear` 파스 결과)를
+    /// 실어(`0x1401ee472`–`0x1401ee491`) 클리어색 설정(`0x1401ee49a` vtbl+0x118) → 클리어
+    /// (`0x1401ee4b6` vtbl+0x120, `dl=1`/`r8d=0` = 색만·깊이 없음) 한 뒤 타깃을 되돌린다
+    /// (`0x1401ee4bc`–`0x1401ee4e7`).
+    ///
+    /// 동봉 자산 도달은 1건 — `effects/fluidsimulation/effect.json`.
+    public struct Function: Equatable {
+        /// 원본이 아는 action 은 `clear` 하나뿐이다(`0x1401e845a` 의 `memcmp("clear")`, 길이 5 고정).
+        public enum Action: String, Equatable, CaseIterable {
+            case clear
+        }
+        public let name: String
+        public let action: Action
+        /// `EffectManifest.fbos` 의 인덱스. 원본과 같게 **파스 시점에** 이름→인덱스로 푼다.
+        /// 절대 비지 않는다 — 비면 항목 자체가 안 생긴다(`0x1401e884a`).
+        public let fboIndices: [Int]
+        public init(name: String, action: Action = .clear, fboIndices: [Int]) {
+            self.name = name; self.action = action; self.fboIndices = fboIndices
+        }
+    }
+
     public let passes: [Pass]
     public let fbos: [FBO]
     /// G-B4-08: 이 이펙트의 **자산 basename**. 디렉터리명과 다를 수 있다 — 동봉 WEAssets 최상위
@@ -235,8 +305,19 @@ public struct EffectManifest: Equatable {
     /// `effects/<디렉터리명>` 을 쓰면 이 7종은 존재하지 않는 경로를 찾게 된다.
     public let replacementKey: String?
 
-    public init(passes: [Pass], fbos: [FBO], replacementKey: String? = nil) {
+    /// T09-D1: 이름으로 부르는 FBO 클리어 함수들. 키 이름순(jsoncpp `std::map` 순서와 같다).
+    public let functions: [Function]
+
+    public init(passes: [Pass], fbos: [FBO], replacementKey: String? = nil,
+                functions: [Function] = []) {
         self.passes = passes; self.fbos = fbos; self.replacementKey = replacementKey
+        self.functions = functions
+    }
+
+    /// T09-D1: 스크립트 `executeMaterialFunction(name)` 이 찾는 그 조회다.
+    /// 원본 소비처(`0x1401ee3d0`–`0x1401ee40a`)가 선형 탐색으로 **첫 일치**를 쓴다.
+    public func function(named name: String) -> Function? {
+        functions.first { $0.name == name }
     }
 
     /// WE 의 JSON 파서는 관용이다 — 자기 자산이 그 관용에 의존한다. 동봉 WEAssets 실측:
@@ -248,6 +329,17 @@ public struct EffectManifest: Equatable {
     /// 경로 그대로라 무회귀이고, 관용은 딱 두 가지(줄 주석 · 트레일링 콤마)로 제한한다.
     /// 스캐너는 문자열 리터럴 안을 절대 건드리지 않는다(이스케이프 처리 포함) — `{"a":"x,]"}`
     /// 같은 값이 깨지면 안 된다.
+    ///
+    /// **[2026-08-21] 위 "27개 전부 복구된다" 가 한동안 거짓이었다 — 지금은 고쳤다.**
+    /// 동봉 effect.json 122개는 **전건 CRLF** 인데, `AssetJSON.relaxed` 의 줄 주석 스키퍼가
+    /// `while text[i] != "\n"` 으로 돌고 있었다. Swift `String` 은 그래핌 클러스터 단위로
+    /// 순회하고 `"\r\n"` 은 **한 개의 `Character`** 라 `"\n"` 과 같지 않다 — 그래서 첫 `//` 를
+    /// 만나면 **파일 끝까지** 지워 버렸다. 트레일링 콤마 스키퍼의 공백 집합도 같은 이유로
+    /// `"\r\n"` 을 못 건너뛰었다. 실측: 원시 바이트로 **25/122 파스 nil**(macOS 는 트레일링
+    /// 콤마까지 엄격해 26/122). `isNewline` 으로 고친 뒤 **0/122**.
+    ///
+    /// 이 회귀는 `EffectManifestTests.testEveryBundledEffectManifestParsesAndFunctionComposeReachIsPinned`
+    /// 과 `AssetJSONLenientTests` 의 CRLF 케이스가 고정한다.
     static func relaxedJSON(_ data: Data) -> Data? { AssetJSON.relaxed(data) }
 
     public static func parse(_ data: Data) -> EffectManifest? {
@@ -277,7 +369,11 @@ public struct EffectManifest: Equatable {
                                binds: binds,
                                command: p["command"] as? String,
                                source: p["source"] as? String,
-                               conditions: parseConditions(p["conditions"])))
+                               conditions: parseConditions(p["conditions"]),
+                               // T09-D2: 원본은 타입 태그 5(boolean)만 받는다(`0x1401e7dac`).
+                               // `"compose": 1` 은 켜지면 안 된다 — `fbos[].unique` 와 같은 이유로
+                               // Swift 의 NSNumber 동적 캐스트를 `isJSONBool` 로 먼저 가른다.
+                               compose: isJSONBool(p["compose"]) && (p["compose"] as? Bool) == true))
         }
         var fbos: [FBO] = []
         // X-①-sweep: **개수**도 상한을 둔다. 종전엔 치수(8192)만 클램프했는데, 소비처
@@ -319,7 +415,42 @@ public struct EffectManifest: Equatable {
                             conditions: parseConditions(f["conditions"])))
         }
         let replacementKey = (obj["replacementkey"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        return EffectManifest(passes: passes, fbos: fbos, replacementKey: replacementKey)
+        // T09-D1: 원본도 `fbos` 파스가 끝난 **뒤**에 이름→인덱스를 푼다(`0x1401e735c` < `0x1401e8248`).
+        let functions = parseFunctions(obj["functions"], fbos: fbos)
+        return EffectManifest(passes: passes, fbos: fbos, replacementKey: replacementKey,
+                              functions: functions)
+    }
+
+    /// T09-D1: 최상위 `functions` 파스. 규약은 `Function` 의 주석에 VA 와 함께 적어 뒀다.
+    /// 요약하면 — 객체가 아니면 빈 목록, 항목은 `{action:"clear", fbos:[선언된 fbo 이름…]}` 만,
+    /// 이름은 파스된 `fbos` 인덱스로 풀고 하나도 못 풀면 항목째 버린다.
+    static func parseFunctions(_ v: Any?, fbos: [FBO]) -> [Function] {
+        guard let obj = v as? [String: Any] else { return [] }
+        var out: [Function] = []
+        // jsoncpp 객체는 `std::map` 이라 `getMemberNames`(`0x1401e8272`)가 **키 사전순**을 준다.
+        // Swift 사전은 순서가 없으니 여기서 정렬해 원본 순서와 결정성을 둘 다 맞춘다.
+        for name in obj.keys.sorted() {
+            // 태그 7(object) 아니면 드롭(`0x1401e83f9`).
+            guard let spec = obj[name] as? [String: Any] else { continue }
+            // 태그 4(string) + 정확히 "clear" 아니면 드롭(`0x1401e842d`·`0x1401e8454`·`0x1401e845a`).
+            guard let raw = spec["action"] as? String, let action = Function.Action(rawValue: raw)
+            else { continue }
+            // 태그 6(array) 아니면 드롭(`0x1401e84df`).
+            guard let names = spec["fbos"] as? [Any] else { continue }
+            var indices: [Int] = []
+            for element in names {
+                // 원소가 문자열(태그 4)이 아니면 그 원소만 건너뛴다(`0x1401e8593`).
+                guard let fboName = element as? String else { continue }
+                // 이름 완전 일치 선형 탐색, 첫 일치(`0x1401e8630`–`0x1401e867d`).
+                // 못 찾으면 아무것도 안 넣는다 — 원본도 인덱스를 push 하지 않는다.
+                guard let idx = fbos.firstIndex(where: { $0.name == fboName }) else { continue }
+                indices.append(idx)
+            }
+            // 인덱스가 비면 항목 자체를 안 만든다(`0x1401e884a` `je 0x1401e88a1`).
+            guard !indices.isEmpty else { continue }
+            out.append(Function(name: name, action: action, fboIndices: indices))
+        }
+        return out
     }
 
     /// X-⑪: `conditions` 파스. 배열이 아니면 **nil**(= 항상 true, fail-open).
