@@ -1,5 +1,6 @@
 import XCTest
 @testable import WapleCompatCore
+import WapleCore
 
 /// `WapleCompatCore` 의 첫 테스트.
 ///
@@ -69,6 +70,52 @@ final class DeepScanHelpersTests: XCTestCase {
     func testFirstErrorTokenIsBounded() {
         let long = "x:1:1: error: " + String(repeating: "z", count: 500)
         XCTAssertEqual(DeepScan.firstErrorToken(long).count, 80)
+    }
+
+    // MARK: 언팩 씬 마운트 — 3차 웨이브 AB
+
+    /// **종전 `scanScene` 은 `scene.pkg`/`gifscene.pkg` 가 없으면 곧장 `false` 였다.**
+    /// WE 2.8.42 설치본 실측: 씬 프로젝트 **188/188 이 언팩**이고 두 루트 전체에 `.pkg` 가 0개다
+    /// (`WapleCoreTests/WallpaperCompatibilityCorpusAuditTests` 가 그 분포를 고정한다). 즉 `--deep`
+    /// 을 설치본에 겨누면 188건이 전부 "미지원" 으로 세어졌는데, 렌더러는 그 188건을 정상
+    /// 마운트한다(`SceneRenderer.swift:1485`). 형제 스캐너는 G-E3-01/02 에서 이미 고쳤고 여기만
+    /// 남아 있었다. 이 테스트는 GPU 없이 도는 CPU 경로만 탄다(엔트리에 tex/mdl/particle 이 없다).
+    func testScanSceneMountsUnpackedFolderWithDeclaredFileName() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("DeepScanMount-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        // `file` 이 관례 이름이 아니다 — 설치본의 ricepod/fantasticcar/techno/audiophile 4건 형태.
+        try Data(#"{"type":"scene","file":"ricepod.json"}"#.utf8)
+            .write(to: root.appendingPathComponent("project.json"))
+        try Data("""
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/layer.json"},{"particle":"particles/rain.json"}]}
+        """.utf8).write(to: root.appendingPathComponent("ricepod.json"))
+
+        let raw = try XCTUnwrap(DeepScan.rawJSON(root.appendingPathComponent("project.json")))
+        let project = ProjectJSONParser.parse(json: raw, folderURL: root)
+        let agg = DeepAgg()
+        let supported = DeepScan.scanScene(root, project: project, assetsDir: nil, agg: agg)
+
+        XCTAssertTrue(supported, "언팩 씬을 마운트하지 못하면 --deep --strict 가 전건을 미지원으로 센다")
+        XCTAssertEqual(agg.sceneAttempt, 1)
+        XCTAssertEqual(agg.sceneParseOK, 1, "SceneDocument 가 실제로 만들어져야 한다")
+        XCTAssertEqual(agg.sceneSupported, 1)
+    }
+
+    /// 관용 JSON 배선 — 리더가 `AssetJSON` 을 타지 않으면 JSONC 자산에서 조용히 실패한다.
+    /// 근거: WE 는 jsoncpp `allowComments`/`allowTrailingCommas` 를 둘 다 켠다(0x140091fe2·0x1400920b3).
+    /// 실측: 자산 JSON 3,655개 중 63개가 JSONC 이고 그중 하나가 머티리얼
+    /// (`defaultprojects/fantasticcar/materials/car/glass.json`, 줄 주석).
+    func testRawJSONAcceptsCommentsAndTrailingCommas() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("DeepScanJSONC-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data("{\r\n  \"type\": \"scene\", // 줄 주석\r\n  \"file\": \"scene.json\",\r\n}".utf8).write(to: url)
+        let obj = try XCTUnwrap(DeepScan.rawJSON(url), "관용 파스가 안 걸리면 nil 이다")
+        XCTAssertEqual(obj["type"] as? String, "scene")
+        XCTAssertEqual(obj["file"] as? String, "scene.json")
     }
 
     // MARK: 상한 상수 — 회귀하면 무한 대기·무한 증가가 돌아온다

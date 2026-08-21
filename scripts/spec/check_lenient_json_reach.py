@@ -58,7 +58,14 @@ WIRED = {"Sources/WapleCore/SceneDocument.swift": 7,
          "Sources/WapleCore/TexImage.swift": 1,
          "Sources/WapleCore/Model3D.swift": 1,
          "Sources/WapleRender/SceneRendererResources.swift": 3,
-         "Sources/WapleRender/SceneRenderer3D.swift": 2}
+         "Sources/WapleRender/SceneRenderer3D.swift": 2,
+         # [2026-08-21] **스캐너가 렌더러보다 엄격한 채로 이 게이트가 계속 초록이었다.**
+         # `DeepScan` 의 리더 5곳(rawJSON · 머티리얼 2 · 파티클 2)이 맨 `JSONSerialization`
+         # 이라, 렌더러는 여는 JSONC 자산(동봉+설치 63건, 그중 머티리얼
+         # `fantasticcar/materials/car/glass.json` 이 직접 도달)을 스캐너만 "invalid" 로
+         # 판정했다. 표에 없으면 이 게이트는 그 파일을 **쳐다보지도 않는다** — 관용 파서가
+         # 있어도 리더가 안 부르면 아무 일도 안 일어난다는 게 이 게이트의 전제다.
+         "Sources/WapleCompatCore/DeepScan.swift": 5}
 
 
 def swift_characters(text: str):
