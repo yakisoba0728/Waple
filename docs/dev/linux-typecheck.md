@@ -227,40 +227,64 @@ scripts/dev/linux-render-typecheck.sh --replace SceneRendererResources.swift=/tm
 
 ## CI
 
-**현재 상태: `spec.yml` 에 프로브 한 스텝만 들어가 있다. 게이트는 아직 아니다.**
+**현재 상태: `spec.yml` 에 프로브 스텝과 관측 스텝이 들어가 있다. 차단 게이트는 아직 아니다.**
 
-### 확정된 것 (1차 자료 실측, 2026-08-21)
+| 단계 | 상태 | 커밋 |
+|---|---|---|
+| 1 · 프로브(러너 사실 재기) | **들어가 있다** | `1fb7ad2` |
+| 2 · 판단 규칙 적용 | **끝났다** — 아래 표에서 "6.3.3 + 모드 5" 행이 뽑혔다 | — |
+| 3 · 관측(초록을 안 깨고 진단을 본다) | **들어가 있다** | 이 커밋 |
+| 4 · 차단 게이트 | **아직 아니다** — 3단계가 러너에서 rc=0 을 준 뒤에만 | — |
+
+### 확정된 것
+
+먼저 1차 자료(2026-08-21):
 
 | 사실 | 근거 |
 |---|---|
-| `ubuntu-latest` = **Ubuntu 24.04** | `actions/runner-images` README 의 라벨 표 |
+| `ubuntu-latest` = **Ubuntu 24.04**, `ubuntu-24.04` 와 **같은 칸** | `actions/runner-images` README 라벨 표 |
 | 그 이미지(`20260816.277.1`)에 **Swift 6.3.3** 동봉 | `images/ubuntu/Ubuntu2404-Readme.md` |
 | `swift`·`swiftc` 가 **`/usr/local/bin`** 에 심링크, 실체는 `/usr/share/swift` | `images/ubuntu/scripts/build/install-swift.sh` |
 | `SWIFT_PATH=/usr/share/swift/usr/bin` 이 `/etc/environment` 에 박힌다 | 같은 스크립트 |
+| `ubuntu-latest` 는 **26.04 로 이동 중**(공개 프리뷰, 1~2개월 점진) | 같은 README 의 "Latest Migration Process" |
 
-즉 **툴체인은 있고 PATH 에도 있다.** `swift-actions/setup-swift` 같은 설치 단계는 필요 없고,
-`spec` 잡의 "ubuntu 에서 수십 초" 라는 성질도 설치 때문에 깨지지는 않는다
-(실측: 최근 `spec` 잡 전체가 15~28초 — run `32473541352` 는 18초, 잡 `timeout-minutes: 10`).
+그리고 **프로브가 실제 러너에서 재 온 것**(`1fb7ad2` 가 넣은 스텝의 CI 로그):
 
-### 미해결 — 그래서 아직 게이트가 아니다
+```
+image=20260816.277.1  arch=x86_64  cores=4  mem=15989MB    ← 개발 컨테이너와 같은 사양
+os=Ubuntu 24.04 LTS
+SWIFT_PATH=/usr/share/swift/usr/bin
+swift  -> /usr/local/bin/swift          swiftc -> /usr/local/bin/swiftc
+Swift version 6.3.3 (swift-6.3.3-RELEASE)      rc(swift --version)=0
+flock: yes
+rc(기본 언어 모드 typecheck)=0    # 0 이면 모드 5 — 도구의 전제가 선다
+```
 
-1. **버전이 다르다.** 이 도구를 검증한 로컬 툴체인은 **6.0.3** 이고 러너는 **6.3.3** 이다.
-   심 17종은 애플 헤더에서 기계 생성한 것이 아니라 **손으로 적은 것**이라(한계 ②), 새 컴파일러가
-   추가 진단을 내면 그대로 빨간불이 된다. 여기서는 잴 수 없다.
-2. **기본 언어 모드를 모른다.** 이 도구는 `-swift-version` 을 넘기지 않으므로 러너 기본 모드가
-   5 여야 전제가 선다. 6.0.3 에서는 기본이 5 다(아래 프로브의 음성 대조 참조).
-3. **러너의 Swift 버전은 움직인다.** `install-swift.sh` 가 이미지 빌드 시점의 `apple/swift`
-   **releases/latest** 를 받는다. 게다가 `ubuntu-latest` 라벨 자체가 26.04 로 이동 중이다
-   (runner-images README 의 공개 프리뷰 공지). **게이트를 넣는다면 `runs-on` 을 `ubuntu-24.04` 로
-   고정해라** — 안 그러면 이미지 갱신이 어느 날 조용히 CI 를 깬다.
-4. **도구 자체가 이 세션에 바뀌는 중이다.** 커버 목록(`COVERED`/`EXCLUDED`)이 확장되고 있다.
-   움직이는 도구를 차단 게이트로 올리면 실패 원인이 "코드" 인지 "도구" 인지 못 가른다.
+즉 **툴체인 존재·버전 6.3.3·기본 언어 모드 5·`flock` 존재·4코어**가 전부 확정이다.
+설치 단계(`swift-actions/setup-swift` 등)는 필요 없다.
+
+### 미해결 — 그래서 아직 차단 게이트가 아니다
+
+1. **버전이 다르다.** 이 도구를 검증한 로컬 툴체인은 **6.0.3**, 러너는 **6.3.3** 이다. 심 17종은
+   애플 헤더에서 기계 생성한 것이 아니라 **손으로 적은 것**이라(한계 ②), 새 컴파일러가 진단을
+   추가하면 그대로 빨간불이 된다. **여기서는 잴 수 없다 — 3단계 관측이 그것을 재려고 있는 것이다.**
+
+해소된 것도 적어 둔다(전에는 이 목록에 있었다):
+
+- ~~기본 언어 모드를 모른다~~ → 프로브가 rc=0 을 줬다. 모드 5 다.
+- ~~러너 Swift 버전이 움직인다 / `ubuntu-latest` 가 26.04 로 이동 중~~ → `spec` 잡을
+  **`runs-on: ubuntu-24.04` 로 고정**했다(이 커밋). 오늘 기준 동작은 완전히 같다 — README 가 두 라벨을
+  같은 칸에 싣고 프로브가 `Ubuntu 24.04 LTS` 를 찍었다. 잡 전체를 고정한 이유는 **관측이 게이트가
+  돌 환경과 같은 환경에서 재야 근거가 이월되기 때문**이고, 덤으로 기존 게이트 20종도 이미지 이동에서
+  보호된다. 26.04 로 올릴 때는 라벨만 바꾸지 말고 `workflow_dispatch` 로 한 번 돌려 관측 스텝의
+  rc 와 툴체인 줄을 다시 읽어라.
+- ~~도구 자체가 이 세션에 바뀌는 중이다~~ → `0a9755e` 가 커버를 **55/55(제외 0)** 로 닫았다.
+  `EXCLUDED` 가 비었으므로 "커버 밖으로 새는" 경로가 없고, 목록 불일치 검사가 새 파일을 즉시 잡는다.
 
 ### 1단계 — 프로브 (**들어가 있다**)
 
-`spec.yml` 마지막 스텝 `Probe swift on runner`. `set +e` 로 돌고 마지막 명령이 `:` 라
-**어떤 경우에도 rc=0** 이다. 로컬 음성 대조(2026-08-21): `swift` 가 PATH 에 **없을 때**도 rc=0
-(전건 `command not found`), **있을 때**도 rc=0.
+`spec.yml` 의 `Probe swift on runner`. `set +e` 로 돌고 마지막 명령이 `:` 라 **어떤 경우에도 rc=0** 이다.
+로컬 음성 대조(2026-08-21): `swift` 가 PATH 에 **없을 때**도 rc=0(전건 `command not found`), **있을 때**도 rc=0.
 
 기본 언어 모드 판정에 쓰는 스니펫과 그 돌연변이 실측(로컬 6.0.3):
 
@@ -270,7 +294,8 @@ scripts/dev/linux-render-typecheck.sh --replace SceneRendererResources.swift=/tm
 | `-swift-version 5` | 0 | — |
 | `-swift-version 6` | **1** | `main actor-isolated var 'probeGlobal' can not be mutated from a nonisolated context` |
 
-즉 프로브가 rc=0 을 주면 러너 기본 모드도 5 이고, rc≠0 이면 전제가 깨진 것이다.
+**관측 스텝이 들어간 뒤에도 프로브는 남긴다.** 관측 스텝은 언어 모드를 재지 않는다 — 그 전제가
+깨지는 날 프로브가 먼저 보여 준다.
 
 **읽는 법**: `python3 scripts/dev/ci-status.py --branch <브랜치> --jobs` 로 `spec` 잡 id 를 받고
 `python3 scripts/dev/ci-status.py --log <JOB_ID>` 로 발췌한다.
@@ -286,53 +311,79 @@ scripts/dev/linux-render-typecheck.sh --replace SceneRendererResources.swift=/tm
 | 버전이 **6.3.3**(예상) + 언어 모드 rc=0 | **3단계(관측)를 먼저 돌려라.** 진단 차이를 안 보고 게이트로 올리지 마라 |
 | 언어 모드 rc≠0 | **넣지 마라.** 도구에 `-swift-version 5` 를 넘기도록 고치는 게 먼저다(스크립트 소유자에게 넘겨라) |
 
-### 3단계 — 관측 (초록을 깨지 않고 6.3.3 의 진단을 본다)
+**뽑힌 행: 세 번째.** 6.3.3 + 모드 rc=0 → 3단계.
 
-`spec` 잡 끝에 붙인다. **`continue-on-error` 와 `timeout` 을 둘 다 쓴다** — 이 리포는
-`continue-on-error` 만으로 실패가 조용히 묻히는 것을 이미 겪었으므로(`ci.yml` 의 release 레인)
-결과를 반드시 요약과 `::warning::` 으로 띄운다.
+### 3단계 — 관측 (**들어가 있다**)
 
-```yaml
-      - name: WapleRender linux typecheck (관측 전용 — 게이트 아님)
-        continue-on-error: true
-        run: |
-          set +e
-          # `timeout` 을 안에서도 건다 — 스텝이 매달려 잡 timeout-minutes(10)를 먹으면
-          # continue-on-error 와 무관하게 잡이 죽을 여지를 아예 없앤다.
-          # 로컬 실측(4코어): 심 ~5초 + WapleCore emit-module ~22초 + 타입체크 ~32초.
-          timeout 420 env \
-            WAPLE_SWIFT_BIN="${SWIFT_PATH:-$(dirname "$(command -v swiftc)")}" \
-            WAPLE_LINUX_TYPECHECK_DIR="$RUNNER_TEMP/waple-typecheck" \
-            WAPLE_SWIFT_LOCK="$RUNNER_TEMP/swift.lock" \
-            scripts/dev/linux-render-typecheck.sh 2>&1 | tee typecheck.log
-          rc=${PIPESTATUS[0]}
-          echo "rc=$rc"
-          {
-            echo "### 리눅스 타입체크 (관측 전용, rc=$rc)"
-            echo ""
-            if [ "$rc" -eq 0 ]; then
-              echo "러너 툴체인에서도 rc=0 — 게이트로 올릴 근거가 섰다."
-            else
-              echo '```'
-              grep -E "error:|!!" typecheck.log | head -40
-              echo '```'
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-          [ "$rc" -eq 0 ] || echo "::warning title=리눅스 타입체크 관측 실패(rc=$rc)::게이트가 아니라 관측 단계다. 진단이 심(shim) 문제인지 실제 코드 문제인지 가른 뒤에 게이트로 올려라."
-          :
-```
+`spec` 잡의 마지막 스텝 `WapleRender linux typecheck (관측 전용 — 게이트 아님)`.
+정본은 `.github/workflows/spec.yml` 이다 — 여기 다시 베껴 적지 않는다(두 벌이 갈리는 것이 이
+리포의 상습 결함이다). 설계만 적는다.
 
-`WAPLE_SWIFT_BIN` 은 `SWIFT_PATH` 를 먼저 쓴다 — `/usr/local/bin` 에는 `swift`·`swiftc`
-심링크만 있고, 도구는 `$WAPLE_SWIFT_BIN/swiftc` 가 실행 가능하기만 하면 되므로 둘 다 되지만
-실체 경로 쪽이 안전하다.
+**초록을 지키는 장치가 셋이고, 셋 다 서로를 대체하지 않는다.**
 
-### 4단계 — 게이트 (3단계가 rc=0 을 준 **뒤에만**)
+| 장치 | 막는 것 | 검증 가능한가 |
+|---|---|---|
+| `continue-on-error: true` | 스텝 실패 → 잡 failure | 여기서는 **못 잰다**(러너에서만 확인된다) |
+| 본문 `set +e` + 마지막 `:` | 스텝 rc 자체 | **로컬 `bash -e` 로 직접 잰다** |
+| 내부 `timeout 420` | 스텝이 매달려 잡의 `timeout-minutes: 10` 을 먹는 것 | 로컬에서 잰다(아래) |
 
-위 블록에서 `continue-on-error`·`set +e`·마지막 `:` 를 빼고 `runs-on` 을 `ubuntu-24.04` 로
-고정한다. 그 전에 `docs/dev/linux-typecheck.md` 의 이 절과 `AGENTS.md` 를 함께 갱신할 것.
+세 번째가 특히 중요하다 — **잡 타임아웃은 잡 취소라 `continue-on-error` 로 막히지 않는다.**
+예산: 기존 게이트 20종 실측 15~28초 + 이 스텝 최대 420초 = 448초 < 600초(잡 상한).
+도구의 실제 소요는 벽시계 1분 05초라 420초는 6배 여유다.
+
+**결과를 세 곳에 띄운다.** `continue-on-error` 만 걸고 끝내면 실패가 조용히 묻힌다 — 이 리포가
+이미 겪은 일이다(`ci.yml` 의 release 레인에서 `Show failure summary` 가 통째로 skipped 였다,
+run `32218275170`·`32230929535`):
+
+1. 실행 페이지 상단의 `::warning title=리눅스 타입체크 관측 rc=…::`
+2. 잡 요약(`$GITHUB_STEP_SUMMARY`) — 러너 이미지·툴체인·커버 수 표 + **파일별 오류 수** +
+   원문 40줄(`<details>`)
+3. 로그의 기계 판독용 한 줄 `TYPECHECK_OBSERVATION rc=<n> toolchain=<…>`
+   (`ci-status.py --log <JOB_ID>` 에서 이것만 grep 하면 된다)
+
+rc 는 세 갈래로 갈라 적는다: `0`(승격 근거가 섰다) · `124`(진단이 아니라 **예산 문제**) ·
+그 외(진단 — 심 문제인지 코드 문제인지 가르라).
+
+**본문 로컬 실측(2026-08-21).** YAML 에서 `run:` 문자열을 그대로 뽑아 `bash -e` 로 돌렸다
+(추출본과 시험본이 바이트 동일한 것을 `diff` 로 확인). **네 경로 전부 스텝 rc=0 이다:**
+
+| 경로 | 만든 법 | 도구 rc | 스텝 rc | 요약 |
+|---|---|---|---|---|
+| 정상 | 그대로 | 0 | **0** | "러너 툴체인에서도 rc=0" |
+| 진단 | 스텁이 `error:` 3줄 + rc=1 | 1 | **0** | 파일별 표(`WebRenderer 2`·`…Resources 1`) + 원문 |
+| 시간 초과 | `timeout` 을 2초로 줄인 사본 + 60초 자는 스텁 | 124 | **0** | "예산 문제" 로 갈라 적는다 |
+| 툴체인 없음 | `SWIFT_PATH` 미설정 + PATH 에 swiftc 없음 | 2 | **0** | `!! swiftc 를 못 찾았다` + 경고 |
+
+정상 경로의 벽시계는 66초(55파일, 4코어, 다른 작업 8개가 도는 중)였다. 진단 경로는 **실물로도**
+한 번 걸렸다 — 다른 작업이 `SceneRenderer.swift` 를 고치는 중이라 `PointerHit.DeliveryScope` ·
+`PointerClickLatch` 미해결로 rc=1 이 났고, 요약이 `4 SceneRenderer.swift` 로 정확히 접었다.
+
+**환경변수를 왜 그렇게 주는가**
+
+- `WAPLE_SWIFT_BIN` — `SWIFT_PATH`(`/usr/share/swift/usr/bin`)를 먼저 쓴다. `/usr/local/bin` 에는
+  심링크만 있고 도구는 `$WAPLE_SWIFT_BIN/swiftc` 가 실행 가능하기만 하면 되므로 둘 다 되지만
+  실체 경로 쪽이 안전하다. 이 값을 **변수 하나에 담아** 요약의 "툴체인" 칸에도 같이 찍는다 —
+  무엇으로 잰 결과인지가 로그만 보고 확정돼야 한다.
+- `WAPLE_LINUX_TYPECHECK_DIR`·`WAPLE_SWIFT_LOCK` — 둘 다 `$RUNNER_TEMP` 아래. 러너에는 경합이
+  없으므로 락은 형식적이지만, 도구가 락 경로를 **유도**하지 않게 명시하는 것이 이 리포의 규약이다.
+
+### 4단계 — 게이트 (3단계가 러너에서 rc=0 을 준 **뒤에만**)
+
+승격 절차:
+
+1. `spec` 잡 로그에서 `TYPECHECK_OBSERVATION rc=0` 을 **최소 한 번** 확인한다. rc≠0 이면 요약의
+   파일별 표를 보고 **심 문제인지 실제 코드 결함인지 먼저 가른다** — 심 문제면 해당 심 파일을
+   고치는 것이 먼저이고, 게이트는 그다음이다.
+2. 그 스텝에서 `continue-on-error: true` · 본문의 `set +e` · 마지막 `:` 를 뺀다.
+   `timeout 420` 은 **그대로 둔다**(잡 타임아웃 방어는 게이트가 돼도 필요하다).
+3. `runs-on` 은 이미 `ubuntu-24.04` 로 고정돼 있다 — 건드릴 것 없다.
+4. 이 절과 `AGENTS.md` 를 함께 갱신한다.
 
 **한 번에 두 단계를 넣지 마라.** 프로브 → 관측 → 게이트를 각각 별도 커밋으로 밀어야
 어느 단계에서 어긋났는지 한 번의 실행으로 갈린다.
+
+**게이트가 돼도 이 도구는 macOS CI 를 대체하지 않는다**(한계 ①③④⑤ 참조). 차단하는 것은
+"스코프·타입 오류가 리눅스에서도 보이는 부류" 하나뿐이다.
 
 ## 심을 고쳐야 할 때
 

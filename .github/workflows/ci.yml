@@ -315,7 +315,11 @@ jobs:
 
       # [2026-08-19] 스킵 가시화 **및 게이트**.
       #
-      # XCTSkip("no Metal") 이 76개 파일 322곳에 걸쳐 있고 그 아래 테스트가 561개다.
+      # XCTSkip("no Metal") 이 **77개 파일 322곳**에 걸쳐 있고 그 아래 테스트가 561개다.
+      # (파일 수 정정 2026-08-21: 76 → 77. 재실측
+      #  `grep -rlE 'XCTSkip[^(]*\([^)]*no Metal' Tests/ --include=*.swift | wc -l` = 77,
+      #  같은 패턴의 줄 수는 322 로 그대로다. 커밋 2642488 시점에도 이미 77 이었으니
+      #  76 은 그전부터 낡아 있던 값이다 — 게이트 동작과는 무관하고 근거 숫자만 틀렸다.)
       # 스킵은 통과로 집계되므로, 러너 이미지가 바뀌거나 GPU 가 없는 세션에서 돌면
       # **전부 스킵된 채 초록**이 뜬다 — 통과 수를 세는 것만으로는 알아챌 수 없다.
       # 처음엔 숫자만 남기는 단계로 뒀고, 두 번의 실측(run 32219037798 debug·release)으로
@@ -337,6 +341,29 @@ jobs:
           echo "executed=${EXECUTED} skipped=${SKIPPED}"
 
           # [2026-08-19] 트립와이어. 이제 정상 범위를 안다.
+          # [2026-08-21 다섯 번째] 실측 갱신: executed **3099** / 실패 0
+          # (run 32478678474 · 커밋 `aebf586` — **브랜치 tip 자신**이다). 하한을 3038 → 3099.
+          # 정적 개수도 `aebf586` 에서 정확히 3099 라 두 세는 법이 또 어긋나지 않았다(여섯 번째 연속).
+          #
+          # +61 의 출처를 **커밋별로 실측**했다(2642488 ↔ aebf586 정적 개수 차, 합계 정확히 61):
+          #   1fb7ad2 +0 · d8e87f2 +0 · aa976b7 +7 · 25459c5 +6 · ef1fd91 +15 ·
+          #   fdc21e8 +6 · eeb4fc7 +14 · 0a9755e +0 · aebf586 +13.
+          # **파일별로도** 실측했다(같은 두 커밋, 합계 정확히 61 · 음수 0건):
+          #   PointerHitTests +13(신규) · PuppetHostileInputTests +13(신규) ·
+          #   ParticleNumericTagGateTests +9(신규) · PropertyAnimationOptionsTests +6 ·
+          #   SceneScriptAPISurfaceTests +6 · JSONNumericsTagGateTests +5(신규) ·
+          #   SceneDocumentFidelityTests +5 · CoreParseSceneFixRegressionTests +2 ·
+          #   PuppetPoseWEParityTests +2.
+          # 전부 오라클 추가이고 삭제·통합은 0건이다.
+          #
+          # **이 하한을 손대는 사람에게**: 이 값은 tip 의 실측치와 정확히 같게 박는 관례라
+          # (아래 `94b0a34` 문단) 여유가 0 이다. 여러 작업이 동시에 `Tests/**` 를 고치는 중이면
+          # **푸시 직전에 정적 개수를 다시 세서** 이 값 이상인지 확인해라 — 한 줄이면 된다:
+          #   grep -rE '^\s*(public |private |internal )?func test' Tests/ --include=*.swift | wc -l
+          # (참고: 이 커밋을 쓰던 시점의 워킹트리는 이미 3119 였다 — 다른 작업들이 20개를 더 얹었다.
+          #  하한은 그 3119 가 아니라 **CI 가 실제로 잰 3099** 로 둔다. 안 재 본 숫자를 하한으로
+          #  박으면 그게 곧 근거 없는 게이트다.)
+          #
           # [2026-08-21 네 번째] 실측 갱신: executed **3038** / skipped 47(release)·46(debug) / 실패 0
           # (run 32473541358 · 커밋 2642488 — **브랜치 tip 자신**이다). 하한을 2877 → 3038.
           # 정적 개수도 2642488 에서 정확히 3038 이라 두 세는 법이 또 어긋나지 않았다.
@@ -416,13 +443,15 @@ jobs:
             exit 1
           fi
           # 테스트 수는 늘기만 한다(줄면 파일이 빠졌거나 번들이 안 실렸다는 뜻).
-          if [ "${EXECUTED:-0}" -lt 3038 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 3038 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
+          if [ "${EXECUTED:-0}" -lt 3099 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 3099 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
             exit 1
           fi
 
-      # 실패 원인부터 먼저 뽑는다 — 종전 패턴("failed" 포함)은 정상 로그의 "load failed"·"save failed"
-      # 진단문에 파묻혀 실제 실패 단언이 head -50 밖으로 밀려났다(런 30541571683 에서 실측).
+      # 합성 픽셀 골든 기준선을 아티팩트로 올린다 — `workflow_dispatch` 의 `golden_bootstrap`
+      # 을 켰을 때만. (앞머리에 얹혀 있던 `Show failure summary` 의 근거 두 줄은 2026-08-21 에
+      # 제 스텝으로 돌려보냈다 — 아래 그 스텝의 정정 주석 참조. 이 문단은 이제 이 스텝만의 것이다.)
+      #
       # debug 구성에서만 뜬다. 이건 **구조적 위험이 아니라 검증된 선택**이다:
       # 기준선은 한 벌이어야 하는데(두 구성이 각자 뜨면 어느 쪽이 정본인지 사라진다),
       # debug 로 뜬 그 한 벌을 **release 레인이 매 실행 검증한다** — 위 `Test` 스텝은 두 구성
@@ -437,6 +466,18 @@ jobs:
           path: spec/golden/synthetic/
           if-no-files-found: warn
 
+      # [주석 정정 2026-08-21] **고아 주석 회수 — `1fb7ad2` 가 잡은 것과 같은 부류의 세 번째 건.**
+      # 아래 두 줄(grep 패턴의 근거)은 `978c9dd` 에서 이 스텝 바로 위에 적혔는데, 그 뒤
+      # `c9d627c` 가 `Upload synthetic golden baseline` 을 **주석과 그 스텝 사이에** 끼워 넣어
+      # 근거가 남의 스텝에 얹혔다(diff 실측: `+      - name: Upload synthetic golden baseline` 이
+      # 그 두 줄 바로 다음 줄에 삽입됐다). 2026-08-19 스윕이 golden 스텝의 자기 근거를 그 아래에
+      # 덧붙이면서 두 문단이 한 덩어리가 됐고, 그래서 이 스텝은 **자기 grep 패턴의 근거가 없는 채**,
+      # golden 스텝은 **자기와 무관한 로그 파싱 이야기를 머리에 인 채** 돌고 있었다.
+      # 스텝을 옮기거나 끼워 넣을 때 근거 주석이 따라가지 않는 것이 이 리포의 상습 결함이다.
+      #
+      # 실패 원인부터 먼저 뽑는다 — 종전 패턴("failed" 포함)은 정상 로그의 "load failed"·"save failed"
+      # 진단문에 파묻혀 실제 실패 단언이 head -50 밖으로 밀려났다(런 30541571683 에서 실측).
+      #
       # `failure()` 만으로는 release 레인이 빠진다(위 Test 스텝 주석 참조).
       # `steps.test.outcome` 은 continue-on-error 가 삼키기 **전**의 결과라 release 실패도 잡는다.
       - name: Show failure summary
