@@ -286,4 +286,216 @@ final class EffectManifestTests: XCTestCase {
         XCTAssertNotNil(EffectManifest.FBO.Format(rawValue: "rgba8888s"))
         XCTAssertNil(EffectManifest.FBO.Format(rawValue: "rgba8888S"))
     }
+
+    // MARK: - T09-D1 functions / T09-D2 passes[].compose
+
+    /// 실물 `effects/fluidsimulation/effect.json` 의 `functions` 블록 그대로 + 그 블록이 참조하는
+    /// fbo 선언들. 선행 스윕은 "Waple 이 이 블록을 안 읽는다" 를 **미확인**으로 남겼는데, 원본은
+    /// 읽을 뿐 아니라 **소비한다** — 스크립트 `executeMaterialFunction(name)` 의 대상 테이블이다
+    /// (등록 `0x1401f0156`/`0x1401f016c`, 구현 `0x1401ee3a0`–`0x1401ee51b`).
+    ///
+    /// 인덱스가 중요하다. 원본은 이름이 아니라 **파스된 fbo 목록의 인덱스**를 저장하고
+    /// (`0x1401e8630`–`0x1401e867d`), 소비 시점에는 그 인덱스로 곧장 FBO 배열을 친다
+    /// (`0x1401ee440`, stride 0x50). 그래서 우리도 파스 시점에 풀어 둔다.
+    func testFluidSimulationFunctionsResolveToFboIndices() throws {
+        let json = """
+        {"passes":[{"material":"materials/effects/fluidsimulation_advection.json","target":"_rt_SmokeVelocity2"}],
+         "fbos":[
+          {"name":"_rt_SmokeVelocity1","fit":256,"format":"rg1616f","clear":"0 0 0 0","unique":true},
+          {"name":"_rt_SmokeVelocity2","fit":256,"format":"rg1616f","clear":"0 0 0 0","unique":true},
+          {"name":"_rt_SmokeDye1","fit":256,"format":"rgba_backbuffer","clear":"0 0 0 0","unique":true},
+          {"name":"_rt_SmokeDye2","fit":256,"format":"rgba_backbuffer","clear":"0 0 0 0","unique":true}
+         ],
+         "functions":{
+          "clearVelocity":{"action":"clear","fbos":["_rt_SmokeVelocity1","_rt_SmokeVelocity2"]},
+          "clearDye":{"action":"clear","fbos":["_rt_SmokeDye1","_rt_SmokeDye2"]}
+         }}
+        """
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        // jsoncpp 객체는 std::map — `getMemberNames`(`0x1401e8272`)가 사전순을 준다.
+        XCTAssertEqual(m.functions.map(\.name), ["clearDye", "clearVelocity"],
+                       "원본 멤버 열거 순서(사전순)와 같아야 한다")
+        XCTAssertEqual(m.functions.map(\.action), [.clear, .clear])
+        XCTAssertEqual(m.function(named: "clearVelocity")?.fboIndices, [0, 1])
+        XCTAssertEqual(m.function(named: "clearDye")?.fboIndices, [2, 3])
+        XCTAssertNil(m.function(named: "clearPressure"), "선언 안 된 이름은 nil")
+    }
+
+    /// 항목을 **통째로 버리는** 조건 넷을 한 자리에 고정한다. 넷 다 원본이 `push` 를 건너뛰는
+    /// 경로라, 관대하게 받으면 우리만 존재하지 않는 클리어를 돌게 된다.
+    func testFunctionsDropEntriesTheOriginalParserRejects() throws {
+        let json = """
+        {"passes":[{"material":"materials/effects/a.json"}],
+         "fbos":[{"name":"_rt_A","scale":1,"format":"rgba8888"}],
+         "functions":{
+          "ok":{"action":"clear","fbos":["_rt_A"]},
+          "notAnObject":["_rt_A"],
+          "unknownAction":{"action":"blur","fbos":["_rt_A"]},
+          "actionNotString":{"action":1,"fbos":["_rt_A"]},
+          "missingAction":{"fbos":["_rt_A"]},
+          "fbosNotArray":{"action":"clear","fbos":"_rt_A"},
+          "fbosMissing":{"action":"clear"},
+          "noneResolve":{"action":"clear","fbos":["_rt_Nope","_rt_AlsoNope"]},
+          "emptyFbos":{"action":"clear","fbos":[]}
+         }}
+        """
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertEqual(m.functions.map(\.name), ["ok"], """
+            원본이 버리는 것: 값이 객체가 아님(`0x1401e83f9`) · action 이 문자열 "clear" 가 아님
+            (`0x1401e842d`/`0x1401e8454`/`0x1401e845a`) · fbos 가 배열이 아님(`0x1401e84df`) ·
+            푼 인덱스가 0개(`0x1401e884a`)
+            """)
+        XCTAssertEqual(m.functions[0].fboIndices, [0])
+    }
+
+    /// 배열 원소 단위 규약 — **못 푼 이름과 문자열 아닌 원소는 그 원소만** 빠지고, 항목은 산다.
+    /// (`0x1401e8593` 은 다음 원소로, `0x1401e867d` 는 인덱스 없이 다음 원소로 간다.)
+    /// 그리고 인덱스는 **파스가 끝난** fbos 기준이라, format 없어 버려진 선언(X-⑧)만큼 당겨진다.
+    func testFunctionFboListSkipsBadElementsAndIndexesTheSurvivingFboList() throws {
+        let json = """
+        {"passes":[{"material":"materials/effects/a.json"}],
+         "fbos":[{"name":"_rt_Dropped","scale":1},
+                 {"name":"_rt_A","scale":1,"format":"rgba8888"},
+                 {"name":"_rt_B","scale":1,"format":"r8"}],
+         "functions":{"f":{"action":"clear","fbos":["_rt_Missing",7,null,"_rt_B","_rt_A"]}}}
+        """
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertEqual(m.fbos.map(\.name), ["_rt_A", "_rt_B"], "전제: format 없는 선언은 드롭된다")
+        XCTAssertEqual(m.function(named: "f")?.fboIndices, [1, 0],
+                       "미지 이름·비문자열은 원소만 빠지고 순서는 선언 순서를 따른다")
+    }
+
+    /// T09-D2: `compose` 는 **진짜 boolean 만** 켠다(`0x1401e7dac` 의 `cmp byte [rax+8], 5`).
+    /// `fbos[].unique` 와 같은 함정이다 — Swift 의 `1 as? Bool` 은 true 로 성공한다.
+    func testComposeAcceptsOnlyRealBooleanTrue() throws {
+        let json = """
+        {"passes":[{"material":"a.json","compose":true},
+                   {"material":"b.json","compose":false},
+                   {"material":"c.json","compose":1},
+                   {"material":"d.json","compose":"true"},
+                   {"material":"e.json"}]}
+        """
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertEqual(m.passes.map(\.compose), [true, false, false, false, false],
+                       "숫자 1 과 문자열 \"true\" 는 원본이 안 받는다")
+    }
+
+    /// 실물 `effects/refraction/effect.json` 의 형태 — 1패스가 compose, 2패스는 아니다.
+    /// 원본에서 이 켜짐 하나가 ① 중간 렌더 타깃 +1(`0x1401e633f`·`0x1401e6345`)과
+    /// ② 그 패스 직후 핑퐁 타깃 교체(`0x1401e9b8f`–`0x1401e9bf0`)를 만든다.
+    func testRefractionShapedManifestKeepsComposeOnFirstPassOnly() throws {
+        let json = """
+        {"replacementkey":"refract",
+         "passes":[{"material":"materials/effects/refract/refract.json","compose":true,
+                    "bind":[{"name":"previous","index":0}]},
+                   {"material":"materials/effects/refract/copy.json",
+                    "bind":[{"name":"previous","index":0}]}]}
+        """
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertEqual(m.passes.map(\.compose), [true, false])
+        XCTAssertEqual(m.replacementKey, "refract")
+        XCTAssertTrue(m.functions.isEmpty, "functions 없는 이펙트는 빈 목록")
+    }
+
+    // MARK: - 동봉 자산 전건 회귀
+
+    /// 동봉 `Sources/WapleRender/Resources/WEAssets/effects` 를 찾는다.
+    /// `scripts/dev/linux-core-tests.sh` 는 테스트 소스를 **심링크로** 임시 패키지에 건다 —
+    /// 그래서 `#filePath` 를 그대로 거슬러 오르면 리포 밖으로 나간다. 심링크를 먼저 푸는
+    /// 이 방식은 `Model3DMeshFramingTests.mdlSearchRoots` 에서 이미 검증됐다.
+    private static func bundledEffectsRoot() -> URL? {
+        let fm = FileManager.default
+        // 하네스가 넣어 주는 절대 경로를 먼저 본다(scripts/dev/linux-core-tests.sh).
+        if let p = ProcessInfo.processInfo.environment["WAPLE_WE_ASSETS"], !p.isEmpty {
+            let cand = URL(fileURLWithPath: p).appendingPathComponent("effects")
+            if fm.fileExists(atPath: cand.path) { return cand }
+        }
+        let here = (try? fm.destinationOfSymbolicLink(atPath: #filePath)) ?? #filePath
+        var dir = URL(fileURLWithPath: here).deletingLastPathComponent()
+        for _ in 0..<8 {
+            let cand = dir.appendingPathComponent("Sources/WapleRender/Resources/WEAssets/effects")
+            if fm.fileExists(atPath: cand.path) { return cand }
+            dir = dir.deletingLastPathComponent()
+        }
+        return nil
+    }
+
+    /// 동봉 `Resources/WEAssets/effects/**/effect.json` **122개 전건**을 실제로 파스한다.
+    ///
+    /// 목적이 셋이다.
+    ///  ① 두 키를 새로 읽기 시작했으니 나머지 120개 스키마가 그대로인지 본다(스키마 실패 0건).
+    ///  ② `functions`/`compose` 의 **실측 도달 수를 못박는다** — 자산이 갱신돼 도달이 늘면
+    ///     여기서 깨져서 배선 여부를 다시 보게 된다.
+    ///  ③ **CRLF 관용 구멍**(아래)을 수치로 고정한다.
+    ///
+    /// 파스 입력은 **CRLF→LF 정규화본**이다. 그래야 이 테스트가 재는 것이 "매니페스트 스키마"로
+    /// 한정된다 — 원시 바이트로 재면 `AssetJSON.relaxed` 의 줄 주석 스키퍼가 `"\r\n"` 을 개행으로
+    /// 못 알아보는 별건 버그(`EffectManifest.relaxedJSON` 주석의 2026-08-21 정정)에 가려진다.
+    /// 그 별건은 아래에서 따로, 플랫폼 가정 없이 잰다.
+    ///
+    /// 2026-08-21 실측: `functions` 1개 파일(`fluidsimulation`), `compose` 2개 파일
+    /// (`refraction` + 그 preview 사본 `refraction/preview/effects/refract`).
+    func testEveryBundledEffectManifestParsesAndFunctionComposeReachIsPinned() throws {
+        let root = try XCTUnwrap(Self.bundledEffectsRoot(), "동봉 WEAssets/effects 를 못 찾았다")
+        let walker = try XCTUnwrap(FileManager.default.enumerator(at: root,
+                                                                  includingPropertiesForKeys: nil))
+        let files = walker.compactMap { $0 as? URL }
+            .filter { $0.lastPathComponent == "effect.json" }
+            .sorted { $0.path < $1.path }
+        XCTAssertEqual(files.count, 122, "동봉 effect.json 개수가 바뀌었다 — 아래 기대값도 다시 세라")
+
+        var withFunctions: [String] = []
+        var withCompose: [String] = []
+        var schemaFailures: [String] = []
+        /// CRLF 관용 구멍에 막혀 **원시 바이트로는** 파스가 안 되는 파일들. 정규화하면 전부 산다.
+        var crlfBlocked: [String] = []
+        var byName: [String: EffectManifest] = [:]
+        for url in files {
+            let rel = String(url.path.dropFirst(root.path.count + 1))
+            let raw = try Data(contentsOf: url)
+            let lf = Data(String(decoding: raw, as: UTF8.self)
+                .replacingOccurrences(of: "\r\n", with: "\n").utf8)
+            guard let m = EffectManifest.parse(lf) else { schemaFailures.append(rel); continue }
+            byName[rel] = m
+            if EffectManifest.parse(raw) == nil { crlfBlocked.append(rel) }
+            if !m.functions.isEmpty { withFunctions.append(rel) }
+            if m.passes.contains(where: \.compose) { withCompose.append(rel) }
+        }
+        XCTAssertTrue(schemaFailures.isEmpty,
+                      "CRLF 를 정규화하고도 못 읽는 매니페스트가 있으면 스키마 회귀다: \(schemaFailures)")
+        XCTAssertEqual(withFunctions, ["fluidsimulation/effect.json"])
+        XCTAssertEqual(withCompose, ["refraction/effect.json",
+                                     "refraction/preview/effects/refract/effect.json"])
+
+        // ③ CRLF 관용 구멍. 동봉 122개는 **전건 CRLF** 라, 줄 주석 스키퍼가 `"\r\n"` 을 개행으로
+        //    못 알아보면 첫 주석부터 파일 끝까지 지워져 통째로 nil 이 된다(리눅스 실측 25건,
+        //    macOS 는 트레일링 콤마도 엄격해 `fluidsimulation` 이 더해져 26건이었다).
+        //    `AssetJSON.relaxed` 가 `isNewline` 을 쓰도록 고쳐 **0 으로 조였다**(2026-08-21).
+        //    이 값이 다시 0 을 넘으면 그 회귀다.
+        XCTAssertTrue(crlfBlocked.allSatisfy { byName[$0] != nil },
+                      "정규화 후에도 못 읽으면 CRLF 문제가 아니다")
+        XCTAssertEqual(crlfBlocked, [],
+                       "원시 CRLF 바이트로 못 읽는 매니페스트 — AssetJSON.relaxed 회귀")
+
+        // 도달한 1건의 내용까지 실물로 고정한다 — 인덱스는 선언 순서(9개 중 0·1 과 6·7)다.
+        let fluid = try XCTUnwrap(byName["fluidsimulation/effect.json"])
+        XCTAssertEqual(fluid.fbos.count, 9)
+        XCTAssertEqual(fluid.functions.map(\.name), ["clearDye", "clearVelocity"])
+        XCTAssertEqual(fluid.function(named: "clearDye")?.fboIndices, [6, 7])
+        XCTAssertEqual(fluid.function(named: "clearVelocity")?.fboIndices, [0, 1])
+        XCTAssertEqual(fluid.function(named: "clearDye")?.fboIndices.map { fluid.fbos[$0].name },
+                       ["_rt_SmokeDye1", "_rt_SmokeDye2"])
+        XCTAssertEqual(fluid.function(named: "clearVelocity")?.fboIndices.map { fluid.fbos[$0].name },
+                       ["_rt_SmokeVelocity1", "_rt_SmokeVelocity2"])
+        // 소비처가 쓰는 클리어 색은 fbo 선언에서 온다(`0x1401ee472`–`0x1401ee491`, movss 4개) — 넷 다 있어야 한다.
+        for idx in [0, 1, 6, 7] {
+            XCTAssertEqual(fluid.fbos[idx].clearColor, SIMD4<Float>(0, 0, 0, 0),
+                           "\(fluid.fbos[idx].name) 의 clear 가 없으면 클리어 색이 정의되지 않는다")
+        }
+
+        // 도달한 2건의 compose 위치도 고정한다 — 둘 다 1패스만 compose 다.
+        for rel in withCompose {
+            XCTAssertEqual(byName[rel]?.passes.map(\.compose), [true, false], rel)
+        }
+    }
 }
