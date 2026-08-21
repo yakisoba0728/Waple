@@ -328,6 +328,86 @@ def decode_blend(pe):
     return sha, seq, hex(pe.base + b), hex(pe.base + e)
 
 
+# ── 블렌드 디스크립터 기록 자리(명령 주소까지) ───────────────────────────
+#
+# `stack_imms` 는 (오프셋, 값)만 준다. 문자열↔D3D11 상태 표를 인용 가능하게 만들려면
+# **어느 명령이** 그 필드를 썼는지가 필요하다. 그래서 같은 디코더를 명령 주소를 달고
+# 다시 돌린다(원본 함수는 다른 항목이 쓰고 있어 건드리지 않는다).
+#
+# FUN_140099f60 의 스택 디스크립터 베이스는 RSP+0x20 이다 — 0x14009a0b4 에서
+# `mov r8d, 0x108`(=264=sizeof(D3D11_BLEND_DESC)) 로 그 자리를 0으로 민다.
+BLEND_DESC_BASE = 0x20
+BLEND_DESC_FIELDS = {
+    0x00: "AlphaToCoverageEnable", 0x04: "IndependentBlendEnable",
+    0x08: "RT0.BlendEnable", 0x0C: "RT0.SrcBlend", 0x10: "RT0.DestBlend",
+    0x14: "RT0.BlendOp", 0x18: "RT0.SrcBlendAlpha", 0x1C: "RT0.DestBlendAlpha",
+    0x20: "RT0.BlendOpAlpha", 0x24: "RT0.RenderTargetWriteMask",
+}
+# 같은 스택 창을 ret 뒤 루프(0x14009a260~)가 float 배열로 재사용한다. 그 기록은
+# 디스크립터가 아니다 — 값으로 거른다(D3D11 열거값·마스크는 전부 ≤ 0xF).
+BLEND_IMM_MAX = 0xF
+
+
+def imm_sites(body, base):
+    """`mov [reg+disp], imm` 을 (명령 VA, disp, 폭, 값)으로 뽑는다.
+
+    `stack_imms` 와 같은 디코더지만 명령 VA 를 함께 낸다. REX 접두는 0x40..0x4F 전부
+    받는다 — 0x42(REX.X)가 붙은 SIB 형태가 실물에 있다."""
+    out = []
+    i, n = 0, len(body)
+    while i < n - 6:
+        j = i
+        if 0x40 <= body[j] <= 0x4F:
+            j += 1
+        op = body[j]
+        if op in (0xC6, 0xC7):
+            m = body[j + 1]
+            if (m >> 3) & 7 == 0 and (m >> 6) != 3:
+                mod, rm = m >> 6, m & 7
+                k = j + 2
+                disp = 0
+                if rm == 4:
+                    k += 1
+                if mod == 1:
+                    disp = struct.unpack_from("<b", body, k)[0]
+                    k += 1
+                elif mod == 2:
+                    disp = struct.unpack_from("<i", body, k)[0]
+                    k += 4
+                elif mod == 0 and rm == 5:
+                    k += 4
+                    disp = None          # rip-상대 — 스택이 아니다
+                if disp is not None:
+                    if op == 0xC7:
+                        imm = struct.unpack_from("<I", body, k)[0]
+                        out.append((base + i, disp, 4, imm))
+                        k += 4
+                    else:
+                        out.append((base + i, disp, 1, body[k]))
+                        k += 1
+                    i = k
+                    continue
+        i += 1
+    return out
+
+
+def blend_desc_sites(pe):
+    """FUN_140099f60 이 D3D11_BLEND_DESC 필드를 쓰는 자리 전수.
+
+    반환: (기록 목록, 값으로 걸러낸 목록). 걸러낸 것도 돌려주는 이유는
+    "무엇을 뺐는지" 를 정본에 적어야 그물의 크기가 숨지 않기 때문이다."""
+    body, b, e = pe.body(FN_BLEND)
+    kept, dropped = [], []
+    for va, disp, size, imm in imm_sites(body, pe.base + b):
+        off = disp - BLEND_DESC_BASE
+        if off not in BLEND_DESC_FIELDS:
+            continue
+        row = {"va": hex(va), "field": BLEND_DESC_FIELDS[off], "descOff": hex(off),
+               "width": size, "value": imm}
+        (kept if imm <= BLEND_IMM_MAX else dropped).append(row)
+    return kept, dropped
+
+
 def decode_sampler(pe):
     body, b, e = pe.body(FN_SAMPLER)
     sha = hashlib.sha256(body).hexdigest()[:16]
@@ -343,6 +423,90 @@ def ui_msaa_values():
                   | set("x" + m for m in re.findall(r'MSAA x(\d)', txt)))
 
 
+# ── 문자열 ↔ D3D11 블렌드 상태 완전표 ────────────────────────────────────
+#
+# 표의 **값은 손으로 옮겨 적지 않는다** — `blend_desc_sites` 가 바이트에서 읽은 것을
+# 실행 순서대로 덧씌워 만든다. 여기 리터럴로 있는 것은 **어느 명령이 어느 분기에 속하는가**
+# 뿐이고, 그건 디스어셈으로 확인해 아래 주석에 분기 주소까지 적어 뒀다.
+#
+#   0x14009a0c3–0x14009a0ca  mov ecx, esi / and ecx, 7   ← 스위치 선택자 = 캐시키 & 7
+#   0x14009a0cd  je 0x14009a0fa   → 0 normal
+#   0x14009a0d2  je 0x14009a32b   → 1 translucent
+#   0x14009a0db  je 0x14009a2fe   → 2 additive
+#   0x14009a0e4  je 0x14009a0f2   → 3 alphatocoverage (그 뒤 normal 블록으로 흘러든다)
+#   0x14009a0e9  jne 0x14009a12a  → 5·6·7 은 디스크립터 필드를 하나도 안 쓴다
+#                                    (걸리지 않으면 0x14009a0eb = 키 4)
+BLEND_WRITEMASK_VA = "0x14009a0c5"          # mov byte [rsp+0x44], 7  — 공통 기본 WriteMask
+BLEND_ADD_TAIL_VAS = ["0x14009a11a", "0x14009a122"]   # BlendOpAlpha=ADD, BlendOp=ADD 합류점
+BLEND_NORMAL_VAS = ["0x14009a0fa", "0x14009a102", "0x14009a10a", "0x14009a112"] + BLEND_ADD_TAIL_VAS
+BLEND_MODE_PATHS = {
+    "normal": (0, "0x14009a0cd", BLEND_NORMAL_VAS),
+    "translucent": (1, "0x14009a0d2",
+                    ["0x14009a32b", "0x14009a333", "0x14009a33b", "0x14009a343", "0x14009a34b"]
+                    + BLEND_ADD_TAIL_VAS),
+    "additive": (2, "0x14009a0db",
+                 ["0x14009a2fe", "0x14009a306", "0x14009a30e", "0x14009a316", "0x14009a31e"]
+                 + BLEND_ADD_TAIL_VAS),
+    "alphatocoverage": (3, "0x14009a0e4", ["0x14009a0f2"] + BLEND_NORMAL_VAS),
+}
+# 스위치 뒤에 **모든 모드에 공통으로** 덧씌워지는 플래그 비트. (비트, 테스트 명령, 기록 VA 들)
+BLEND_FLAG_PATHS = [
+    (0x80, "0x14009a12a", ["0x14009a12f", "0x14009a137", "0x14009a13f", "0x14009a147"]),
+    (0x18, "0x14009a14f", ["0x14009a155"]),
+    (0x10, "0x14009a15a", ["0x14009a160", "0x14009a168", "0x14009a170"]),
+    (0x20, "0x14009a178", ["0x14009a17e", "0x14009a186", "0x14009a18e"]),
+    (0x40, "0x14009a196", ["0x14009a19c", "0x14009a1a4", "0x14009a1ac"]),
+    (0x100, "0x14009a1b4", ["0x14009a1ba", "0x14009a1c2", "0x14009a1ca"]),
+]
+BOOLISH = ("AlphaToCoverageEnable", "IndependentBlendEnable", "RT0.BlendEnable")
+
+
+def _blend_name(field, v):
+    """필드값을 D3D11 이름으로. 열거가 아닌 필드는 숫자/불리언 그대로."""
+    if field in BOOLISH:
+        return bool(v)
+    if field == "RT0.RenderTargetWriteMask":
+        return v
+    if field.endswith("BlendOp") or field.endswith("BlendOpAlpha"):
+        return BLEND_OP.get(v, "?%d" % v)
+    return BLEND.get(v, "?%d" % v)
+
+
+def blend_string_table(sites):
+    """blending 문자열 → D3D11_BLEND_DESC 완전표. 값은 sites(바이트 실측)에서만 온다."""
+    by_va = {s["va"]: s for s in sites}
+    out = {}
+    for name, (enum, branch_va, vas) in BLEND_MODE_PATHS.items():
+        desc = {f: 0 for f in BLEND_DESC_FIELDS.values()}
+        wrote = {}
+        for va in [BLEND_WRITEMASK_VA] + vas:
+            s = by_va[va]
+            desc[s["field"]] = s["value"]
+            wrote[s["field"]] = va
+        out[name] = {
+            "enum": enum,
+            "분기": branch_va,
+            "상태": {f: _blend_name(f, desc[f]) for f in BLEND_DESC_FIELDS.values()},
+            "기록 명령": {f: wrote.get(f, "(memset 0 @0x14009a0be)")
+                      for f in BLEND_DESC_FIELDS.values()},
+        }
+    return out
+
+
+def blend_flag_table(sites):
+    """스위치 뒤 공통 플래그 비트 → 덮어쓰는 필드. 값은 sites 에서만 온다."""
+    by_va = {s["va"]: s for s in sites}
+    out = {}
+    for bit, test_va, vas in BLEND_FLAG_PATHS:
+        out["0x%x" % bit] = {
+            "테스트": test_va,
+            "덮어쓰는 필드": {by_va[va]["field"]: _blend_name(by_va[va]["field"], by_va[va]["value"])
+                        for va in vas},
+            "기록 명령": {by_va[va]["field"]: va for va in vas},
+        }
+    return out
+
+
 # ── main ────────────────────────────────────────────────────────────────
 def main():
     pe = PE(BIN)
@@ -353,6 +517,9 @@ def main():
     sha_i, ds_writes, rs_writes, i0, i1 = decode_init(pe)
     sha_b, blend_seq, b0, b1 = decode_blend(pe)
     sha_s, samp_seq, s0, s1 = decode_sampler(pe)
+    blend_sites, blend_dropped = blend_desc_sites(pe)
+    blend_tbl = blend_string_table(blend_sites)
+    blend_flags = blend_flag_table(blend_sites)
 
     str_vas = {}
     for s in ("blending", "cullmode", "depthtest", "depthwrite", "alphawriting",
@@ -503,6 +670,130 @@ def main():
         "caution": "네 개의 blending 모드 디스크립터는 직접 디코드했으나, 이 플래그 비트들의 "
                    "**호출부 의미**(어느 패스가 어느 비트를 켜는가)는 추적하지 않았다",
     }, "보고", [ev_blend, ev_script]))
+
+    E(specfmt.entry("renderState.blend.descriptorWriteSites", {
+        "무엇": "FUN_140099f60 이 D3D11_BLEND_DESC 필드에 immediate 를 쓰는 자리 **전수**. "
+              "아래 renderState.blend.stringToState 의 값은 전부 이 목록에서 온다 — "
+              "표를 손으로 옮겨 적지 않는다",
+        "스택 베이스": "RSP+0x%x. 0x14009a0b4 의 `mov r8d, 0x108`(=264=sizeof(D3D11_BLEND_DESC))가 "
+                   "그 자리를 0으로 미는 memset 인자다" % BLEND_DESC_BASE,
+        "필드 오프셋": {hex(k): v for k, v in sorted(BLEND_DESC_FIELDS.items())},
+        "기록 수": len(blend_sites),
+        "기록": blend_sites,
+        "값으로 걸러낸 기록": blend_dropped,
+        "왜 걸러내는가": "ret(0x14009a2fd) 뒤의 루프(0x14009a260–0x14009a2dc)가 같은 스택 창을 "
+                   "float 배열로 재사용한다. 그 기록은 디스크립터가 아니다 — D3D11 열거값과 "
+                   "WriteMask 는 전부 0x%x 이하이므로 값으로 정확히 갈린다. 무엇을 뺐는지는 "
+                   "위 '값으로 걸러낸 기록' 에 그대로 남긴다" % BLEND_IMM_MAX,
+    }, "확정", [ev_blend, ev_script]))
+
+    E(specfmt.entry("renderState.blend.stringToState", {
+        "무엇": "머티리얼 `passes[].blending` **문자열 ↔ D3D11 블렌드 상태** 완전표. "
+              "문자열→열거값은 FUN_1401577e0(등록)과 FUN_1401531c0(역매핑)에서, "
+              "열거값→디스크립터는 FUN_140099f60 의 스위치에서 읽었다",
+        "표": blend_tbl,
+        "문자열 VA": {k: str_vas[k]["va"] for k in
+                   ("blending", "normal", "translucent", "additive", "alphatocoverage")},
+        "열거값 등록(FUN_1401577e0)": {
+            "프로퍼티 등록": "0x140157897 `lea rdx, [\"blending\"]` · "
+                        "0x1401578b4 `mov [rbx+0x34], 0x1f0`(=496 프로퍼티 id)",
+            "normal=0": "0x140157d82 lea · 0x140157d9e `mov byte [0x1404e93b0], sil` "
+                        "(sil=0 — esi 는 0x140157803 `xor esi, esi`)",
+            "translucent=1": "0x140157db2 lea · 0x140157dd6 `mov byte [0x1404e93d8], 1`",
+            "additive=2": "0x140157dea lea · 0x140157e0e `mov byte [0x1404e9400], 2`",
+            "alphatocoverage=3": "0x140157e22 lea · 0x140157e4a `mov byte [0x1404e9428], 3`",
+            "레코드": "0x1404e9390 부터 0x28 바이트 간격 4개(std::string 0x20 + 값 1바이트). "
+                   "끝 포인터 0x1404e9430 이 0x1404e9340 에, 시작이 0x1404e9338 에 실린다. "
+                   "이 배열은 .data 의 런타임 초기화 영역이라 파일 바이트로는 0이다 — "
+                   "값은 위 기록 명령에서만 읽힌다",
+        },
+        "역매핑(FUN_1401531c0)": {
+            "범위": "0x1401531c0–0x1401531f2",
+            "0 normal": "0x1401531d2 (기본 분기)",
+            "1 translucent": "0x1401531ea",
+            "2 additive": "0x1401531e2",
+            "3 alphatocoverage": "0x1401531da",
+            "쓰는 곳": "머티리얼 직렬화 — 0x14020a1f4 `xor ecx,ecx` + 0x14020a1f6 `call` 로 "
+                    "열거값 0 을 문자열로 되돌려 0x14020a20e 의 \"blending\" 키에 싣는다",
+        },
+        "기본값": "blending 키가 없으면 열거값 0 = normal. 블렌드 상태 객체 생성자가 "
+                "오브젝트+0x26 을 0으로 두기 때문이다 — 0x140098ed3 "
+                "`mov byte [rcx+0x26], sil`(sil=0 @0x140098eaf)",
+        "플래그 비트(스위치 뒤 공통 덧씌움)": blend_flags,
+        "생성·바인딩": {
+            "CreateBlendState": "0x14009a1e1 `call [rax+0xa0]` (desc=RSP+0x20, out=RBP+0x60)",
+            "캐시 저장": "0x14009a1f2 `mov [rax+rsi*8], rdx` — 캐시키 rsi 로 색인되는 배열 "
+                     "[rdi+0x140]",
+            "바인딩": "0x14009a232 `call [rax+0x118]` — BlendFactor=NULL(0x14009a228 "
+                   "`xor r8d,r8d`), SampleMask=0xffffffff(0x14009a21b)",
+        },
+        "뎁스스텐실 결합": "blending 은 블렌드 상태만 고르지 않는다 — 0x140099f84–0x140099f9f 가 "
+                    "열거값이 1(translucent) 또는 2(additive)일 때 뎁스스텐실 슬롯 인덱스에 "
+                    "1을 OR 한다(0·3 은 OR 하지 않는다). 즉 **투명 머티리얼은 저작된 "
+                    "depthwrite 와 무관하게 뎁스 쓰기가 꺼진다**. "
+                    "0x140099f8a je / 0x140099f91 `cmp al,3` / 0x140099f9c `or rax,rcx` / "
+                    "0x140099f9f `mov rdx,[rdi+rax*8+0xc0]`. 슬롯 표는 "
+                    "renderState.depthStencil.table",
+        "표기": "위 '기록 명령' 이 `(memset 0 @…)` 인 필드는 명령이 아니라 0으로 남은 값이다 — "
+              "D3D11 열거값 0 은 유효값이 아니지만 BlendEnable=FALSE 인 필드는 무시된다",
+        "이 항목이 다루지 않는 것": "플래그 비트의 **호출부**(어느 패스가 어느 비트를 켜는가)는 "
+                          "renderState.blend.flagBits 의 caution 그대로 이 문서의 범위 밖이다",
+    }, "확정", [
+        ev_blend,
+        specfmt.ev("binary", "wallpaper64.exe FUN_1401577e0 @ 0x1401577e0",
+                   "머티리얼 pass 프로퍼티 등록자 — 문자열↔열거값 레코드 4개를 만든다"),
+        specfmt.ev("binary", "wallpaper64.exe FUN_1401531c0 @ 0x1401531c0",
+                   "열거값→문자열 역매핑(직렬화 경로)"),
+        ev_script,
+    ]))
+
+    E(specfmt.entry("renderState.blend.cacheKeyDerivation", {
+        "식": "캐시키 = word[오브젝트+0x28] | (word[오브젝트+0x28] 의 bit9 가 서면 "
+             "byte[오브젝트+0x26](=blending 열거값) 아니면 4)",
+        "명령": {
+            "상태워드 적재": "0x140099ff8 `movzx eax, word [rdi+0x28]`",
+            "bit9 검사": "0x140099ffc `bt ax, 9`",
+            "bit9=1": "0x14009a003 `movzx ecx, byte [rdi+0x26]` — 머티리얼 blending 열거값",
+            "bit9=0": "0x14009a009 `mov ecx, 4`",
+            "합성": "0x14009a015 `or eax, ecx` · 0x14009a024 `mov esi, eax`",
+            "스위치 선택자": "0x14009a0c3 `mov ecx, esi` · 0x14009a0ca `and ecx, 7`",
+        },
+        "키 4의 정체": "bit9 가 **꺼져 있을 때의 정적 기본값**이다. 도달 불가 분기가 아니다 — "
+                  "0x14009a009 가 조건 없이 4를 싣는다. 그 분기는 0x14009a0eb 에서 "
+                  "WriteMask 를 8(ALPHA only)로만 쓰고 0x14009a0f0 `jmp 0x14009a12a` 로 "
+                  "스위치 본문을 통째로 건너뛴다 — 즉 Src/Dest/Op 는 memset 0 으로 남는다. "
+                  "그 상태로 CreateBlendState 를 부르면 D3D11 이 거절하므로, 이 키는 "
+                  "반드시 플래그 비트(0x10/0x20/0x40/0x80/0x100 중 팩터와 연산자를 채우는 "
+                  "조합)와 함께 쓰인다. 어느 패스가 그 조합을 켜는지는 이 문서의 범위 밖이다",
+        "키 5·6·7": "0x14009a0e9 `jne 0x14009a12a` 로 빠져 디스크립터 필드를 하나도 쓰지 않는다. "
+                 "상태워드의 하위 3비트가 0이라면(열거값 자리로 예약) 이 값들은 위 식으로 "
+                 "만들어지지 않는다",
+        "왜 중요한가": "재구현이 blending 문자열만 보고 파이프라인을 고르면 이 상태워드 층을 "
+                  "통째로 놓친다. WriteMask·MIN/MAX·프리멀티 오버는 전부 여기서 온다",
+    }, "확정", [ev_blend, ev_script]))
+
+    E(specfmt.entry("renderState.blend.notParsedAt1401c2a40", {
+        "주장": "0x1401c2a40 근방은 머티리얼 `blending` 파서가 **아니다**",
+        "실제": "0x1401c2a40–0x1401c2e4e(.pdata 조각 5개 병합)는 파티클 오퍼레이터의 "
+              "`blendinstart`/`blendinend`/`blendoutstart`/`blendoutend` 수명-가중 창 파서다. "
+              "네 키의 문자열 VA 는 0x14048f850·0x14048f860·0x14048f870·0x14048f880 이고, "
+              "0x1401c2d80 이후 rcpps 로 구간 역수 두 개를 만들어 float4 로 splat 한다",
+        "유일한 호출부": "0x1401c5490(파티클 시스템 JSON 파서)에서 11곳 — "
+                   "0x1401cb884 · 0x1401cc43c · 0x1401cc7da · 0x1401cc9be · 0x1401ccf66 · "
+                   "0x1401cd194 · 0x1401cd407 · 0x1401ce3d6 · 0x1401ce64b · 0x1401cf11c · "
+                   "0x1401cf1dc",
+        "진짜 자리": "문자열↔열거값은 FUN_1401577e0 / FUN_1401531c0, 열거값↔D3D11 상태는 "
+                 "FUN_140099f60 이다(renderState.blend.stringToState)",
+        "왜 적어 두는가": "`blend` 로 시작하는 키가 두 서브시스템에 있어서 문자열 검색만으로는 "
+                    "정확히 이 함수가 먼저 걸린다. Waple 쪽 대응 구현은 "
+                    "Sources/WapleCore/ParticleSystem.swift 의 BlendWindow 이고 "
+                    "이미 같은 VA 를 인용한다 — 블렌드 상태와 무관하다",
+    }, "확정", [
+        specfmt.ev("binary", "wallpaper64.exe FUN_1401c2a40 @ 0x1401c2a40",
+                   "파티클 blendin/blendout 창 파서 — 머티리얼 blending 과 무관하다"),
+        specfmt.ev("file", "Sources/WapleCore/ParticleSystem.swift:509"),
+        ev_script,
+    ]))
 
     # ── 뎁스스텐실 ──────────────────────────────────────────────────────
     E(specfmt.entry("renderState.depthStencil.table", {
