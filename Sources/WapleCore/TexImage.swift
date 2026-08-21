@@ -15,12 +15,17 @@ public struct TexImage {
         /// (`data.subdata(in: mip.payloadRange)` 가 슬라이스에서도 성립).
         public let payloadRange: Range<Int>
         public let lz4: Bool
+        /// 이 레벨의 슬라이스 수(volume). **헤더 flags & 0x40 일 때만** 파일에 필드가 있고 없으면 1 —
+        /// TEXB 리더 0x14015d374 `test byte ptr [rax + 4], 0x40` 게이트, 읽기 0x14015d399,
+        /// 미존재 기본값 1 은 0x14015d2f4(`mov ebx, 1`). 엔진 상한은 0x80(0x14015d3b4).
+        public let depth: Int
 
         public init(decodeWidth: Int, decodeHeight: Int, imageWidth: Int, imageHeight: Int,
-                    decompressedSize: Int, payloadRange: Range<Int>, lz4: Bool = true) {
+                    decompressedSize: Int, payloadRange: Range<Int>, lz4: Bool = true, depth: Int = 1) {
             self.decodeWidth = decodeWidth; self.decodeHeight = decodeHeight
             self.imageWidth = imageWidth; self.imageHeight = imageHeight
             self.decompressedSize = decompressedSize; self.payloadRange = payloadRange; self.lz4 = lz4
+            self.depth = depth
         }
     }
 
@@ -110,8 +115,29 @@ public struct TexImage {
     public let width: Int   // 이미지 width (imgW)
     public let height: Int
     public let format: Int
-    /// TexHeader flags@22(RePKG TexFlags 확정): bit0 NoInterpolation, bit1 ClampUVs, bit2 IsGif, bit5 IsVideoTexture.
+    /// TEXI 헤더 flags@22. **TEXI 리더 0x14015c760 은 `|=` 로 합친다**(0x14015c7b1) — 파일 값이
+    /// 엔진이 미리 세운 비트를 지우지 못한다는 뜻이라, 리더는 파일에 없는 비트를 봐도 놀라면 안 된다.
+    /// 비트별(디컴파일 + 차분 컴파일 확정, spec/formats/tex-deep.json `format.tex.flags.bits`):
+    ///   0x1  NoInterpolation — 소비됨(SceneRendererResources.resolveTextureNoInterpolation)
+    ///   0x2  ClampUVs        — 소비됨(resolveTextureClampUVs)
+    ///   0x4  IsGif(스프라이트시트) — TEXS 섹션이 붙는다. 동봉 52건 = TEXS 파스 52건으로 정확히 일치
+    ///   0x8  **파일 입력이 아니다.** 로더 0x14015e90a–0x14015e933 이 mip 체인 길이 < 2 일 때 스스로
+    ///        세운다(`or dword ptr [rsi + 4], 8`). 동봉 311건 중 파일에 켜진 것 0건 — 리더는 무시할 것
+    ///   0x20 IsVideoTexture(mp4 페이로드)
+    ///   0x40 Slice3D(volume) — 헤더에 i32 texDepth, **mip 레코드에도 i32 depth** 가 추가된다(depth 참조)
+    ///   0x80000 AlphaChannelPriority — **컴파일러 전용**. wallpaper64 의 플래그 디스패치
+    ///        0x14030358e–0x1403035d5 는 0x1/0x2/0x4/0x8/0x20/0x40 여섯 비트만 내부 상태로 옮기고,
+    ///        0x80000·0x100000..0x800000 을 읽는 자리는 바이너리에 없다(주입은 하지만 소비는 안 한다)
     public var flags: Int = 0
+    /// TEXI 헤더 i32 texDepth — **flags & 0x40 일 때만** 파일에 있고(리더 게이트 0x14015c855,
+    /// 저장 0x14015c885) 없으면 1. 동봉 `materials/lut/*.tex` 28개가 32×32×32 3D LUT 로 이 필드를 쓴다
+    /// (texW/texH = 슬라이스 한 장, imgW = texW × depth). 소비처가 3D 샘플링을 하려면 이 값이 필요하다.
+    public var depth: Int = 1
+    /// TEXI 헤더 마지막 u32 — **TEXI 버전 > 0 일 때만** 있다(리더 게이트 0x14015c891, 저장 0x14015c8c1).
+    /// 바이트 순 R,G,B,A. 렌더 소비처는 확인되지 않았다(에디터/UI 힌트로 보인다) — 노출만 한다.
+    /// 헤더 실제 길이가 42 가 아니라 46/50 이라는 근거가 이 필드다(참조 파서로 동봉 311건 전부
+    /// 파스 끝 == EOF 확인). raw 폴백 오프셋을 왜 그래도 42 로 두는지는 parse(_:) 4) 주석 참조.
+    public var previewColor: UInt32 = 0
     public let payload: PayloadKind
     /// 페이로드 바이트 범위 — **인덱스 공간은 `parse(_:)` 에 넘긴 `Data` 그 자체**다.
     /// 즉 `data.subdata(in: tex.payloadRange)` 가 어떤 Data(슬라이스 포함)에서도 성립한다.
@@ -154,6 +180,17 @@ public struct TexImage {
     public var clampUVs: Bool { flags & 0x2 != 0 }
     public var isGif: Bool { flags & 0x4 != 0 }
     public var isVideoTexture: Bool { flags & 0x20 != 0 }
+    /// 3D 슬라이스 텍스처(flags 0x40). 참이면 `depth` 가 슬라이스 수이고 imgW == texW × depth 다.
+    public var isVolume: Bool { flags & 0x40 != 0 }
+    /// AlphaChannelPriority(flags 0x80000). **런타임 비소비 플래그**(위 flags 주석의 디스패치 참조) —
+    /// 인코딩 시 어느 채널을 우선 보존할지의 컴파일러 힌트다. 노출만 하고 렌더는 보지 않는다.
+    public var alphaChannelPriority: Bool { flags & 0x80000 != 0 }
+    /// 스프라이트시트 논리 프레임 크기(TEXS0003 의 gifWidth/gifHeight). v2 이하는 파일에 없어
+    /// 헤더 imgW/imgH 가 기본값이다 — TEXS 리더 0x14015e226(v≥3 읽기) / 0x14015e268(v<3 기본).
+    public var gifWidth: Int = 0
+    public var gifHeight: Int = 0
+    /// TEXS 섹션 버전(0 = 섹션 없음). v1 은 지오메트리가 i32, v2 이하는 frametime 이 항상 0 이다.
+    public var framesVersion: Int = 0
 
     /// 프로퍼티 값으로 변형 선택: 첫 매치 변형의 mip, 미매치 시 기본(mip). variants 없으면 항상 기본.
     /// 순수 — 렌더 배선이 이 결과로 디코드(TexDecoder.rgba(from:data:properties:)).
@@ -171,17 +208,44 @@ public struct TexImage {
     public static func spriteFrameIndex(frames: [TexFrame], time: Float) -> Int {
         let n = frames.count
         guard n > 1 else { return 0 }
+        // TEXS0002 이하는 frametime 을 **안 쓴다** — 동봉 실측(2026-08-21, `.tex` 311 전건):
+        // TEXS0003 44개는 프레임마다 `duration/frames`(짝 `.tex-json` 과 정확히 일치)이고,
+        // TEXS0002 8개(debris1·fire1~3·lightning1~2·snow·smoke3)는 **전 프레임 0** 이다.
+        // 종전 `max(1e-4, f.time)` 클램프는 그 8개의 총 재생길이를 n×0.1ms 로 만들어
+        // 초당 수백 바퀴를 돌렸다(육안으로는 잡음). 파일에 속도가 없으면 파일 밖에서 가져와야 한다.
+        let stored = storedFrameTimeTotal(frames)
+        let useFallback = stored <= 1e-4
         var total: Float = 0
-        for f in frames { total += max(1e-4, f.time) }
+        for f in frames { total += frameDuration(f, fallback: useFallback) }
         guard total > 1e-4, time.isFinite else { return 0 }
         var t = time.truncatingRemainder(dividingBy: total)
         if t < 0 { t += total }            // 음수 시간 방어(일시정지 되감기 등)
         var acc: Float = 0
         for i in 0..<n {
-            acc += max(1e-4, frames[i].time)
+            acc += frameDuration(frames[i], fallback: useFallback)
             if t < acc { return i }
         }
         return n - 1                        // 부동소수 경계 폴백
+    }
+
+    /// 파일이 speed 를 안 실었을 때(TEXS0002) 쓰는 프레임당 재생시간. 파티클 경로가 이미 쓰는
+    /// 값과 같게 맞춘다(SceneRendererFrameEncoder.particleSheetFrameIndex / SceneRenderer3D 의
+    /// `max(0.016, ft)`) — 한 자산이 이미지 레이어냐 파티클이냐에 따라 속도가 달라지지 않게 하는 것이
+    /// 이 상수의 유일한 근거다. **WE 가 이 자리에 쓰는 값은 RE 로 확정하지 못했다**(TEXS 리더
+    /// 0x14015e514 가 총 재생길이를 누적만 하고, 그걸 읽는 소비처를 바이너리에서 특정하지 못함).
+    public static let fallbackFrameTime: Float = 0.016
+
+    /// 파일에 실린 frametime 의 총합(비유한/음수는 0 취급) — 0 이면 파일에 속도가 없다는 뜻.
+    private static func storedFrameTimeTotal(_ frames: [TexFrame]) -> Float {
+        var sum: Float = 0
+        for f in frames where f.time.isFinite && f.time > 0 { sum += f.time }
+        return sum
+    }
+
+    /// 프레임 1장의 재생시간. fallback 이면 파일 값을 무시하고 기본값(전 프레임 균일)을 쓴다.
+    /// fallback 이 아니면 종전과 **글자 그대로 같은 식**이라 TEXS0003 시트는 무회귀다.
+    private static func frameDuration(_ f: TexFrame, fallback: Bool) -> Float {
+        fallback ? fallbackFrameTime : max(1e-4, f.time)
     }
 
     public static func parse(_ data: Data) -> TexImage? {
@@ -196,19 +260,44 @@ public struct TexImage {
               let texW = i32(26), let texH = i32(30),
               let imgW = i32(34), let imgH = i32(38) else { return nil }
         // 차원은 무경계 UInt32 에서 옴. Metal 렌더 한계(16384) 를 넘으면 거부해 w*h*4 정수 오버플로 트랩(크래시) 차단.
+        // (참고: 엔진 자신의 상한은 더 좁다 — TEXB 리더 0x14015d3a2 가 w/h > 0x2000 이면 에러 경로다.)
         let maxDim = 16384
         guard texW >= 0, texH >= 0, imgW >= 0, imgH >= 0,
               texW <= maxDim, texH <= maxDim, imgW <= maxDim, imgH <= maxDim else { return nil }
+
+        // TEXI 헤더 꼬리 두 필드 — **둘 다 조건부**라서 헤더 길이가 42/46/50 으로 달라진다.
+        // 리더 0x14015c760 원문 순서: fmt(0x14015c789) flags(0x14015c7b1) texW(0x14015c7da)
+        // texH(0x14015c803) imgW(0x14015c82c) imgH(0x14015c85a)
+        //   → flags & 0x40 이면 i32 depth(게이트 0x14015c855, 저장 0x14015c885)
+        //   → TEXI 버전 > 0 이면 u32 previewColor(게이트 0x14015c891, 저장 0x14015c8c1).
+        // 종전 코드는 42 를 고정으로 봤고(= previewColor 를 페이로드로 셈) raw 폴백에서 4바이트 어긋났다.
+        var depth = 1
+        if flags & 0x40 != 0 {
+            guard let d = i32(42), d > 0, d <= 128 else { return nil }   // 엔진 상한 0x80 = 0x14015d3b4
+            depth = d
+        }
+        // TEXI 섹션 이름 "TEXI000N" + NUL 이 오프셋 9..18 — 뒤 4자리가 버전이다(로더 0x14015e745 가 atoi).
+        // 리더는 `버전 >= 1` 만 가르므로(0x14015c891 `cmp r11d, 1`) 숫자로 풀 것 없이 0 초과만 본다.
+        let texiVersionPositive = b[13..<17].contains { (0x31...0x39).contains($0) }
+        let hasMipDepth = flags & 0x40 != 0
+        let previewColor: UInt32 = texiVersionPositive ? (readU32LE(b, at: hasMipDepth ? 46 : 42) ?? 0) : 0
 
         func make(_ kind: PayloadKind, _ range: Range<Int>, _ mip: CompressedMip?,
                   mips: [CompressedMip] = [], variants: [Variant] = [],
                   mipChain: [CompressedMip] = []) -> TexImage {
             var t = TexImage(width: imgW, height: imgH, format: format, payload: kind, payloadRange: range, mip: mip)
             t.flags = flags
+            t.depth = depth
+            t.previewColor = previewColor
             t.mips = mips
             t.variants = variants
             t.mipChain = mipChain
-            t.frames = parseFrames(b)
+            let s = parseFrames(b)
+            t.frames = s.frames
+            t.framesVersion = s.version
+            // v3 은 파일에서(0x14015e226), v2 이하는 헤더 imgW/imgH 가 엔진 기본값(0x14015e268).
+            t.gifWidth = s.version >= 3 ? s.gifWidth : imgW
+            t.gifHeight = s.version >= 3 ? s.gifHeight : imgH
             return t
         }
 
@@ -221,7 +310,7 @@ public struct TexImage {
         //    payloadRange 오정렬 없음).
         //    [정정 2026-08-01] 종전엔 이 35 를 "코퍼스" 라고 적었다. assets 한정 수치이고 워크샵
         //    scene.pkg 를 합친 전수는 796개다(그중 701개가 mipCount>1). 아래 mipChain 전달 참조.
-        let container = parseMip(b, imgW: imgW, imgH: imgH, format: format, base: base)
+        let container = parseMip(b, imgW: imgW, imgH: imgH, format: format, base: base, hasMipDepth: hasMipDepth)
         if let (mips, imageFormat, _, chain) = container {
             let mip = mips[0]
             switch imageFormat {
@@ -261,8 +350,16 @@ public struct TexImage {
             return make(kind, mip.payloadRange, mip, mips: mips, variants: variants, mipChain: mipChain)
         }
         // 4) 비압축 raw RGBA(드묾).
-        // F433: 픽셀은 42B TEXV 헤더(TEXV0005\0+TEXI0001\0+6×i32) 뒤에서 시작 — 종전 0..<b.count 는
+        // F433: 픽셀은 TEXV 헤더(TEXV0005\0 + TEXI0001\0 + 6×i32) 뒤에서 시작 — 종전 0..<b.count 는
         // 헤더를 픽셀로 디코드해 42B(4의 배수 아님) 시프트로 채널 정렬이 깨졌다(TexDecoder.rawRGBA8888).
+        //
+        // ⚠️ **실물 헤더 끝은 42 가 아니다.** 리더 규칙대로면 42 + (flags&0x40 ? 4 : 0) + (TEXI ver>0 ? 4 : 0)
+        // 이고, 실물은 TEXI0001 이라 previewColor 가 **항상** 붙어 최소 46 이다(동봉 311건 전건 —
+        // 참조 파서로 46/50 을 쓰면 파스 끝이 EOF 와 정확히 일치, 42 를 쓰면 전건 어긋난다).
+        // 그런데도 42 를 유지하는 이유는 **이 분기가 실물에서 도달 불가**여서다: 엔진이 만든 `.tex` 는
+        // 예외 없이 TEXB 컨테이너를 갖는다(동봉 311/311, 워크샵 코퍼스 4,680/4,680 — TEXB0001~0004 합계가
+        // 파일 수와 같다). 여기 오는 건 합성/손상 입력뿐이고, 기존 픽스처(TEXI0001 을 적지만 previewColor
+        // 는 안 적는다)가 42 를 못박아 두고 있다. 도달 가능한 실물 반례가 나오면 그때 46/50 으로 옮길 것.
         if format == 0 { return make(.rawRGBA8888, (base + 42)..<(base + b.count), nil) }
         return make(.unknown, base..<(base + b.count), nil)
     }
@@ -277,7 +374,8 @@ public struct TexImage {
     /// mipChain: **단일 image** 일 때 image 0 의 전체 레벨도 수집(레벨 L 의 image dims = imgW/imgH >> L,
     /// 최소 1 — 레벨 레코드의 w/h 는 alloc dims 라 orig 는 축소식에서 온다). 다중 image 는 페이지 스택 경로가
     /// 레이아웃을 바꾸므로 [](무회귀). 어느 레벨이든 파스 실패 시 체인 폐기(mip0 경로 그대로 — 종전과 동일).
-    private static func parseMip(_ b: [UInt8], imgW: Int, imgH: Int, format: Int, base: Int) -> (mips: [CompressedMip], imageFormat: Int, variants: [Variant], mipChain: [CompressedMip])? {
+    private static func parseMip(_ b: [UInt8], imgW: Int, imgH: Int, format: Int, base: Int,
+                                 hasMipDepth: Bool) -> (mips: [CompressedMip], imageFormat: Int, variants: [Variant], mipChain: [CompressedMip])? {
         guard let ti = indexOf(b, Array("TEXB".utf8)), ti + 9 <= b.count else { return nil }
         let version = Int(String(bytes: b[ti + 4..<ti + 8], encoding: .ascii) ?? "") ?? 0
         guard version >= 1, version <= 4 else { return nil }
@@ -291,6 +389,15 @@ public struct TexImage {
             var q = start
             guard let w = i32(q), let h = i32(q + 4), w > 0, h > 0, w <= 16384, h <= 16384 else { return nil }
             q += 8
+            // **레코드 안의 i32 depth 는 헤더 flags & 0x40 일 때만 존재한다**(TEXB 리더 게이트
+            // 0x14015d374, 읽기 0x14015d399, 미존재 기본 1 은 0x14015d2f4). 이걸 몰라 동봉
+            // `materials/lut/*.tex` 28개(3D LUT)가 전건 parseMip 실패 → PNG 시그니처 스캔 폴백으로
+            // 흘렀고, 컨테이너를 통째로 못 읽으니 imageCount·mip 체인·depth 가 전부 사라졌다.
+            var mipDepth = 1
+            if hasMipDepth {
+                guard let d = i32(q), d > 0, d <= 128 else { return nil }   // 엔진 상한 0x80(0x14015d3b4)
+                mipDepth = d; q += 4
+            }
             var isLZ4 = 0, dec = 0
             if version >= 2 {
                 guard let z = i32(q), let d = i32(q + 4) else { return nil }
@@ -298,11 +405,14 @@ public struct TexImage {
             }
             guard let comp = i32(q), comp > 0, q + 4 + comp <= b.count else { return nil }
             q += 4
-            if isLZ4 == 0 { dec = comp }  // 비압축: payload 그대로
+            // 엔진은 이 필드의 **bit0 만** 본다(0x14015d484 `movzx eax, r9b` + `and al, 1`).
+            let lz4 = isLZ4 & 1 != 0
+            if !lz4 { dec = comp }  // 비압축: payload 그대로
             // dec 는 공격자 제어 필드. 단일 mip 의 정당한 한계(512MB)를 넘으면 거부해 ~4GB 할당 DoS 차단.
             guard dec > 0, dec <= 512 << 20 else { return nil }
             let mip = CompressedMip(decodeWidth: w, decodeHeight: h, imageWidth: origW, imageHeight: origH,
-                                    decompressedSize: dec, payloadRange: (base + q)..<(base + q + comp), lz4: isLZ4 != 0)
+                                    decompressedSize: dec, payloadRange: (base + q)..<(base + q + comp),
+                                    lz4: lz4, depth: mipDepth)
             return (mip, q + comp)
         }
         var p = ti + 9
@@ -419,12 +529,13 @@ public struct TexImage {
 
     /// TEXS 스프라이트시트 섹션 파스(파일 꼬리에서 역방향 탐색 — LZ4 페이로드 내 우연 일치 회피).
     /// 이상 감지 시 [] (프레임 없음 = 전체 텍스처 1프레임과 동등).
-    private static func parseFrames(_ b: [UInt8]) -> [TexFrame] {
+    private static func parseFrames(_ b: [UInt8]) -> (frames: [TexFrame], version: Int, gifWidth: Int, gifHeight: Int) {
+        let none = (frames: [TexFrame](), version: 0, gifWidth: 0, gifHeight: 0)
         let sig = Array("TEXS000".utf8)
-        guard b.count > sig.count + 6 else { return [] }
-        guard let ti = findLastSignature(b, sig) else { return [] }
+        guard b.count > sig.count + 6 else { return none }
+        guard let ti = findLastSignature(b, sig) else { return none }
         let version = Int(b[ti + 7]) - 0x30
-        guard version >= 1, version <= 3 else { return [] }
+        guard version >= 1, version <= 3 else { return none }
         func i32(_ o: Int) -> Int? {
             guard o >= 0, o + 4 <= b.count else { return nil }
             return Int(Int32(bitPattern: UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24))
@@ -434,10 +545,17 @@ public struct TexImage {
             return Float(bitPattern: UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24)
         }
         var p = ti + 9
-        guard let count = i32(p), count > 0, count <= 4096 else { return [] }
+        guard let count = i32(p), count > 0, count <= 4096 else { return none }
         p += 4
-        if version >= 3 { p += 8 }   // gifWidth, gifHeight
-        guard p + count * 32 <= b.count else { return [] }
+        // gifWidth/gifHeight 는 **v3 부터만** 파일에 있다(TEXS 리더 0x14015e221 `cmp ebp, 3`,
+        // 읽기 0x14015e226·0x14015e241). v2 이하에서는 엔진이 헤더 imgW/imgH 를 넣는다(0x14015e268)
+        // — 그 기본값은 호출자 make(_:) 가 채운다.
+        var gifW = 0, gifH = 0
+        if version >= 3 {
+            guard let gw = i32(p), let gh = i32(p + 4) else { return none }
+            gifW = gw; gifH = gh; p += 8
+        }
+        guard p + count * 32 <= b.count else { return none }
         // TEXS0001(v1) 은 x/y/w/h 지오메트리가 f32 가 아니라 i32 정수형이다(RePKG
         // TexFrameInfoContainerReader 실측 — id 는 i32, frametime 은 v1/v2/v3 모두 f32).
         // v2/v3 은 f32 유지. 레코드 크기(32B)·필드 순서는 전 버전 동일 → 지오메트리 읽기만 분기.
@@ -454,16 +572,16 @@ public struct TexImage {
                   // spriteFrameIndex 는 프레임당 max(1e-4,…) 클램프라 0 도 안전.
                   t.isFinite, t >= 0,
                   x >= 0, y >= 0, x.isFinite, y.isFinite,
-                  w.isFinite, h.isFinite, wy.isFinite, hx.isFinite else { return [] }
+                  w.isFinite, h.isFinite, wy.isFinite, hx.isFinite else { return none }
             // 회전 프레임(RePKG): Width|Height 가 0 → 유효 크기는 HeightX/WidthY 에서. 양 축 모두 0(퇴화)이면
             // 프레임 전체 드롭(종전 w>0,h>0 안전망 유지) — 단 회전 시트는 더는 통째로 버리지 않는다.
             let effW = w != 0 ? w : hx
             let effH = h != 0 ? h : wy
-            guard abs(effW) > 0, abs(effH) > 0 else { return [] }
+            guard abs(effW) > 0, abs(effH) > 0 else { return none }
             out.append(TexFrame(imageId: id, time: t, x: x, y: y, width: w, height: h, widthY: wy, heightX: hx))
             p += 32
         }
-        return out
+        return (out, version, gifW, gifH)
     }
 
     private static func findSig(_ b: [UInt8], _ sig: [UInt8], limit: Int) -> Int? {

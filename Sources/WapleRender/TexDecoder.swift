@@ -19,6 +19,14 @@ public enum TexDecoder {
         case .embeddedImage:
             // imageFormat 이 인코딩 이미지(PNG/JPEG/GIF)로 지정한 mip. LZ4 해제(mipBytes) 후 CGImageSource 디코드
             // — fast-path 512B 스캔이 놓치는 LZ4 압축 임베디드 이미지 경로. straight-alpha 규약은 draw 가 유지.
+            //
+            // ⚠️ **volume(tex.depth > 1) 은 여기서 2D 한 장으로 나온다.** 동봉 `materials/lut/*.tex` 28개가
+            // 그렇다: 헤더는 imgW=1024(=texW×depth) × imgH=32 인데 **실제 PNG 는 32×1024**(32×32 슬라이스를
+            // 세로로 쌓았다 — 전 28개 실측 동일). 즉 헤더 치수와 디코드 치수가 축이 바뀌어 있다.
+            // 반환 dims 는 PNG 실치수(32×1024)라 그 자체로는 정합하지만, 3D LUT 로 샘플하려면
+            // `tex.depth` 로 세로를 잘라 슬라이스를 만들어야 한다 — 그 소비처는 아직 없다.
+            // (2026-08-21 이전에는 이 28개가 parseMip 실패로 `.png` 폴백을 탔다. 픽셀은 같았지만
+            //  컨테이너를 못 읽어 depth 자체가 없었다 — TexImage.parse 의 hasMipDepth 참조.)
             guard let mip = tex.mip, let dec = mipBytes(mip: mip, data: data) else { return nil }
             return decodeEncoded(dec, inBytes: mip.payloadRange.count, format: "embedded")
         case .rawRGBA8888:
