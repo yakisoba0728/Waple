@@ -1044,6 +1044,17 @@ extension SceneRenderer {
     /// GLSLTranslator.swift:1592 의 VIn 은 a_Position/a_TexCoord 만 지원 — 현재로선 이 4개 모두 MSL 컴파일
     /// 단계에서 실패해(안전) 스톡 폴백으로 떨어진다(실측: 3470948192/3589454154 A/B 무변화). 온전한 시각
     /// 개선은 GLSLTranslator 의 attribute 화이트리스트 확장(a_Normal 추가)이 별도로 필요 — 이 웨이브 스코프 밖.
+    ///
+    /// **[2026-08-21 해소 — 위 "별도로 필요" 는 이번에 들어갔다.]** `GLSLTranslator` 가
+    /// `a_Normal`(슬롯 2)을 **참조될 때만** `VIn` 에 싣고 그 사실을 `TranslatedShader.vertexAttributes`
+    /// 로 알린다. 아래 `buildCustomMeshShader` 의 정점 디스크립터가 같은 조건에서 `attribute(2)` 를
+    /// 꽂는다(법선은 메시 8f 정점의 오프셋 12 에 이미 있다). 즉 위 문단의 "MSL 컴파일 단계에서
+    /// 실패" 는 `a_Normal` 한 이름에 대해서는 더 이상 사실이 아니다 —
+    /// 다만 이 화이트리스트(env 게이트 `WAPLE_BUILTIN_MESH_SHADERS`)와 **독립**이라, 게이트가 꺼져
+    /// 있으면 여기 4개는 여전히 pkg 밖 소스라 이 경로에 들어오지 않는다. 저작레인 8건
+    /// (`audiophile` · `demon_core` · `dna_fragment` · `fantasticcar` · `ricepod` · `techno` ·
+    /// `shimmering_particles`)은 pkg 안 셰이더라 게이트와 무관하게 수혜를 받는다.
+    /// 도달 수치는 `docs/re/shader-uniforms.md` §7.6 의 표.
     private static let builtinMeshShaderWhitelist: Set<String> = ["generic", "generic2", "generic3", "generic4"]
 
     /// G①: 순수 판정 함수(테스트 편의 — env 뮤테이션 없이 화이트리스트/게이트 조합을 직접 검증).
@@ -1110,6 +1121,15 @@ extension SceneRenderer {
         // (2D 커스텀 레이어 경로가 이미 회피하는 것과 동일 계약 — translatedLayerPipeline 참조).
         vd.attributes[0].format = .float3; vd.attributes[0].offset = 0; vd.attributes[0].bufferIndex = 4
         vd.attributes[1].format = .float2; vd.attributes[1].offset = 24; vd.attributes[1].bufferIndex = 4
+        // [2026-08-21] `a_Normal`(attribute 2) — 번역기가 **실제로 실었을 때만** 꽂는다
+        // (`docs/re/shader-uniforms.md` §7.6/§7.7). 새 버퍼가 필요 없다: 메시 정점이 이미
+        // `pos3+normal3+uv2`(8f) 라 법선이 **오프셋 12** 에 있다.
+        // **무조건 꽂으면 안 된다** — 셰이더가 안 실은 attribute 를 디스크립터에만 넣는 것은
+        // Metal 이 무시하지만, 반대(번역기가 싣고 디스크립터가 빠짐)는 파이프라인 생성 실패다.
+        // 두 쪽이 같은 조건을 봐야 한다: 조건의 단일 출처가 `t.vertexAttributes` 다.
+        if t.vertexAttributes.contains("a_Normal") {
+            vd.attributes[2].format = .float3; vd.attributes[2].offset = 12; vd.attributes[2].bufferIndex = 4
+        }
         vd.layouts[4].stride = 32
         pd.vertexDescriptor = vd
         pd.depthAttachmentPixelFormat = .depth32Float
@@ -2267,7 +2287,7 @@ extension SceneRenderer {
             guard !snapshot.isEmpty else { skipEmpty += 1; continue }
             drawn += 1
             let verts = particle3DVertices(snapshot, sys, m: m, right: right, up: up)
-            let vertexCount = verts.count / 9
+            let vertexCount = verts.count / ParticleShaders.vertexFloats3D
             guard vertexCount > 0, let vbuf = sys.scratch.load(verts, device: device) else { continue }
             let useFog = fogActive && sys.foggy
             let pipe: MTLRenderPipelineState?
@@ -2297,7 +2317,10 @@ extension SceneRenderer {
         if dbg { NSLog("%@", "[Particle3D] t=\(time) drawn=\(drawn) skipInvis=\(skipInvis) skipParent=\(skipParent) skipEmpty=\(skipEmpty) of \(particleSystems.count)") }
     }
 
-    /// 파티클 스냅샷 → 월드공간 카메라-페이싱 쿼드 정점(정점당 9 float: world.xyz, uv, rgba).
+    /// 파티클 스냅샷 → 월드공간 카메라-페이싱 쿼드 정점
+    /// (정점당 `ParticleShaders.vertexFloats3D` = 13 float: `world.xyz, u0,v0, rgba, u1,v1, blend, pad`).
+    /// 꼬리 4 슬롯은 2D 와 **뜻이 같은** `SPRITESHEETBLEND` 크로스페이드다 — 두 경로가 갈리면
+    /// 같은 파티클 def 가 2D/3D 마운트에 따라 다르게 보인다(`docs/re/sprite-occlusion.md` §11.3).
     /// 월드 중심 = m · 파티클 로컬 pos(F731: def.flags worldspace 시 m 우회 직결 — 실물도 오브젝트 변환을
     /// 통째로 버린다, 아래 F731 블록의 0x14023670c/ctx+0xAF0 근거). 반경 = 0.5·size·(m 열0 길이)
     /// — in-plane 스케일만 크기에 반영, z 스케일(예: speedline 0.6)은 위치에 이미 m 으로 반영됨.
@@ -2307,7 +2330,7 @@ extension SceneRenderer {
     func particle3DVertices(_ snapshot: [Particle], _ sys: GPUParticleSystem,
                             m: simd_float4x4, right: SIMD3<Float>, up: SIMD3<Float>) -> [Float] {
         var verts: [Float] = []
-        verts.reserveCapacity(snapshot.count * 54)
+        verts.reserveCapacity(snapshot.count * 6 * ParticleShaders.vertexFloats3D)
         // F731(S-23): def.flags **값 1**(= bit0, worldspace) — 파티클 pos 가 이미 월드 좌표라 오브젝트
         // 변환 m 을 우회해 직결한다(크기도 월드 단위 → colScale=1). 값 4(= bit2, perspective)는 3D 경로가
         // viewProj 원근 투영을 내재해(멀수록 작아짐이 자동) 추가 z-스케일이면 이중 원근 — 여기선 의도적으로
@@ -2386,31 +2409,59 @@ extension SceneRenderer {
             }
             // UV + 종횡비: 스프라이트시트면 현재 프레임 서브렉트(2D appendQuad 미러), 아니면 전체 텍스처.
             var uv: [(Float, Float)] = [(0, 0), (1, 0), (1, 1), (0, 1)]
+            // 크로스페이드 짝(기본 = 현재 프레임 · blend 0 → `mix` 항등 → 종전과 비트동일).
+            var uvNext = uv
+            var blend: Float = 0
             var ratio = sys.texRatio
             if !sys.frames.isEmpty {
                 let fc = sys.frames.count
                 let fi: Int
-                if p.frame >= 0 { fi = sheetFrameIndex(sequence: p.frame, frameCount: fc, mirror: sys.mapSeqMirror) }
+                // 좌표(= WE `lifetime * numFrames`)를 같이 들고 나온다 — `blend` 는 인덱스를 고른
+                // **그 좌표의 소수부**여야 한다(WE 는 `ComputeSpriteFrame` 한 곳에서 floor/frac 을
+                // 동시에 낸다). 좌표가 없는 갈래(mapsequence)는 nil = 크로스페이드 없음.
+                var coord: Float? = nil
+                if p.frame >= 0 {
+                    // mapsequence: 스폰 시 프레임 확정 → 크로스페이드 금지(2D 형제와 같은 규약).
+                    fi = sheetFrameIndex(sequence: p.frame, frameCount: fc, mirror: sys.mapSeqMirror)
+                }
                 else if sys.def.animationMode == .sequence {
                     // F730(S-22): animationmode=sequence — 수명에 걸쳐 시트 전체 순차 재생 ×sequencemultiplier
                     // (3=수명 내 3회전, 0.5=절반까지). 수명 진행률 t×fc×rate 를 sheetFrameIndex 로 루프 폴드
                     // (sequence 의 폴드는 순환 — mapsequence 전용 mirror 와 무관). 비유한 rate/수명은 0/ε 폴터.
                     let t = p.age / max(1e-4, p.lifetime)
                     let rate = sys.def.sequenceMultiplier.isFinite ? max(0, sys.def.sequenceMultiplier) : 0
-                    fi = sheetFrameIndex(sequence: t * Float(fc) * rate, frameCount: fc, mirror: false)
+                    let c = t * Float(fc) * rate
+                    fi = sheetFrameIndex(sequence: c, frameCount: fc, mirror: false)
+                    coord = c
                 }
-                // F530-sweep: 2D 형제(SceneRendererFrameEncoder.particleSheetFrameIndex)와 동일 가드.
-                else { fi = safeInt(Double(p.age / max(0.016, sys.frames[0].time))).map { $0 % fc } ?? 0 }
-                let fr = sys.frames[max(0, min(fc - 1, fi))]
-                let tw = Float(max(1, sys.texture.width)), th = Float(max(1, sys.texture.height))
-                let u0 = fr.atlasX / tw, v0 = fr.atlasY / th
-                let u1 = min(1, (fr.atlasX + fr.atlasWidth) / tw), v1 = min(1, (fr.atlasY + fr.atlasHeight) / th)
-                let corners = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
-                let q = fr.rotationQuarters
-                uv = (0..<4).map { corners[($0 + q) % 4] }
-                let upW = q % 2 == 0 ? fr.atlasWidth : fr.atlasHeight
-                let upH = q % 2 == 0 ? fr.atlasHeight : fr.atlasWidth
-                ratio = upH / max(1, upW)
+                // F530-sweep: 2D 형제(SceneRendererFrameEncoder.particleSheetPair)와 동일 가드.
+                // 폴백 프레임시간은 형제 자리 셋이 공유하는 한 상수다(TexImage.fallbackFrameTime 주석).
+                else {
+                    let c = p.age / max(TexImage.fallbackFrameTime, sys.frames[0].time)
+                    fi = safeInt(Double(c)).map { $0 % fc } ?? 0
+                    coord = c
+                }
+                // 크로스페이드 게이트는 2D 와 같다 — `animationmode != "randomframe"` 하나
+                // (파스 0x1401c5717 → [def+0x30]; 콤보 0x1401d24d2). `randomframe` 은 시뮬이
+                // 스폰 시 p.frame 을 확정해 애초에 위 첫 갈래로 간다.
+                let pair: TexImage.SheetFramePair
+                if let c = coord, sys.def.animationMode != .randomframe {
+                    // **인덱스는 위에서 고른 fi 를 그대로 쓴다** — `sheetFramePair` 와 어긋나는
+                    // 퇴화 입력에서는 blend 를 0 으로 접는다(TexImage.reconciledSheetPair 주석).
+                    pair = TexImage.reconciledSheetPair(
+                        currentIndex: fi,
+                        pair: TexImage.sheetFramePair(frameCoordinate: c, frameCount: fc, crossfade: true))
+                } else {
+                    pair = TexImage.fixedSheetPair(currentIndex: fi)
+                }
+                let cur = sys.frames[max(0, min(fc - 1, pair.current))]
+                let nxt = sys.frames[max(0, min(fc - 1, pair.next))]
+                let q0 = TexImage.sheetFrameQuadUV(cur, textureWidth: sys.texture.width, textureHeight: sys.texture.height)
+                let q1 = TexImage.sheetFrameQuadUV(nxt, textureWidth: sys.texture.width, textureHeight: sys.texture.height)
+                uv = (0..<4).map { q0.corner($0) }
+                uvNext = (0..<4).map { q1.corner($0) }
+                blend = pair.blend
+                ratio = q0.ratio      // 쿼드 기하는 하나 — 현재 프레임 것만(2D 형제와 같은 근거).
             }
             let hw = p.size * colScale * 0.5
             let hh = hw * ratio
@@ -2421,11 +2472,12 @@ extension SceneRenderer {
             let r = rRight * hw, u = rUp * hh
             let tl = center - r + u, tr = center + r + u, br = center + r - u, bl = center - r - u
             let cr = p.color.x, cg = p.color.y, cb = p.color.z, al = p.alpha
-            func v(_ pt: SIMD3<Float>, _ uu: (Float, Float)) {
-                verts.append(contentsOf: [pt.x, pt.y, pt.z, uu.0, uu.1, cr, cg, cb, al])
+            // 13 float: world.xyz, u0,v0, rgba, u1,v1, blend, pad(0 — pv3d_* 미참조).
+            func v(_ pt: SIMD3<Float>, _ uu: (Float, Float), _ u2: (Float, Float)) {
+                verts.append(contentsOf: [pt.x, pt.y, pt.z, uu.0, uu.1, cr, cg, cb, al, u2.0, u2.1, blend, 0])
             }
-            v(tl, uv[0]); v(tr, uv[1]); v(br, uv[2])
-            v(tl, uv[0]); v(br, uv[2]); v(bl, uv[3])
+            v(tl, uv[0], uvNext[0]); v(tr, uv[1], uvNext[1]); v(br, uv[2], uvNext[2])
+            v(tl, uv[0], uvNext[0]); v(br, uv[2], uvNext[2]); v(bl, uv[3], uvNext[3])
         }
         return verts
     }

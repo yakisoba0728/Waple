@@ -39,10 +39,12 @@ final class Scene3DParticleIntegrationTests: XCTestCase {
     }
 
     private func vtx(_ verts: [Float], _ i: Int) -> SIMD3<Float> {
-        SIMD3(verts[i * 9 + 0], verts[i * 9 + 1], verts[i * 9 + 2])
+        SIMD3(verts[i * ParticleShaders.vertexFloats3D + 0],
+              verts[i * ParticleShaders.vertexFloats3D + 1],
+              verts[i * ParticleShaders.vertexFloats3D + 2])
     }
     /// 정점 i 의 텍스처 u 좌표(레이아웃: xyz uv rgba — 9 float 스트라이드).
-    private func tu(_ verts: [Float], _ i: Int) -> Float { verts[i * 9 + 3] }
+    private func tu(_ verts: [Float], _ i: Int) -> Float { verts[i * ParticleShaders.vertexFloats3D + 3] }
 
     // MARK: F730(S-22) — animationmode=sequence + sequencemultiplier 소비
 
@@ -54,7 +56,7 @@ final class Scene3DParticleIntegrationTests: XCTestCase {
         var p = Particle(); p.pos = .zero; p.size = 2; p.alpha = 1; p.age = 1; p.lifetime = 2
         let verts = renderer.particle3DVertices([p], sys, m: matrix_identity_float4x4,
                                                 right: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0))
-        XCTAssertEqual(verts.count, 6 * 9)
+        XCTAssertEqual(verts.count, 6 * ParticleShaders.vertexFloats3D)
         XCTAssertEqual(tu(verts, 0), 0.5, accuracy: 1e-6,
                        "sequence ×1: age/lifetime=0.5 → t×fc=1 → 프레임1(u0=0.5)이어야")
     }

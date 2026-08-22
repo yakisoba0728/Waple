@@ -1436,4 +1436,137 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertFalse(t.msl.contains("gl_FragColor.rgb *= eng.layerTint.rgb;"))
         XCTAssertTrue(t.msl.contains("float4 layerTint;"), "EngineU always includes layerTint")
     }
+
+    // MARK: - [2026-08-21] 정점 attribute 화이트리스트 (docs/re/shader-uniforms.md §7.6)
+
+    /// **무회귀 기준선**: `a_Normal` 을 안 쓰는 셰이더의 `VIn` 방출 문자열은 **글자 그대로**
+    /// 종전과 같아야 한다. 이 단언이 깨지면 2D 레이어/이펙트 쿼드 파이프라인이 통째로 위험하다
+    /// (그 정점 디스크립터는 attribute 0·1 만 선언한다).
+    func testVInIsUnchangedForShadersThatDoNotReferenceExtraAttributes() throws {
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: opacityVert, fragment: opacityFrag, combos: [:]))
+        XCTAssertEqual(t.vertexAttributes, ["a_Position", "a_TexCoord"])
+        XCTAssertTrue(t.msl.contains(
+            "struct VIn { float3 a_Position [[attribute(0)]]; float2 a_TexCoord [[attribute(1)]]; };"),
+            "종전 방출과 글자 그대로 같아야 한다")
+        XCTAssertFalse(t.msl.contains("a_Normal"))
+    }
+
+    /// **참조하면 싣는다.** 종전에는 `a_Normal` 을 선언한 셰이더가 `VIn` 에 없는 멤버
+    /// (`vin.a_Normal`)를 읽어 MSL 컴파일이 **확정 실패**했다(→ 폴백). 설치본 실측 도달은
+    /// `a_Normal` 17파일, 그중 저작레인 8(§7.6 의 표).
+    func testVInLoadsNormalAttributeWhenReferenced() throws {
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        attribute vec3 a_Normal;
+        varying vec2 v_TexCoord;
+        varying vec3 v_Normal;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+            v_Normal = a_Normal;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        varying vec3 v_Normal;
+        uniform sampler2D g_Texture0;
+        void main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * vec4(v_Normal, 1.0); }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertEqual(t.vertexAttributes, ["a_Position", "a_TexCoord", "a_Normal"])
+        XCTAssertTrue(t.msl.contains("float3 a_Normal [[attribute(2)]];"),
+                      "슬롯 2 는 정점 디스크립터와의 계약이다(메시 8f 정점의 오프셋 12)")
+        XCTAssertTrue(t.msl.contains("vin.a_Normal"), "본문 참조는 그대로 남는다")
+    }
+
+    /// **선언만 있고 `#if` 로 잘려 나간 참조는 안 싣는다.** 선언을 기준으로 실으면 2D 쿼드
+    /// 파이프라인(법선 없는 정점 버퍼)이 파이프라인 생성 단계에서 통째로 깨진다 —
+    /// 컴파일 실패가 파이프라인 실패로 바뀔 뿐이라 아무것도 안 나아지고 진단만 나빠진다.
+    func testDeclaredButUnreferencedNormalIsNotLoaded() throws {
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        attribute vec3 a_Normal;
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        #if LIGHTING
+            v_TexCoord += a_Normal.xy;
+        #endif
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord); }
+        """
+        let off = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: ["LIGHTING": 0]))
+        XCTAssertEqual(off.vertexAttributes, ["a_Position", "a_TexCoord"],
+                       "`#if` 로 잘린 참조는 세면 안 된다")
+        XCTAssertFalse(off.msl.contains("a_Normal"))
+        // 대조군 — 같은 소스를 콤보만 켜면 실린다(테스트가 그냥 항상 false 를 재는 것이 아님을 보인다).
+        let on = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: ["LIGHTING": 1]))
+        XCTAssertEqual(on.vertexAttributes, ["a_Position", "a_TexCoord", "a_Normal"])
+    }
+
+    /// 화이트리스트 **밖**의 attribute 는 여전히 안 싣는다 — 정점 버퍼에 그 데이터가 없기
+    /// 때문이다(`a_Color` 9파일 · `a_Tangent4` 8 · 스키닝 10/9). 싣기만 하면 컴파일 실패가
+    /// 파이프라인 실패로 바뀔 뿐이고, 둘 다 폴백이다. 버퍼 레이아웃 확장이 선행돼야 한다.
+    func testNonWhitelistedAttributesStayUnloaded() throws {
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        attribute vec4 a_Color;
+        varying vec4 v_Color;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_Color = a_Color;
+        }
+        """
+        let frag = """
+        varying vec4 v_Color;
+        void main() { gl_FragColor = v_Color; }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertEqual(t.vertexAttributes, ["a_Position", "a_TexCoord"])
+        XCTAssertFalse(t.msl.contains("a_Color [[attribute("),
+                       "화이트리스트 밖은 VIn 에 안 실린다 — 실리면 파이프라인 생성이 깨진다")
+        XCTAssertTrue(t.msl.contains("vin.a_Color"), "참조는 남아 MSL 컴파일이 실패한다(= 폴백, 의도)")
+        XCTAssertEqual(GLSLTranslator.vertexAttributeWhitelist.map({ $0.name }),
+                       ["a_Position", "a_TexCoord", "a_Normal"],
+                       "화이트리스트를 넓히려면 정점 디스크립터 세 자리를 같이 봐야 한다")
+    }
+
+    /// **(a)와 (b)는 함께 가야 한다.** `GLSLTranslator` 가 `a_Normal` 을 싣는데 정점
+    /// 디스크립터가 `attribute(2)` 를 안 꽂으면 MSL **컴파일 실패**가 **파이프라인 생성 실패**로
+    /// 바뀔 뿐이다(둘 다 폴백이지만 진단이 나빠지고, 반대로 디스크립터만 꽂으면 무의미하다).
+    /// 리눅스에서 `WapleRender` 를 실행할 수 없으므로 소스를 직접 읽어 잠근다.
+    func testMeshVertexDescriptorWiresNormalUnderTheSameCondition() throws {
+        // `#filePath` 를 그대로 쓰면 안 되는 이유는 `TexSpriteSheetBlendTests.repoRoot()` 주석 참조
+        // (리눅스 하네스는 테스트 파일을 심볼릭 링크로 건다).
+        let root = try TexSpriteSheetBlendTests.repoRoot()
+        let src = try String(contentsOf: root.appendingPathComponent("Sources/WapleRender/SceneRenderer3D.swift"),
+                             encoding: .utf8)
+        XCTAssertTrue(src.contains("t.vertexAttributes.contains(\"a_Normal\")"),
+                      "정점 디스크립터가 번역기와 **같은 조건**을 봐야 한다")
+        XCTAssertTrue(src.contains("vd.attributes[2].format = .float3; vd.attributes[2].offset = 12"),
+                      "법선은 메시 8f 정점의 오프셋 12 에 이미 있다 — 새 버퍼가 필요 없다")
+    }
+
+    /// 참조 판정은 **낱말 단위**다 — `a_TexCoord` 는 실물 `a_TexCoordVec4`/`a_TexCoordC2` 의
+    /// 접두라 단순 `contains` 는 화이트리스트가 넓어지는 날 조용히 틀린다.
+    func testAttributeReferenceCheckIsWordAccurate() {
+        XCTAssertTrue(GLSLTranslator.referencesVertexAttribute("a_Normal", in: "out.v = vin.a_Normal;"))
+        XCTAssertTrue(GLSLTranslator.referencesVertexAttribute("a_Normal", in: "vin.a_Normal"))
+        XCTAssertTrue(GLSLTranslator.referencesVertexAttribute("a_Normal", in: "f(vin.a_Normal.xy)"))
+        XCTAssertFalse(GLSLTranslator.referencesVertexAttribute("a_Normal", in: "out.v = vin.a_NormalMap;"))
+        XCTAssertFalse(GLSLTranslator.referencesVertexAttribute("a_TexCoord", in: "vin.a_TexCoordVec4"))
+        XCTAssertTrue(GLSLTranslator.referencesVertexAttribute("a_TexCoord", in: "vin.a_TexCoordVec4; vin.a_TexCoord;"),
+                      "접두 오탐을 피하느라 진짜 참조를 놓치면 안 된다")
+    }
 }

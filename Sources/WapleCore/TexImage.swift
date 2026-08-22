@@ -367,7 +367,22 @@ public struct TexImage {
     ///      `format.tex.texs.fieldLayout.versionDistribution` 의 TEXS0002 9 는 워크샵 포함 수치).
     /// **넘길 패치안(우선순위 낮음)**: 세 자리를 함께 `1.0/60` 으로 올릴 것. 값 자체보다 세 자리가
     /// 같은 상수를 쓴다는 사실이 중요하다.
-    public static let fallbackFrameTime: Float = 0.016
+    ///
+    /// **[2026-08-21 이행 — 위 "넘길 패치안" 을 실행했다. 위 ②는 그래서 해소다.]**
+    /// 종전 ②의 전제("`SceneRenderer3D.swift` 는 이 과제 소유가 아니라 셋을 동시에 못 고친다")가
+    /// 이번 라운드에 사라져 **세 자리를 한 상수로 모았다**:
+    ///   · `TexImage.fallbackFrameTime`(여기)
+    ///   · `SceneRendererFrameEncoder.particleSheetPair` 의 `max(0.016, ft)`
+    ///   · `SceneRenderer3D.particle3DVertices` 의 `max(0.016, sys.frames[0].time)`
+    /// 뒤 둘은 이제 이 상수를 **직접 참조**한다(리터럴 사본 0개 — `grep -rn "0\.016" Sources/` 로 확인).
+    /// 값도 ①이 지목한 목표값 `1.0/60` 으로 올렸다. 종전 `0.016`(= 1/62.5)은 4% 느렸다.
+    /// 값 변경이 안전한 근거는 기존 회귀 테스트가 이미 적어 두고 있었다 —
+    /// `TexSpriteSheetBlendTests.testZeroFrameTimeSheetPlaysAtRoughlyOneRenderFramePerSheetFrame`
+    /// 의 두 절대 시각 단언이 폴백을 `[1/62.5, 1/60]` 구간에 가두고 **양 끝을 다 통과시킨다**
+    /// (그 테스트의 주석에 "1/60(권장 개선) … 그래서 개선을 막지 않는다" 라고 적혀 있다).
+    /// 화면이 바뀌는 범위: `frametime == 0` 시트(TEXS0002) — 동봉 311 중 **8**, 설치 440 중 8.
+    /// 워크샵 코퍼스는 이 컨테이너에 없어 **미측정**이다(0 이 아니다).
+    public static let fallbackFrameTime: Float = 1.0 / 60
 
     /// 파일에 실린 frametime 의 총합(비유한/음수는 0 취급) — 0 이면 파일에 속도가 없다는 뜻.
     private static func storedFrameTimeTotal(_ frames: [TexFrame]) -> Float {
@@ -451,6 +466,83 @@ public struct TexImage {
         // |x| 가 2^24 를 넘으면 Float 에 소수부가 남지 않아 blend 가 정확히 0 이 된다(= 크로스페이드
         // 소멸). 그건 부동소수의 사실이지 규약 위반이 아니라 별도 분기를 두지 않는다.
         return SheetFramePair(current: cur, next: Swift.min(n - 1, cur + 1), blend: Float(d - fl))
+    }
+
+    /// **종전 인덱스 경로**와 `sheetFramePair` 를 화해시킨다 — 둘이 같은 프레임을 가리킬 때만
+    /// 크로스페이드를 켜고, 어긋나면 `blend = 0`(= 종전과 비트동일)으로 접는다.
+    ///
+    /// 왜 필요한가: 크로스페이드를 배선하는 자리 중 일부는 프레임 인덱스를 `sheetFramePair` 가
+    /// 아니라 **다른 식**으로 이미 고르고 있다(3D 파티클의 `sequence` 갈래는
+    /// `sheetFrameIndex(sequence:frameCount:mirror:)`, `mapsequence` 갈래는 스폰 시 확정된
+    /// `p.frame`). 그 인덱스를 `sheetFramePair.current` 로 갈아끼우면 값 규약이 조용히 바뀌는
+    /// 퇴화 입력이 생긴다(`Int` 범위 밖 좌표에서 한쪽은 정지 0, 다른 쪽은 `Int.max % n`;
+    /// 비유한 `sequencemultiplier` 에서 한쪽은 0배, 다른 쪽은 1배). 그래서 **인덱스는 종전
+    /// 경로를 그대로 두고 blend/next 만 얹되**, 두 식이 어긋난 순간에는 크로스페이드를 포기한다.
+    /// 포기해도 화면은 종전과 정확히 같다(`mix(x, y, 0) == x`) — 오역보다 폴터.
+    ///
+    /// `mapsequence`(스폰 시 프레임 확정)는 애초에 `pair` 를 안 타므로 호출부가
+    /// `pair = (idx, idx, 0)` 를 넘긴다 — 그때도 이 함수는 그대로 통과시킨다.
+    /// **고정 프레임 → 크로스페이드 금지.** `mapsequence`(스폰 시 프레임이 확정되는 파티클)와
+    /// 크로스페이드 게이트가 꺼진 경로가 쓴다. 이름을 붙여 둔 이유는 이 자리가
+    /// `docs/re/sprite-occlusion.md` §11.3 이 **"빠뜨리기 쉬운 자리"** 로 지목한 곳이기 때문이다 —
+    /// 고정 프레임에 다음 프레임을 섞으면 틀리고, 그건 WE 가 `randomframe` 에서
+    /// `SPRITESHEETBLEND` 를 끄는 이유(§10.3)와 같은 이유다. 소비처는 2D(`particleVertices`)와
+    /// 3D(`particle3DVertices`) 둘이고, 둘이 같은 이름을 부르는지는 소스 문면 린트가 잠근다.
+    public static func fixedSheetPair(currentIndex: Int) -> SheetFramePair {
+        SheetFramePair(current: currentIndex, next: currentIndex, blend: 0)
+    }
+
+    public static func reconciledSheetPair(currentIndex: Int, pair: SheetFramePair) -> SheetFramePair {
+        guard pair.current == currentIndex else {
+            return SheetFramePair(current: currentIndex, next: currentIndex, blend: 0)
+        }
+        return pair
+    }
+
+    /// `sheetFrameQuadUV(_:textureWidth:textureHeight:)` 의 산출물 — 쿼드 UV 코너 넷 + 종횡비.
+    public struct SheetFrameQuadUV: Equatable {
+        /// TL,TR,BR,BL 순 (u,v) 8 float. `SIMD2` 를 안 쓰는 이유는 `WapleCore` 가 `simd` 를
+        /// 안 들이기 때문이다(이 파일은 `Foundation` 하나만 import 한다).
+        public let uv: [Float]
+        /// 똑바로 세운 스프라이트 종횡비(높이/너비).
+        public let ratio: Float
+        public init(uv: [Float], ratio: Float) { self.uv = uv; self.ratio = ratio }
+        /// 코너 `i`(0=TL, 1=TR, 2=BR, 3=BL). 범위 밖은 (0,0).
+        public func corner(_ i: Int) -> (Float, Float) {
+            guard i >= 0, i * 2 + 1 < uv.count else { return (0, 0) }
+            return (uv[i * 2], uv[i * 2 + 1])
+        }
+    }
+
+    /// 시트 프레임 1장 → 빌보드 쿼드의 **UV 코너 4개**(TL,TR,BR,BL)와 **똑바로 세운 종횡비**.
+    ///
+    /// 이 산술은 종전에 `SceneRendererFrameEncoder.particleVertices`(2D 쿼드)와
+    /// `SceneRenderer3D.particle3DVertices`(3D 쿼드) **두 곳에 글자 그대로 복제**돼 있었다.
+    /// 크로스페이드 배선은 같은 계산을 프레임당 **두 번**(current/next) 해야 해서 복제가 넷이
+    /// 되는데, 넷이 어긋나면 2D/3D 가 갈린다 — 그래서 여기로 모은다. 두 사본과 **글자 그대로
+    /// 같은 식**이라 값은 무변경이다(비회전 프레임 `q == 0` 은 종전과 byte-identical).
+    ///
+    /// 규약:
+    ///  * `atlas*` 는 부호 보정된 절대 서브렉트다(`TexFrame.atlasX/Y/Width/Height`).
+    ///  * `u1`/`v1` 만 `min(1, …)` 로 자른다 — 종전 두 사본의 클램프 위치를 그대로 옮겼다.
+    ///  * 회전 프레임은 코너 **배정**을 `rotationQuarters` 만큼 돌린다(`corners[(i+q) % 4]`).
+    ///    실물에 회전 프레임이 없다는 것은 `sprite-occlusion.md` §11.4 가 센 그대로다(동봉·설치본
+    ///    전건 축정렬) — 즉 이 분기는 측정 도달 0 이고, 그 사실은
+    ///    `testBundledSheetFramesAreAllAxisAligned` 가 잠근다.
+    ///  * 종횡비는 90°/270° 에서 축을 스왑한다(`upH / max(1, upW)`).
+    public static func sheetFrameQuadUV(_ fr: TexFrame, textureWidth: Int, textureHeight: Int) -> SheetFrameQuadUV {
+        let tw = Float(Swift.max(1, textureWidth)), th = Float(Swift.max(1, textureHeight))
+        let u0 = fr.atlasX / tw, v0 = fr.atlasY / th
+        let u1 = Swift.min(1, (fr.atlasX + fr.atlasWidth) / tw)
+        let v1 = Swift.min(1, (fr.atlasY + fr.atlasHeight) / th)
+        let corners: [(Float, Float)] = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
+        let q = fr.rotationQuarters
+        var flat: [Float] = []
+        flat.reserveCapacity(8)
+        for i in 0..<4 { let c = corners[(i + q) % 4]; flat.append(c.0); flat.append(c.1) }
+        let upW = q % 2 == 0 ? fr.atlasWidth : fr.atlasHeight
+        let upH = q % 2 == 0 ? fr.atlasHeight : fr.atlasWidth
+        return SheetFrameQuadUV(uv: flat, ratio: upH / Swift.max(1, upW))
     }
 
     public static func parse(_ data: Data) -> TexImage? {

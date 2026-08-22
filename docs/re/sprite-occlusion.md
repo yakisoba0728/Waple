@@ -1434,3 +1434,111 @@ for name, p in {
 바이트 패턴은 **오탐을 낸다** — 반드시 `.pdata` 시작에서 선형 디스어셈해 확인할 것.
 [VA-정정] 실제로 `0x1401d086d`(진짜는 `0x1401d086c or [rcx+r13+0xa4], 0x10000`, SIB 때문에 창이 밀렸다)와
 `0x1400a7433`(진짜는 `mov [rcx+0xc8], 1`) 둘이 오탐이었고, 남은 5자리가 진짜다.
+
+## 12. [2026-08-21 추가] 배선 기록 — 크로스페이드가 실제로 GPU 까지 갔다
+
+§11.3 은 "넘길 패치안" 이었다. 이 절은 그 패치가 **들어간 뒤**의 기록이다.
+§11 의 본문은 그대로 둔다(툼스톤) — §11.3 의 패치 전문은 근거로 계속 읽히고, 이 절은
+"무엇이 그 전문과 달라졌고 왜" 만 적는다.
+
+> **§11.3 의 `[미배선]` 은 해소다.** `SceneRendererFrameEncoder.particleSheetPair` 의
+> 독스트링에도 같은 툼스톤을 달았다.
+
+### 12.1 무엇이 들어갔나 (파일 5개, 한 커밋)
+
+| 파일 | 변경 |
+| --- | --- |
+| `Sources/WapleRender/ParticleShaders.swift` | 정점 12/13 float · `PVOut`/`PVOut3DFog` 에 `uv2`·`blend` · `pf_main`·`pf3d_fog`·`pf_refract` 의 straight-alpha `mix` |
+| `Sources/WapleRender/SceneRendererFrameEncoder.swift` | `particleVertices` 가 `.next`/`.blend` 적재 · 리본 `push` 스트라이드 확장 · `vertexCount` 두 자리 |
+| `Sources/WapleRender/SceneRenderer3D.swift` | `particle3DVertices` 13 float · `vertexCount` |
+| `Sources/WapleCore/TexImage.swift` | `sheetFrameQuadUV`(순수) · `reconciledSheetPair`(순수) |
+| `Tests/**` | 리눅스 값 테스트 8 + 렌더 테스트 5(macOS 판정) + 기존 스트라이드 단정 4파일 갱신 |
+
+### 12.2 §11.3 전문과 **달라진 것 셋** (그리고 그 이유)
+
+**① 스트라이드 리터럴을 없앴다.** §11.3 은 `uint b = vid * 12;` 를 그대로 쓰라고 적었다.
+그러면 같은 숫자가 MSL 문자열과 인코더(`verts.count / 12`)에 **또** 둘로 갈린다 — 이 절이
+막으려던 바로 그 함정이다. 그래서 `ParticleShaders.vertexFloats2D/3D` 를 두고 MSL 은
+Swift 문자열 보간으로 그 상수를 굽는다. 리터럴 사본은 **0개**다
+(`ParticleShadersTests.testVertexStrideIsInterpolatedFromTheSingleConstant` 가
+`vid * 8`/`vid * 9` 의 부활을 직접 막는다).
+
+**② 리본(rope/ropetrail)은 크로스페이드를 안 탄다.** §11.3 은 리본을 언급하지 않았는데,
+리본도 같은 버텍스 버퍼·같은 `pv_main` 을 쓰므로 **스트라이드는 반드시 같이 넓혀야** 한다
+(안 넓히면 리본이 통째로 깨진다). 다만 `blend` 는 0 이다 — 근거는 자산이다:
+WE 의 rope/trail 은 `genericropeparticle.{vert,geom,frag}` 라는 **다른 셰이더**이고
+그 셋에 `SPRITESHEET`·`SPRITESHEETBLEND` 문자열이 **0건**이다(동봉 자산 grep 실측).
+즉 실물에도 리본 크로스페이드가 없다.
+
+```bash
+grep -c 'SPRITESHEET' Sources/WapleRender/Resources/WEAssets/shaders/genericropeparticle.*
+# → vert 0 · geom 0 · frag 0   (대조군: shaders/genericparticle.frag 는 3)
+```
+
+**③ 3D 는 인덱스 식을 안 바꿨다 — `reconciledSheetPair` 로 화해시켰다.**
+3D 의 프레임 선택은 2D(`particleSheetPair`)와 **퇴화 입력에서 다르다**:
+
+| 입력 | 2D `particleSheetPair` | 3D 종전 식 |
+| --- | --- | --- |
+| `sequencemultiplier` 비유한 | `m = 1`(1배 재생) | `rate = 0`(정지) |
+| `lifetime <= 1e-4`, `mode == sequence` | frametime 폴터로 감 | `t = age / 1e-4` |
+| 좌표가 `Int` 범위 밖 | 정지 `(0,0,0)` | `Int.max % fc` |
+
+여기서 3D 를 2D 식으로 갈아끼우면 **크로스페이드와 무관한 값 회귀**가 딸려 온다. 그래서
+인덱스는 종전 식을 그대로 두고, 같은 좌표로 뽑은 `sheetFramePair` 가 **같은 프레임을
+가리킬 때만** `blend`/`next` 를 얹는다(어긋나면 `blend = 0` → `mix` 항등 → 종전과 비트동일).
+그 화해 규칙이 `TexImage.reconciledSheetPair` 이고, 리눅스 값 테스트가 잠근다.
+
+> **[미해결] 2D/3D 의 프레임 선택식 통일.** 위 표의 세 줄은 여전히 갈려 있다. 어느 쪽이
+> WE 인지는 §11.6 의 첫 항목("파티클 시트의 위상 정본")이 미해결인 채라 판정할 수 없다 —
+> 위상 정본이 닫히면 두 식을 **그 정본 하나로** 갈아야 한다. 지금 임의로 통일하면 근거
+> 없는 값 변경이다.
+
+### 12.3 `mapsequence` 분기의 `blend = 0` — 실제로 빠뜨리기 쉬운 자리였다
+
+§11.3 이 "빠뜨리기 쉬운 자리" 로 지목한 `p.frame >= 0`(mapsequence, 스폰 시 프레임 확정)은
+`particleSheetPair` 를 **아예 안 타므로** `animationmode` 게이트가 자동으로 걸리지 않는다.
+2D·3D 두 자리 다 명시적으로 `SheetFramePair(current: idx, next: idx, blend: 0)` 을 만든다.
+고정 프레임에 다음 프레임을 섞으면 틀리고, 그건 WE 가 `randomframe` 에서
+`SPRITESHEETBLEND` 를 끄는 이유(§10.3)와 같은 이유다.
+
+### 12.4 무회귀 근거 — `blend == 0` 이 비트동일인 이유
+
+`mix(x, y, a) = x + (y − x)·a` 다. 크로스페이드가 꺼진 경로는 CPU 가 `uv1 = uv0` 을 실으므로
+`y == x` 이고, `a == 0` 이라 `x + 0·0 = x` 가 **정확히**(반올림 없이) 성립한다. 즉:
+
+* 시트가 없는 파티클(대다수) — `uv1 = uv0`, `blend = 0` → 종전과 비트동일
+* `randomframe`(동봉 289 중 32) — 게이트 off → 비트동일
+* `mapsequence` — 위 §12.3 → 비트동일
+* 리본 — §12.2 ② → 비트동일
+
+`Tests/WapleCoreTests/TexSpriteSheetBlendTests.testZeroBlendMixIsExactlyTheCurrentFrame` 이
+그 IEEE 성질을 비트패턴으로 잰다(GPU 없이).
+
+### 12.5 화면이 바뀌는 범위 (범위 라벨 포함)
+
+* **바뀐다**: 시트를 쓰고 `animationmode != randomframe` 인 파티클 —
+  동봉 파티클 def **289건 중 257건**(설치본 296 중 264). 실제 화면 변화는 그중 **시트 텍스처를
+  실제로 물린 시스템**에서만 나므로 257 은 **상한**이다(정확한 교집합은 미측정).
+* **안 바뀐다**: CI 픽셀 골든 `SyntheticPixelGoldenTests`(128×72, 5씬). 직접 확인했다 —
+  다섯 씬 모두 `"objects"` 가 `"image"` 레이어 둘뿐이고 `"particle"` 문자열이 **0건**이며,
+  픽스처 `.tex` 는 `TEXV0005` + 34 제로바이트 헤더라 **`flags == 0` → TEXS 없음**이다
+  (`solidTex`/`verticalGradientTex`/`horizontalGradientTex`, `Tests/WapleRenderTests/TestSupport.swift:59`).
+  즉 시트 게이트(`flags & 0x4`)가 애초에 안 켜진다.
+
+```bash
+grep -c particle Tests/WapleRenderTests/SyntheticPixelGoldenTests.swift   # → 0
+```
+
+* **부채**: 256×144 기준선(`spec/golden/snapshot/baseline-*`)은 실물 코퍼스를 쓰므로
+  파티클 시트가 있는 씬에서 **재기준선이 필요하다**. CI 에는 호출부가 없다(§4.4).
+
+### 12.6 이 절이 못 닫은 것
+
+* **[미해결] `g_RenderVar1` 균일 격자 vs TEXS 서브렉트** — §11.6 그대로. 크로스페이드는
+  두 프레임 **각각**을 TEXS 서브렉트로 뽑으므로, 그 갭이 있으면 두 배로 드러난다.
+* **[미해결] 파티클 시트 위상 정본** — §11.6 그대로. 위 §12.2 ③ 의 표가 그 미해결의 그림자다.
+* **[미해결] 프레임별 종횡비.** 크로스페이드는 쿼드 기하가 하나뿐이라 **현재 프레임의**
+  `ratio` 만 쓴다. 한 시트 안의 프레임 크기는 동봉 52/52 · 설치본 61/61 이 균일이라(§11.6)
+  실물에서 갈리지 않지만, 크기가 섞인 시트가 들어오면 다음 프레임이 늘어난다. 실물 0건이라
+  배선하지 않았다.

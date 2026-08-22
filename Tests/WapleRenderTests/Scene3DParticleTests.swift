@@ -109,7 +109,9 @@ final class Scene3DParticleTests: XCTestCase {
     }
 
     private func vtx(_ verts: [Float], _ i: Int) -> SIMD3<Float> {
-        SIMD3(verts[i * 9 + 0], verts[i * 9 + 1], verts[i * 9 + 2])
+        SIMD3(verts[i * ParticleShaders.vertexFloats3D + 0],
+              verts[i * ParticleShaders.vertexFloats3D + 1],
+              verts[i * ParticleShaders.vertexFloats3D + 2])
     }
 
     func testParticle3DBillboardPositionAndSize() throws {
@@ -118,7 +120,8 @@ final class Scene3DParticleTests: XCTestCase {
         var p = Particle(); p.pos = SIMD3(2, 3, 0); p.size = 4; p.alpha = 1; p.color = SIMD3(1, 1, 1)
         let verts = renderer.particle3DVertices([p], sys, m: matrix_identity_float4x4,
                                                 right: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0))
-        XCTAssertEqual(verts.count, 6 * 9, "쿼드 = 2삼각 6정점 × 9float")
+        // [2026-08-21] 9 → 13 float: 크로스페이드 배선(ParticleShaders.vertexFloats3D).
+        XCTAssertEqual(verts.count, 6 * ParticleShaders.vertexFloats3D, "쿼드 = 2삼각 6정점 × 13float")
         // hw=hh=0.5·size=2. TL=center-r+u=(0,5,0), TR=(4,5,0), BR=(4,1,0), BL=(0,1,0).
         XCTAssertEqual(vtx(verts, 0), SIMD3(0, 5, 0), "TL 위치")   // 삼각1 v0 = TL
         XCTAssertEqual(vtx(verts, 1), SIMD3(4, 5, 0), "TR 위치")

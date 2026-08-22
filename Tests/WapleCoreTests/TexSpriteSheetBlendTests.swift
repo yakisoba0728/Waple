@@ -184,6 +184,133 @@ final class TexSpriteSheetBlendTests: XCTestCase {
         XCTAssertEqual(Set(rotated).sorted(), [], "회전 프레임(rotationQuarters != 0) 실물이 생겼다")
     }
 
+    /// 리포 루트. **`#filePath` 를 그대로 쓰면 안 된다** — `scripts/dev/linux-core-tests.sh` 는
+    /// 테스트 파일을 임시 작업 디렉터리에 **심볼릭 링크**로 걸고 그 경로로 컴파일하므로,
+    /// `#filePath` 는 링크 경로(작업 디렉터리 안)를 가리키고 거기엔 `Sources/WapleRender` 가 없다.
+    /// `resolvingSymlinksInPath()` 로 실경로를 얻는다(macOS 실빌드에서는 무동작).
+    static func repoRoot() throws -> URL {
+        let root = URL(fileURLWithPath: #filePath).resolvingSymlinksInPath()
+            .deletingLastPathComponent()    // WapleCoreTests
+            .deletingLastPathComponent()    // Tests
+            .deletingLastPathComponent()    // repo root
+        guard FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("Sources/WapleRender/SceneRenderer3D.swift").path) else {
+            throw XCTSkip("리포 트리를 못 찾았다(\(root.path)) — 소스 문면 린트를 건너뛴다")
+        }
+        return root
+    }
+
+    // MARK: - 5. [2026-08-21] 크로스페이드 GPU 배선이 쓰는 순수 산술
+
+    /// 시트 프레임 → 쿼드 UV 코너 4개(TL,TR,BR,BL) + 똑바로 세운 종횡비.
+    /// 종전엔 이 식이 `SceneRendererFrameEncoder`(2D)와 `SceneRenderer3D`(3D)에 **글자 그대로
+    /// 복제**돼 있었고, 크로스페이드는 프레임당 두 번(current/next) 계산해야 해서 복제가 넷이
+    /// 될 판이었다. 여기 모았으므로 여기서 값을 잠근다.
+    func testSheetFrameQuadUVIsAxisAlignedSubrectInTextureSpace() {
+        // 256×128 아틀라스의 (64,0)-(128,64) 서브렉트.
+        let fr = TexImage.TexFrame(imageId: 0, time: 0, x: 64, y: 0, width: 64, height: 64)
+        let q = TexImage.sheetFrameQuadUV(fr, textureWidth: 256, textureHeight: 128)
+        XCTAssertEqual(q.corner(0).0, 0.25, accuracy: 1e-6)   // TL.u = 64/256
+        XCTAssertEqual(q.corner(0).1, 0.0, accuracy: 1e-6)
+        XCTAssertEqual(q.corner(1).0, 0.5, accuracy: 1e-6)    // TR.u = 128/256
+        XCTAssertEqual(q.corner(2).1, 0.5, accuracy: 1e-6)    // BR.v = 64/128
+        XCTAssertEqual(q.corner(3).0, 0.25, accuracy: 1e-6)   // BL.u
+        XCTAssertEqual(q.ratio, 1, accuracy: 1e-6)            // 64×64 정사각
+        // 종횡비는 픽셀 비율이지 UV 비율이 아니다 — 32×64 프레임은 2.0 이어야 한다.
+        let tall = TexImage.TexFrame(imageId: 0, time: 0, x: 0, y: 0, width: 32, height: 64)
+        XCTAssertEqual(TexImage.sheetFrameQuadUV(tall, textureWidth: 256, textureHeight: 128).ratio,
+                       2, accuracy: 1e-6)
+    }
+
+    /// `u1`/`v1` 만 1 로 자른다 — 종전 두 사본의 클램프 위치를 그대로 옮긴 것이다.
+    /// (원점 `u0`/`v0` 은 안 자른다: 자르면 서브렉트가 통째로 미끄러진다.)
+    func testSheetFrameQuadUVClampsOnlyTheFarEdge() {
+        let over = TexImage.TexFrame(imageId: 0, time: 0, x: 0, y: 0, width: 999, height: 999)
+        let q = TexImage.sheetFrameQuadUV(over, textureWidth: 64, textureHeight: 64)
+        XCTAssertEqual(q.corner(0).0, 0, accuracy: 1e-6)
+        XCTAssertEqual(q.corner(1).0, 1, accuracy: 1e-6, "먼 쪽 모서리는 1 로 잘린다")
+        XCTAssertEqual(q.corner(2).1, 1, accuracy: 1e-6)
+    }
+
+    /// 회전 프레임은 **코너 배정**을 `rotationQuarters` 만큼 돌린다. 실물 도달은 0 이지만
+    /// (`testBundledSheetFramesAreAllAxisAligned`) 배선이 살아 있다는 것은 잠가 둔다.
+    func testSheetFrameQuadUVRotatesCornerAssignment() {
+        // width>0, height<0 → rotationQuarters == 1.
+        let rot = TexImage.TexFrame(imageId: 0, time: 0, x: 0, y: 64, width: 64, height: -64)
+        XCTAssertEqual(rot.rotationQuarters, 1)
+        let q = TexImage.sheetFrameQuadUV(rot, textureWidth: 64, textureHeight: 64)
+        // 비회전이었다면 TL = (0,0). q=1 이면 corners[(0+1)%4] = TR = (1, 0).
+        XCTAssertEqual(q.corner(0).0, 1, accuracy: 1e-6)
+        XCTAssertEqual(q.corner(0).1, 0, accuracy: 1e-6)
+        XCTAssertEqual(q.ratio, 1, accuracy: 1e-6, "정사각은 축 스왑해도 1")
+    }
+
+    /// **고정 프레임(mapsequence)은 blend 가 0 이어야 한다.** `docs/re/sprite-occlusion.md` §11.3 이
+    /// "빠뜨리기 쉬운 자리" 로 지목한 자리다 — 그 분기는 `particleSheetPair`(= 크로스페이드 게이트를
+    /// 지는 함수)를 아예 안 타므로 게이트가 자동으로 걸리지 않는다.
+    func testFixedSheetPairNeverBlends() {
+        for i in [0, 1, 7, 63] {
+            XCTAssertEqual(TexImage.fixedSheetPair(currentIndex: i),
+                           TexImage.SheetFramePair(current: i, next: i, blend: 0))
+        }
+    }
+
+    /// 그 규약을 **두 소비처가 실제로 부르는지**. 리눅스에서 `WapleRender` 를 실행할 수 없으므로
+    /// 소스 문면으로 잠근다 — 한쪽만 부르면 2D/3D 가 갈린다.
+    func testBothParticlePathsUseFixedSheetPairForMapsequence() throws {
+        let root = try Self.repoRoot()
+        for rel in ["Sources/WapleRender/SceneRendererFrameEncoder.swift",
+                    "Sources/WapleRender/SceneRenderer3D.swift"] {
+            let src = try String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8)
+            XCTAssertTrue(src.contains("TexImage.fixedSheetPair(currentIndex:"),
+                          "\(rel) 이 고정 프레임 규약을 직접 짓고 있다(두 자리가 갈릴 수 있다)")
+        }
+    }
+
+    /// **인덱스가 어긋나면 크로스페이드를 포기한다.** 3D 파티클의 `sequence` 갈래는 프레임을
+    /// `sheetFrameIndex` 로 고르는데, 퇴화 입력에서 `sheetFramePair` 와 다른 답이 나올 수 있다
+    /// (한쪽은 정지 0, 다른 쪽은 `Int.max % n`). 그때 blend 를 얹으면 **없는 프레임**을 섞는다.
+    func testReconciledSheetPairDropsBlendWhenIndicesDisagree() {
+        let agree = TexImage.SheetFramePair(current: 3, next: 4, blend: 0.25)
+        XCTAssertEqual(TexImage.reconciledSheetPair(currentIndex: 3, pair: agree), agree,
+                       "같은 프레임을 가리키면 그대로 통과")
+        let disagree = TexImage.reconciledSheetPair(currentIndex: 5, pair: agree)
+        XCTAssertEqual(disagree, TexImage.SheetFramePair(current: 5, next: 5, blend: 0),
+                       "어긋나면 종전 인덱스를 지키고 blend 는 0(= mix 항등)")
+    }
+
+    /// **`blend == 0` 은 `mix` 항등이라 비트동일**이라는 것이 이 배선 전체의 무회귀 근거다.
+    /// GPU 의 `mix` 는 리눅스에서 못 돌리므로 같은 IEEE 성질을 CPU 로 잰다 —
+    /// `x + (y - x) * 0 == x` 가 정규 유한값에서 정확히 성립한다는 것(반올림 없음).
+    func testZeroBlendMixIsExactlyTheCurrentFrame() {
+        func mix(_ x: Float, _ y: Float, _ a: Float) -> Float { x + (y - x) * a }
+        for x in [Float(0), 1, 0.1, 0.3333333, 65504, 1e-30] {
+            // 크로스페이드 꺼짐 규약: next == current 이므로 y == x 다.
+            XCTAssertEqual(mix(x, x, 0).bitPattern, x.bitPattern, "blend 0 · 같은 프레임 → 비트동일")
+            // 다음 프레임이 달라도 blend 가 정확히 0 이면 현재 프레임 그대로다.
+            XCTAssertEqual(mix(x, 0.7, 0).bitPattern, x.bitPattern, "blend 0 → 비트동일")
+        }
+    }
+
+    // MARK: - 6. [2026-08-21] 폴백 프레임시간은 **한 상수**다 (형제 자리 셋)
+
+    /// 값보다 중요한 사실: 세 자리가 같은 상수를 쓴다는 것.
+    /// 종전에는 `TexImage.fallbackFrameTime`(0.016) · `particleSheetPair` 의 `max(0.016, ft)` ·
+    /// `SceneRenderer3D` 의 `max(0.016, sys.frames[0].time)` 이 **각자 리터럴을 들고** 있었다 —
+    /// 한 자리만 고치면 같은 자산이 이미지 레이어냐 파티클이냐에 따라 재생속도가 갈린다.
+    /// 소스를 직접 읽어 잠근다(리눅스에서 `WapleRender` 를 실행할 수 없으므로 이것이 유일한 그물이다).
+    func testFallbackFrameTimeHasNoLiteralSiblings() throws {
+        let root = try Self.repoRoot()
+        for rel in ["Sources/WapleRender/SceneRendererFrameEncoder.swift",
+                    "Sources/WapleRender/SceneRenderer3D.swift"] {
+            let src = try String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8)
+            XCTAssertTrue(src.contains("TexImage.fallbackFrameTime"),
+                          "\(rel) 이 공유 상수를 안 쓴다")
+            XCTAssertFalse(src.contains("max(0.016,"),
+                           "\(rel) 에 폴백 프레임시간 리터럴 사본이 되살아났다")
+        }
+    }
+
     /// TEXS0002(= 파일에 재생속도가 없는 버전) 실물 8건이 그대로인지. 이 8건이 곧
     /// `fallbackFrameTime` 의 유일한 소비 대상이다 — 도달이 커지면 값 논의를 다시 해야 한다.
     func testTEXS0002ReachIsEightBundledFiles() throws {

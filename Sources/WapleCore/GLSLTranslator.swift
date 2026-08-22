@@ -68,10 +68,63 @@ public struct TranslatedShader: Equatable {
     /// F-X4: 샘플러 주석의 `"default":"경로"`(문자열) — 씬/머티리얼이 슬롯을 지정하지 않을 때의 텍스처
     /// 폴백(WE 관례: util/noise, _rt_FullFrameBuffer 등). 슬롯 → 경로 문자열.
     public let textureDefaults: [Int: String]
+    /// [2026-08-21] 방출된 `VIn` 이 실제로 싣고 있는 정점 attribute 이름들(슬롯 오름차순).
+    /// **정점 디스크립터와의 계약**이다 — 소비처는 이 목록에 있는 것만 꽂아야 한다.
+    /// 슬롯 번호는 `GLSLTranslator.vertexAttributeWhitelist` 가 정한다.
+    /// 항상 `a_Position`(0)·`a_TexCoord`(1) 로 시작하고, 그 뒤는 셰이더가 **실제로 참조할 때만**
+    /// 붙는다(현재 `a_Normal`(2) 하나). 근거·도달은 `docs/re/shader-uniforms.md` §7.6/§7.7.
+    public let vertexAttributes: [String]
 }
 
 /// WE GLSL(방언) → MSL 소스-투-소스 변환기. 실패 시 nil(→ 손-포팅 폴백).
 public enum GLSLTranslator {
+    // MARK: - 정점 attribute 화이트리스트 (docs/re/shader-uniforms.md §7.6)
+
+    /// `VIn` 에 실을 수 있는 attribute 와 그 `[[attribute(n)]]` 슬롯.
+    ///
+    /// **슬롯 번호는 정점 디스크립터와의 계약이다.** 소비처
+    /// (`SceneRenderer3D.buildCustomMeshShader` · `SceneRendererResources.translatedPipeline` /
+    /// `translatedLayerPipeline`)가 같은 번호로 버퍼 오프셋을 꽂는다. 번호를 바꾸면 그 세 자리를
+    /// 같이 바꿔야 한다.
+    ///
+    /// **왜 화이트리스트인가.** `parseAttributes` 는 선언된 이름을 **전부** `vin.<이름>` 으로
+    /// 매핑하므로, `VIn` 에 없는 attribute 를 선언한 셰이더는 없는 멤버를 읽어 MSL 컴파일이
+    /// **확정 실패**한다(→ 스톡 폴백). 설치본 실측 도달:
+    /// `a_Normal` 17파일(저작레인 8) · `a_Color` 9(1) · `a_Tangent4` 8(1) ·
+    /// `a_BlendIndices`/`a_BlendWeights` 10/9(0) — `docs/re/shader-uniforms.md` §7.6 의 표.
+    ///
+    /// **`a_Normal` 만 넣은 이유**는 그것만 정점 버퍼에 **실제로 있기** 때문이다. 메시 정점은
+    /// `pos3+normal3+uv2`(8f, stride 32)라 법선이 오프셋 12 에 이미 있다. `a_Color`/`a_Tangent4`/
+    /// 스키닝 attribute 는 버퍼에 없으므로 `VIn` 에만 실으면 **컴파일 실패가 파이프라인 생성
+    /// 실패로 바뀔 뿐**이다(둘 다 폴백이지만 진단이 나빠진다). 그 셋은 버퍼 레이아웃 확장이
+    /// 선행돼야 하는 별건이다.
+    public static let vertexAttributeWhitelist: [(name: String, type: GLSLType, slot: Int)] = [
+        ("a_Position", .vec3, 0),
+        ("a_TexCoord", .vec2, 1),
+        ("a_Normal", .vec3, 2),
+    ]
+
+    /// 슬롯 0·1 은 **무조건** 싣는다 — 이 리포의 세 정점 디스크립터가 전부 그 둘을 선언하고,
+    /// 어느 쪽도 참조하지 않는 셰이더에서 `VIn` 이 비면 `[[stage_in]]` 자체가 불법이 된다.
+    /// 조건부는 슬롯 2 이상이다.
+    static let alwaysLoadedVertexAttributes = ["a_Position", "a_TexCoord"]
+
+    /// 방출된 vertex 본문이 `vin.<name>` 을 **낱말 단위로** 참조하는가.
+    /// 단순 `contains` 를 쓰면 안 된다 — `a_TexCoord` 는 실물 `a_TexCoordVec4`/`a_TexCoordC2` 의
+    /// 접두라(동봉 자산 실측: `a_TexCoordVec4` 6 · `a_TexCoordVec4C1` 4 · `a_TexCoordC2` 1 …)
+    /// 화이트리스트가 넓어지는 날 조용히 틀린다.
+    static func referencesVertexAttribute(_ name: String, in vertBody: String) -> Bool {
+        let needle = "vin.\(name)"
+        var idx = vertBody.startIndex
+        while let r = vertBody.range(of: needle, range: idx..<vertBody.endIndex) {
+            if r.upperBound == vertBody.endIndex { return true }
+            let c = vertBody[r.upperBound]
+            if !(c.isLetter || c.isNumber || c == "_") { return true }
+            idx = r.upperBound
+        }
+        return false
+    }
+
     // MARK: - 번역 메모이즈 (프로세스 전역, 마운트 간·재마운트 공유)
     // 번역은 (vertex, fragment, combos, include) 의 순수 함수(씬 상수 값은 번역기 밖 buildPassMaterial 에서
     // 적용 → 출력에 안 굽힘 → 전역 공유 안전). 키 = raw 소스 + 인라인된 소스 + 정규화 combos:
@@ -565,11 +618,20 @@ public enum GLSLTranslator {
         let vertexBuiltins = VertexBuiltins(vertexID: vertIds.contains("gl_VertexID"),
                                             instanceID: vertIds.contains("gl_InstanceID"),
                                             viewportIndex: vertBody.contains("out.gl_ViewportIndex"))
+        // 정점 attribute: 슬롯 0·1 은 항상, 그 위는 **최종 본문이 실제로 참조할 때만**.
+        // `vertexBuiltins` 와 같은 규율이다 — 안 쓰는 셰이더의 방출물을 종전 그대로 두려면
+        // 참조 여부를 **번역이 끝난 본문**에서 봐야 한다(선언만 보고 실으면 `#if` 로 잘려 나간
+        // 참조까지 세어 2D 쿼드 파이프라인을 깬다).
+        let vertexAttributes = alwaysLoadedVertexAttributes + vertexAttributeWhitelist
+            .filter { !alwaysLoadedVertexAttributes.contains($0.name) }
+            .sorted { $0.slot < $1.slot }
+            .filter { referencesVertexAttribute($0.name, in: vertBody) }
+            .map { $0.name }
         // 소스 struct 정의: 멤버 타입 리네임(vec2→float2 등) 후 프리앰블 선두에 방출(헬퍼 시그니처가 참조).
         let structBlock = structDefs.map { "struct \($0.name) {" + replaceIdentifiers($0.body, typeAndMacroRenames()) + "};" }
             .joined(separator: "\n")
         let msl = assemble(varyings: varyings, textures: textures, textureKinds: textureKinds,
-                           vertexBuiltins: vertexBuiltins,
+                           vertexBuiltins: vertexBuiltins, vertexAttributes: vertexAttributes,
                            materialCount: materials.count,
                            vertAudioNames: audioBufferNames.filter { vertIds.contains($0.name) },
                            fragAudioNames: audioBufferNames.filter { fragIds.contains($0.name) },
@@ -577,7 +639,7 @@ public enum GLSLTranslator {
                            vertBody: vertBody, fragBody: fragBody, structs: structBlock,
                            premultiplyOutput: premultiplyOutput)
         return TranslatedShader(msl: msl, materialParams: materials, textureSlots: textures, usesAudio: usesAudio,
-                                textureDefaults: textureDefaults)
+                                textureDefaults: textureDefaults, vertexAttributes: vertexAttributes)
     }
 
     /// 파일 스코프 const 중 전역 MSL `constant` 가 될 수 없는 이름 집합(전이 폐쇄 포함).
@@ -2099,6 +2161,7 @@ public enum GLSLTranslator {
     private static func assemble(varyings: [(type: GLSLType, name: String)], textures: [Int],
                                  textureKinds: [Int: GLSLType] = [:],
                                  vertexBuiltins: VertexBuiltins = VertexBuiltins(),
+                                 vertexAttributes: [String] = alwaysLoadedVertexAttributes,
                                  materialCount: Int,
                                  vertAudioNames: [(name: String, buffer: Int)] = [],
                                  fragAudioNames: [(name: String, buffer: Int)] = [],
@@ -2112,7 +2175,14 @@ public enum GLSLTranslator {
         if vertexBuiltins.viewportIndex { vary += "  uint gl_ViewportIndex [[viewport_array_index]];\n" }
         for v in varyings { vary += "  \(v.type.msl) \(v.name);\n" }
         vary += "};\n"
-        let vin = "struct VIn { float3 a_Position [[attribute(0)]]; float2 a_TexCoord [[attribute(1)]]; };\n"
+        // [2026-08-21] 종전엔 이 줄이 `a_Position`/`a_TexCoord` **두 개 고정**이었다. 지금은
+        // 화이트리스트에서 골라 싣는다 — 두 개만 실린 경우의 방출 문자열은 종전과 **글자 그대로
+        // 같다**(무회귀). 셋째(`a_Normal`)는 셰이더가 참조할 때만 붙는다.
+        let vinMembers = vertexAttributes.compactMap { n -> String? in
+            guard let e = vertexAttributeWhitelist.first(where: { $0.name == n }) else { return nil }
+            return "\(e.type.msl) \(e.name) [[attribute(\(e.slot))]];"
+        }
+        let vin = "struct VIn { " + vinMembers.joined(separator: " ") + " };\n"
         // timeAndPad = (time, pointerUV.x, pointerUV.y, frametime dt) / pointerLastAndPad = (직전 프레임 포인터 UV.xy, g_PointerState.z 클릭힘, 0).
         // texWrap[2](8 슬롯, texRes 와 동일 상한): 슬롯별 1=clamp/0=repeat(F162/F163) — buildPassBindings 가
         // bind 출처(fbo/previous)=clamp, aux 출처=TexImage.clampUVs 로 빌드 시 1 회 계산(WE 기본=repeat).

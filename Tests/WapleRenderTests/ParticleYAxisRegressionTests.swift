@@ -42,9 +42,10 @@ final class ParticleYAxisRegressionTests: XCTestCase {
         particle.size = 4
         particle.alpha = 1
         let verts = renderer.particleVertices([particle], sys)
-        XCTAssertEqual(verts.count, 48, "쿼드 1개 = 6정점×8float")
-        // 인터리브 레이아웃: [ndc.x, ndc.y, u, v, r, g, b, a] × 6.
-        let ys = stride(from: 1, to: verts.count, by: 8).map { verts[$0] }
+        // [2026-08-21] 8 → 12 float: 크로스페이드 배선(ParticleShaders.vertexFloats2D).
+        XCTAssertEqual(verts.count, 6 * ParticleShaders.vertexFloats2D, "쿼드 1개 = 6정점×12float")
+        // 인터리브 레이아웃: [ndc.x, ndc.y, u0, v0, r, g, b, a, u1, v1, blend, pad] × 6.
+        let ys = stride(from: 1, to: verts.count, by: ParticleShaders.vertexFloats2D).map { verts[$0] }
         XCTAssertTrue(ys.allSatisfy { $0 > 0.1 },
                       "pos.y=+50(sim 로컬 위)는 원점(NDC y=0)보다 화면 위(NDC y>0)여야 — 실제: \(ys)")
         _ = sys  // (var 로 받은 sys 자체는 미변형 사용 — mutating 경고 회피)
@@ -78,7 +79,7 @@ final class ParticleYAxisRegressionTests: XCTestCase {
         let ok = renderer.appendRibbon(particle, sys, into: &verts)
         XCTAssertTrue(ok, "히스토리 3점은 유효 스팬(붕괴 아님) — 쿼드 폴백이면 안 됨")
         XCTAssertFalse(verts.isEmpty)
-        let ys = stride(from: 1, to: verts.count, by: 8).map { verts[$0] }
+        let ys = stride(from: 1, to: verts.count, by: ParticleShaders.vertexFloats2D).map { verts[$0] }
         // head(최신, y=+50)의 엣지 정점들이 tail(y=−5 근방)보다 확실히 위(NDC y 큼)여야 한다.
         XCTAssertGreaterThan(ys.max()!, ys.min()! + 0.2,
                              "리본이 위로 뻗어야(head 가 화면 위) — 실제 ys: \(ys)")
@@ -124,11 +125,20 @@ final class ParticleYAxisRegressionTests: XCTestCase {
         var verts: [Float] = []
         XCTAssertTrue(renderer.appendRibbon(particle, sys, into: &verts))
 
-        // 정점당 8 float: ndc.xy, uv, rgba
-        let ys = stride(from: 1, to: verts.count, by: 8).map { verts[$0] }
-        let us = stride(from: 2, to: verts.count, by: 8).map { verts[$0] }
-        let vs = stride(from: 3, to: verts.count, by: 8).map { verts[$0] }
-        let alphas = stride(from: 7, to: verts.count, by: 8).map { verts[$0] }
+        // 정점당 12 float: ndc.xy, u0,v0, rgba, u1,v1, blend, pad
+        let vf = ParticleShaders.vertexFloats2D
+        let ys = stride(from: 1, to: verts.count, by: vf).map { verts[$0] }
+        let us = stride(from: 2, to: verts.count, by: vf).map { verts[$0] }
+        let vs = stride(from: 3, to: verts.count, by: vf).map { verts[$0] }
+        let alphas = stride(from: 7, to: verts.count, by: vf).map { verts[$0] }
+        // ④ 리본은 크로스페이드를 안 탄다(WE rope 는 SPRITESHEET 콤보가 없는 별도 셰이더) —
+        //    uv1 == uv0 · blend == 0 이라 `mix` 가 항등이고 렌더가 종전과 비트동일하다.
+        let u1s = stride(from: 8, to: verts.count, by: vf).map { verts[$0] }
+        let v1s = stride(from: 9, to: verts.count, by: vf).map { verts[$0] }
+        let blends = stride(from: 10, to: verts.count, by: vf).map { verts[$0] }
+        XCTAssertEqual(u1s, us, "리본의 두 번째 UV 는 첫 번째와 같아야 한다")
+        XCTAssertEqual(v1s, vs, "리본의 두 번째 UV 는 첫 번째와 같아야 한다")
+        XCTAssertTrue(blends.allSatisfy { $0 == 0 }, "리본 blend 는 전건 0 — 실제: \(Set(blends))")
 
         // ① 폭: 반폭 20px = NDC 0.2 → 양쪽 엣지 간격 0.4. size*0.5 였다면 0.2 가 나온다.
         XCTAssertEqual(ys.max()! - ys.min()!, 0.4, accuracy: 0.01,

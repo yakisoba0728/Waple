@@ -116,7 +116,7 @@ final class Scene3DParticleFogTests: XCTestCase {
             if var f = fog {
                 enc.setFragmentBytes(&f, length: MemoryLayout<SceneRenderer.Particle3DFogUniform>.stride, index: 0)
             }
-            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: verts.count / 9)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: verts.count / ParticleShaders.vertexFloats3D)
             enc.endEncoding()
             cb.commit(); cb.waitUntilCompleted()
             return tex
