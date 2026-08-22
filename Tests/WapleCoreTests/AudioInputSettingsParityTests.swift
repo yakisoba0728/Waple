@@ -123,9 +123,14 @@ final class AudioInputSettingsParityTests: XCTestCase {
 
     // MARK: 우리 쪽 단위와의 발산
 
-    /// **`SystemAudioSpectrumProvider.AudioInputSettings.volume` 은 곱수(기본 1)이고 WE 설정은
-    /// 0…200 정수(기본 50)다.** WE 값을 그대로 곱수로 넣으면 정확히 50배가 된다.
-    /// 이 자리는 소유 밖이라 코어에 변환기만 두고 값으로 잠근다.
+    /// **WE 설정값을 그대로 곱수로 쓰면 정확히 50배다.** 종전
+    /// `SystemAudioSpectrumProvider.AudioInputSettings.volume` 이 곱수(기본 1)를 저장했기 때문에
+    /// WE 설정(0…200 정수, 기본 50)을 옮겨 올 자리가 이 배율만큼 어긋나 있었다.
+    ///
+    /// **[해소 2026-08-21]** 렌더 계층이 이제 **WE 와 같은 설정 단위**로 저장하고
+    /// (`AudioInputSettings.volumeSetting`/`.thresholdSetting`, 새 키) 곱수·임계는 아래 변환기가
+    /// 만든다. 이 테스트는 그 변환이 빠졌을 때의 오차를 계속 값으로 들고 있는다 — 배선이 다시
+    /// 풀리면 여기가 아니라 `AudioInputPipelineTests` 가 잡지만, 배율 자체의 근거는 여기다.
     func testRawWEsettingUsedAsAMultiplierIsFiftyTimesTooLoud() {
         let weSetting = Float(AudioSpectrum.defaultInputVolumeSetting)   // 50
         let correct = AudioSpectrum.inputVolumeGain(setting: AudioSpectrum.defaultInputVolumeSetting)
