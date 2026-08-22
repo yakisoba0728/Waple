@@ -646,12 +646,41 @@ public struct SceneCamera3D: Equatable {
     }
 }
 
-/// 씬 objects[] 의 camera 의사-오브젝트(에디터 카메라 프리셋: fov/zoom/origin/경로 — 실측 37씬/58
-/// 오브젝트, 실효 zoom 애니 9씬·비기본 fov 16). scene.camera(3D 룩앳, parseCamera)와 별개 채널.
+/// 씬 objects[] 의 camera 의사-오브젝트(에디터 카메라 프리셋: fov/zoom/origin/경로 — 워크샵 실측
+/// 37씬/58 오브젝트, 실효 zoom 애니 9씬·비기본 fov 16). scene.camera(3D 룩앳, parseCamera)와 별개 채널.
 /// 종전 parseNode 가 콘텐츠 키 부재로 트랜스폼-노드로 흡수해 fov/zoom 을 통째 드롭했다.
-/// path 필드는 스크립트 파일 참조(전 57오브젝트 "scripts/camera_paths_*.json" — 인라인 웨이포인트 부재)라
-/// 미소비(YAGNI). 팬은 origin.xy 애니(실측 5씬, zoom single 인트로와 연동)만 실효 — 정적/스크립트 base 는
+/// 팬은 origin.xy 애니(실측 5씬, zoom single 인트로와 연동)만 실효 — 정적/스크립트 base 는
 /// 전수 중립(화면중심)이라 렌더러 데드존/게이트로 흡수(P0-2 파스 → P1 zoom → 이번 origin 팬 잔여).
+///
+/// **[2026-08-21 정정] 종전 문면 "`path` 필드는 스크립트 파일 참조(전 57오브젝트
+/// `"scripts/camera_paths_*.json"` — **인라인 웨이포인트 부재**)라 미소비(YAGNI)" 는 근거가 틀렸다.**
+/// 툼스톤으로 남긴다 — Waple 이 소비하지 않는 것은 사실이지만 그 *이유* 는 사실이 아니다.
+///
+/// 실측(전부 `wallpaper64.exe` 2.8.42, imagebase `0x140000000` — 직접 디스어셈블):
+/// camera 오브젝트는 `load` 를 **오버라이드**한다(vtable `0x140490980` 슬롯 `+0x40` =
+/// `0x1401f2030`). 그 함수는 기존 경로 리스트를 비우고 기저 `IObject::load`(`0x1401de470`,
+/// `0x1401f20a5`)를 부른 뒤 **`json["path"]`** 를 찾아(`Json::Value::find` `0x1401f20e3`,
+/// 4바이트 SSO 리터럴 `0x140490954`) 태그 4(string)면(`0x1401f2140`) `asString`(`0x140085cc0`,
+/// `0x1401f2151`)으로 꺼내 `[[obj+0xc8]+0x1898]` 서브시스템에 넘겨(`0x1400d3f80`, `0x1401f2178`)
+/// 받아 온 텍스트를 jsoncpp 리더(`0x140017840`, `0x1401f21a3`)로 파싱하고, 그 문서의
+/// **`"paths"` 배열**(`0x1401f21cc`, 태그 6 게이트 `0x1401f21d7`)을 순회하면서 항목별로
+/// `options`(`0x1401f2239`) · `events`(`0x1401f2260`) · `center`(`0x1401f2277`) ·
+/// `eye`(`0x1401f2292`) · `up`(`0x1401f22ad`) · `zoom`(`0x1401f22c8`) · `fov`(`0x1401f22e3`) 을 읽는다.
+/// 즉 **웨이포인트는 참조 파일 안에 있고 엔진은 그것을 실제로 소비한다.** "인라인 부재" 는
+/// 미소비의 근거가 못 된다.
+///
+/// 파일 형식 실측(설치본 `projects/defaultprojects/demon_core/scripts/camera_00.json` 등):
+/// `{"paths":[{"duration":<int>,"name":"","transforms":[{"center":"x y z","eye":"x y z",
+/// "up":"x y z","timestamp":<int>}, …]}, …]}`.
+///
+/// **도달 재측정(2026-08-21).** 설치본 씬 문서 **186개**(scene.json 184 + gifscene.json 2)에
+/// `objects[]` camera 의사-오브젝트는 **0건**이다 — 그러므로 위 "37씬/58 오브젝트" · "57오브젝트"
+/// 와 `"scripts/camera_paths_*.json"` 이라는 파일명은 **워크샵 코퍼스 기준이고 이 컨테이너에서
+/// 재현할 수 없다**(그 코퍼스가 없다). 두 수(58 / 57)가 서로 어긋나는 것도 여기서는 못 가린다 —
+/// **[미해결]**. 설치본이 실제로 쓰는 채널은 오브젝트가 아니라 **`scene.camera.paths`**(파일 참조
+/// 문자열 배열)이고 **4씬**이다(`arsenal` · `demon_core` · `dna_fragment` · `neon_sunset`,
+/// 전건 `["scripts/camera_00.json"]`). 그 채널은 `parseCamera` 가 아직 안 읽는다 — 렌더 소비까지
+/// 딸린 별건이라 이 라운드 범위 밖(**미구현**).
 public struct SceneCameraObject: Equatable {
     public var id: Int = 0
     public var name: String = ""
@@ -680,7 +709,21 @@ public struct SceneCameraObject: Equatable {
     /// 기본값 "0"(Manual)이라 **11개 중 어느 것도 기본 활성이 아니다**. 무조건 활성인 카메라만
     /// 골라내는 게이트로 쓴다.
     public var hasVisibleBinding: Bool = false
-    /// 칩 경로 스크립트 파일 참조 + 큐 모드(기본 random, sequential 1건).
+    /// 카메라 경로 파일 참조 + 큐 모드. 둘 다 **파스·보존 전용**(소비는 미구현 — 타입 주석의
+    /// `0x1401f2030` 절 참조).
+    ///
+    /// `path` 는 디스크립터가 **아니다** — camera 오브젝트 등록부(`0x1401f3460`–`0x1401f38b5`)는
+    /// `visible`(`+0x120` bit0, 타입 6) · `fov`(`+0x2d8`, 타입 4) · `zoom`(`+0x2dc`, 타입 4) ·
+    /// `queuemode`(`+0x350`, 타입 5=string) **4개뿐**이고, `path` 는 `load` 오버라이드
+    /// `0x1401f2030` 이 손으로 읽는다(`0x1401f20e3`).
+    ///
+    /// `queueMode` 기본값 `"random"`: 엔진 ctor 는 `+0x350` 의 첫 바이트를 0 으로 깔아
+    /// **빈 문자열**을 남긴다(`0x140190745`, camera 분기 `mov ecx, 0x360` `0x140190693`). 값 목록은
+    /// 정적 초기화가 만드는 2원소 표 `0x1404e96e0` 이고 **index 0 = `"random"`**(`0x140478098`,
+    /// 길이 6) · index 1 = `"sequential"`(`0x140490960`, 길이 0xa)이다. 즉 빈 문자열은 "sequential
+    /// 이 아님" = index 0 과 같은 뜻이라 `?? "random"` 은 **효과가 같고**, 저작값 비교
+    /// (`== "sequential"`)를 쓰는 소비자에게 안전하다. 원문 그대로 보존하려면 `String?` 이 맞지만
+    /// 그러면 소비부가 매번 nil 을 풀어야 해서 이 자리는 값으로 접는다.
     public var path: String? = nil
     public var queueMode: String = "random"
     /// 오브젝트-레벨 플래그 파스·보존.
@@ -811,6 +854,12 @@ public struct SceneNode3D: Equatable {
     /// SceneRenderer3D(3D 렌더)를 타지 않는다 — 소비는 2D PuppetAttach 배선(SceneRendererResources.swift:
     /// 329-341)의 몫이며 이 배치는 파스만 착지한다. nil=일반 계층.
     public var attachment: String? = nil
+    /// `objects[]` 배열 인덱스. 다른 오브젝트 구조체(`SceneLayer`/`SceneTextLayer`/`SceneParticle`/
+    /// `SceneObject3D`/`SceneLight3D`/`SceneSprite`)의 `order` 와 같은 축이고, **id 중복 시 승자**를
+    /// 가리는 데 쓴다(`SceneDocument.claimObjectID` 선언 주석 = WE 규약 근거).
+    /// 생성자 인자에 넣지 않는다 — 이 타입의 `init` 은 리포 밖(테스트 포함)에서도 불리므로 시그니처를
+    /// 유지하고, 파스에서 생성 직후 대입한다(미대입 = 0 = 배열 선두와 동치라 **최선-노력 우선권**).
+    public var order: Int = 0
     public init(id: Int, origin: Vec3, angles: Vec3, scale: Vec3, parent: Int?, visible: Bool) {
         self.id = id; self.origin = origin; self.angles = angles
         self.scale = scale; self.parent = parent; self.visible = visible
@@ -1816,7 +1865,7 @@ extension SceneDocument {
             }
             // 트랜스폼-온리 그룹(콘텐츠 키 없음 + id 보유): 계층 노드로 기록(비가시도 포함 — 서브트리
             // 가시성 판정에 필요)하고 다음으로. 종전에는 조용히 버려져 parent 참조가 끊겼다.
-            if let node = parseNode(obj, initialVisible: initialVisible, visibleScript: visibleScript) {
+            if let node = parseNode(obj, order: order, initialVisible: initialVisible, visibleScript: visibleScript) {
                 nodes3D.append(node)
                 continue
             }
@@ -1838,6 +1887,7 @@ extension SceneDocument {
                     // 스크립트가 shared.xx 세팅 → text id=181 이 소비 → shared.vvv → Hollow Cylinder 스케일).
                     // 종전엔 트랜스폼만 보존하고 스크립트를 버려 컨트롤러 체인이 끊겼다(소비 지오메트리 NaN).
                     invNode.propertyScripts = transformScripts(obj)
+                    invNode.order = order                // id 중복 승자 판정용(claimObjectID 주석)
                     nodes3D.append(invNode)
                 }
                 continue
@@ -2302,7 +2352,8 @@ extension SceneDocument {
     /// 콘텐츠 키가 있거나 id 없으면 nil(호출부가 레이어/컨텐츠 분기로 진행).
     /// camera 의사-오브젝트와 이펙트 캐리어 quad(shape+effects)도 콘텐츠로 취급 — 종전에는 여기서
     /// 트랜스폼-노드로 흡수돼 갓레이 41오브젝트(23씬)·카메라 fov/zoom(37씬)이 통째 드롭됐다.
-    private static func parseNode(_ obj: [String: Any], initialVisible: Bool, visibleScript: String?) -> SceneNode3D? {
+    private static func parseNode(_ obj: [String: Any], order: Int, initialVisible: Bool,
+                                  visibleScript: String?) -> SceneNode3D? {
         // G-D2-1: `sprite` 도 **콘텐츠 키**다. WE 오브젝트 팩토리가 `sprite`(문자열)에 0x270 바이트
         // 전용 클래스를 생성하고(`mov ecx, 0x270` `0x140190304` → ctor `0x14019031b`) 그 ctor 가
         // `materials/util/occlusiontest.json` 을 로드한다(= 하드웨어 오클루전으로 가림을 판정하는
@@ -2334,6 +2385,7 @@ extension SceneDocument {
         if let vs = visibleScript { ps["visible"] = vs }
         node.propertyScripts = ps
         node.attachment = obj["attachment"] as? String   // M(⑤): 파스만(SceneNode3D.attachment 주석 참조)
+        node.order = order                               // id 중복 승자 판정용(claimObjectID 주석)
         return node
     }
 
@@ -2696,15 +2748,32 @@ extension SceneDocument {
                                                     camera3D: SceneCamera3D?, imageLayerCompositeIDs: Set<Int>) {
         guard ProcessInfo.processInfo.environment["WAPLE_VIS_INHERIT"] != "0" else { return }
         guard camera3D == nil, !nodes3D.isEmpty else { return }
+        // 승자는 `objects[]` 순서다 — 앞이 이긴다(`claimObjectID` 주석). 종전에는 노드를 먼저 넣고
+        // 레이어/텍스트/파티클이 **덮어써서** 카테고리 우선순위가 규칙이 돼 있었고, 같은 카테고리
+        // 안에서는 배열 뒤쪽이 이겼다. WE 의 `Scene::findObjectById`(`0x140196840`)는 반대다.
+        //
+        // 소유권을 **먼저 한 번에** 정한다. `invisible` 집합까지 소유권을 봐야 하기 때문이다 —
+        // 같은 id 를 가진 두 노드 중 앞이 보이고 뒤가 안 보이면, 그 id 를 부모로 삼은 자식은
+        // WE 에서 **안 숨는다**(부모 조회가 앞의 것을 돌려주므로). 소유권을 나중에 정하면
+        // 뒤의 것이 `invisible` 에 들어가 자식이 잘못 숨는다.
+        var owner: [Int: Int] = [:]
+        for n in nodes3D { _ = claimObjectID(n.id, order: n.order, owner: &owner) }
+        for l in layers { _ = claimObjectID(l.id, order: l.order, owner: &owner) }
+        for t in texts { _ = claimObjectID(t.id, order: t.order, owner: &owner) }
+        for p in particles { _ = claimObjectID(p.id, order: p.order, owner: &owner) }
         var parentOf: [Int: Int] = [:]
         var invisible: Set<Int> = []
-        for n in nodes3D {
-            if let p = n.parent { parentOf[n.id] = p }
+        func put(_ id: Int, _ order: Int, _ parent: Int?) {
+            guard owner[id] == order else { return }     // 승자만 기록(order 는 배열 인덱스라 유일)
+            parentOf[id] = parent
+        }
+        for n in nodes3D where owner[n.id] == n.order {
             if !n.visible && n.propertyScripts["visible"] == nil { invisible.insert(n.id) }
         }
         guard !invisible.isEmpty else { return }
-        for l in layers where l.id != 0 { if let p = l.parent { parentOf[l.id] = p } }
-        for t in texts where t.id != 0 { if let p = t.parent { parentOf[t.id] = p } }
+        for n in nodes3D { put(n.id, n.order, n.parent) }
+        for l in layers { put(l.id, l.order, l.parent) }
+        for t in texts { put(t.id, t.order, t.parent) }
         // 파티클도 부모 체인의 중간 마디가 된다 — 종전엔 이 한 줄이 없어서 parentOf 에 파티클 id 가
         // 아예 안 들어갔고, 부모가 **가시** 파티클인 자식은 hasInvisibleAncestor 가 parentOf[부모] 를
         // 못 찾아 그 자리에서 false 로 끝났다(비가시 파티클은 :934 의 invNode 로 nodes3D 에 이미 있어
@@ -2712,7 +2781,7 @@ extension SceneDocument {
         // 실물 3299228616: `543 Moving Stars_02 → 540 Blinking Stars_01(파티클, visible true)
         // → 239 LonelyCAT VIE(language 콤보 조건 false)` — 540 은 정상 은닉되는데 543 은 계속 그려졌다
         // (파티클을 거치는 체인 30오브젝트/1씬).
-        for p in particles where p.id != 0 { if let pp = p.parent { parentOf[p.id] = pp } }
+        for p in particles { put(p.id, p.order, p.parent) }
         func hasInvisibleAncestor(_ id: Int?, depth: Int = 0) -> Bool {
             guard let id, depth < 32 else { return false }
             if invisible.contains(id) { return true }
@@ -2774,25 +2843,25 @@ extension SceneDocument {
         guard !composeTargets.isEmpty else { return }
         var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
         var parentOf: [Int: Int] = [:]
-        for l in layers where l.id != 0 {
-            localT[l.id] = (l.origin, l.scale, l.angleZ)
-            if let p = l.parent { parentOf[l.id] = p }
+        // F437 후속(2026-08-21): 승자는 카테고리 우선순위가 아니라 **`objects[]` 순서**다
+        // (앞이 이긴다 — `claimObjectID` 선언 주석의 `Scene::findObjectById` `0x140196840`).
+        // 종전 규칙은 ① 레이어끼리는 뒤가 이기고 ② 레이어 > 노드 > 텍스트로 카테고리가 이겼다.
+        var owner: [Int: Int] = [:]
+        func put(_ id: Int, _ order: Int, _ t: (origin: Vec2, scale: Vec2, angle: Float), _ parent: Int?) {
+            guard claimObjectID(id, order: order, owner: &owner) else { return }
+            localT[id] = t
+            parentOf[id] = parent      // nil 대입 = 이전 승자가 남긴 항목 제거
         }
+        for l in layers { put(l.id, l.order, (l.origin, l.scale, l.angleZ), l.parent) }
         for n in nodes3D {
-            // F437: 레이어/노드 id 중복 시 레이어 우선 — 종전엔 노드가 레이어의 localT 항목을 덮어써
-            // world(레이어id) 가 노드 트랜스폼을 반환했다(비정형 씬 한정).
-            guard localT[n.id] == nil else { continue }
-            localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z)
-            if let p = n.parent { parentOf[n.id] = p }
+            put(n.id, n.order, (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z),
+                n.parent)
         }
         // W3-⑤(a): "부모=텍스트" 케이스(3701356561 Solide H/V 등 이미지 자식) — composeTextParentTransforms
-        // 가 이 함수보다 먼저 실행돼(:919) texts 는 이미 월드(또는 루트 로컬=월드) 값으로 확정돼 있다
+        // 가 이 함수보다 먼저 실행돼 texts 는 이미 월드(또는 루트 로컬=월드) 값으로 확정돼 있다
         // (F057 해소로 angleZ 도 부모 누적 반영 완료). 그래서 parentOf 는 등록하지 않는다(등록하면 텍스트
-        // 자신의 부모 체인이 여기서 다시 합성돼 이중 적용된다). 레이어/노드가 같은 id 를 이미 썼으면 그 쪽이 우선(F437 동형).
-        for t in texts where t.id != 0 {
-            guard localT[t.id] == nil else { continue }
-            localT[t.id] = (t.origin, t.scale, t.angleZ)
-        }
+        // 자신의 부모 체인이 여기서 다시 합성돼 이중 적용된다) — `put` 대신 `nil` 부모로 넘긴다.
+        for t in texts { put(t.id, t.order, (t.origin, t.scale, t.angleZ), nil) }
         // A1/E1: angle 은 scene.json angles 그대로(이미 라디안 — 코퍼스 전부 ≤π 확정, 인코더 규약과 동일).
         // 종전 `* .pi/180` 은 이미 라디안인 값을 도(°)로 오인해 부모 오프셋 회전을 57× 축소했다
         // (852473d 가 렌더 인코더 3곳만 고쳤고 이 합성부는 미동기 — SceneRendererFrameEncoder.swift:405 참조).
@@ -2814,17 +2883,16 @@ extension SceneDocument {
             return composed(pw, t)
         }
         for i in composeTargets {
-            // F436: id 없는(0) 레이어도 parent 가 있으면 합성 — world() 는 localT 에 id 항목이 있어야
-            // 해서 id==0 은 nil → 종전 미합성(로컬 좌표 그대로 렌더). 자신 로컬 × 부모 월드를 직접 합성.
-            if layers[i].id == 0 {
-                guard let pid = layers[i].parent, let pw = world(pid, 0) else { continue }
-                let wt = composed(pw, (layers[i].origin, layers[i].scale, layers[i].angleZ))
-                layers[i].origin = wt.origin
-                layers[i].scale = wt.scale
-                layers[i].angleZ = wt.angle
-                continue
-            }
-            guard let wt = world(layers[i].id, 0) else { continue }
+            // F436 + 2026-08-21: **자신 로컬 × 부모 월드를 직접** 합성한다. 종전에는 id 가 있는
+            // 레이어만 `world(자기 id)` 로 우회했고 id==0 만 이 직접 형태를 썼는데, 두 형태는
+            // ① id 가 유일하면 정의상 같은 값이고 ② 중복 id 에서는 직접 형태만 맞다
+            // (우회 형태는 `localT[id]` = **승자의** 로컬을 자기 로컬로 착각해 진 쪽 레이어를
+            //  승자 좌표로 끌어다 놓는다. WE 는 오브젝트마다 자기 로컬과 자기 부모 포인터를
+            //  들고 있으므로 그런 뒤섞임이 없다 — `claimObjectID` 주석의 `sub_1401850a0`).
+            // 형제 셋(`composeLightParentTransforms`·`composeTextParentTransforms`·
+            // `composeParticleParentTransforms`)이 이미 이 직접 형태라 네 곳이 같은 모양이 된다.
+            guard let pid = layers[i].parent, let pw = world(pid, 0) else { continue }
+            let wt = composed(pw, (layers[i].origin, layers[i].scale, layers[i].angleZ))
             layers[i].origin = wt.origin
             layers[i].scale = wt.scale
             layers[i].angleZ = wt.angle
@@ -2842,14 +2910,19 @@ extension SceneDocument {
         guard camera3D == nil, lights.contains(where: { $0.parent != nil }) else { return }
         var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float, z: Float)] = [:]
         var parentOf: [Int: Int] = [:]
-        for l in layers where l.id != 0 {
-            localT[l.id] = (l.origin, l.scale, l.angleZ, l.originZ)
-            if let p = l.parent { parentOf[l.id] = p }
+        // 승자는 `objects[]` 순서다 — 앞이 이긴다(`claimObjectID` 주석. composeParentTransforms 와 동기).
+        var owner: [Int: Int] = [:]
+        func put(_ id: Int, _ order: Int,
+                 _ t: (origin: Vec2, scale: Vec2, angle: Float, z: Float), _ parent: Int?) {
+            guard claimObjectID(id, order: order, owner: &owner) else { return }
+            localT[id] = t
+            parentOf[id] = parent      // nil 대입 = 이전 승자가 남긴 항목 제거
         }
+        for l in layers { put(l.id, l.order, (l.origin, l.scale, l.angleZ, l.originZ), l.parent) }
         for n in nodes3D {
-            guard localT[n.id] == nil else { continue }  // 레이어 우선(composeParentTransforms F437 동일)
-            localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z, n.origin.z)
-            if let p = n.parent { parentOf[n.id] = p }
+            put(n.id, n.order,
+                (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z, n.origin.z),
+                n.parent)
         }
         // A1/E1: angle 은 scene.json angles 그대로(이미 라디안) — composeParentTransforms 와 동기.
         func world(_ id: Int, _ depth: Int) -> (origin: Vec2, scale: Vec2, angle: Float, z: Float)? {
@@ -2881,9 +2954,68 @@ extension SceneDocument {
         }
     }
 
-    /// E1 공용: 레이어+노드(+W3-⑤ 텍스트)에서 부모 체인 로컬 트랜스폼 맵을 구성(레이어 우선, F437 규약 동일).
-    /// composeParentTransforms/composeLightParentTransforms 는 검증된 원본 그대로 두고, 신규 소비처
-    /// (텍스트/파티클)만 이 헬퍼를 공유한다. texts 는 이 함수 호출부(composeTextParentTransforms 등)가
+    /// **오브젝트 id 중복 승자 — `objects[]` 배열 순서에서 앞이 이긴다(first-wins).**
+    ///
+    /// 이 리포에 **id 로 오브젝트를 고르는 술어는 이것 하나여야 한다.** 종전에는 세 부모-맵 빌더
+    /// (`composeParentTransforms` 인라인 · `composeLightParentTransforms` 인라인 ·
+    /// `buildParentTransformMap`)와 `applyVisibilityInheritance` 가 각자 다른 규칙을 들고 있었다 —
+    /// 레이어끼리는 **뒤가** 이기고(`localT[l.id] = …` 무조건 대입), 레이어↔노드↔텍스트는 카테고리
+    /// 우선순위(레이어 > 노드 > 텍스트)로 갈렸다. 둘 다 WE 와 다르다.
+    ///
+    /// 근거(전부 `wallpaper64.exe` 2.8.42, imagebase `0x140000000` — 직접 디스어셈블):
+    ///
+    /// * **로드는 중복을 제거하지 않는다.** 씬 로더 `0x140186c90`–`0x140188816` 이 `objects` 배열을
+    ///   원소 순서로 돌며(태그 7 게이트 `0x140187f15` → 오브젝트 팩토리 `0x14018ff60` 호출
+    ///   `0x140187f22`) 만들어진 것을 **전건** 씬 오브젝트 벡터 `[scene+0x158]` 에 push 한다
+    ///   (`0x140190842`). 같은 id 가 둘이면 둘 다 살아 있고 둘 다 그려진다.
+    /// * **id 로 하나를 고르는 자리는 `Scene::findObjectById` `0x140196840` 하나뿐이다**
+    ///   (씬 인터페이스 서브오브젝트 vtable `0x14048ea08` 의 슬롯 `+8`; 그 서브오브젝트를
+    ///   `[ctx+0x1510]` 에 심는 곳이 `0x1401872e8`). 본체는 `[scene+0x158]`..`[scene+0x160]` 을
+    ///   **앞에서 뒤로** 도는 선형 탐색이고 `cmp [rdi+8], rdx`(= `obj->id == id`) 가 맞는
+    ///   **첫 원소**에서 멈춘다(`0x140196860` 루프 머리 · `0x140196863` 비교 · `0x140196867` 탈출).
+    /// * **`parent` 해소도 같은 규칙이다.** 로드 중 해소는 `IObject::load` `0x1401de470` 이
+    ///   `0x1401de52c` 의 `call [r8+8]` 로 위 함수를 부르고, 로드가 끝난 뒤 씬 로더의 2차 패스가
+    ///   같은 벡터를 앞에서 뒤로 훑어 **자기 자신을 뺀 첫 일치**를 부모로 삼는다
+    ///   (`0x140187fd2` 후보 로드 · `0x140187fd5` 자기 제외 · `0x140187fda` id 비교).
+    /// * **id 등록부도 first-wins 다.** `0x1401a38f0`(오브젝트 기저 ctor `0x1401ddd69` 이 부른다)이
+    ///   `json["id"]` 를 `asUInt64`(`0x140086000`)로 읽어 `[obj+8]` 에 넣고 `0x140078250` 으로
+    ///   해시 집합에 넣는데, 그 함수는 **삽입(insert)** 이라 같은 키가 이미 있으면 기존 노드를
+    ///   그대로 돌려주고(`0x14007831f` `xor al,al` = inserted=false) **덮어쓰지 않는다.**
+    ///
+    /// **형제 이름에 속지 마라(브리프 함정 8).** 패키지 엔트리 색인은 `adda85e` 가 확정한 대로
+    /// **last-wins** 다(`ScenePackage` 선언 주석). 오브젝트 id 는 그 **반대**다 — 이름이 같은 다른 코드다.
+    ///
+    /// `id == 0` 은 승자 경쟁에서 뺀다: WE 의 `0x1401a38f0` 은 `asUInt64` 결과가 0 이면
+    /// **저장 자체를 건너뛰므로**(`0x140086000` 직후 `test rax,rax` / `je`) `id` 키가 없는 오브젝트와
+    /// 구분되지 않는다. Waple 도 `intVal(obj["id"]) ?? 0` 이라 같은 자리에 0 이 온다.
+    ///
+    /// **의도적 이탈 1건(도달 0).** WE 에서는 `[obj+8]` ctor 기본값이 0 이라 `id` 키가 없는 오브젝트도
+    /// id 0 이고, 그래서 `"parent": 0` 이 **로드 시점**(`0x1401de52c`)에 "배열 앞쪽의 id 0 인 첫
+    /// 오브젝트" 로 붙을 수 있다(로더 2차 패스는 `parent id == 0` 이면 건너뛰므로 — `0x140187fbd` —
+    /// 재해소하지 않는다). 즉 **로드 순서에 의존하는 기벽**이다. 설치본 186 씬 전수에서 `parent` 값은
+    /// `24` 2건뿐이고 `parent:0`·`id:0` 은 0건이라 재현할 실물이 없다. 흉내 내지 않고 "부모 없음" 으로
+    /// 고정한다(`SceneObjectIDDedupTests.testParentZeroDoesNotBindToAnIDlessObject` 가 그 선택을 잠근다).
+    ///
+    /// 코퍼스 도달: 설치본 씬 문서 **186개 / 오브젝트 294개 중 중복 id 0건**(`id` 키 부재 2건, `id == 0` 0건).
+    /// 즉 이 규약을 뒤집어도 동봉·설치본 렌더는 한 픽셀도 안 바뀐다 — 워크샵 씬을 위한 정합성 수정이다.
+    ///
+    /// 반환 `true` = 호출부가 이 id 자리를 **이 후보로 (재)기록해야 한다**.
+    private static func claimObjectID(_ id: Int, order: Int, owner: inout [Int: Int]) -> Bool {
+        guard id != 0 else { return false }
+        if let cur = owner[id], cur <= order { return false }
+        owner[id] = order
+        return true
+    }
+
+    /// E1 공용: 레이어+노드(+W3-⑤ 텍스트)에서 부모 체인 로컬 트랜스폼 맵을 구성.
+    ///
+    /// **[2026-08-21 정정]** 종전 문면은 "(레이어 우선, F437 규약 동일) …
+    /// composeParentTransforms/composeLightParentTransforms 는 검증된 원본 그대로 두고, 신규
+    /// 소비처(텍스트/파티클)만 이 헬퍼를 공유한다" 였다. 툼스톤으로 남긴다 — **둘 다 낡았다.**
+    /// ① 승자는 카테고리(레이어 우선)가 아니라 **`objects[]` 순서**가 정한다(`claimObjectID`).
+    /// ② 세 빌더가 각자 다른 규칙을 들고 있던 것이 문제의 원인이었으므로, 이제 **셋 다 같은 술어**를
+    ///   쓴다. 튜플 모양(라이트만 `z` 성분이 하나 더 있다)만 다르다 — 술어를 또 복제하지 마라.
+    /// texts 는 이 함수 호출부(composeTextParentTransforms 등)가
     /// 스스로를 뮤테이트하기 **전** 스냅샷(값 타입 인자라 호출 시점 로컬값 고정)이라 이중 합성이 아니다 —
     /// 텍스트→텍스트 부모 체인(3516106265: id 790/798/804 parent=783)도 재귀로 정상 합성된다.
     ///
@@ -2894,24 +3026,44 @@ extension SceneDocument {
         -> (localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)], parentOf: [Int: Int]) {
         var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
         var parentOf: [Int: Int] = [:]
-        for l in layers where l.id != 0 {
-            localT[l.id] = (l.origin, l.scale, l.angleZ)
-            if let p = l.parent { parentOf[l.id] = p }
+        // F437 후속: 승자는 카테고리가 아니라 **`objects[]` 순서**가 정한다(claimObjectID 주석).
+        var owner: [Int: Int] = [:]
+        func put(_ id: Int, _ order: Int, _ t: (origin: Vec2, scale: Vec2, angle: Float), _ parent: Int?) {
+            guard claimObjectID(id, order: order, owner: &owner) else { return }
+            localT[id] = t
+            parentOf[id] = parent      // nil 대입 = 이전 승자가 남긴 항목 제거
         }
+        for l in layers { put(l.id, l.order, (l.origin, l.scale, l.angleZ), l.parent) }
         for n in nodes3D {
-            guard localT[n.id] == nil else { continue }
-            localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z)
-            if let p = n.parent { parentOf[n.id] = p }
+            put(n.id, n.order, (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z),
+                n.parent)
         }
-        for t in texts where t.id != 0 {
-            guard localT[t.id] == nil else { continue }
-            localT[t.id] = (t.origin, t.scale, t.angleZ)
-            if let p = t.parent { parentOf[t.id] = p }
-        }
+        for t in texts { put(t.id, t.order, (t.origin, t.scale, t.angleZ), t.parent) }
         return (localT, parentOf)
     }
 
     /// E1 공용: id 의 월드(부모 체인 합성) 트랜스폼. angle 은 scene.json angles 그대로(라디안).
+    ///
+    /// **부모→자식으로 실제 물려받는 축은 둘뿐이다**(근거 전부 `wallpaper64.exe` 2.8.42):
+    ///
+    /// | 축 | 규약 | 근거 |
+    /// |---|---|---|
+    /// | 트랜스폼(4×4) | **곱셈**. `World = Local × ParentWorld`, 게이트는 `parent != null` **하나**(플래그워드 `+0x120` 은 안 읽는다) | `sub_1401850a0`: `0x14018528a` parent 로드 · `0x140185294` 부모 없으면 로컬 반환 · `0x1401852b0` 부모 월드 재귀 · `0x1401852c0` 행렬곱 |
+    /// | 가시성 | **논리 AND**(곱셈 아님). 자기 bit0 이 서 있고 **조상 전부** 서 있어야 보인다 | `sub_140185010`: `0x140185014` `test byte [rcx+0x120], 1` → `0x14018501d` `rcx = [rcx+0x180]` → `0x140185029` 자기 재귀 |
+    ///
+    /// **투명도(`alpha`)·색(`color`)·밝기(`brightness`)는 상속되지 않는다.** 이미지 레이어 등록부
+    /// (`0x1401ee520`–`0x1401ef118`)가 `color`(`+0x330`, 타입 2=vec3) · `alpha`(`+0x33c`, 타입 4) ·
+    /// `brightness`(`+0x340`, 타입 4)를 잡는데, 이미지 전체 `.pdata` 함수 전수 디스어셈블에서
+    /// 그 세 멤버를 읽는 **모든** 함수를 뽑아 보면 그중 부모 포인터 `[obj+0x180]` 를 함께
+    /// 역참조하는 것은 **0개**다(`0x1401891a0` 만 둘 다 나오는데, 거기 `+0x33c` 는 카메라 **경로
+    /// 레코드**의 fov 이고 `+0x180` 은 위 가시성 AND 호출이다 — 같은 오브젝트가 아니다).
+    /// 그래서 Waple 의 `composed()` 가 origin/scale/angle 만 합성하고 alpha/color 를 건드리지 않는
+    /// 것이 맞다.
+    ///
+    /// 순서: WE 는 **자식이 요구할 때** 부모 월드를 재귀로 만든다(pull, 캐시 스탬프
+    /// `sub_140185040`). Waple 은 파스 말미에 같은 재귀를 한 번 돌려 굽는다(push) — 사이클은
+    /// `depth < 32` 로 끊고, WE 는 로더 2차 패스에서 조상 체인에 자기 자신이 나오면 부모를 아예
+    /// 지운다(`0x140187ff7`–`0x140188018`).
     private static func worldParentTransform(_ id: Int, _ depth: Int,
                                              localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)],
                                              parentOf: [Int: Int])

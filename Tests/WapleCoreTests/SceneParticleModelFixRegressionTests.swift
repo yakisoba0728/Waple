@@ -152,6 +152,13 @@ final class SceneParticleModelFixRegressionTests: XCTestCase {
     }
 
     // MARK: F437 — 레이어/노드 id 중복 시 레이어 우선
+    //
+    // **[2026-08-21 정정] 규칙 이름이 낡았다 — 이기는 것은 카테고리가 아니라 `objects[]` 순서다.**
+    // WE 의 `Scene::findObjectById`(`0x140196840`)는 오브젝트 벡터를 앞에서 뒤로 훑어 **첫 일치**를
+    // 돌려준다(`SceneDocument.claimObjectID` 선언 주석에 근거 전부). 이 케이스의 단정(110)은 그대로
+    // 유효한데, 그건 레이어라서가 아니라 **레이어가 배열에서 먼저**이기 때문이다. 카테고리와 배열
+    // 순서를 실제로 가르는 짝 케이스는 `SceneObjectIDDedupTests` 에 있다
+    // (`testEarlierNodeBeatsLaterLayerWithSameID` / `testEarlierLayerBeatsLaterNodeWithSameID`).
 
     func testF437_LayerWinsOnLayerNodeIDCollision() throws {
         let scene = """

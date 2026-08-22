@@ -1,0 +1,373 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_scene_objects.py",
+ "entries": [
+  {
+   "id": "scene.object.idLookupFirstWins",
+   "value": {
+    "함수": "0x140196840",
+    "vtable": "0x14048ea08 슬롯 +0x8",
+    "벡터": "[scene+0x158]..[scene+0x160] (서브오브젝트 기준 +0x108/+0x110)",
+    "규약": "앞에서 뒤로 선형 탐색, 첫 일치에서 탈출(0x140196867 je) — first-wins",
+    "미발견": "nullptr (0x140196872 xor eax,eax)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_objects.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.object.idStoreFirstWins",
+   "value": {
+    "헬퍼": "0x1401a38f0 (기저 ctor 0x1401ddbb0 이 0x1401ddd69 에서 호출)",
+    "읽기": "find(\"id\") 0x1401a3922 → 태그 1..3 만(0x1401a3935 dec/cmp 2/ja) → asUInt64 0x140086000",
+    "id0": "asUInt64 결과가 0 이면 저장 자체를 건너뛴다(0x1401a3964 test/je) — `id:0` 은 `id` 키 부재와 구분되지 않는다",
+    "저장": "[obj+8] = id (0x1401a399e)",
+    "집합삽입": "sub_140078250 — 같은 키가 이미 있으면 기존 노드 반환, inserted=false(0x14007831f xor al,al). 덮어쓰지 않는다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_objects.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.object.sortOrderDescriptor",
+   "value": {
+    "이름세팅": "0x1401e090a (lea 0x1401e08f9)",
+    "멤버오프셋": "0x124",
+    "타입코드": 0,
+    "타입코드근거": "mov [rbx+0x30], edi @0x1401e092b · 지배 대입 xor edi,edi @0x1401e07b9 (rdi 는 Win64 비휘발성) · 독립확인 dil==0 @0x1401e098b",
+    "멤버타입": "int32 — 역직렬화 썽크 0x1401a4930 이 dword 를 쓴다(0x1401a496c)",
+    "태그게이트": "1(int)/2(uint)/3(real) 만 착지. 4(string)·5(bool)은 스토어를 건너뛰어 ctor 기본값 0 이 남는다",
+    "바인딩경로": "{\"value\":…} 는 dec/cmp 2/ja(0x1401a49b5) 뒤 asInt 0x140085ee0",
+    "세터게터": "0x1401a49f0 / 0x1401a4a10 (dword 복사 썽크)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_objects.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.object.sortIsStable",
+   "value": {
+    "게이트": "씬 플래그워드 [scene+0xe0] & 0x3000 == 0x2000 (customsortorder 켜짐 AND transparentsorting 꺼짐)",
+    "비교자": "0x140186980 — sortorder(+0x124) 오름차순, 부호 있는 엄격 <(setl @0x14018698c)",
+    "소형경로": "n ≤ 0x20 → 0x14019fde0 = _Insertion_sort_unchecked. 안쪽 루프가 엄격 < 인 동안만 밀므로(0x14019fe78 jne) 같은 키의 원래 순서가 보존된다",
+    "대형경로": "n > 0x20 → ceil(n/2) 임시버퍼(0x14018ab97–0x14018ab9f, 실패 시 0x14018abfd 에서 반으로 줄여 재시도) + 0x14019fec0 = _Stable_sort_unchecked(_ISORT_MAX 0x20, 자기 재귀 2회 0x1401a02a2/0x1401a02c5, 병합)",
+    "결론": "두 경로 다 안정(stable) — 같은 sortorder 끼리는 objects[] 배열 순서가 유지된다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_objects.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.object.typeVtables",
+   "value": {
+    "base/node": {
+     "vtable": "0x14048ec88",
+     "설치": "0x1401907ff",
+     "종류코드": 0,
+     "종류함수": "0x14000ec40",
+     "getTransformMatrix(+0x80)": "0x1401850a0",
+     "meshRaycast(+0x88)": "0x1400a36d0"
+    },
+    "image": {
+     "vtable": "0x1404911a8",
+     "설치": "0x1401fac7c",
+     "종류코드": 1,
+     "종류함수": "0x140050790",
+     "getTransformMatrix(+0x80)": "0x1401fd3f0",
+     "meshRaycast(+0x88)": "0x1401fd690"
+    },
+    "particle": {
+     "vtable": "0x1404915b0",
+     "설치": "0x14019020b",
+     "종류코드": 2,
+     "종류함수": "0x140118a50",
+     "getTransformMatrix(+0x80)": "0x1401850a0",
+     "meshRaycast(+0x88)": "0x1400a36d0"
+    },
+    "sprite": {
+     "vtable": "0x140491680",
+     "설치": "0x14025657c",
+     "종류코드": 3,
+     "종류함수": "0x1401253a0",
+     "getTransformMatrix(+0x80)": "0x1401850a0",
+     "meshRaycast(+0x88)": "0x1400a36d0"
+    },
+    "text": {
+     "vtable": "0x140491950",
+     "설치": "0x140256af7",
+     "종류코드": 4,
+     "종류함수": "0x1400fde90",
+     "getTransformMatrix(+0x80)": "0x140256e10",
+     "meshRaycast(+0x88)": "0x1400a36d0"
+    },
+    "model": {
+     "vtable": "0x140491338",
+     "설치": "0x14019015b",
+     "종류코드": 5,
+     "종류함수": "0x140128f80",
+     "getTransformMatrix(+0x80)": "0x1401850a0",
+     "meshRaycast(+0x88)": "0x140223810"
+    },
+    "light": {
+     "vtable": "0x140491c38",
+     "설치": "0x140190441",
+     "종류코드": 6,
+     "종류함수": "0x1401b49e0",
+     "getTransformMatrix(+0x80)": "0x1401850a0",
+     "meshRaycast(+0x88)": "0x1400a36d0"
+    },
+    "sound": {
+     "vtable": "0x140490ae8",
+     "설치": "0x1401905b2",
+     "종류코드": 7,
+     "종류함수": "0x1401f4c10",
+     "getTransformMatrix(+0x80)": "0x1401850a0",
+     "meshRaycast(+0x88)": "0x1400a36d0"
+    },
+    "camera": {
+     "vtable": "0x140490980",
+     "설치": "0x1401906b5",
+     "종류코드": 8,
+     "종류함수": "0x1401f1a20",
+     "getTransformMatrix(+0x80)": "0x1401850a0",
+     "meshRaycast(+0x88)": "0x1400a36d0"
+    },
+    "shape": {
+     "vtable": "0x140491d10",
+     "설치": "0x1401907b4",
+     "종류코드": 10,
+     "종류함수": "0x14025fa30",
+     "getTransformMatrix(+0x80)": "0x1401850a0",
+     "meshRaycast(+0x88)": "0x1400a36d0"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_objects.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.object.cursorHitTestParticipants",
+   "value": {
+    "디스패처": "sub_140189e10 (0x140189e10–0x14018aab9), 프레임 갱신 0x1401802d5 에서 호출",
+    "순회": "오브젝트 배열을 뒤에서 앞으로(0x14018a404) = 위에서 아래로",
+    "1차게이트": "solid(=[obj+0x120] bit13) 0x14018a02d — 꺼져 있으면 그 오브젝트를 건너뛴다",
+    "2차게이트": "종류코드 [vt+0x60] (0x14018a041). 1(image)·4(text) → 2D 쿼드 히트테스트, 5(model) → 메시 경로. 그 외 타입은 히트테스트를 아예 받지 않는다",
+    "쿼드히트테스트": "0x14019dbb0 (0x14018a242)",
+    "메시히트테스트": "0x140185520 (0x14018a265)",
+    "보조슬롯(+0x88)": "0x14018a2bb 에서 호출되는 타입별 2차 판정. 실구현은 image(0x1401fd690) 와 model(0x140223810) **둘뿐**이고, 나머지 8타입은 `xor al,al; ret` 스텁 0x1400a36d0 다",
+    "시차보정": "종류 1·4 **둘 다** obj.parallaxDepth(+0x170/+0x174)를 성분별로 곱한 오프셋을 히트테스트에 넘긴다(0x14018a0ff · 0x14018a10d, r8 = [rsp+0x40] @0x14018a235). 텍스트가 이미지와 다른 규칙을 쓰지 않는다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_objects.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.object.inheritedAxes",
+   "value": {
+    "트랜스폼": {
+     "상속": true,
+     "규약": "곱셈 — World = Local · ParentWorld",
+     "함수": "sub_1401850a0",
+     "게이트": "parent != null 하나뿐(0x14018528a 로드 · 0x140185291 test · 0x140185294 je → 로컬 반환)",
+     "재귀": "0x1401852b0 부모 월드 · 0x1401852c0 행렬곱",
+     "플래그워드참조": 0
+    },
+    "가시성": {
+     "상속": true,
+     "규약": "논리 AND(곱셈 아님) — 자기 bit0 ∧ 조상 전건 bit0",
+     "함수": "sub_140185010",
+     "근거": "0x140185014 test byte [rcx+0x120],1 → 0x14018501d rcx=[rcx+0x180] → 0x140185029 자기 재귀"
+    },
+    "투명도": {
+     "상속": false,
+     "멤버": "image alpha +0x33c (등록 0x1401ee770, 타입 4=float)",
+     "근거": ".pdata 전수 디스어셈블에서 +0x33c 를 읽는 함수 중 [obj+0x180] 을 함께 역참조하는 것은 0개"
+    },
+    "색": {
+     "상속": false,
+     "멤버": "image color +0x330 (등록 0x1401ee6a0, 타입 2=vec3) · brightness +0x340 (0x1401ee85e, 타입 4)",
+     "근거": "위와 동일 — 부모 포인터와 함께 나오는 리더 0개"
+    },
+    "적용순서": "WE 는 자식이 요구할 때 부모 월드를 재귀로 만든다(pull, 프레임 스탬프 캐시 sub_140185040). 전역 순서가 없다. 사이클은 로더 2차 패스가 부모를 지워서 끊는다(0x140187ff7–0x140188018)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_objects.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.object.cameraPathConsumed",
+   "value": {
+    "load오버라이드": "camera vtable 0x140490980 슬롯 +0x40 = 0x1401f2030 (기저 0x1401de470 을 0x1401f20a5 에서 호출)",
+    "path읽기": "find(\"path\") 0x1401f20e3 → 태그 4 게이트 0x1401f2140 → asString 0x140085cc0 → 파일 서브시스템 0x1400d3f80 → jsoncpp 리더 0x140017840",
+    "파일루트키": "paths (0x1401f21cc, 태그 6=array 게이트 0x1401f21d7)",
+    "항목키": {
+     "0x1401f2239": "options",
+     "0x1401f2260": "events",
+     "0x1401f2277": "center",
+     "0x1401f2292": "eye",
+     "0x1401f22ad": "up",
+     "0x1401f22c8": "zoom",
+     "0x1401f22e3": "fov"
+    },
+    "등록부": {
+     "visible": {
+      "멤버": "0x120",
+      "타입코드": 6
+     },
+     "fov": {
+      "멤버": "0x2d8",
+      "타입코드": 4
+     },
+     "zoom": {
+      "멤버": "0x2dc",
+      "타입코드": 4
+     },
+     "queuemode": {
+      "멤버": "0x350",
+      "타입코드": 5
+     }
+    },
+    "등록부VA": "0x1401f3460–0x1401f38b5 — 4개뿐이고 `path` 는 디스크립터가 아니다",
+    "queuemode값목록": [
+     "random",
+     "sequential"
+    ],
+    "queuemode기본": "ctor 가 문자열 첫 바이트를 0 으로 깐다(0x140190745) = 빈 문자열. 값 목록 index 0 이 \"random\" 이라 효과가 같다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_objects.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.object.cpRotationConsumer",
+   "value": {
+    "생성": "CP 빌더 0x14022bd40 이 controlpointangle*/controlpoint* 로 [cp+0x80] 4×4 를 만든다(§6.2)",
+    "복사": "CP 갱신부 0x14022e3e0 이 [cp+0xc0] 의 bit0 이 서 있고 bit16 이 꺼졌을 때만(0x14022e468 bt/jb · 0x14022e472 test/je) +0x80..0xbf → +0x00..0x3f 로 복사한다(0x14022e47b–0x14022e4ae). 레코드 앞 0x40 이 CP 의 **활성 4×4** 다",
+    "소비": "이미터 형상 평가부 0x1402378a0(호출부 0x14023771b, 함수 0x140236cd0)이 활성 4×4 를 기저 3행 + 위치 행으로 읽고 위치 행에 이미터 로컬 오프셋 [emitter+0x70] 을 더한다(0x140237c33 이후 · 0x140237c65 addps). 이미터 종류 분기 양쪽(0x140237c33 · 0x1402384af)이 같은 레코드를 읽는다",
+    "게이트비트": "instanceoverride CP 게이트(flags & 0x10005)와 같은 워드·같은 비트",
+    "값소스이름표": [
+     "timeofday",
+     "particlesystemtime",
+     "layertime",
+     "color",
+     "position",
+     "velocity",
+     "controlpoint",
+     "deltatocontrolpoint",
+     "directiontocontrolpoint",
+     "layerorigin",
+     "remap",
+     "multiply",
+     "add",
+     "subtract"
+    ],
+    "결론": "CP 회전의 최종 소비자는 **이미터의 방향 기저**다. `directiontocontrolpoint` 는 코드에서 직접 참조되지 않는 값 소스 이름표(0x140484ed0–0x140484f38)의 한 칸이고 위치 계열이다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_objects.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.corpus.objectIDCensus",
+   "value": {
+    "씬문서": 186,
+    "오브젝트": 294,
+    "중복id를_가진_문서": 0,
+    "중복id값": 0,
+    "id키_부재": 2,
+    "id_0": 0,
+    "objects[]_camera_의사오브젝트": 0,
+    "그중_path_보유": 0,
+    "scene.camera.paths_보유_문서": [
+     "projects/defaultprojects/arsenal/scene.json",
+     "projects/defaultprojects/demon_core/scene.json",
+     "projects/defaultprojects/dna_fragment/scene.json",
+     "projects/defaultprojects/neon_sunset/scene.json"
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "설치본 씬 문서 전수 — $WE_ROOT/**/{scene,gifscene}.json"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_objects.py"
+    }
+   ]
+  }
+ ]
+}
