@@ -17,6 +17,13 @@ import simd
 ///  · `Composite::allocateTargets` `0x14017f1b0`–`0x14017fa6f` — 레벨 버퍼 생성, N 산출, 강도 정규화
 ///  · `Composite::drawBloomChain`   `0x140183610`–`0x140183a61` — `g_RenderVar0` 기저·패스별 배율·BICUBIC 선택
 ///
+/// **피라미드 레벨 버퍼는 fp16 이다** — 컬러 포맷 enum `0xf` → DXGI 10 `R16G16B16A16_FLOAT`
+/// (`0x14017f323 mov ecx,0xf` → `0x14017f33d cmovne edi,ecx` → 레벨 생성 인자 `0x14017f47d`;
+/// enum→DXGI 점프표 `sub_1400d2a20` / `0x1400d2aa4`). 그래서 1.0 초과가 보존되고
+/// 소프트-니 임계(`bloomhdrthreshold` 기본 1.0)가 의미를 갖는다 — LDR 3패스가 8비트 UNORM 위에서
+/// 도는 것과 갈리는 지점이다(`LDRBloomMath` 헤더 · 정본
+/// `spec/engine/tonemapping.json` `engine.tonemap.chainColorSpace`).
+///
 /// 정본: `spec/engine/hdr-bloom.json` · `spec/engine/uniform-feed.json` ·
 /// 문서: `docs/re/scene-postprocessing.md` §5.
 public enum HDRBloomMath {

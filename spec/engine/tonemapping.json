@@ -1,0 +1,1672 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_tonemapping.py",
+ "entries": [
+  {
+   "id": "engine.tonemap.operatorAbsence",
+   "value": {
+    "verdict": "톤매핑 연산자·노출·자동노출·화이트포인트가 **없다**. 최종 픽셀 연산은 가산과 `saturate` 클램프뿐이고 `saturate` 는 곡선이 아니다 — 어깨도 발끝도 없다.",
+    "samplingDesign": "최종 합성은 Composite::frame(0x14017fa70–0x1401816cc) 안에서 끝나고 그 패스의 셰이더는 WE 가 평문 배포한다. 곡선이 있다면 (a) 평문에 있거나 (b) 엔진이 상수를 실어야 한다. (a)=identifierCensus, (b)=binaryOperatorConstants 로 각각 쟀고 둘 다 0 이다.",
+    "shaderPopulation": 137,
+    "identifierCensus": {
+     "ACES": {
+      "files": 1,
+      "sites": [
+       "HLSL/dx11playlisttransition.vert:87"
+      ]
+     },
+     "Reinhard": {
+      "files": 0,
+      "sites": []
+     },
+     "Uncharted": {
+      "files": 0,
+      "sites": []
+     },
+     "filmic": {
+      "files": 0,
+      "sites": []
+     },
+     "Hable": {
+      "files": 0,
+      "sites": []
+     },
+     "tonemap": {
+      "files": 0,
+      "sites": []
+     },
+     "whitepoint": {
+      "files": 0,
+      "sites": []
+     },
+     "exposure": {
+      "files": 0,
+      "sites": []
+     },
+     "luminance": {
+      "files": 0,
+      "sites": []
+     },
+     "histogram": {
+      "files": 0,
+      "sites": []
+     },
+     "adapt": {
+      "files": 0,
+      "sites": []
+     },
+     "dither": {
+      "files": 0,
+      "sites": []
+     },
+     "bayer": {
+      "files": 0,
+      "sites": []
+     }
+    },
+    "identifierCensusNote": "유일한 히트는 `ACES` 1건이고 그것은 **오타 주석**이다 — HLSL/dx11playlisttransition.vert 의 \"Move pieaces up and down\" 안의 `ace`. 코드 식별자는 0건이다.",
+    "binaryStringCensus": {
+     "gamma": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "Gamma": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "GAMMA": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "tonemap": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "ToneMap": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "Tonemap": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "TONEMAP": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "exposure": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "Exposure": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "dither": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "Dither": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "bayer": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "Bayer": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "whitepoint": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "luminance": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "histogram": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "ACES": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "Reinhard": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "SRGB": {
+      "ascii": 0,
+      "utf16le": 0
+     },
+     "sRGB": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "srgb": {
+      "ascii": 1,
+      "utf16le": 0
+     }
+    },
+    "binaryStringHits": {
+     "sRGB": "ASCII 1건. **문자열이 아니다** — `0x1400b8817 cmp ecx, 0x42475273` 의 즉치 필드다. 같은 함수가 `\"#png: bad chunk\"`(0x140479a38)를 참조하므로 **PNG 청크 타입 판별**이고 렌더 파이프라인과 무관하다.",
+     "srgb": "ASCII 1건. `materials/util/combine_srgb.json` 경로 문자열의 일부다(transferFunctionSites 참조).",
+     "그 밖": "gamma · tonemap · exposure · dither · bayer · whitepoint · luminance · histogram · ACES · Reinhard 는 ASCII·UTF-16LE 양쪽 0건이다."
+    },
+    "binaryOperatorConstants": {
+     "ACES.a=2.51": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "ACES.c=2.43": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "ACES.d=0.59": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "ACES.e=0.14": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "Uncharted2.W=11.2": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "Hable.A=0.15": {
+      "loadSites": 1,
+      "discriminating": false,
+      "where": [
+       "0x140492660 [VA-스캐너위치] .rdata"
+      ]
+     },
+     "Hable.B=0.50": {
+      "loadSites": 106,
+      "discriminating": false,
+      "where": [
+       "0x14000c65b [VA-스캐너위치] .text",
+       "0x1400d98e3 [VA-스캐너위치] .text",
+       "0x1400d98eb [VA-스캐너위치] .text",
+       "0x1400fdeda [VA-스캐너위치] .text"
+      ]
+     },
+     "Hable.C=0.10": {
+      "loadSites": 4,
+      "discriminating": false,
+      "where": [
+       "0x140186d84 [VA-스캐너위치] .text",
+       "0x140186fb7 [VA-스캐너위치] .text",
+       "0x1401870df [VA-스캐너위치] .text",
+       "0x140492654 [VA-스캐너위치] .rdata"
+      ]
+     },
+     "Hable.D=0.20": {
+      "loadSites": 1,
+      "discriminating": false,
+      "where": [
+       "0x14049267c [VA-스캐너위치] .rdata"
+      ]
+     },
+     "Hable.E=0.02": {
+      "loadSites": 1,
+      "discriminating": false,
+      "where": [
+       "0x14049262c [VA-스캐너위치] .rdata"
+      ]
+     },
+     "Hable.F=0.30": {
+      "loadSites": 1,
+      "discriminating": false,
+      "where": [
+       "0x140492694 [VA-스캐너위치] .rdata"
+      ]
+     }
+    },
+    "binaryTransferConstants": {
+     "2.4": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "1.055": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "12.92": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "0.04045": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "0.055": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "0.0031308": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "1/2.4": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "2.2": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "1/2.2": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     }
+    },
+    "binaryLumaConstants": {
+     "Rec601.0.299": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "Rec601.0.587": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "Rec601.0.114": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "Rec601.0.2989": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "Rec601.0.5870": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "Rec601.0.1140": {
+      "loadSites": 0,
+      "discriminating": true,
+      "where": []
+     },
+     "Rec709.0.2126": {
+      "loadSites": 1,
+      "discriminating": true,
+      "where": [
+       "0x140492684 [VA-스캐너위치] .rdata"
+      ]
+     },
+     "Rec709.0.7152": {
+      "loadSites": 1,
+      "discriminating": true,
+      "where": [
+       "0x1404926d0 [VA-스캐너위치] .rdata"
+      ]
+     },
+     "Rec709.0.0722": {
+      "loadSites": 1,
+      "discriminating": true,
+      "where": [
+       "0x140492650 [VA-스캐너위치] .rdata"
+      ]
+     }
+    },
+    "transferConstantPositiveControl": {
+     "FreeImage64.dll": {
+      "2.4": 3,
+      "1.055": 1,
+      "12.92": 1,
+      "0.04045": 0,
+      "0.055": 1,
+      "0.0031308": 1,
+      "1/2.4": 1,
+      "2.2": 0,
+      "1/2.2": 0
+     },
+     "d3dcompiler_47.dll": {
+      "2.4": 0,
+      "1.055": 0,
+      "12.92": 0,
+      "0.04045": 0,
+      "0.055": 0,
+      "0.0031308": 0,
+      "1/2.4": 0,
+      "2.2": 0,
+      "1/2.2": 0
+     },
+     "webwallpaper64.exe": {
+      "2.4": 0,
+      "1.055": 0,
+      "12.92": 0,
+      "0.04045": 0,
+      "0.055": 0,
+      "0.0031308": 0,
+      "1/2.4": 0,
+      "2.2": 0,
+      "1/2.2": 0
+     },
+     "scenescript64.dll": {
+      "2.4": 0,
+      "1.055": 0,
+      "12.92": 0,
+      "0.04045": 0,
+      "0.055": 0,
+      "0.0031308": 0,
+      "1/2.4": 0,
+      "2.2": 0,
+      "1/2.2": 0
+     }
+    },
+    "transferConstantPositiveControlNote": "부재 결론의 최대 약점은 **재는 방법이 틀려서 0 이 나왔을 가능성**이다. 같은 f32 스캐너를 설치본의 다른 이미지에 그대로 돌려 그 가능성을 닫는다. `bin/FreeImage64.dll`(이미지 코덱)은 sRGB 전이함수를 정당하게 갖고 있어 **0 이 아닌 값**이 나오고, `bin/d3dcompiler_47.dll`·`bin/webwallpaper64.exe`·`bin/scenescript64.dll` 은 0 이다. 곧 스캐너는 살아 있고 `wallpaper64.exe` 의 0 은 실제 부재다.",
+    "discriminatingLoadSiteTotal": 0,
+    "discriminatingNote": "부재 결론이 걸리는 수는 `discriminatingLoadSiteTotal` **하나**다 — 판별력 있는 톤 연산자 계수와 전이함수 상수의 적재 자리 수 합. `discriminating:false` 로 표시된 둥근 십진수(0.15 · 0.5 · 0.1 · 0.2 · 0.02 · 0.3)는 어느 프로그램에나 나오므로 **근거가 아니다**. 실측이 그것을 보여 준다: `Hable.C=0.10` 4자리 중 셋은 `Scene::Scene` 의 `bloomhdrfeather` 기본값 0.1(`0x1401870d8` 의 즉치)과 그 형제 필드다. 숨기지 않고 싣되 판정에서 뺀다.",
+    "lumaConstantHits": "Rec.709 삼중(0.2126 · 0.7152 · 0.0722)만 각 1건이고 셋 다 `.rdata` 상수다. 소비처는 세 함수이고 전부 8비트 정수 색을 255.0 으로 나눠 0.6333 과 비교하는 자리다(`0x14003d877` `mulss` … `0x14003d8a4` `divss 255.0` → `0x14003d8ac` `subss 0.6333`; 같은 함수가 `DwmIsCompositionEnabled` 를 GetProcAddress 로 찾는다) — **데스크톱 강조색 대비 판정**이지 씬 톤매핑이 아니다. 셰이더가 쓰는 Rec.601 삼중(0.299/0.587/0.114 · 0.2989/0.5870/0.1140)은 **적재 자리 0** 이라 평문에만 있다 — 곧 그 dot 은 GPU 에서만 돈다.",
+    "howToRead": "`loadSites` 는 호출 사이트가 아니라 **그 f32 비트패턴이 이미지에 박힌 횟수**다(방법론 함정 4). 5.36MB 에서 임의 4바이트가 우연히 맞을 기대값은 0.00125 회라 0 은 강하다 — 0 이면 그 상수를 쓰는 코드가 이 이미지에 없다.",
+    "notScanned": [
+     "다른 실행 파일/DLL 의 **결론**(bin/webwallpaper64.exe · bin/scenescript64.dll · bin/wallpaperui.exe · bin/mediaextensions64.dll) — 최종 합성을 소유하지 않으므로 이 문서의 범위 밖이다. 다만 전이함수 상수만은 위 positiveControl 에서 같이 쟀다",
+     "워크샵 저작 셰이더 — 씬이 자기 이펙트에 곡선을 넣는 것은 엔진 규약이 아니다",
+     "bin/ 의 서드파티 DLL(FreeImage64.dll · d3dcompiler_47.dll 등)의 **내부 동작** — 전이함수 상수를 정당하게 가질 수 있고, 실제로 FreeImage 가 갖고 있다(positiveControl)"
+    ],
+    "wapleParity": {
+     "post.finalIsSaturateOnly": true,
+     "post.noTransferFunction": true,
+     "note": "HDRPostPass.hdrpost_f 가 `saturate(c.rgb * exposure)` 뿐이고 전이함수 상수를 하나도 갖지 않는다 — WE 와 일치. 나머지 탐침은 engine.bloom.ldr.arithmetic.wapleProbes 가 소유한다."
+    },
+    "crossRef": "spec/engine/shaders.json shaders.bloom (셰이더 문면) · spec/engine/render-pass.json engine.renderPass.order (패스 순서)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "shader",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders",
+     "note": "WE 2.8.42 동봉 원본 — 설치본 assets/shaders 와 파일 목록·내용 전건 동일"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (imagebase 0x140000000) — 이미지 전수 바이트 스캔(f32 비트패턴 · ASCII/UTF-16LE 문자열 · 점프표)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tonemapping.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.tonemap.transferFunctionSites",
+   "value": {
+    "howDirectionIsDecided": "**함수 이름이 아니라 상수로 판정한다.** 지수 2.4 + 무릎 0.04045 = 디코드(sRGB→linear), 지수 0.416666667(=1/2.4) 또는 1/2.2 = 인코드. `combine_hdr_editor.frag` 의 함수 이름은 `srgb()` 지만 본문은 `passthroughsrgb.frag` 의 `lin()` 과 같은 디코드다 — 이름으로 방향을 정하면 뒤집힌다.",
+    "sites": {
+     "combine_hdr.frag": {
+      "declaredFunctions": [
+       "lin"
+      ],
+      "direction": "sRGB→linear (디코드 · EOTF)",
+      "knee": "0.04045",
+      "exponent": "2.4",
+      "applySites": [
+       "combine_hdr.frag:32",
+       "combine_hdr.frag:43"
+      ]
+     },
+     "combine_hdr_editor.frag": {
+      "declaredFunctions": [
+       "srgb"
+      ],
+      "direction": "sRGB→linear (디코드 · EOTF)",
+      "knee": "0.04045",
+      "exponent": "2.4",
+      "applySites": [
+       "combine_hdr_editor.frag:18"
+      ]
+     },
+     "downsample_quarter_linear.frag": {
+      "declaredFunctions": [],
+      "direction": "linear→감마2.2 (인코드)",
+      "knee": "없음",
+      "exponent": "1/2.2",
+      "applySites": [
+       "downsample_quarter_linear.frag:13"
+      ]
+     },
+     "passthroughlinear.frag": {
+      "declaredFunctions": [
+       "_srgb"
+      ],
+      "direction": "linear→sRGB (인코드 · OETF)",
+      "knee": "없음",
+      "exponent": "0.416666667 (= 1/2.4)",
+      "applySites": [
+       "passthroughlinear.frag:14"
+      ]
+     },
+     "passthroughsrgb.frag": {
+      "declaredFunctions": [
+       "lin"
+      ],
+      "direction": "sRGB→linear (디코드 · EOTF)",
+      "knee": "0.04045",
+      "exponent": "2.4",
+      "applySites": [
+       "passthroughsrgb.frag:15"
+      ]
+     }
+    },
+    "materialToShader": {
+     "backbufferpassthrough": {
+      "shader": "passthroughlinear",
+      "combos": null,
+      "textures": null
+     },
+     "blur_h_bloom": {
+      "shader": "blur_h_bloom",
+      "combos": null,
+      "textures": [
+       "_rt_8FrameBuffer"
+      ]
+     },
+     "ccsimple": {
+      "shader": "ccsimple",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "clippingmaskimage4": {
+      "shader": "clippingmaskimage4",
+      "combos": null,
+      "textures": null
+     },
+     "combine": {
+      "shader": "combine",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer",
+       "util/black"
+      ]
+     },
+     "combine_dhdr_upsample": {
+      "shader": "combine_hdr",
+      "combos": {
+       "DISPLAYHDR": 1
+      },
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "combine_hdr_editor": {
+      "shader": "combine_hdr_editor",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "combine_hdr_upsample": {
+      "shader": "combine_hdr",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "combine_hdr_upsample_dbg": {
+      "shader": "combine_hdr",
+      "combos": {
+       "COMBINEDBG": 1
+      },
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "combine_hdr_upsample_linear": {
+      "shader": "combine_hdr",
+      "combos": {
+       "LINEAR": 1
+      },
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "combine_ldr": {
+      "shader": "combine",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer",
+       "_rt_Bloom"
+      ]
+     },
+     "combine_srgb": {
+      "shader": "passthroughsrgb",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "combine_video_hdr": {
+      "shader": "combine_video_hdr",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "compiler_backdrop": {
+      "shader": "compilerbackdrop",
+      "combos": null,
+      "textures": null
+     },
+     "composelayer": {
+      "shader": "composelayer",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "composelayer_clearalpha": {
+      "shader": "composelayer",
+      "combos": {
+       "CLEARALPHA": 1
+      },
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "composelayer_depthtest": {
+      "shader": "composelayer",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "debugrt": {
+      "shader": "passthrough",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "debugrt_fb": {
+      "shader": "passthrough",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "debugrt_fb_bloom": {
+      "shader": "passthrough",
+      "combos": null,
+      "textures": [
+       "_rt_Bloom"
+      ]
+     },
+     "debugrt_fb_eighth": {
+      "shader": "passthrough",
+      "combos": null,
+      "textures": [
+       "_rt_EighthFrameBuffer"
+      ]
+     },
+     "debugrt_fb_quarter": {
+      "shader": "passthrough",
+      "combos": null,
+      "textures": [
+       "_rt_QuarterFrameBuffer"
+      ]
+     },
+     "debugrt_reflection": {
+      "shader": "passthrough",
+      "combos": null,
+      "textures": [
+       "_rt_Reflection"
+      ]
+     },
+     "downsample_eighth_blur_v": {
+      "shader": "downsample_eighth_blur_v",
+      "combos": null,
+      "textures": [
+       "_rt_4FrameBuffer"
+      ]
+     },
+     "downsample_quarter": {
+      "shader": "downsample_quarter",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "downsample_quarter_bloom": {
+      "shader": "downsample_quarter_bloom",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "downsample_quarter_linear": {
+      "shader": "downsample_quarter_linear",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "effectcomposebackground": {
+      "shader": "effectcomposebackground",
+      "combos": null,
+      "textures": [
+       null,
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "effectpassthrough": {
+      "shader": "genericimage3",
+      "combos": null,
+      "textures": null
+     },
+     "effectpassthrough_4": {
+      "shader": "genericimage4",
+      "combos": null,
+      "textures": null
+     },
+     "error": {
+      "shader": "error",
+      "combos": null,
+      "textures": null
+     },
+     "fade": {
+      "shader": "fade",
+      "combos": null,
+      "textures": null
+     },
+     "flat": {
+      "shader": "flat",
+      "combos": null,
+      "textures": null
+     },
+     "flatalpha": {
+      "shader": "flat",
+      "combos": null,
+      "textures": null
+     },
+     "flatalphavertexcolor": {
+      "shader": "flat",
+      "combos": {
+       "vertexcolor": 1
+      },
+      "textures": null
+     },
+     "flatpointalphavertexcolor": {
+      "shader": "flatpoint",
+      "combos": null,
+      "textures": null
+     },
+     "flattexture": {
+      "shader": "minimalalpha",
+      "combos": null,
+      "textures": null
+     },
+     "fullscreenlayer": {
+      "shader": "passthrough",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "gizmo": {
+      "shader": "flat",
+      "combos": null,
+      "textures": null
+     },
+     "gizmovertexcolor": {
+      "shader": "flat",
+      "combos": {
+       "vertexcolor": 1
+      },
+      "textures": null
+     },
+     "hdr_downsample": {
+      "shader": "hdr_downsample",
+      "combos": null,
+      "textures": null
+     },
+     "hdr_downsample_bloom": {
+      "shader": "hdr_downsample",
+      "combos": {
+       "BLOOM": 1
+      },
+      "textures": null
+     },
+     "hdr_upsample": {
+      "shader": "hdr_downsample",
+      "combos": {
+       "UPSAMPLE": 1
+      },
+      "textures": null
+     },
+     "hdr_upsample_cubic": {
+      "shader": "hdr_downsample",
+      "combos": {
+       "UPSAMPLE": 1,
+       "BICUBIC": 1
+      },
+      "textures": null
+     },
+     "occlusiontest": {
+      "shader": "occlusiontest",
+      "combos": null,
+      "textures": null
+     },
+     "passthrough": {
+      "shader": "passthrough",
+      "combos": null,
+      "textures": [
+       "_rt_FullFrameBuffer"
+      ]
+     },
+     "shadowcaster": {
+      "shader": "shadowcaster",
+      "combos": null,
+      "textures": null
+     },
+     "solidlayer": {
+      "shader": "flat",
+      "combos": null,
+      "textures": null
+     },
+     "solidlayer_depthtest": {
+      "shader": "flat",
+      "combos": null,
+      "textures": null
+     },
+     "solidlayer_instance": {
+      "shader": "genericimage2",
+      "combos": {
+       "version": 2
+      },
+      "textures": [
+       "util/white"
+      ]
+     },
+     "solidlayer_instance_3": {
+      "shader": "genericimage3",
+      "combos": {
+       "version": 2
+      },
+      "textures": [
+       "util/white"
+      ]
+     },
+     "solidlayer_instance_4": {
+      "shader": "genericimage4",
+      "combos": {
+       "version": 2
+      },
+      "textures": [
+       "util/white"
+      ]
+     },
+     "solidlayer_instance_depthtest": {
+      "shader": "genericimage2",
+      "combos": {
+       "version": 2
+      },
+      "textures": [
+       "util/white"
+      ]
+     },
+     "solidlayer_instance_depthtest_3": {
+      "shader": "genericimage3",
+      "combos": {
+       "version": 2
+      },
+      "textures": [
+       "util/white"
+      ]
+     },
+     "solidlayer_instance_depthtest_4": {
+      "shader": "genericimage4",
+      "combos": {
+       "version": 2
+      },
+      "textures": [
+       "util/white"
+      ]
+     },
+     "volumetrics_back": {
+      "shader": "volumetricsback",
+      "combos": null,
+      "textures": null
+     },
+     "volumetrics_blur_h": {
+      "shader": "blur_k3",
+      "combos": {
+       "VERTICAL": 0
+      },
+      "textures": [
+       "_rt_volumetricsLightBuffer"
+      ]
+     },
+     "volumetrics_blur_v": {
+      "shader": "blur_k3",
+      "combos": {
+       "VERTICAL": 1
+      },
+      "textures": [
+       "_rt_volumetricsLightBufferB"
+      ]
+     },
+     "volumetrics_combine": {
+      "shader": "passthrough",
+      "combos": null,
+      "textures": [
+       "_rt_volumetricsLightBuffer"
+      ]
+     },
+     "volumetrics_front": {
+      "shader": "volumetricsfront",
+      "combos": null,
+      "textures": null
+     },
+     "volumetrics_fullscreen": {
+      "shader": "volumetricsfront",
+      "combos": {
+       "FULLSCREEN": 1
+      },
+      "textures": null
+     },
+     "wireframe": {
+      "shader": "wireframe",
+      "combos": null,
+      "textures": null
+     }
+    },
+    "runtimeReachable": {
+     "backbufferpassthrough": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "blur_h_bloom": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "ccsimple": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "clippingmaskimage4": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "combine": {
+      "pathString": false,
+      "bareName": true,
+      "verdict": "nameOnly"
+     },
+     "combine_dhdr_upsample": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "combine_hdr_editor": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "combine_hdr_upsample": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "combine_hdr_upsample_dbg": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "combine_hdr_upsample_linear": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "combine_ldr": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "combine_srgb": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "combine_video_hdr": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "compiler_backdrop": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "composelayer": {
+      "pathString": false,
+      "bareName": true,
+      "verdict": "nameOnly"
+     },
+     "composelayer_clearalpha": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "composelayer_depthtest": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "debugrt": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "debugrt_fb": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "debugrt_fb_bloom": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "debugrt_fb_eighth": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "debugrt_fb_quarter": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "debugrt_reflection": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "downsample_eighth_blur_v": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "downsample_quarter": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "downsample_quarter_bloom": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "downsample_quarter_linear": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "effectcomposebackground": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "effectpassthrough": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "effectpassthrough_4": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "error": {
+      "pathString": false,
+      "bareName": true,
+      "verdict": "nameOnly"
+     },
+     "fade": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "flat": {
+      "pathString": false,
+      "bareName": true,
+      "verdict": "nameOnly"
+     },
+     "flatalpha": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "flatalphavertexcolor": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "flatpointalphavertexcolor": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "flattexture": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "fullscreenlayer": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "gizmo": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "gizmovertexcolor": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "hdr_downsample": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "hdr_downsample_bloom": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "hdr_upsample": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "hdr_upsample_cubic": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "occlusiontest": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "passthrough": {
+      "pathString": false,
+      "bareName": true,
+      "verdict": "nameOnly"
+     },
+     "shadowcaster": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "solidlayer": {
+      "pathString": false,
+      "bareName": true,
+      "verdict": "nameOnly"
+     },
+     "solidlayer_depthtest": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "solidlayer_instance": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "solidlayer_instance_3": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "solidlayer_instance_4": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "solidlayer_instance_depthtest": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "solidlayer_instance_depthtest_3": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "solidlayer_instance_depthtest_4": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     },
+     "volumetrics_back": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "volumetrics_blur_h": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "volumetrics_blur_v": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "volumetrics_combine": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "volumetrics_front": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "volumetrics_fullscreen": {
+      "pathString": true,
+      "bareName": true,
+      "verdict": "loadable"
+     },
+     "wireframe": {
+      "pathString": false,
+      "bareName": false,
+      "verdict": "unreachable"
+     }
+    },
+    "runtimeReachableNote": "세 등급이다. `loadable` = `materials/util/<name>.json` 전체 경로가 이미지에 있다(엔진이 그 경로로 연다). `nameOnly` = 전체 경로는 없지만 **맨몸 이름**이 있다 — 다른 방식으로 열릴 수 있으므로 미로드로 단정하지 않는다(실사례: `solidlayer` `0x140490ba0` · `passthrough` `0x140490b90`). `unreachable` = **둘 다 없다** — 그때만 런타임이 열 방법이 없다고 말한다. **[정정] 종전 초안은 전체 경로만 보고 판정했는데 그건 과잉 주장이었다** — `nameOnly` 부류를 통째로 미로드로 오판한다. `unreachable` 도 만능은 아니다: 엔진이 이름을 **이어붙여** 만드는 자리가 있으므로(HDR 피라미드 RT 이름이 `\"_rt_\"` + 숫자 + `\"FrameBuffer\"` 로 만들어진다 — `0x14017f3ae`–`0x14017f3d3`) `solidlayer_depthtest` 처럼 기존 문자열의 이어붙임으로 만들 수 있는 이름은 이 표만으로 미로드를 단정하면 안 된다. 아래 `unreachableTransferPaths` 셋은 그 예외에 걸리지 않는 것만 골랐다.",
+    "unreachableTransferPaths": {
+     "combine_hdr_editor": "전체 경로도 맨몸 이름도 **없다** → 런타임 미로드. `srgb()` 라는 오해를 부르는 이름이 화면에 닿지 않는다는 뜻이다.",
+     "combine_hdr_upsample_linear": "전체 경로도 맨몸 이름도 **없다**. 이 머티리얼만 `combine_hdr` 의 `LINEAR=1` 콤보를 건다 — 즉 `lin()` 을 건너뛰는 분기(combine_hdr.frag `#if LINEAR == 1`)는 **도달 불가**다.",
+     "combine_hdr_upsample_dbg": "전체 경로도 맨몸 이름도 **없다**. `COMBINEDBG=1` 분기도 도달 불가.",
+     "howVerified": "위 셋의 맨몸 이름은 `combine_hdr_editor` · `combine_hdr_upsample_linear` · `combine_hdr_upsample_dbg` 로 충분히 길어 다른 문자열의 부분이 될 수 없다(짧은 이름 `combine` 은 `volumetrics_combine.json` 의 부분으로 잡히므로 그런 이름에는 이 논법을 쓰지 않는다)."
+    },
+    "loadSelection": "combine 슬롯 `[composite+0x3150]` 은 `0x14017fb45`–`0x14017fb6f` 에서 셋 중 하나로 정해진다: bit13&&bit14 → combine_dhdr_upsample(`0x14017fb49`), bit13 → combine_hdr_upsample, 아니면 combine_ldr(`0x14017fb5c` `lea rdx` · `0x14017fb63` `cmovne rdx,rax`). 블룸이 꺼진 HDR 용 슬롯 `[+0x3158]` 은 `0x14017fb88`–`0x14017fb9f` 에서 bit16 이면 combine_video_hdr, 아니면 combine_srgb 다.",
+    "ldrHasNoTransferFunction": true,
+    "ldrHasNoTransferFunctionWhy": "LDR 이 쓰는 combine_ldr → combine.frag 에는 `pow` 가 한 번도 나오지 않는다. 감마 논쟁이 화면에 닿는 표본은 `hdr:true` 씬뿐이다(finalPixelExpression.corpusReach).",
+    "crossRef": "spec/engine/shaders.json shaders.bloom · spec/engine/render-pass.json engine.renderPass.materialInputs"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "shader",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders",
+     "note": "WE 2.8.42 동봉 원본 — 설치본 assets/shaders 와 파일 목록·내용 전건 동일"
+    },
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (imagebase 0x140000000) — 이미지 전수 바이트 스캔(f32 비트패턴 · ASCII/UTF-16LE 문자열 · 점프표)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tonemapping.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.tonemap.finalPixelExpression",
+   "value": {
+    "byPath": {
+     "LDR + bloom": "scene + bloom — combine.frag:10-15. 곡선 없음, 클램프는 UNORM 타깃이 한다.",
+     "LDR + bloom off": "최종 패스 자체가 없다 — 씬이 이미 타깃에 그려져 있다(`0x140180b97` `test r13b,r13b` 의 `je` 가 combine 을 통째로 건너뛴다).",
+     "HDR + bloom (SDR)": "saturate(lin(scene + 4탭bloom)) * g_RenderVar0.x — combine_hdr.frag:43",
+     "HDR + bloom (HDR10)": "lin(max(0, saturate(scene) + bloom)) * (g_RenderVar0.y * smoothstep(1,5,dot((0.299,0.587,0.114),c)) + g_RenderVar0.x) — combine_hdr.frag:27-32",
+     "HDR + bloom off": "lin(scene) — passthroughsrgb.frag:15",
+     "비디오 HDR(bit16)": "saturate(rgb / (2*g_HDRParams.y)) * (2*g_HDRParams.y) — combine_video_hdr.frag:10-13. 순수 클리핑이다."
+    },
+    "saturateIsClampNotCurve": "[0,1] 구간은 **항등**이고 >1 은 1.0 이다. 어깨도 발끝도 없으므로 ACES/Reinhard 로 바꾸면 저역까지 곡선변형돼 이탈한다.",
+    "hdrBoostRampIsNotAToneCurve": "combine_hdr.frag:31 의 smoothstep(1,5,luma) 는 톤 곡선이 아니라 **HDR10 헤드룸 배수 램프**다. DISPLAYHDR 콤보 안에만 있고 SDR 경로에는 실리지 않는다.",
+    "corpusScenes": 358,
+    "corpusReach": {
+     "LDR + bloom off": 348,
+     "LDR + bloom on": 6,
+     "HDR + bloom on": 4,
+     "HDR + bloom off": 0
+    },
+    "hdrScenes": [
+     "Sources/WapleRender/Resources/WEAssets/presets/lightning/previewthunderbolt/scene.json",
+     "WE_ROOT/assets/presets/lightning/previewthunderbolt/scene.json",
+     "WE_ROOT/projects/defaultprojects/razer_bedroom/scene.json",
+     "WE_ROOT/projects/defaultprojects/shimmering_particles/scene.json"
+    ],
+    "reachReading": "감마 논쟁(`lin()` 이식 여부)이 화면에 닿는 표본은 358 중 `hdr:true` 쪽뿐이고, `hdr:true && !bloom` 은 코퍼스에 **0건**이라 `passthroughsrgb` 경로는 동봉·설치본 어느 씬으로도 재현되지 않는다.",
+    "crossRef": "spec/engine/shaders.json shaders.composite · spec/engine/render-pass.json engine.renderPass.order"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "shader",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders",
+     "note": "WE 2.8.42 동봉 원본 — 설치본 assets/shaders 와 파일 목록·내용 전건 동일"
+    },
+    {
+     "kind": "corpus",
+     "ref": "동봉 172 + 설치본 186 = 358 씬의 general.hdr / general.bloom"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tonemapping.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.tonemap.chainColorSpace",
+   "value": {
+    "question": "톤매핑·블룸·감마가 **어느 색 공간과 정밀도에서** 도는가.",
+    "renderTargetFormatSelect": "컴포지트가 만드는 **모든** 컬러 타깃의 포맷은 한 자리에서 정해진다: `0x14017f317 mov edi,1`(LDR 기본) · `0x14017f323 mov ecx,0xf`(HDR) · `0x14017f328 shr r14d,0xd` + `0x14017f32c and r14b,1`(= flags bit13) · `0x14017f33d cmovne edi,ecx` · `0x14017f340 mov [rbp+0x130],edi`. 그 값이 `_rt_FullFrameBuffer`(`0x14017f5a3`), 피라미드 레벨(`0x14017f47d`), LDR 3버퍼(`0x14017f5a3` 뒤 `0x14017f5ea`)에 **같이** 실린다.",
+    "formatEnumToDXGI": {
+     "0x00": {
+      "dxgi": 28,
+      "name": "R8G8B8A8_UNORM"
+     },
+     "0x01": {
+      "dxgi": 28,
+      "name": "R8G8B8A8_UNORM"
+     },
+     "0x02": {
+      "dxgi": 28,
+      "name": "R8G8B8A8_UNORM"
+     },
+     "0x03": {
+      "dxgi": 28,
+      "name": "R8G8B8A8_UNORM"
+     },
+     "0x04": {
+      "dxgi": 77,
+      "name": "BC3_UNORM"
+     },
+     "0x05": {
+      "dxgi": 28,
+      "name": "R8G8B8A8_UNORM"
+     },
+     "0x06": {
+      "dxgi": 74,
+      "name": "BC2_UNORM"
+     },
+     "0x07": {
+      "dxgi": 71,
+      "name": "BC1_UNORM"
+     },
+     "0x08": {
+      "dxgi": 49,
+      "name": "R8G8_UNORM"
+     },
+     "0x09": {
+      "dxgi": 61,
+      "name": "R8_UNORM"
+     },
+     "0x0a": {
+      "dxgi": 34,
+      "name": "R16G16_FLOAT"
+     },
+     "0x0b": {
+      "dxgi": 54,
+      "name": "R16_FLOAT"
+     },
+     "0x0c": {
+      "dxgi": 98,
+      "name": "BC7_UNORM"
+     },
+     "0x0d": {
+      "dxgi": 24,
+      "name": "R10G10B10A2_UNORM"
+     },
+     "0x0e": {
+      "dxgi": 10,
+      "name": "R16G16B16A16_FLOAT"
+     },
+     "0x0f": {
+      "dxgi": 10,
+      "name": "R16G16B16A16_FLOAT"
+     },
+     "0x10": {
+      "dxgi": 41,
+      "name": "R32_FLOAT"
+     },
+     "0x11": {
+      "dxgi": 11,
+      "name": "R16G16B16A16_UNORM"
+     },
+     "0x12": {
+      "dxgi": 11,
+      "name": "R16G16B16A16_UNORM"
+     },
+     "0x13": {
+      "dxgi": 13,
+      "name": "R16G16B16A16_SNORM"
+     },
+     "0x14": {
+      "dxgi": 13,
+      "name": "R16G16B16A16_SNORM"
+     },
+     "0x15": {
+      "dxgi": 28,
+      "name": "R8G8B8A8_UNORM"
+     },
+     "0x16": {
+      "dxgi": 55,
+      "name": "D16_UNORM"
+     },
+     "0x17": {
+      "dxgi": 39,
+      "name": "R32_TYPELESS"
+     },
+     "0x18": {
+      "dxgi": 40,
+      "name": "D32_FLOAT"
+     },
+     "0x19": {
+      "dxgi": 39,
+      "name": "R32_TYPELESS"
+     },
+     "0x1a": {
+      "dxgi": 0,
+      "name": "UNKNOWN"
+     },
+     "0x1b": {
+      "dxgi": 0,
+      "name": "UNKNOWN"
+     }
+    },
+    "formatEnumToDXGINote": "`sub_1400d2a20` 의 28엔트리 점프표를 이미지에서 읽은 것이다(표 `0x1400d2aa4` — `.text` 안의 데이터). enum 1 → 28 `R8G8B8A8_UNORM`, enum 0xf → 10 `R16G16B16A16_FLOAT`, enum 0x1b → 0 `UNKNOWN`(= 없음).",
+    "srgbArmsPresent": [],
+    "noHardwareSRGB": "28 arm 중 `_SRGB` DXGI 값(29·72·75·78·91·93·99)이 **0건**이다 — 엔진은 sRGB 텍스처 뷰를 만들 수단 자체가 없다. 스왑체인도 `0x140008146 mov dword [rbp-0x40], 0x1c`(=28 UNORM)로 채워 `0x140008172 call [rax+0x50]`(CreateSwapChain)에 넘긴다. 곧 셰이더의 `lin()` 을 상쇄할 하드웨어 인코드는 존재하지 않는다.",
+    "precisionByPath": {
+     "LDR": "체인 전체가 **8비트 UNORM**이다. `_rt_FullFrameBuffer`(`0x14017f5ac`) · `_rt_4FrameBuffer`(`0x14017f5c6` 이름 → `0x14017f618` 슬롯) · `_rt_8FrameBuffer`(`0x14017f62a` → `0x14017f65c`) · `_rt_Bloom`(`0x14017f66e` → `0x14017f686`) 넷 다 같은 포맷 인자를 받는다. 곧 추출·블러 결과가 **매 패스 [0,1] 로 잘린다** — 임계를 넘긴 밝기가 1.0 이상으로 살아남지 못한다.",
+     "HDR": "`_rt_FullFrameBuffer` 와 피라미드 레벨 전부가 **fp16**(enum 0xf → DXGI 10)이다. 1.0 초과가 보존되므로 소프트-니 임계(`bloomhdrthreshold` 기본 1.0)가 의미를 갖는다."
+    },
+    "depthOnBloomTargets": "블룸 타깃 넷은 깊이 인자가 전부 enum `0x1b`(= DXGI 0 UNKNOWN = 깊이 버퍼 없음)다. `_rt_FullFrameBuffer` 만 `0x14017f591 lea eax,[rax*4+0x16]` 로 flags bit0 에 따라 0x16(D16_UNORM) 또는 0x1a 를 받는다.",
+    "whereGammaSitsInOrder": "감마 디코드는 **블룸 합성과 같은 셰이더 안**에서, 블룸을 더한 뒤에 걸린다(combine_hdr.frag:43 `saturate(lin(albedo))`). 곧 블룸은 **감마 인코드된 값 위에서** 더해지고 그 합에 디코드가 걸린다. 그 뒤 그레이딩(ccsimple `[+0x3188]`, `0x140180bd2`)과 페이드(`[+0x3180]`, `0x140180c96`)가 온다 — **감마가 그레이딩보다 앞**이다.",
+    "noDitherBeforeEightBit": "8비트 백버퍼로 내려가기 전에 밴딩을 깨는 단계가 없다 — engine.postprocess.ditherAbsence 참조.",
+    "crossRef": "spec/engine/render-state.json · spec/engine/render-targets.json · spec/engine/render-pass.json engine.renderPass.frameObjectFields"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (imagebase 0x140000000) — 이미지 전수 바이트 스캔(f32 비트패턴 · ASCII/UTF-16LE 문자열 · 점프표)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tonemapping.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.postprocess.ditherAbsence",
+   "value": {
+    "verdict": "디더링 패스가 **없다**. fp16 또는 8비트 타깃에서 8비트 백버퍼로 내려가면서 밴딩을 깨는 단계가 WE 에 존재하지 않는다.",
+    "shaderFilesWithDitherToken": 0,
+    "binaryAscii": 0,
+    "binaryUtf16le": 0,
+    "noBayerTexture": "`assets/materials/util/` 의 동봉 텍스처(black · white · noise · clouds_256 · perlin_256 · uniform_256 · flatnormal · fur · noflow)에 베이어/블루노이즈 행렬이 없다. 디더 커널을 실을 자산이 없다.",
+    "whyItMatters": "Waple 도 디더를 넣지 않는 것이 **정확**하다. 넣으면 WE 보다 부드러워져 골든이 어긋난다 — '개선' 으로 오인하기 쉬운 자리다.",
+    "crossRef": "engine.tonemap.chainColorSpace"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "shader",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders",
+     "note": "WE 2.8.42 동봉 원본 — 설치본 assets/shaders 와 파일 목록·내용 전건 동일"
+    },
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (imagebase 0x140000000) — 이미지 전수 바이트 스캔(f32 비트패턴 · ASCII/UTF-16LE 문자열 · 점프표)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tonemapping.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.bloom.ldr.arithmetic",
+   "value": {
+    "note": "패스 목록·머티리얼·렌더타깃은 spec/engine/render-pass.json engine.renderPass.bloomChain.ldr 이, 셰이더 문면은 spec/engine/shaders.json shaders.bloom 이 이미 담는다. 여기 담는 것은 **탭 기하와 그 판정 근거**다.",
+    "passCount": 3,
+    "passCountEvidence": "`Composite::drawBloomChain` LDR 분기 `0x140183949`–`0x140183a5d` 는 머티리얼 세 개만 그린다: `[+0x3160]`(`0x140183966` 바인드 · `0x140183983` 드로우) · `[+0x3170]`(`0x1401839b5` · `0x1401839d2`) · `[+0x3178]`(`0x140183a04` · `0x140183a21`). 레벨 루프도 업샘플도 없다.",
+    "tapUniformIsNotWrittenPerPass": "LDR 분기 전체에 `[composite+0xb8..0xc4]`(g_RenderVar0) 스토어가 **0건**이다 — HDR 분기가 `0x1401836a0`–`0x1401836ba` 에서 매 패스 다시 쓰는 것과 대조된다. 곧 LDR 의 탭 오프셋은 엔진 공통 유니폼 바인더가 채우는 `g_TexelSize` 하나뿐이다.",
+    "blur13Weights": {
+     "downsample_eighth_blur_v.frag": [
+      0.006299,
+      0.017298,
+      0.039533,
+      0.075189,
+      0.119007,
+      0.156756,
+      0.171834,
+      0.156756,
+      0.119007,
+      0.075189,
+      0.039533,
+      0.017298,
+      0.006299
+     ],
+     "blur_h_bloom.frag": [
+      0.006299,
+      0.017298,
+      0.039533,
+      0.075189,
+      0.119007,
+      0.156756,
+      0.171834,
+      0.156756,
+      0.119007,
+      0.075189,
+      0.039533,
+      0.017298,
+      0.006299
+     ]
+    },
+    "blur13Stride": {
+     "downsample_eighth_blur_v.vert": {
+      "axis": "x",
+      "fullResTexels": 8.0
+     },
+     "blur_h_bloom.vert": {
+      "axis": "y",
+      "fullResTexels": 8.0
+     }
+    },
+    "axisNamingTrap": "`downsample_eighth_blur_v` 는 이름이 `_v` 인데 `g_TexelSize.x` 로 **X축**이고, `blur_h_bloom` 은 `_h` 인데 `g_TexelSize.y` 로 **Y축**이다. 이름 보고 포팅하면 두 패스가 바뀐다.",
+    "notCommonBlurH": "`common_blur.h` 의 `blur13`(7탭 bilinear 근사, σ≈2.02)과는 **다른 커널**이다(13 정수탭, σ≈2.33). 이름이 같아 섞이기 쉽다.",
+    "hardThresholdNotSoftKnee": "추출은 `saturate(max(rgb) − g_BloomThreshold)` 를 **곱한다** — 비율이 아니라 초과분 자체가 감쇠 계수인 하드 임계다. HDR 의 소프트-니(`g_BloomBlendParams`)와 형태가 다르다.",
+    "strengthIsRaw": "LDR 경로에는 **강도 정규화가 없다**. 저작값이 그대로 추출 머티리얼 `[+0x3160]` 한 곳에만 실린다(`0x14017f994`–`0x14017fa40`: `bloomstrength` `0x14017f9d4` · `bloomthreshold` `0x14017fa07` · `bloomtint` `0x14017fa40`). 블러 두 패스에는 어떤 상수도 실리지 않는다.",
+    "authoringDefaults": {
+     "bloomstrength": "2.0 — Scene::Scene 즉시값 `0x1401870ac` (0x40000000)",
+     "bloomthreshold": "0.6499999761581421 — `0x1401870b7` (0x3f266666)",
+     "bloomtint": "(1,1,1) — 358 씬 중 저작 154건이 전건 \"1.00000 1.00000 1.00000\""
+    },
+    "wapleProbes": {
+     "ldr.defaultStrength": 2.0,
+     "ldr.defaultThreshold": 0.65,
+     "ldr.blur13HalfWeights": [
+      0.171834,
+      0.156756,
+      0.119007,
+      0.075189,
+      0.039533,
+      0.017298,
+      0.006299
+     ],
+     "ldr.extractTapIsFullResTexel": true,
+     "ldr.horizontalStepIsTwoQuarterTexels": true,
+     "ldr.verticalStepIsOneEighthTexel": true,
+     "ldr.gateIsSaturateOfExcess": true,
+     "ldr.saturationBoostFoldsToTwoCMinusGray": true,
+     "ldr.compositeIsPlainAddition": true,
+     "ldr.noStrengthNormalization": true,
+     "hdr.hasStrengthNormalization": true,
+     "hdr.blendParamsKneeIsThresholdTimesFeather": true,
+     "post.finalIsSaturateOnly": true,
+     "post.noTransferFunction": true
+    },
+    "crossRef": "spec/engine/uniform-feed.json engine.uniformFeed.g_TexelSize.convention (그쪽은 셰이더 5종 교차대조로 status 보고) · spec/engine/shaders.json shaders.blurKernels"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "shader",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders",
+     "note": "WE 2.8.42 동봉 원본 — 설치본 assets/shaders 와 파일 목록·내용 전건 동일"
+    },
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (imagebase 0x140000000) — 이미지 전수 바이트 스캔(f32 비트패턴 · ASCII/UTF-16LE 문자열 · 점프표)"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/LDRBloomMath.swift"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tonemapping.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.bloom.pathDivergence",
+   "value": {
+    "gate": "렌더러 플래그 `[composite+0x128]` **비트13(0x2000)** 하나가 두 경로를 가른다. 소비 지점은 셋이고 전부 같은 비트를 본다: ① 타깃 생성·포맷 선택 `0x14017f328`(shr) + `0x14017f33d`(cmovne) + `0x14017f346`(test) — LDR 이면 `0x14017f55e` 로 뛰어 피라미드를 만들지 않는다. ② 파라미터 급전 `0x14017f7cb` `test dword [rsi+0x128], 0x2000` → `0x14017f7d5 je 0x14017f994`(LDR 피드). ③ 드로우 루프 `0x140183618` 같은 test → `0x140183625 je 0x140183949`(LDR 체인).",
+    "gatesBefore": "체인 자체는 비트13 **앞에** 세 게이트를 더 지난다: `0x140180a41 test byte [rsi+0x128], 0x40`(bit6 블룸 설정) · 씬 플래그 `[scene+0xe0]` 비트1 · 씬 오브젝트 리스트 비어있지 않음(`0x140180a68 cmp [rcx+0x158], rax`). 하나라도 false 면 `0x140180a48 je 0x140180b69` 로 블룸 없는 분기로 간다.",
+    "rows": {
+     "렌더타깃 포맷": {
+      "LDR": "enum 1 → DXGI 28 R8G8B8A8_UNORM (매 패스 [0,1] 클램프)",
+      "HDR": "enum 0xf → DXGI 10 R16G16B16A16_FLOAT",
+      "where": "0x14017f33d"
+     },
+     "추출 임계": {
+      "LDR": "하드 — `saturate(max(rgb) − T)` 를 곱한다",
+      "HDR": "소프트-니 — `g_BloomBlendParams` = (T, T−K, 2K, 0.25/(K+1e-5)), K = T×feather (0x14017f8bc–0x14017f900)"
+     },
+     "임계 파라미터": {
+      "LDR": "bloomthreshold (기본 0.65)",
+      "HDR": "bloomhdrthreshold (기본 1.0) × bloomhdrfeather (기본 0.1)"
+     },
+     "강도 파라미터": {
+      "LDR": "bloomstrength (기본 2.0) — **생값**",
+      "HDR": "bloomhdrstrength (기본 2.0) ÷ (scatter^(max(N,2)−2) + 1) (0x14017f85e powf → 0x14017f86b +1.0 → 0x14017f88f divss)"
+     },
+     "채도 부스트": {
+      "LDR": "있다 — `2c − gray`(셰이더 리터럴 sat=1.0)",
+      "HDR": "없다"
+     },
+     "필터": {
+      "LDR": "1/4 박스 → 13탭 가우시안 X → 13탭 가우시안 Y (고정 3패스)",
+      "HDR": "듀얼필터 피라미드 — 전 단계 4탭 박스, 가우시안 패스 없음"
+     },
+     "레벨 수": {
+      "LDR": "고정 3 (1/4, 1/8, 1/8)",
+      "HDR": "N = max(1, min(bloomhdriterations, min(8, floor(log2(min(W,H)))))) (0x14017f363 min → 0x14017f541 상한 8)"
+     },
+     "탭 오프셋 유니폼": {
+      "LDR": "g_TexelSize — 드로우 루프가 LDR 분기에서 [composite+0xb8..0xc4] 를 한 번도 쓰지 않는다",
+      "HDR": "g_RenderVar0 — 드로우 루프가 패스마다 다시 쓴다 (0x1401836a0–0x1401836ba)"
+     },
+     "업샘플": {
+      "LDR": "없다",
+      "HDR": "4탭 ×0.25×scatter, 머티리얼 blending:additive"
+     },
+     "합성 머티리얼": {
+      "LDR": "combine_ldr → combine.frag (블룸 단일 탭 가산)",
+      "HDR": "combine_hdr_upsample / combine_dhdr_upsample → combine_hdr.frag (블룸 ±g_TexelSize 4탭 평균 가산)"
+     },
+     "전이함수": {
+      "LDR": "없다",
+      "HDR": "lin() 디코드 1지점 (combine_hdr.frag:43)"
+     },
+     "블룸 off 일 때": {
+      "LDR": "최종 패스 자체가 없다",
+      "HDR": "combine_srgb(passthroughsrgb) 또는 bit16 이면 combine_video_hdr"
+     },
+     "틴트": {
+      "LDR": "bloomtint (추출에 곱)",
+      "HDR": "bloomtint (추출에 곱) — 같다"
+     }
+    },
+    "sharedFacts": [
+     "4탭 박스의 ×0.25",
+     "bloomtint 기본 (1,1,1)",
+     "추출이 max 채널을 밝기로 쓴다(벡터 luma 가 아니다)",
+     "최종 클램프는 saturate 또는 UNORM 타깃"
+    ],
+    "openQuestion": "비트13 을 **세우는** 자리는 이번 조사에서 특정하지 못했다. `[composite+0x128]` 은 `0x140115b5d`–`0x140115b67` 의 범용 `flags = (set | flags) & ~clear` 헬퍼로만 갱신되고, 이미지 전체에 즉치 0x2000 을 그 필드에 or/and 하는 자리는 없다(전수 스캔 0건 — 0x2000 과 0x128 이 같은 명령에 있는 자리는 위 세 `test` 뿐이다). 즉 이 문서가 확정한 것은 비트13 의 **소비**이고, `general.hdr` → 비트13 의 **주입**은 아직 열려 있다(방법론 함정 3).",
+    "crossRef": "engine.bloom.hdr.structure · engine.bloom.hdr.levelCountRule · spec/engine/render-pass.json engine.renderPass.conditions"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "shader",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders",
+     "note": "WE 2.8.42 동봉 원본 — 설치본 assets/shaders 와 파일 목록·내용 전건 동일"
+    },
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (imagebase 0x140000000) — 이미지 전수 바이트 스캔(f32 비트패턴 · ASCII/UTF-16LE 문자열 · 점프표)"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/LDRBloomMath.swift"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/HDRBloomMath.swift"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tonemapping.py"
+    }
+   ]
+  }
+ ]
+}
