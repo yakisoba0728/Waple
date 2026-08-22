@@ -115,6 +115,20 @@ BINARY_ALSO = {
     # `wallpaper64.exe` 라고 밝혀 두었고, 실측으로 그 둘은 본체에서 정확히 문서가 적은 명령이다 —
     # `0x1400d1f52 mov r8d,0x200` · `0x1400d1e21 xor r13d,r13d`).
     "docs/re/web-wallpaper-bridge.md": ("wallpaper64.exe",),
+    # 블렌드/대표색 클러스터: 한 문서가 본체 + 에디터 UI(`wallpaperui`) + `resourceutil`/`winrtutil`
+    # 을 함께 인용한다. 기준 이미지로만 재면 10건이 통째로 오탐이고, 아래를 함께 보면 전건
+    # "다른 이미지에서 경계" 로 설명된다(각 이미지 단독으로도 이탈 0 을 확인했다).
+    "docs/re/material-blend.md": ("bin/wallpaperui.exe",),
+    "spec/engine/blend-modes.json": ("bin/wallpaperui.exe",),
+    "Sources/WapleRender/BlendMSL.swift": ("bin/wallpaperui.exe",),
+    "Tests/WapleCoreTests/BlendModeCanonParityTests.swift": ("bin/wallpaperui.exe",),
+    "scripts/spec/measure_blend_modes.py": ("bin/wallpaperui.exe",),
+    "docs/re/scheme-color.md": ("bin/resourceutil64.dll", "bin/winrtutil64.exe"),
+    "spec/engine/dominant-color.json": ("bin/resourceutil64.dll", "bin/winrtutil64.exe"),
+    "scripts/spec/measure_dominant_color.py": ("bin/resourceutil64.dll", "bin/winrtutil64.exe"),
+    # 오브젝트 전파 문서도 같다 — 씬 로더는 본체지만 저작(에디터) 쪽 근거를 함께 인용한다.
+    # 기준은 본체 유지: base=wallpaper64 는 경계 OK 129, base=wallpaperui 는 33 이다.
+    "docs/re/object-propagation.md": ("bin/wallpaperui.exe",),
     "docs/re/package-format.md": ("bin/wallpaperui.exe",),
     "spec/formats/pkg.json": ("bin/wallpaperui.exe",),
     "scripts/spec/measure_corpus.py": ("bin/wallpaperui.exe",),
