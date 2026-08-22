@@ -144,22 +144,77 @@ final class AudioInputPipelineTests: XCTestCase {
         XCTAssertEqual(out, manual)   // ×1.0 은 IEEE 상 정확히 항등
     }
 
-    // MARK: - 설정 영속(UserDefaults)
+    // MARK: - 설정 영속(UserDefaults) — 저장 단위는 **WE 설정 단위**다
 
-    /// 기본값 threshold 0(비활성)/volume 1(무회귀)과 라운드트립. 키는 `waple.` 접두 관례.
-    func testInputSettingsDefaultsAndRoundTrip() {
+    /// 미저장 기본값이 배포 `config.json` 과 같고, 파생값이 종전 기본값과 **비트 동일**이다.
+    ///
+    /// 종전에는 `volume` 이 곱수(기본 1) · `threshold` 가 임계 그대로(기본 0)였다. 지금은
+    /// 설정 정수/실수를 저장하고 곱수·임계는 `AudioSpectrum` 이 만든다. 기본 설정 50 이
+    /// 정확히 곱수 1.0 을 만들기 때문에(50 × 0.02f, 오차 2.2e-8 < 반ULP 3.0e-8) **기본 설치의
+    /// 관측 결과는 변하지 않는다** — 그 등식을 여기서 값으로 못 박는다.
+    func testInputSettingDefaultsMatchShippedConfigAndDeriveTheOldDefaults() {
         let d = UserDefaults.standard
-        d.removeObject(forKey: AudioInputSettings.thresholdKey)
-        d.removeObject(forKey: AudioInputSettings.volumeKey)
-        XCTAssertEqual(AudioInputSettings.threshold, 0)
-        XCTAssertEqual(AudioInputSettings.volume, 1)
-        AudioInputSettings.threshold = 0.25
-        AudioInputSettings.volume = 1.5
+        d.removeObject(forKey: AudioInputSettings.volumeSettingKey)
+        d.removeObject(forKey: AudioInputSettings.thresholdSettingKey)
+        XCTAssertEqual(AudioInputSettings.volumeSetting, 50)      // 배포 config.json
+        XCTAssertEqual(AudioInputSettings.thresholdSetting, 0)
+        XCTAssertEqual(AudioInputSettings.volume, 1)              // 종전 기본 곱수와 동일
+        XCTAssertEqual(AudioInputSettings.threshold, 0)           // 종전 기본 임계와 동일
+    }
+
+    /// 라운드트립과 **변환**. 설정을 그대로 곱수로 쓰면 50배, 임계로 쓰면 1000배라는 것도 같이 잠근다.
+    func testInputSettingRoundTripAppliesTheEngineScales() {
+        let d = UserDefaults.standard
         defer {
-            d.removeObject(forKey: AudioInputSettings.thresholdKey)
-            d.removeObject(forKey: AudioInputSettings.volumeKey)
+            d.removeObject(forKey: AudioInputSettings.volumeSettingKey)
+            d.removeObject(forKey: AudioInputSettings.thresholdSettingKey)
         }
-        XCTAssertEqual(AudioInputSettings.threshold, 0.25)
-        XCTAssertEqual(AudioInputSettings.volume, 1.5)
+        AudioInputSettings.volumeSetting = 100
+        AudioInputSettings.thresholdSetting = 10
+        XCTAssertEqual(AudioInputSettings.volumeSetting, 100)
+        XCTAssertEqual(AudioInputSettings.thresholdSetting, 10)
+        XCTAssertEqual(AudioInputSettings.volume, 2.0, accuracy: 1e-6)      // 100 × 0.02
+        XCTAssertEqual(AudioInputSettings.threshold, 0.01, accuracy: 1e-8)  // 10 × 0.001
+        // 설정을 그대로 썼다면 각각 50배 · 1000배였다.
+        XCTAssertEqual(Float(AudioInputSettings.volumeSetting) / AudioInputSettings.volume, 50, accuracy: 1e-4)
+        XCTAssertEqual(AudioInputSettings.thresholdSetting / AudioInputSettings.threshold, 1000, accuracy: 1e-2)
+        // 슬라이더 밖 값도 통과한다 — 실물 로더에 클램프가 없다(0x14006C741~0x14006C766 에
+        // minss/maxss/comiss 가 0개).
+        AudioInputSettings.volumeSetting = 500
+        XCTAssertEqual(AudioInputSettings.volume, 10.0, accuracy: 1e-4)
+    }
+
+    /// **옛 키는 읽지 않는다.** 옛 키에 종전 의미의 값(곱수 1.5)이 남아 있어도 새 키가 비어 있으면
+    /// 기본값이 나와야 한다 — 이름을 유지한 채 의미만 바꿨다면 여기서 1.5 가 **설정 1.5**로 읽혀
+    /// 곱수가 0.03 이 됐을 것이다(그리고 반대 방향의 마이그레이션이었다면 50배).
+    func testLegacyKeysAreNeverRead() {
+        let d = UserDefaults.standard
+        d.set(Float(1.5), forKey: AudioInputSettings.legacyVolumeKey)
+        d.set(Float(0.25), forKey: AudioInputSettings.legacyThresholdKey)
+        d.removeObject(forKey: AudioInputSettings.volumeSettingKey)
+        d.removeObject(forKey: AudioInputSettings.thresholdSettingKey)
+        defer {
+            d.removeObject(forKey: AudioInputSettings.legacyVolumeKey)
+            d.removeObject(forKey: AudioInputSettings.legacyThresholdKey)
+        }
+        XCTAssertEqual(AudioInputSettings.volumeSetting, 50)
+        XCTAssertEqual(AudioInputSettings.volume, 1)
+        XCTAssertEqual(AudioInputSettings.thresholdSetting, 0)
+        XCTAssertEqual(AudioInputSettings.threshold, 0)
+        // 새 키에 쓴 값은 옛 키를 건드리지 않는다(옛 값은 남아 있고, 읽히지만 않는다).
+        AudioInputSettings.volumeSetting = 75
+        defer { d.removeObject(forKey: AudioInputSettings.volumeSettingKey) }
+        XCTAssertEqual(d.float(forKey: AudioInputSettings.legacyVolumeKey), 1.5)
+        XCTAssertEqual(AudioInputSettings.volume, 1.5, accuracy: 1e-6)   // 75 × 0.02
+    }
+
+    /// 키 이름 자체를 못 박는다 — 새 키가 옛 키와 **다른 문자열**이어야 마이그레이션이 성립한다.
+    func testSettingKeysAreDistinctFromLegacyKeys() {
+        XCTAssertEqual(AudioInputSettings.legacyVolumeKey, "waple.audioInputVolume")
+        XCTAssertEqual(AudioInputSettings.legacyThresholdKey, "waple.audioInputThreshold")
+        XCTAssertEqual(AudioInputSettings.volumeSettingKey, "waple.audioInputVolumeSetting")
+        XCTAssertEqual(AudioInputSettings.thresholdSettingKey, "waple.audioInputThresholdSetting")
+        XCTAssertNotEqual(AudioInputSettings.legacyVolumeKey, AudioInputSettings.volumeSettingKey)
+        XCTAssertNotEqual(AudioInputSettings.legacyThresholdKey, AudioInputSettings.thresholdSettingKey)
     }
 }

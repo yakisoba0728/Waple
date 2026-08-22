@@ -158,8 +158,12 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
     }
 
     /// 창 분석 순수 계산부(커버리지 가능): 게이트 → 채널별 FFT → 64+64 비닝 → volume 스칼라.
-    /// 반환 nil = 무음 게이트가 창을 무음 처리. volume 은 결과 스펙트럼 전체에 곱한다(audioinputvolume)
+    /// 반환 nil = 무음 게이트가 창을 무음 처리. volume 은 결과 스펙트럼 전체에 곱한다
     /// — 1.0 곱은 IEEE 상 정확히 항등이라 기본값 무회귀. WE 포맷: 128(64L + 64R) 채널별 FFT.
+    ///
+    /// **`threshold`/`volume` 은 설정값이 아니라 이미 변환된 값이다** — 각각 AP `+0x10` · `+0x0C`
+    /// 에 해당한다(`설정×0.001` · `설정×0.02`). 호출부가 `AudioInputSettings.threshold`/`.volume`
+    /// 로 변환해 넘긴다. WE 설정 정수를 그대로 넣으면 볼륨 50배 · 임계 1000배다.
     static func analyzeWindow(l: [Float], r: [Float], fftSize: Int,
                               log2n: vDSP_Length, setup: FFTSetup,
                               threshold: Float, volume: Float,
@@ -323,24 +327,89 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
 }
 
 /// 앱 레벨 오디오 입력 설정(UserDefaults 백 — scene.json 파스가 아님. WE 도 앱/설정 레벨 어휘:
-/// audioinputvolume/audioinputthreshold, strings/json-keys.txt:424-425). 설정 UI 배선은 범위 밖.
+/// `user.audioinputvolume` / `user.audioinputthreshold`, `config.json`). 설정 UI 배선은 범위 밖.
 /// 키 관례는 `waple.fitMode`/`waple.maxFPS` 등 기존 설정 키(`kr.yaki.waple` 도메인)를 따른다.
+///
+/// **[2026-08-21] 저장 단위를 WE 설정 단위로 맞췄다.** 종전에는 `volume` 이 **곱수**(기본 1),
+/// `threshold` 가 **임계 그대로**였다. 그런데 WE 가 실제로 저장하는 것은 슬라이더 정수/실수이고,
+/// 곱수·임계는 로더가 상수를 곱해 만든다(전부 `wallpaper64.exe`, imagebase `0x140000000`):
+///
+/// ```
+///   0x14006c72c  lea   rdx, 0x140476f00      ; "audioinputvolume"
+///   0x14006c741  call  0x140085ee0           ; asInt
+///   0x14006c75e  mulss xmm0, [0x14049262c]   ; × 0.019999999552965164f
+///   0x14006c766  movss [0x1404e55b4], xmm0   ; = AP+0x0C  (읽는 자리: 0x1400d1d3f)
+///
+///   0x14006c750  lea   rdx, 0x140476f18      ; "audioinputthreshold"
+///   0x14006c776  call  0x140086220           ; asFloat
+///   0x14006c77b  mulss xmm0, [0x140492608]   ; × 0.001f
+///   0x14006c794  movss [0x1404e55b8], xmm0   ; = AP+0x10  (읽는 자리: 0x1400d1a15)
+/// ```
+///
+/// 두 사슬 어디에도 `minss`/`maxss`/`comiss` 가 없다 — **클램프가 없다**(확정). 그래서 여기서도
+/// 클램프하지 않는다. 슬라이더 도메인은 UI 쪽 값일 뿐 저장 경로의 계약이 아니다
+/// (`ui/dist/scripts/scripts.js`: 볼륨 `floor:0, ceil:200`, 임계 `floor:0, ceil:10, step:.1`).
+///
+/// 변환은 `WapleCore.AudioSpectrum` 에 있다(리눅스 테스트가 값을 잠근다 —
+/// `AudioInputSettingsParityTests`). 여기는 **저장·조회**만 한다.
+///
+/// 곱해지는 **위치**는 실물과 다르다(실물은 비정규화 진폭에, 우리는 밴드 출력에) — 곱셈이
+/// 결합적이라 관측 결과는 같다. 근거는 `docs/re/audio-capture.md` §9.2.
 public enum AudioInputSettings {
-    static let thresholdKey = "waple.audioInputThreshold"
-    static let volumeKey = "waple.audioInputVolume"
+    /// **옛 키 — 읽지도 쓰지도 않는다(툼스톤).** 여기에는 종전 의미의 값, 즉 볼륨은 **곱수**
+    /// (기본 1)가, 임계는 **임계 그대로**가 들어 있다. 이름을 유지한 채 의미만 WE 설정 단위로
+    /// 바꾸면 이미 저장한 사용자가 볼륨 **50배** · 임계 **1000배**를 맞는다. 그래서 새 키를 쓴다.
+    ///
+    /// **일회 변환을 하지 않는 이유(판단 근거).**
+    ///  ① **역상이 도메인 밖으로 나간다.** 옛 임계 0.25 를 설정 단위로 되돌리면 `0.25/0.001 = 250`
+    ///     인데 슬라이더 상한은 10 이다. 25배 밖의 값을 "사용자가 고른 설정" 인 척 심게 된다.
+    ///  ② **볼륨은 정수로 양자화된다.** 새 저장 단위는 `asInt` 가 끝낸 정수라(위 `0x14006c741`),
+    ///     옛 곱수 1.5 → 75 는 되돌아오지만 임의의 곱수는 라운드트립하지 않는다.
+    ///  ③ **게터가 쓰기를 하게 된다.** 일회 변환은 첫 조회 시점에 UserDefaults 를 갱신해야 하는데,
+    ///     이 프로퍼티들은 캡처 콜백 경로(`analyzeWindow`)에서 창마다 읽힌다. 읽기 전용 계약을
+    ///     깨는 대가가 크다.
+    ///  ④ **도달이 0 이다.** 이 두 키를 쓰는 설정 UI 가 아직 없고(위 "설정 UI 배선은 범위 밖"),
+    ///     기본 상태에서 오디오를 켜는 동봉 자산도 0건이다(`docs/re/audio-capture.md` §6.1).
+    ///     즉 실사용자 중 옛 키에 비기본값이 들어 있는 사람은 없다고 본다 — **추정**이지만,
+    ///     틀리더라도 결과는 "그 사람이 기본값으로 돌아간다" 이지 50배가 아니다.
+    ///
+    /// 값을 **지우지도 않는다** — 남겨 두면 되돌릴 수 있고, 읽지 않으므로 해가 없다.
+    static let legacyThresholdKey = "waple.audioInputThreshold"
+    static let legacyVolumeKey = "waple.audioInputVolume"
 
-    /// 무음 게이트 임계값 — 창 피크 < threshold 이면 그 창은 0 스펙트럼(`0x1400d1a1b`-`0x1400d1ad9`).
-    /// 기본 0 = 비활성(무회귀; 엔진 활성 조건 threshold > FLT_EPSILON 의 판정은 isSilenced 가 담당).
-    public static var threshold: Float {
-        get { UserDefaults.standard.object(forKey: thresholdKey) == nil ? 0 : UserDefaults.standard.float(forKey: thresholdKey) }
-        set { UserDefaults.standard.set(newValue, forKey: thresholdKey) }
+    /// WE `user.audioinputvolume` 와 같은 단위(정수). 기본 50 = 곱수 1.0.
+    static let volumeSettingKey = "waple.audioInputVolumeSetting"
+    /// WE `user.audioinputthreshold` 와 같은 단위(실수). 기본 0 = 게이트 비활성.
+    static let thresholdSettingKey = "waple.audioInputThresholdSetting"
+
+    /// 저장 단위 그대로의 볼륨 설정. 미저장이면 배포 `config.json` 기본값 50.
+    public static var volumeSetting: Int {
+        get {
+            UserDefaults.standard.object(forKey: volumeSettingKey) == nil
+                ? AudioSpectrum.defaultInputVolumeSetting
+                : UserDefaults.standard.integer(forKey: volumeSettingKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: volumeSettingKey) }
     }
 
-    /// 입력 볼륨 — 분석 결과 스펙트럼에 곱하는 스칼라(audioinputvolume). 기본 1 = 무회귀.
-    public static var volume: Float {
-        get { UserDefaults.standard.object(forKey: volumeKey) == nil ? 1 : UserDefaults.standard.float(forKey: volumeKey) }
-        set { UserDefaults.standard.set(newValue, forKey: volumeKey) }
+    /// 저장 단위 그대로의 임계 설정. 미저장이면 배포 `config.json` 기본값 0.
+    public static var thresholdSetting: Float {
+        get {
+            UserDefaults.standard.object(forKey: thresholdSettingKey) == nil
+                ? AudioSpectrum.defaultInputThresholdSetting
+                : UserDefaults.standard.float(forKey: thresholdSettingKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: thresholdSettingKey) }
     }
+
+    /// 분석 결과 스펙트럼에 곱하는 스칼라 = `설정 × 0.02`(`0x14006c75e`).
+    /// 기본 설정 50 에서 정확히 1.0 이라(50×0.02f 의 오차 2.2e-8 < 반ULP 3.0e-8) 종전 기본값과
+    /// **비트 동일**하다 — 이 변경은 기본 설치에서 무회귀다.
+    public static var volume: Float { AudioSpectrum.inputVolumeGain(setting: volumeSetting) }
+
+    /// 무음 게이트 임계 = `설정 × 0.001`(`0x14006c77b`). 창 피크 < threshold 이면 그 창은 0 스펙트럼
+    /// (`0x1400d1a1b`-`0x1400d1ad9`). 기본 0 = 비활성이라 종전 기본값과 같다.
+    public static var threshold: Float { AudioSpectrum.inputThreshold(setting: thresholdSetting) }
 }
 
 /// F536(F-51): 프로세스 전역 단일 SCStream 캡처 코어. 구독자(SystemAudioSpectrumProvider)가 1명 이상이면

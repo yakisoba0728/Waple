@@ -89,6 +89,85 @@ BYTE_CHECKS = [
     (0x1400D1425, "41c7448f040402013c", "`mov [r15+rcx*4+4], 0x3C010204` — 패딩 허수부 **1/127**"),
 ]
 
+# ── 입력 설정 사슬: `user.audioinputvolume` / `user.audioinputthreshold` → AP+0x0C / +0x10 ──
+#
+# 종전 정본에는 이 둘의 **출처를 적을 자리가 없었다.** `engine.audio.processorConstants` 는
+# 생성자가 심는 네 필드(+0xEC/+0xF0/+0xF4/+0xF8)만 담고, `AP+0x0C`(게인 곱수)와
+# `AP+0x10`(무음 임계)은 생성자 기본값(각각 1.0 / 0.0)이 아니라 **설정 로더가 덮는 값**이다.
+# 그래서 게인 162.56 을 "설정과 무관한 상수" 로 읽는 오독이 났다 — 그건 설정 50 에서의 값이다.
+#
+# 아래 열 개 앵커가 사슬 전부다(두 키의 lea → 직독 호출 → 스케일 곱 → 저장, 그리고 읽는 자리).
+# 오프셋 기준은 **오디오 스레드의 this** 다(생성자 this 보다 8 크다 — `lea rbx,[rcx+8]`
+# `0x1400C0CA6`). 그래서 `0x1404E55A8 + 0x0C = 0x1404E55B4`, `+0x10 = 0x1404E55B8` 이다.
+AUDIO_INPUT_BYTE_CHECKS = [
+    (0x14006C72C, "488d15cda74000",
+     '`lea rdx, [0x140476F00]` — 키 문자열 "audioinputvolume"'),
+    (0x14006C741, "e89a970100",
+     "`call 0x140085EE0`(asInt) — 태그 5(boolean)도 1/0 으로 받는다"),
+    (0x14006C75E, "f30f5905c65e4200",
+     "`mulss xmm0, [0x14049262C]` — 설정 정수 × 0.02f"),
+    (0x14006C766, "f30f1105468e4700",
+     "`movss [0x1404E55B4], xmm0` — AP+0x0C(게인 곱수) 저장"),
+    (0x14006C750, "488d15c1a74000",
+     '`lea rdx, [0x140476F18]` — 키 문자열 "audioinputthreshold"'),
+    (0x14006C776, "e8a59a0100", "`call 0x140086220`(asFloat)"),
+    (0x14006C77B, "f30f5905855e4200",
+     "`mulss xmm0, [0x140492608]` — 설정 실수 × 0.001f"),
+    (0x14006C794, "f30f11051c8e4700",
+     "`movss [0x1404E55B8], xmm0` — AP+0x10(무음 임계) 저장"),
+    (0x1400D1D3F, "f30f10570c",
+     "`movss xmm2, [rdi+0x0C]` — 오디오 스레드가 AP+0x0C 를 읽는 **유일한** 자리(게인)"),
+    (0x1400D1A15, "f3410f106e10",
+     "`movss xmm5, [r14+0x10]` — 무음 임계를 읽는 자리(`comiss` 게이트 0x1400D1A1B 의 좌변)"),
+]
+
+# 키 문자열과 그 `end` 포인터(begin+길이). WE 의 Json 조회는 (begin,end) 쌍을 넘긴다.
+AUDIO_INPUT_KEY_STRINGS = [
+    (0x140476F00, 0x140476F10, "audioinputvolume"),
+    (0x140476F18, 0x140476F2B, "audioinputthreshold"),
+]
+
+# 스케일 상수는 `.rdata` 원시 바이트에서 읽는다(리터럴을 베끼지 않는다).
+AUDIO_INPUT_SCALES = [
+    (0x14049262C, "volumeScale", 0.019999999552965164,
+     "AP+0x0C 곱수 = 설정 × 이 값. 이미지 전체 적재 자리 4곳 중 오디오 경로는 0x14006C75E 하나"),
+    (0x140492608, "thresholdScale", 0.0010000000474974513,
+     "AP+0x10 임계 = 설정 × 이 값"),
+]
+
+# 클램프 부재를 **바이트로** 확인할 구간: 직독 호출 직후 ~ 저장 직전.
+# 이 구간에 minss/maxss/comiss/ucomiss 계열이 하나라도 있으면 "클램프 없음" 이 거짓이다.
+AUDIO_INPUT_NOCLAMP_RANGES = [
+    ("volume", 0x14006C746, 0x14006C766),
+    ("threshold", 0x14006C77B, 0x14006C794),
+]
+CLAMP_OPCODES = {
+    "minss": "f30f5d", "maxss": "f30f5f", "minsd": "f20f5d", "maxsd": "f20f5f",
+    "comiss": "0f2f", "ucomiss": "0f2e", "comisd": "660f2f", "ucomisd": "660f2e",
+}
+
+# ── UI 슬라이더 도메인과 배포 기본값(보고) ────────────────────────────────────
+# 이 스크립트는 이 셋을 **재현하지 않는다** — 바이너리가 아니라 `ui/dist/scripts/scripts.js`
+# 와 `config.json` 에 있다. 그래서 별도 항목으로 `보고` 등급이다.
+REPORTED_INPUT_DOMAINS = {
+    "volumeSlider": {"floor": 0, "ceil": 200, "shippedDefault": 50,
+                     "source": "ui/dist/scripts/scripts.js 의 "
+                               "`audioSlider={hideLimitLabels:!0,floor:0,ceil:200,…}`",
+                     "note": "**0…100 이 아니다.** 곱수 도메인은 [0, 4] 이고 중립점이 50 이라 "
+                             "배포 기본값에서 곱수가 정확히 1.0 이다(50×0.02f 의 오차 2.2e-8 < 반ULP 3.0e-8)"},
+    "thresholdSlider": {"floor": 0, "ceil": 10, "step": 0.1, "precision": 2, "shippedDefault": 0,
+                        "source": "ui/dist/scripts/scripts.js 의 "
+                                  "`audioThresholdSlider={hideLimitLabels:!0,floor:0,ceil:10,step:.1,precision:2,…}`",
+                        "note": "임계 도메인은 [0, 0.01]. 기본 0 은 게이트 비활성"
+                                "(활성 조건 `threshold > FLT_EPSILON`, 0x1400D1A1B)"},
+    "gainSpan": {"0": 0.0, "25": 81.28, "50": 162.56, "100": 325.12, "200": 650.24,
+                 "note": "1/N 정규화 진폭 기준 최종 게인 = 162.56 × (설정×0.02). "
+                         "`engine.audio.pipeline.gain` 의 162.56 은 **설정 50 에서의 값**이지 "
+                         "설정과 무관한 상수가 아니다"},
+    "clampDomain": "슬라이더는 UI 의 것일 뿐 저장 경로의 계약이 아니다 — 로더에 클램프가 없으므로 "
+                   "직접 편집한 config.json 의 범위 밖 값도 그대로 통과한다",
+}
+
 FORMAT_STRINGS = [
     "rgba8888", "rgb888", "rg88", "r8", "rgb565", "bc7", "dxt5", "dxt3", "dxt1",
     "rgba16161616f", "rgb161616f", "rg1616f", "r16f", "rgba16161616", "rgb161616",
@@ -282,6 +361,83 @@ def measure(pe):
                     "`audioprocessingexponent` 는 프로젝트 JSON 기본값 작성기에만 나오고 이 경로에 도달하지 않는다"),
          S]))
 
+    # ── 입력 설정 사슬 (직접 재현) ──────────────────────────────────────────
+    input_checks = {}
+    for va, expect, why in AUDIO_INPUT_BYTE_CHECKS:
+        o = pe.off(va)
+        got = pe.data[o:o + len(expect) // 2].hex()
+        if got != expect:
+            raise SystemExit(f"[measure_effect_fbo_audio] {va:#x} 의 바이트가 {got} 인데 {expect} 를 기대했다.\n"
+                             f"  ({why})\n"
+                             f"  입력 설정 사슬이 어긋났다 — 조용히 다른 값을 확정으로 커밋하지 않으려고 멈춘다.")
+        input_checks[hex(va)] = {"bytes": got, "meaning": why}
+
+    key_strings = {}
+    for begin, end, expect in AUDIO_INPUT_KEY_STRINGS:
+        o = pe.off(begin)
+        got = pe.data[o:o + (end - begin)].decode("ascii", "replace")
+        if got != expect or pe.data[pe.off(end)] != 0:
+            raise SystemExit(f"[measure_effect_fbo_audio] 키 문자열 {begin:#x} 가 {got!r} 인데 "
+                             f"{expect!r} 를 기대했다(끝 {end:#x} 이 NUL 이 아닐 수도 있다).")
+        key_strings[expect] = {"begin": hex(begin), "end": hex(end), "length": end - begin}
+
+    scales = {}
+    for va, key, expect, why in AUDIO_INPUT_SCALES:
+        got = struct.unpack_from("<f", pe.data, pe.off(va))[0]
+        if abs(got - expect) > 1e-17 * max(1.0, abs(expect)):
+            raise SystemExit(f"[measure_effect_fbo_audio] {key} 가 {got!r} 인데 {expect!r} 를 기대했다 ({va:#x}).")
+        scales[key] = {"value": got, "site": hex(va), "why": why}
+
+    clamps = {}
+    for name, lo, hi in AUDIO_INPUT_NOCLAMP_RANGES:
+        blob = pe.data[pe.off(lo):pe.off(hi)].hex()
+        found = sorted(m for m, pat in CLAMP_OPCODES.items() if pat in blob)
+        if found:
+            raise SystemExit(f"[measure_effect_fbo_audio] {name} 사슬 [{lo:#x},{hi:#x}) 에 "
+                             f"클램프 명령이 있다: {found}. 정본의 '클램프 없음' 이 거짓이 된다.")
+        clamps[name] = {"range": [hex(lo), hex(hi)], "bytes": blob, "clampOpcodesFound": []}
+
+    entries.append(specfmt.entry(
+        "engine.audio.inputSettings",
+        {"volume": {"configKey": "user.audioinputvolume",
+                    "field": "AudioProcessor+0x0C (스레드 기준; 절대 주소 0x1404E55B4)",
+                    "reader": "0x140085EE0 (asInt)",
+                    "scale": scales["volumeScale"],
+                    "storeSite": "0x14006C766",
+                    "readSites": ["0x1400D1D3F"],
+                    "meaning": "게인 곱수. 생성자 기본값 1.0 은 **설정이 없을 때의 값**이지 상수가 아니다"},
+         "threshold": {"configKey": "user.audioinputthreshold",
+                       "field": "AudioProcessor+0x10 (스레드 기준; 절대 주소 0x1404E55B8)",
+                       "reader": "0x140086220 (asFloat)",
+                       "scale": scales["thresholdScale"],
+                       "storeSite": "0x14006C794",
+                       "readSites": ["0x1400D1A15"],
+                       "meaning": "무음 게이트 임계. 창 피크 < 임계이면 그 창은 0 스펙트럼"},
+         "keyStrings": key_strings,
+         "noClamp": clamps,
+         "instructionAnchors": input_checks,
+         "offsetBaseline": "오프셋은 **오디오 스레드의 this** 기준이다 — 생성자 this 보다 8 작다"
+                           "(생성자가 `lea rbx,[rcx+8]` 로 밴드 버퍼를 심는다, 0x1400C0CA6). "
+                           "전역 AudioProcessor 는 ctor-this 0x1404E55A0 ↔ 스레드 베이스 0x1404E55A8",
+         "waple": "변환은 `WapleCore.AudioSpectrum.inputVolumeGain(setting:)` / `inputThreshold(setting:)`, "
+                  "저장은 `SystemAudioSpectrumProvider.AudioInputSettings`(WE 와 같은 설정 단위)"},
+        "확정",
+        [specfmt.ev("binary", "설정 로더 0x14006C280-0x14006CE9B 안의 열 개 앵커를 원시 바이트로 대조 — 불일치 시 하드 실패"),
+         specfmt.ev("binary", "스케일 상수 둘은 `.rdata` 원시 바이트에서 직접 읽는다(리터럴을 베끼지 않는다)"),
+         specfmt.ev("binary", "직독 호출 직후 ~ 저장 직전 구간을 스캔해 minss/maxss/comiss/ucomiss 부재를 "
+                              "확인한다 — **클램프가 없다**는 주장이 이 스캔의 결과다"),
+         specfmt.ev("doc", "docs/re/audio-capture.md §9.2"),
+         S]))
+
+    entries.append(specfmt.entry(
+        "engine.audio.inputSettingDomains", dict(REPORTED_INPUT_DOMAINS), "보고",
+        [specfmt.ev("asset", "ui/dist/scripts/scripts.js 의 두 슬라이더 정의"),
+         specfmt.ev("asset", "배포 config.json 의 `user.audioinputvolume = 50` · `user.audioinputthreshold = 0`"),
+         specfmt.ev("doc",
+                    "**이 스크립트는 이 셋을 재현하지 않는다.** 슬라이더 정의와 배포 기본값은 바이너리가 "
+                    "아니라 설치본 파일에 있고, 이 스크립트는 바이너리만 연다. 그래서 확정이 아니라 보고다. "
+                    "재현이 필요하면 WE_ROOT 아래 두 파일을 여는 별도 측정기를 붙여라.")]))
+
     # ── 파이프라인 (수식은 보고, 상수는 위에서 확정) ────────────────────────
     entries.append(specfmt.entry(
         "engine.audio.pipeline",
@@ -305,7 +461,11 @@ def measure(pe):
          "tilt": "w = C − (1−C)·cos(π·t), t = (i−1)/(B−1) — **빈 인덱스**이지 밴드 인덱스가 아니다. 진폭에 sqrt(w)",
          "tiltRatio": "최저↔최고 감쇠비 sqrt(1.0)/sqrt(0.002) = 22.3608 — 원본은 저역을 깎는다",
          "reduction": "밴드 내 MAX(평균 아님)",
-         "gain": "162.56 = 127 × 0.001 × 2 × 640, 1/N 정규화 진폭 기준. 축약 뒤 맨 마지막에 일괄",
+         "gain": "162.56 = 127 × 0.001 × 2 × 640 × **AP+0x0C**, 1/N 정규화 진폭 기준. "
+                 "축약 뒤 맨 마지막에 일괄. [정정 2026-08-21] **AP+0x0C 는 상수가 아니다** — "
+                 "`user.audioinputvolume × 0.02` 이고 생성자 기본값 1.0 은 설정이 없을 때의 값이다. "
+                 "여기 162.56 은 배포 기본 설정 50 에서의 값이고, 슬라이더 0…200 에서 게인은 "
+                 "0…650.24 를 돈다(`engine.audio.inputSettings` · `engine.audio.inputSettingDomains`)",
          "smoothing": "생산 단계에 없음 — 매 프레임 밴드 배열을 0 으로 시작해 재계산"},
         "보고",
         [specfmt.ev("binary", f"{VA_AUDIO_THREAD:#x} 오디오 스레드 본체(7,783 B) 디스어셈블"),

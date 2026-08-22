@@ -611,7 +611,15 @@ extension SceneRenderer {
         guard let src = EffectShaders.source(for: eff.name, fbNearest: fbNearest),
               let params = EffectShaders.params(for: eff.name, constants: eff.constants, combos: eff.combos),
               let pipe = effectPipeline(source: src, device: device) else { return nil }
-        let audio = audioParams(for: eff)
+        // 오디오 선언 기본값은 **WE 원문 GLSL 어노테이션**에서 읽는다 — 이 경로가 쓰는 손포팅
+        // MSL 에는 어노테이션이 없기 때문이다(종전에는 리터럴 표가 그 자리를 메웠다).
+        // 원문 조회는 `AUDIOPROCESSING` 이 켜진 이펙트에서만 한다 — 꺼져 있으면 `audioParams` 가
+        // 어차피 nil 을 주므로 매니페스트 파스와 파일 읽기가 순전히 낭비다(이 경로는 번역 실패
+        // 폴백이라 오디오 무관 이펙트가 대부분이다).
+        let audioMode = eff.audioMode
+        let audio = (audioMode >= 1 && audioMode <= 3)
+            ? audioParams(for: eff, shaderSource: audioAnnotationSource(for: eff, package: package))
+            : nil
         if audio != nil { hasAudio = true }
         // slot0 은 framebuffer → aux 는 slot1.. 디코드. 디코드 실패는 흰색 1x1 폴백.
         // 레거시 frag(mask=texture(1)) 와 waterripple(normal=1, mask=2) 모두 위해
@@ -2026,54 +2034,77 @@ extension SceneRenderer {
         return (m, adjusted)
     }
 
-    /// 셰이더 **선언 어노테이션**의 `audiobounds` 기본값 — 이펙트마다 다르다.
+    /// 손포팅 이펙트의 **오디오 어노테이션 원문** — pass 0 의 정점 셰이더 GLSL.
     ///
-    /// 이 경로(`buildHandPortEffect`)는 손포팅 MSL 을 쓰므로 GLSL 어노테이션을 파스하지 않는다.
-    /// 번역 경로는 `MaterialParam.defaultValue`(= `annotationDefault`)가 자동으로 처리하지만,
-    /// 여기서는 폴백 리터럴이 곧 실효 기본값이다. 종전엔 `[0.5, 1.0]` 하나로 박혀 있었는데
-    /// **그건 `pulse` 의 값**이고 `shake` 는 다르다.
+    /// 종전에는 이 자리가 없었고 `audioParams(for:)` 가 `[0.5,1.0]`(pulse) / `[0.0,1.2]`(shake) 를
+    /// **리터럴로** 들고 있었다. 이제 원문이 있으면 `AudioResponse.declaredDefaults(shaderSource:)`
+    /// 가 다섯 키를 실제로 읽는다(`"material"` 값으로 건다 — 유니폼 이름으로 걸면
+    /// `audioexponent → g_AudioPower` · `audioamount → g_AudioMultiply` 때문에 둘을 놓친다).
     ///
-    /// 동봉 자산 전수 실측(2026-08-21) — `effects/*/shaders/effects/*.{vert,frag}` 의 `// {…}`
-    /// 어노테이션 중 `"material"` 이 오디오 키인 것을 전부 파스했다. **오디오 어노테이션을 가진
-    /// 이펙트는 둘뿐이다**:
+    /// **왜 이 경로에만 필요한가.** 번역 경로는 `MaterialParam.defaultValue`(= `annotationDefault`)가
+    /// 같은 어노테이션을 이미 읽는다. 손포팅 경로는 Waple 자체 MSL 을 쓰므로 GLSL 을 안 본다 —
+    /// 그래서 여기서만 따로 읽어야 한다. 손포팅은 **번역이 실패했을 때만** 도는 폴백이라
+    /// (`buildEffectChain`: translated 우선), 원문이 아예 없어서 실패한 경우에는 여기도 nil 이 되고
+    /// 이름표 폴백으로 떨어진다 — 그게 종전 동작과 같은 자리다.
     ///
-    /// | 이펙트 | audiobounds | frequencymin | frequencymax | audioexponent | audioamount |
-    /// | --- | --- | --- | --- | --- | --- |
-    /// | `pulse` | `"0.5 1.0"` | 0 | 1 | 1.0 | 1 |
-    /// | `shake` | **`"0.0 1.2"`** | 0 | 1 | 1.0 | 1 |
-    ///
-    /// 즉 갈리는 것은 `audiobounds` **하나뿐**이고 나머지 넷은 아래 폴백 리터럴과 이미 일치한다
-    /// (그래서 그쪽은 손대지 않는다 — 우연한 일치가 아니라 실측으로 확인한 일치다).
-    /// 근거: `effects/shake/shaders/effects/shake.vert:29` ·
-    /// `effects/pulse/shaders/effects/pulse.vert:31`(설치본도 바이트 동일).
-    ///
-    /// 표에 없는 이펙트는 `pulse` 값으로 떨어진다 — 새 손포팅 이펙트가 오디오를 쓰기 시작하면
-    /// 그 셰이더의 어노테이션을 재서 여기 추가해라.
-    static func audioBoundsAnnotationDefault(effect name: String) -> [Float] {
-        switch name {
-        case "shake": return [0.0, 1.2]
-        default:      return [0.5, 1.0]
-        }
+    /// 셰이더 경로 해석은 번역 경로와 **같은 두 단계**를 쓴다(`loadEffectManifest` →
+    /// `resolvePassShaderMeta`). 관례 폴백(`effects/<name>`)까지 같으므로 매니페스트가 없어도 동작한다.
+    /// 명령 패스(`copy`/`swap`)는 셰이더가 없으므로 건너뛰고 첫 셰이더 패스를 본다.
+    func audioAnnotationSource(for eff: SceneEffect, package: ScenePackage) -> String? {
+        let root = SceneRenderer.effectLocalRoot(eff)
+        let manifest = loadEffectManifest(eff, package: package)
+        guard let mp = manifest.passes.first(where: { $0.command == nil }) else { return nil }
+        let meta = resolvePassShaderMeta(mp, eff: eff, manifest: manifest, package: package, root: root)
+        guard let d = effectScopedData("shaders/\(meta.base).vert", root: root, package: package),
+              let src = String(data: d, encoding: .utf8) else { return nil }
+        // **CRLF 정규화가 필수다**(공통 브리프 함정 11). 동봉·설치본의 `.vert` 는 **CRLF** 이고
+        // (`pulse.vert`/`shake.vert` 둘 다 CRLF 83줄, `file(1)` 실측),
+        // `AudioResponse.declaredDefaults(shaderSource:)` 는 `split(separator: "\n")` 으로 쪼갠다.
+        // Swift 에서 `"\r\n"` 은 **한 개의 Character** 이고 `"\n"` 과 같지 않으므로, 정규화 없이
+        // 넘기면 파일 전체가 한 줄이 되어 파서가 **전건 nil** 을 돌려준다 — 즉 이 기능이 조용히
+        // 죽고 종전 이름표 폴백으로만 산다. `Tests/WapleCoreTests/AudioAnnotationCorpusTests`
+        // 가 이 두 사실(원문은 nil · 정규화하면 파스된다)을 값으로 잠근다.
+        //
+        // 정공법은 파서가 `isNewline` 으로 쪼개는 것이고 그 패치안은 보고서에 넘겼다
+        // (`AudioResponse.swift` 는 이 라운드의 소유 밖). 그때가 오면 이 두 줄은 무해한 잉여가 된다.
+        return src.replacingOccurrences(of: "\r\n", with: "\n")
+                  .replacingOccurrences(of: "\r", with: "\n")
     }
 
     /// 효과의 AUDIOPROCESSING 콤보 + 오디오 상수 → AudioParams(없으면 nil). draw 시 audioResponse 계산에 사용.
-    func audioParams(for eff: SceneEffect) -> AudioParams? {
+    ///
+    /// 우선순위는 **씬 상수(`constantshadervalues`) > 셰이더 선언 어노테이션 > 이름표 폴백**이다.
+    /// 종전에는 가운데 단이 통째로 없어서 다섯 값이 전부 리터럴 폴백이었다
+    /// (`audioBoundsAnnotationDefault` 의 `[0.5,1.0]`/`[0.0,1.2]` 와 `?? 0`/`?? 1` 넷).
+    /// 이제 `AudioResponse.declaredDefaults(effectName:shaderSource:)` 가 원문을 읽고, 원문이
+    /// 없을 때만 이름표(`pulse`/`shake`) 표로 떨어진다 — 그 표도 리터럴이 아니라 `WapleCore` 에 있다.
+    ///
+    /// **동봉·설치본에서 값이 갈리는 이펙트는 0개다(2026-08-21 전수 실측).** 오디오 어노테이션을
+    /// 가진 셰이더는 동봉 `WEAssets` **2파일**(`effects/pulse/shaders/effects/pulse.vert` ·
+    /// `effects/shake/shaders/effects/shake.vert`), 설치본 **3파일**(앞의 둘 +
+    /// `projects/defaultprojects/razer_bedroom/shaders/effects/pulse.vert`)뿐이고, 그 셋의 다섯 값이
+    /// 전부 이름표 폴백과 같다. 즉 **이 변경은 두 코퍼스 전건에서 비트동일**이고, 값이 실제로
+    /// 갈릴 수 있는 것은 워크샵 셰이더다(이 컨테이너에 코퍼스가 없어 **미측정**).
+    /// `freqMax` 폴백 1 의 근거는 그대로다 — `g_AudioFrequencyMax` 어노테이션이 `"default":1`
+    /// (range [0,15])이라, 종전 15 를 쓰면 23.4–187.5 Hz 여야 할 대역이 23.4–14671.9 Hz 로 벌어졌다.
+    func audioParams(for eff: SceneEffect, shaderSource: String? = nil) -> AudioParams? {
         let mode = eff.audioMode
         guard mode >= 1, mode <= 3 else { return nil }
         let c = eff.constants
-        let bounds = c["audiobounds"] ?? Self.audioBoundsAnnotationDefault(effect: eff.name)
+        let d = AudioResponse.declaredDefaults(effectName: eff.name, shaderSource: shaderSource)
+        // 성분별 폴백이다 — 씬이 `audiobounds` 를 1성분만 적으면 y 는 **그 셰이더의 선언값**으로
+        // 채운다. 종전에는 그 자리가 리터럴 1.0 이라 `shake` 에서 1.2 대신 1.0 이 됐다.
+        // 도달: 동봉 1,698 · 설치본 2,143 JSON 전수에서 `audiobounds` 저작은 **0건**이라
+        // 두 코퍼스에서 이 분기 자체가 안 돈다(워크샵 미측정).
+        let bounds = c["audiobounds"] ?? []
         return AudioParams(
             mode: mode,
-            freqMin: c["frequencymin"]?.first ?? 0,
-            // **WE 선언 기본값은 1 이다** — `effects/pulse/shaders/effects/pulse.vert` 의
-            // `g_AudioFrequencyMax` 어노테이션이 `"default":1`(range [0,15]). 종전 15 는 전 대역을
-            // 고르는 값이라, 비선형 밴드 매핑이 들어온 지금은 23.4–187.5 Hz 여야 할 대역이
-            // 23.4–14671.9 Hz 로 벌어진다. 씬 상수는 constantshadervalues 에서만 채워지고 셰이더
-            // 선언 기본값은 파스하지 않으므로 이 폴백이 곧 실효 기본값이다.
-            freqMax: c["frequencymax"]?.first ?? 1,
-            bounds: SIMD2<Float>(bounds.count > 0 ? bounds[0] : 0.5, bounds.count > 1 ? bounds[1] : 1.0),
-            power: c["audioexponent"]?.first ?? 1,
-            multiply: c["audioamount"]?.first ?? 1)
+            freqMin: c["frequencymin"]?.first ?? d.freqMin,
+            freqMax: c["frequencymax"]?.first ?? d.freqMax,
+            bounds: SIMD2<Float>(bounds.count > 0 ? bounds[0] : d.bounds.x,
+                                 bounds.count > 1 ? bounds[1] : d.bounds.y),
+            power: c["audioexponent"]?.first ?? d.power,
+            multiply: c["audioamount"]?.first ?? d.multiply)
     }
 
     /// 파티클 시스템별 텍스처/시뮬/블렌드 준비. 텍스처는 material 의 첫 텍스처(없으면 흰색 폴백).
