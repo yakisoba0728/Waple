@@ -116,6 +116,87 @@ public enum FluidSimulationPrecision {
     /// `unorm8 → float` 로드.
     public static func unorm8Load(_ level: UInt8) -> Double { Double(level) / 255 }
 
+    // MARK: - rg16f 속도 감쇠의 고정점 (신규 2026-08-21 · 4차 실측)
+
+    /// binary16 의 **최소 준정규**. 감쇠가 여기까지 내려오면 실질 0이다.
+    public static let binary16SmallestSubnormal = 0x1p-24
+
+    /// `v ← v / decay` 한 걸음이 binary16 **저장에서 살아남는가**.
+    ///
+    /// `false` 면 그 자리가 고정점이다 — 그 뒤로는 몇 프레임을 돌려도 값이 안 움직인다.
+    public static func binary16DecayStepSurvives(magnitude: Double, decay: Double) -> Bool {
+        let stored = binary16Quantize(magnitude)
+        return binary16Quantize(stored / decay) != stored
+    }
+
+    /// **`viscosityfactor` 가 어디부터 rg16f 속도장의 감쇠를 완전히 멈추는가.**
+    ///
+    /// 속도 패스의 감쇠는 `v ← v / (1 + ν·m·dt)`(§2.8)이고 상대 감소분은 `≈ ν·m·dt` 다.
+    /// binary16 은 상대 반 ulp 미만의 증분을 저장에서 버리는데(§`binary16SmallestResolvableRelativeStep`)
+    /// 그 상대 반 ulp 는 가수 위치에 따라 `2^-12`(binade 위쪽) … `2^-11`(binade 아래쪽) 사이를
+    /// 오간다. 그래서 문턱이 **하나의 값이 아니라 띠**다:
+    ///
+    /// * `ν < alwaysStallsBelow` — binade 안쪽 값에서는 감쇠가 **한 걸음도** 못 간다.
+    /// * `ν > neverStallsAbove` — 어느 값에서든 감쇠가 진행된다.
+    /// * 그 사이 — 값이 binade 안 어디에 있느냐로 갈린다.
+    ///
+    /// **이 띠는 근사 안내선이지 판정기가 아니다.** 두 가지가 어긋나게 만든다 —
+    /// ① **binade 경계 바로 아래에서는 간격이 반으로 줄어** 위 문턱을 못 넘는 증분도 한 걸음
+    ///    내려간다(60 fps · `ν = 0.1` 에서 `300.0` 은 즉시 멈추지만 `256.0` 은 548프레임
+    ///    내려가 `187.5` 에서 멈춘다). ② RTNE **동점**은 짝수 쪽으로 접혀 제자리에 남는다
+    ///    (`187.5` 가 정확히 그 경우다 — 감소분이 반 ulp 와 같다).
+    /// 실제 고정점은 반드시 `binary16VelocityDecayFixedPoint` 로 **돌려서** 구해라.
+    ///
+    /// 실물 기본값 `viscosityfactor = 1.0`(preview 2.29)은 60 fps 에서 띠보다 **한 자릿수 위**라
+    /// 출하 설정에서는 이 정체가 일어나지 않는다. 슬라이더 범위가 `[0, 20]` 이므로 워크샵
+    /// 저작으로는 도달한다. `viscosityfactor = 0` 은 `decay == 1` 이라 정밀도와 무관하게 감쇠가 없다.
+    public static func binary16DecayStallBand(materialDissipation: Double,
+                                              dt: Double) -> (alwaysStallsBelow: Double,
+                                                              neverStallsAbove: Double) {
+        let perUnit = materialDissipation * dt
+        guard perUnit > 0 else { return (.infinity, .infinity) }
+        return (0x1p-12 / perUnit, binary16SmallestResolvableRelativeStep / perUnit)
+    }
+
+    /// 속도 크기가 감쇠를 멈추는 자리. `nil` 이면 최소 준정규까지(= 실질 0) 내려간다.
+    ///
+    /// `lowPass`(§2.8)는 `‖v‖ ≤ u_Lifetime` 에서만 붙어 분모를 `+0.5` 로 키우므로,
+    /// 그 대역 안으로 들어오면 프레임당 33 % 로 급감해 정체를 못 만든다. 즉 이 함수가
+    /// 0 아닌 고정점을 돌려주는 것은 **`u_Lifetime` 위**에서 멈춘 경우뿐이다.
+    ///
+    /// - Parameters:
+    ///   - startMagnitude: 시작 속도 크기(텍셀/초).
+    ///   - viscosity: `u_Viscosity`(`viscosityfactor`, 기본 1.0 · preview 2.29).
+    ///   - materialDissipation: `m_Dissipation` — 속도 머티리얼 상수 **0.2**.
+    ///   - lifetime: `u_Lifetime`(기본 0.1 · preview 0.32).
+    ///   - frameTime: 생 `g_Frametime`. `dt` 는 여기서 `min(1/20, ·)` 로 접힌다.
+    public static func binary16VelocityDecayFixedPoint(startMagnitude: Double,
+                                                       viscosity: Double,
+                                                       materialDissipation: Double,
+                                                       lifetime: Double,
+                                                       frameTime: Double,
+                                                       frameLimit: Int = 200_000)
+        -> (magnitude: Double, frames: Int)? {
+        let dt = FluidSimulation.simulationTimeStep(frameTime: frameTime)
+        let decay = FluidSimulation.advectionDecay(decayFactor: viscosity,
+                                                   materialDissipation: materialDissipation,
+                                                   dt: dt)
+        var magnitude = binary16Quantize(startMagnitude)
+        var frames = 0
+        while frames < frameLimit {
+            let lowPass = FluidSimulation.advectionLowPass(sampleMagnitude: magnitude,
+                                                           lifetime: lifetime)
+            let next = binary16Quantize(magnitude / (decay + lowPass))
+            if next == magnitude {
+                return magnitude <= binary16SmallestSubnormal ? nil : (magnitude, frames)
+            }
+            magnitude = next
+            frames += 1
+            if magnitude == 0 { return nil }
+        }
+        return (magnitude, frames)
+    }
+
     // MARK: - LDR 염료 감쇠의 고정점 (신규 2026-08-21)
 
     /// **속도가 0 인 자리에서 염료가 몇 레벨에서 감쇠를 멈추는가.**

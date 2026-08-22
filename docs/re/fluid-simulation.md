@@ -12,6 +12,14 @@
 실험은 세션 스크래치의 파이썬에만 있었는데 이제 리포 안에서 돈다 —
 `Sources/WapleCore/FluidSimulation{,Precision,Grid}.swift` + 테스트 두 벌.
 
+**2026-08-21 4차 실측(호출 경로 축)** — 남은 다섯 건에 **자산 도달을 다시 재고**(§9.0b, 정정 0건)
+가장 도달이 큰 G1(`0x1401ea500` 의 호출 빈도)을 x86 으로 파서 **도달 경로를 전부 열거했다**(§3.3a).
+부수로 §9-1 의 3차 기재 **세 줄을 정정한다** — ① `call [reg+0xB8]` 은 25곳이 아니라 **24곳**이고
+SIB 형식은 **0건**이다, ② "24/25곳 전건이 다른 클래스" 는 틀렸다 — **4곳이 바로 이 함수**다,
+③ 이 함수는 `Effect` 의 메서드가 **아니다**(`this` 가 이펙트 **목록**을 들고 있다 — 함정 #27).
+그리고 §2.13(e) 가 제목에만 있고 본문에서 안 잰 축, **`rg16f` 속도 감쇠**를 §2.13(f)에서 잰다.
+새로 연 [미해결]도 하나 있다 — `constantshadervalues` 의 **영문 라벨 키**(§1.6.1b, 도달 preview 씬 22/트리 · 출하 0).
+
 동봉 이펙트 46종(최상위 `effect.json` 기준) 중 **가장 복잡한 하나**를 끝까지 뜯는다.
 이 이펙트만 가진 것이 셋이다 —
 
@@ -41,12 +49,12 @@
    읽는 텍스처와 쓰는 텍스처가 겹치는 자리가 없다.
 2. **`fit` 은 정사각이 아니다.** `0x1401eb2f8`–`0x1401eb37b` 이 **긴 변을 N 에 맞추고 종횡비를
    보존하며 확대는 하지 않는다**. 즉 1920×1080 레이어에서 `fit:256` 은 **256×144** 다.
-   Waple 은 `fit` 을 N×N 정사각으로 읽었고(`EffectManifest.swift:400`) 그래서 속도장 텍셀이
+   Waple 은 `fit` 을 N×N 정사각으로 읽었고(종전 `EffectManifest` 의 `fit` 파스) 그래서 속도장 텍셀이
    화면에서 정사각이 아니게 되고, `aspect = g_Texture0Resolution.y/.x` 가 0.5625 대신 **1.0**
    이 됐다 — 이 이펙트에서 가장 큰 그림 차이였다.
    **2026-08-21 착지**: `EffectManifest.FBO.fittedBox` 가 규약 전문을 담고 두 소비처
-   (`SceneRendererFrameEncoder.swift:2034-2036` 할당 · `SceneRendererResources.swift:1214-1216`
-   `texRes`)가 그것으로 푼다. `scale` 상호작용(§1.3.1)과 입력 출처(§1.3.2)도 함께 확정했다.
+   (`SceneRendererFrameEncoder.swift` 의 `spec.fittedBox(baseWidth:baseHeight:)` 호출 = 텍스처 할당 ·
+   `SceneRendererResources` 의 `texRes` 조립 = `g_TextureNResolution`)가 그것으로 푼다. `scale` 상호작용(§1.3.1)과 입력 출처(§1.3.2)도 함께 확정했다.
    회귀 표면 실측: 동봉+설치본 FBO 선언 112건 중 `fit` 보유 **28건**(이펙트 2종), 그중
    실제로 치수가 바뀌는 것은 `cursorripple` 뿐이다(§6-W1 표).
 3. **`functions` 는 죽은 코드도 에디터 UI 도 아니다** — 씬 스크립트 API
@@ -218,7 +226,7 @@ RT::RT(this, w, h, scale, …)                    # 0x1400d2c60
 `fit` 의 기준은 **이 이펙트가 그려 넣는 서피스**다. 전화면 framebuffer 레이어에서는
 화면 해상도와 같아지지만 그건 우연이고, 부분 레이어에서는 레이어 크기다.
 Waple 의 대응값은 빌드 시점 `effW/effH`(레이어 크기, `isFrameBuffer` 면 프로젝션 크기,
-`SceneRendererResources.swift:369-412`)와 프레임 시점 `dst` 크기다.
+`SceneRendererResources` 의 `effW`/`effH` 산출)와 프레임 시점 `dst` 크기다.
 
 #### 1.3.3 `width`/`height` 는 `fit` 의 **입력**을 갈아치운다
 
@@ -262,7 +270,7 @@ Waple 의 대응값은 빌드 시점 `effW/effH`(레이어 크기, `isFrameBuffe
 (id 19,21…37 — 20 은 결번)이고, 위 표의 원본 idx 0..17 과 **1:1로 맞는다** — id 23 에만
 `pressure:0.8`(= `..._clear.vert` 의 `u_Pressure`), id 36 에만 `depth:0.5`(= `..._normal.frag`
 의 `u_Depth`), id 35 에만 `DYE:1` 이 실려 있다. 즉 **명령 패스도 원본 배열 슬롯을 소비하고,
-에디터는 배열 **끝**의 빈 원소만 잘라낸다** — `SceneRendererResources.swift:713-733` 의 정정이
+에디터는 배열 **끝**의 빈 원소만 잘라낸다** — `SceneRendererResources` 의 `liveFbos` 필터 의 정정이
 이 자산으로 재확인된다.
 
 ### 1.5 `conditions` — 4건 전부
@@ -424,6 +432,45 @@ preview 씬의 18개 패스 오버라이드를 셰이더 어노테이션과 대�
 > **선언 키를 하나라도 가진 패스(3·14·15·16·17)에만** 실렸다(선언 키가 0개인 curl·divergence·
 > pressure 아홉에는 안 실렸다). 기즈모 변수를 모든 패스에 동기화하는 저작 동작으로 보이지만
 > 표본이 한 씬뿐이라 규칙으로 못 세운다.
+
+#### 1.6.1b 형제 이펙트에는 **영문 라벨을 키로 쓴 씬**이 있다 — **[신규 미해결 2026-08-21 · 4차]**
+
+§1.6.1 은 "소비자는 모르는 `constantshadervalues` 키를 조용히 버려야 한다" 로 끝났다. 그 규칙을
+전 코퍼스로 확인하다 **다른 종류의 미지 키**가 나왔다 — 셰이더 어노테이션의 `material` 키가
+아니라 **영문 UI 라벨**로 적힌 키다.
+
+`effects[].passes[].constantshadervalues` 전수(양 트리, 씬 355개):
+
+| | 동봉 171 | 설치본 184 |
+|---|---:|---:|
+| 키 출현 | 315 | 432 |
+| **대문자로 시작하는 키**(라벨 형태) | **88** | **88** |
+| 그 키를 가진 씬 | **22** | **22** — **22/22 전부 `*/preview/scene.json`** |
+| 걸린 이펙트 | 20종(`foliagesway` 15 · `scroll` 8 · `transform` 7 · `godrays` 7 · …) | 동일 |
+
+대조는 명확하다 — `scroll` 씬은 `"Speed X"`/`"Speed Y"` 로 적는데
+`shaders/effects/scroll.vert:5,6` 의 어노테이션은 `{"material":"speedx","label":"ui_editor_properties_speed_x"}` ·
+`{"material":"speedy", …_speed_y}` 다. 즉 씬에 실린 것은 **`label` 을 영어로 푼 문자열**이다.
+
+**두 가설이 남고 못 가른다.**
+
+* **H1 — 죽은 키다(더 그럴듯).** 22/22 가 전부 preview 씬이고, preview 트리는 §1.1 에서 이미
+  **본체보다 오래된 스냅샷**임이 확인됐다. 그리고 단순 정규화(소문자화 + 공백 제거)로는
+  `"Accumulation rate"` → `accumulationrate` 가 되는데 `motionblur_accumulation.frag` 의
+  `material` 키는 **`rate`** 다 — **어떤 단순 규칙으로도 안 맞는 반례가 있다.**
+  H1 이면 WE 도 기본값으로 돌고 Waple 과 **갈리지 않는다.**
+* **H2 — WE 가 라벨로도 푼다.** 그러면 그 88건이 WE 에서는 살고 Waple 에서는 죽는다
+  (Waple 은 `MaterialParam.sceneKey` = 어노테이션 `material` 키로만 찾는다 —
+  `GLSLTranslator.swift` 의 `materials.append(MaterialParam(glslName:type:sceneKey:defaultValue:))`
+  와 `SceneRendererResources.swift` 의 `scriptWrites[p.sceneKey] ?? constants[p.sceneKey] ?? p.defaultValue`).
+
+**왜 이 문서에 적나**: 이 갭이 §1.6.1 의 규칙과 같은 경로(이펙트 패스 상수)에 있고, 그 규칙을
+검증하다 나왔기 때문이다. **판정과 착지는 이 문서 밖이다** — 씬 파서는
+`Sources/WapleCore/SceneDocument.swift` 의 머리말이 인용하는 WE 파서
+`0x140154480`–`0x140155668` 소관이다. §9-9 에 [미해결]로 올리고 넘긴다.
+
+**도달**: 88건/트리 · 22 씬/트리이지만 **전부 에디터의 이펙트 미리보기 썸네일 씬**이다.
+출하 배경화면(`projects/defaultprojects/**`) 도달은 **0건**이다.
 
 #### 1.6.2 코퍼스 도달 — **이펙트 자신의 preview 뿐이다**
 
@@ -1090,6 +1137,49 @@ float64 가 약속하는 만큼은 안 쌓인다.** 즉 `r16f` 가 그 슬라이
 `FluidSimulationPrecision.swift`(binary16·unorm8) ·
 `Tests/WapleCoreTests/FluidSimulationPrecisionTests.swift`(작은 격자로 같은 부호를 회귀로 잠근다).
 
+### 2.13(f) 아직 안 잰 축 — **`rg16f` 속도 감쇠** — **[신규 확정 2026-08-21 · 4차]**
+
+§2.13(e)의 제목은 "`r16f`/`rg16f` 반올림" 인데 **본문이 실제로 잰 것은 압력(`r16f`)과
+염료(`unorm8`) 둘뿐**이다. 속도장(`rg1616f` = `rg16f`)의 **감쇠** 축은 안 봤다. 여기서 잰다.
+
+속도 패스의 감쇠는 §2.8 의 한 줄이다 — `v ← v / (1 + ν·m·dt)`, `ν = u_Viscosity`
+(`viscosityfactor`), `m = m_Dissipation = 0.2`(머티리얼 상수). 상대 감소분이 `≈ ν·m·dt` 이고,
+binary16 은 상대 반 ulp 미만의 증분을 저장에서 통째로 버린다(§2.13(e-2)의 기구와 같다).
+그러므로 **`ν` 가 작으면 속도장이 감쇠를 아예 멈춘다** — 흐름이 영원히 그대로 흐른다.
+
+60 fps · `m = 0.2` 에서 (`FluidSimulationPrecision.binary16VelocityDecayFixedPoint`, 시작 300 텍셀/초):
+
+| `viscosityfactor` | 결과 | 프레임 |
+|---:|---|---:|
+| 2.29 (preview) | 최소 준정규(2⁻²⁴)까지 = **실질 0** | 1,089 |
+| **1.0 (기본)** | 〃 | 2,436 |
+| 0.147 | 〃 | 11,885 |
+| 0.15 · 0.2 | 〃 | 11,885 — **같다.** 이 구간은 상대 감소분이 반 ulp 를 겨우 넘어 매 프레임 **정확히 1 ulp** 만 내려가므로, 프레임 수가 `ν` 가 아니라 시작값과 준정규 사이의 **표현 가능한 값 개수**로 정해진다 |
+| **0.1** | **300.0 에서 즉시 정지** | **0** |
+| 0.0 | 300.0 (정밀도와 무관 — `decay` 가 정확히 1) | 0 |
+
+문턱은 **하나의 값이 아니라 띠**다. 상대 반 ulp 가 가수 위치에 따라 `2⁻¹²`…`2⁻¹¹` 을 오가므로
+60 fps 에서 `ν < 0.0732` 는 (binade 안쪽에서) 항상 멈추고 `ν > 0.1465` 는 항상 내려간다.
+`dt` 상한(1/20) 때문에 20 fps 이하에서는 띠가 `0.0244`…`0.0488` 로 내려간다.
+
+**그리고 그 띠는 판정기가 아니다** — 두 가지가 어긋나게 만든다:
+
+* **binade 경계 바로 아래에서는 표현 간격이 반으로 줄어** 한 걸음 더 간다. 같은 `ν = 0.1` ·
+  60 fps 에서 `300.0` 은 즉시 멈추지만 `256.0` 은 **548 프레임** 내려가 `187.5` 에서 멈추고,
+  `511.0` 은 `375.0` 에서 멈춘다.
+* `187.5` 가 멈추는 이유는 감소분이 **정확히 반 ulp** 라 RTNE 가 짝수(= 제자리)로 접기 때문이다.
+
+`lowPass`(§2.8)는 이 정체를 못 구한다 — `‖v‖ ≤ u_Lifetime` 에서만 붙는데 그 대역에 들어오면
+프레임당 33 % 로 급감해 애초에 고정점이 안 생긴다. 즉 **0 아닌 고정점은 항상 `u_Lifetime` 위**다.
+
+**도달**: 출하 두 씬(본체·설치본 preview)은 `viscosityfactor` 를 preview 값 **2.29** 로 저작하고
+셰이더 기본은 **1.0** 이라 **둘 다 띠보다 한 자릿수 위**다 — **출하 도달 0**. 슬라이더 범위가
+`[0, 20]` 이므로 **워크샵 저작으로만** 도달한다. 이식 규율은 §4.3 과 같다: `.rg16Float` 를
+그대로 쓰는 한 Waple 에도 같은 정체가 자동으로 생긴다. **정밀도를 올려 주면 갈린다.**
+
+값 잠금: `Tests/WapleCoreTests/FluidSimulationPrecisionTests.swift` 의
+`testVelocityDecayReachesZeroAtTheShippedViscosity` 외 넷.
+
 ---
 
 ## 3. 핑퐁 규약
@@ -1122,7 +1212,7 @@ swap 두 번이 그것을 `V1`/`D1` 로 옮겨 **다음 프레임의 패스 0 �
 프레임 경계에서 이미 정합이다.
 
 `swap` 은 **포인터 교환**이지 복사가 아니다(`0x1401e7170` 이 명령 패스를 정식 패스로 push 하고,
-Waple 은 `makeSwapPass` → `fboTex.swapAt`, `SceneRendererResources.swift:899-916`).
+Waple 은 `makeSwapPass` → `fboTex.swapAt`, `SceneRendererResources.makeSwapPass(_:effName:fboIndex:device:)`).
 
 ### 3.2 `unique` 가 이 이펙트에서 뜻하는 것
 
@@ -1132,11 +1222,17 @@ Waple 은 `makeSwapPass` → `fboTex.swapAt`, `SceneRendererResources.swift:899-
 | 종류 | 풀 키 | 근거 |
 |---|---|---|
 | `unique` | `<이름>_<이펙트 인스턴스 id>` — **치수 접미사 없음** | `0x1401eb381`(bit0 분기) → `0x1401eb3b5`(`"_"`) + `0x1401eb3d7`(`[[rbp-0x18]+8]` = 인스턴스 id) |
-| 공유 | `<이름>_<W>_<H>_<scale>` | `0x1401eb4fa` 분기 → `0x1401eb552`(W) · `0x1401eb6eb`(H) · `0x1401eb737`(scale) |
+| 공유 | `<이름>_<W>_<H>_<scale>` | `0x1401eb4fa` 분기 → `0x1401eb552`(W) · `0x1401eb6eb`(H) · ~~`0x1401eb737`(scale)~~ → **`0x1401eb87f`** [VA-정정] |
+
+> **[정정 2026-08-21 · 4차]** 위 표의 scale 성분 주소가 틀렸었다. 실제 자리는
+> `0x1401eb87f` 의 `movzx edx, byte ptr [rcx + 0xc]`(레코드 `+0x0c` = scale, §1.2) → `0x1401eb886`
+> 정수→문자열 → `0x1401eb896` 이어붙이기다. 종전에 적힌 `0x1401eb737` 은
+> `movzx ebx, byte ptr [rbp + 0x90]` 로 **키 조립과 무관한 명령**이다 — 경계는 맞아서
+> `va_citations.py` 가 못 잡았다(함정 #27: 주소가 맞아도 라벨은 틀릴 수 있다).
 
 즉 **`unique` RT 는 창 리사이즈로 키가 바뀌지 않는다** — `fit:` 절대 크기 버퍼가 dst 변화에
 휘둘리지 않게 하는 장치다. Waple 도 같은 결론에 도달해 있다
-(`SceneRendererFrameEncoder.swift:2013-2027` 의 "인덱스별 (폭,높이,포맷) 대조" 주석).
+(`SceneRendererFrameEncoder.swift` 의 `X-⑧` 블록에 있는 "인덱스별 (폭, 높이, 포맷) 대조" 주석).
 
 **`unique` 없이는 이 이펙트가 원리적으로 못 돈다.** 프레임 로컬 풀이면 (a) swap 이 매 프레임
 리셋되고 (b) 체크아웃 순서가 바뀌면 같은 이름이 다른 텍스처를 받는다 — 시뮬 상태가 프레임 간에
@@ -1182,9 +1278,13 @@ Waple 은 `makeSwapPass` → `fboTex.swapAt`, `SceneRendererResources.swift:899-
 **슬롯 23 = `+0xB8`** 이고, `call [reg+0xB8]` 사이트 24곳을 전수로 훑었지만 전부 다른 클래스의
 vtable(`[[ctx+0xc8]+0x158]` 매니저 등)이라 이 클래스의 호출부를 특정하지 못했다.
 
+> **[정정 2026-08-21 · 4차 → §3.3a]** 위 두 문장 중 뒤엣것은 **틀렸다.** 그 24곳 중 **4곳**이
+> 바로 이 함수를 부른다(파생 클래스의 슬롯 34 안, 수신자는 `this` 자신). 그리고 이 클래스는
+> "이펙트 클래스" 가 아니라 **이펙트를 소유한 객체**다. 전문은 §3.3a.
+
 함수적 배제는 그대로 유효하다: `clear` 를 가진 6장이 전부 속도/압력/염료이고 매 프레임 0 이면
 이 이펙트가 어떤 그림도 못 만든다. 그러므로 "생성/리사이즈 시 1회" 로 취급하는 Waple 의 현행 규약
-(`SceneRendererFrameEncoder.swift:2069-2075`)은 관측과 모순되지 않는다.
+(`SceneRendererFrameEncoder.swift` 의 `uniqueStore.pendingClear` 블록)은 관측과 모순되지 않는다.
 
 > **다만 갈라지는 구간이 하나 있다.** WE 는 이 루틴이 불리면 **크기가 그대로여도** 비운다.
 > Waple 은 보유 텍스처의 `(폭, 높이, 포맷)` 이 어긋날 때만 재생성하고 그때만 `pendingClear` 에
@@ -1194,6 +1294,143 @@ vtable(`[[ctx+0xc8]+0x158]` 매니저 등)이라 이 클래스의 호출부를 �
 > 256×144** 라 치수가 안 바뀌므로, 창을 그 사이로 리사이즈하면 **WE 는 (호출된다면) 비우고
 > Waple 은 유지한다**. 그림 차이는 "리사이즈 순간 흐름이 리셋되는가" 한 프레임짜리이고,
 > 도달 자산이 0건이라 지금 고칠 것은 아니다 — 위 호출 빈도가 확정되면 그때 판정할 자리다.
+
+### 3.3a `acquireRenderTargets` 의 도달 경로 — **[신규 확정 2026-08-21 · 4차]**
+
+§3.3 과 §9-1 은 "기구는 다 열렸고 **호출 빈도** 하나가 남았다" 로 끝났다. 이번에 그 하나를
+x86 으로 파서 **도달 경로를 전부 열거했다.** 결론부터: **매 프레임 경로는 존재하지 않는다.**
+
+#### (1) 이 함수는 `Effect` 의 메서드가 아니다 — 종전 이름이 틀렸다
+
+> **[정정 2026-08-21 → §3.3a]** 이 문서(§3.3 · §9-1 · 부록 A ⑥c)와
+> `docs/dev/re-methodology.md` 함정 #27 이 경고한 그대로다 — **VA 는 맞고 라벨이 틀렸다.**
+> 종전 문면 `Effect::acquireRenderTargets` 는 그대로 남기되, 실제 소유 클래스는 아래다.
+
+`0x1401ea500` 의 본체가 직접 말한다. 함수 후반의 이중 루프(선형 디스어셈, 함수 시작
+`0x1401ea500` 에서 내려온 것):
+
+```
+0x1401eb1ed  mov rcx, [rbx + 0x308]     ; this->effects.begin
+0x1401eb1f4  mov rax, [rbx + 0x310]     ; this->effects.end
+0x1401eb207  je  0x1401ebb4f            ; 비어 있으면 통째로 건너뛴다
+0x1401eb252  mov rax, [rcx]             ; effect = *it
+0x1401eb259  mov r10, [rax + 0xe8]      ; effect->fbos.begin   ← executeMaterialFunction 이 쓰는 그 필드
+0x1401eb260  mov rax, [rax + 0xf0]      ; effect->fbos.end
+0x1401eb2cc  movzx r9d, word [r10+0x0e] ; 레코드 +0x0e = width   (§1.2 표와 일치)
+0x1401eb2d7  movzx eax, word [r10+0x10] ; 레코드 +0x10 = height
+0x1401eba2c  test byte [rcx + 0x48], 2  ; 레코드 +0x48 bit1 = clear
+0x1401ebb1e  add r10, 0x50              ; FBO 레코드 stride 0x50 — 안쪽 루프
+0x1401ebb35  add rcx, 8                 ; 이펙트 포인터 stride 8 — 바깥 루프
+```
+
+즉 `this` 는 **이펙트를 소유한 객체**(레이어/렌더 객체)이고, 이 함수는
+"이 객체의 핑퐁 렌더타깃(`this+0x2c8`/`+0x2d0`) + **이 객체에 달린 모든 이펙트의 모든 FBO**"
+를 한 번에 (재)획득한다. `clear` 비트가 선 FBO 는 **호출 한 번당 한 번씩** 비워진다.
+
+같은 클래스의 **슬롯 8**(`0x1401e6f50`)이 `"effects"` 이름을 싣고(`0x1401e7004` 의 `lea rdx`)
+`Json::Value::find`(`0x1401e700b` 의 `call`)로 그 배열을 파스해 `+0x308..+0x310` 를 다시 채운다는
+것이 방증이다 — `"effects"` 는 **씬의 오브젝트**가 갖는 키이고 `effect.json` 에는 없다
+(설치본 전수: `effect.json` 135개 중 `"effects"` 를 담은 것 **0건**, `scene.json` 중 담은 것 55건).
+**이펙트가 이펙트 목록을 들고 있을 수는 없다.**
+
+`+0x198`/`+0x1a0` 도 같은 객체의 또 다른 벡터이고(`0x1401ea673`–`0x1401ea681` 이 비었는지 본다)
+아래 (4)의 슬롯 19/20 썽크가 그 길이를 게이트로 쓴다. **그 벡터의 정체는 확정 못 했다.**
+
+#### (2) 상수 적재 census — 4개 vtable, 어느 클래스도 재정의하지 않는다
+
+이미지 전체를 바이트로 훑어 값 `0x1401ea500` 이 박힌 자리를 세면 **정확히 4곳**이고 전부
+`.rdata` 의 vtable 슬롯이다(함정 #4 — 호출 사이트가 아니라 적재 자리를 센다):
+
+| 슬롯 주소 | vtable 베이스 | 슬롯 | 슬롯 22(`+0xB0`) | 슬롯 34(`+0x110`) | 생성자(`lea` 로 싣는 자리) |
+|---|---|---:|---|---|---|
+| `0x140490540` | `0x140490488` | 23 | `0x1401ea310` | **`0x14000ec30`(= `ret`, 스텁)** | `0x1401e698e` · `0x1401e6b52` |
+| `0x140491260` | `0x1404911a8` | 23 | `0x1402066a0`(재정의) | `0x1402065e0` | `0x1401fac7c` · `0x1401fb4e6` |
+| `0x140491a08` | `0x140491950` | 23 | `0x1401ea310` | `0x140258900` | `0x140256af7` · `0x140256d2a` |
+| `0x140491dc8` | `0x140491d10` | 23 | `0x1401ea310` | `0x140260190` | `0x1401907b4` · `0x14025fa4a` |
+
+네 vtable 은 전부 슬롯 0…37(`+0x000`…`+0x128`)까지이고 `+0x130` 부터는 인접 문자열 풀이다
+(`0x140490488+0x130` 은 `"copy"` 다). 즉 **공통 베이스가 38개 가상 슬롯을 정의하고 네 클래스가
+슬롯 23 을 하나도 재정의하지 않는다.**
+
+#### (3) 유일한 진입은 **슬롯 34(`+0x110`)** 이고, 순서는 `22 → 23 → 24` 다
+
+`call [reg+0xB8]` 을 **두 가지 방법으로** 셌고 둘 다 **24곳**이다 —
+(a) `.pdata` 함수 시작에서 선형 디스어셈(함정 #15), (b) `.text` 바이트 스캔으로
+`FF /2 mod=10 disp32=0xB8`(SIB 형식 `rm=4` 포함) 전수. **`jmp [reg+0xB8]` 은 0건**이다.
+
+> **[정정 2026-08-21 → §3.3a(3)]** §9-1 의 3차 기재 *"24곳이 아니라 25곳이다 — 종전 스캔이
+> SIB 형식을 한 자리 놓쳤다"* 는 **틀렸다.** 두 독립 스캔 모두 24 를 주고 SIB 형식은 **0건**이다.
+> 종전 문면은 위 툼스톤으로 남긴다.
+
+그 24곳 중 **4곳이 바로 이 함수를 부른다** — 세 파생 클래스의 슬롯 34 안이다:
+
+| 호출부 | 들어 있는 함수 | 그 함수의 정체 | 수신자 |
+|---|---|---|---|
+| `0x140206680` | `0x1402065e0` | vtable `0x1404911a8` 의 **슬롯 34** | `mov rax,[rbx]` / `mov rcx,rbx` — **자기 자신** |
+| `0x140209504` | `0x140209360` | 위 함수만 부르는 헬퍼(`0x14020661d`) | 〃 |
+| `0x140258a02` | `0x140258900` | vtable `0x140491950` 의 **슬롯 34** | 〃 |
+| `0x1402601fa` | `0x140260190` | vtable `0x140491d10` 의 **슬롯 34** | 〃 |
+
+> **[정정 2026-08-21 → §3.3a(3)]** §9-1 의 3차 기재 *"25곳 전건이 수신자를
+> `[[ctx+0xc8]+0x158]` 꼴 매니저에서 뽑는다"* 도 **틀렸다.** 그 관용구는 `0x1401f4de1` ·
+> `0x1401f69ef` 계열에 해당하고(그쪽은 실제로 다른 클래스다), 위 4곳은 `this` 자신이다.
+> 종전 문면은 이 툼스톤으로 남긴다.
+
+네 곳 모두 **직전에 슬롯 22(`+0xB0`)를 부르고 직후에 슬롯 24(`+0xC0`)로 간다**. 예:
+
+```
+0x140206673  call qword ptr [r8 + 0xb0]     ; slot22(w, h, 1.0f, 1.0f, …)  — 크기 반영
+0x14020667a  mov  rax, [rbx]
+0x140206680  call qword ptr [rax + 0xb8]    ; slot23 = 0x1401ea500  ← 여기서 clear 가 돈다
+0x140206691  jmp  qword ptr [rax + 0xc0]    ; slot24
+```
+
+**베이스 클래스(`0x140490488`)의 슬롯 34 는 `0x14000ec30` = `ret` 스텁**이다. 즉 그 클래스의
+객체는 이 경로로 렌더타깃을 절대 획득하지 않는다.
+
+#### (4) 슬롯 34 를 부르는 자리는 **전부 에지 게이트**다
+
+슬롯 34 호출부는 **바이트 스캔으로 26곳**이다(`call` 21 · `jmp` 5). `.pdata` 함수 시작에서
+내려오는 선형 디스어셈은 **23곳**만 준다 — 놓친 셋(`0x1401ee097` · `0x1401ee0b3` · `0x1401fa293`)이
+전부 **`.pdata` 항목이 없는 2~4명령짜리 리프 썽크**이기 때문이다(`frag_of()` 가 `None` 을 준다).
+**바이트 스캔이 아니었으면 아래 표의 마지막 세 줄을 통째로 놓쳤다** — `docs/dev/re-methodology.md` 함정 #4 의
+"호출 사이트가 아니라 적재 자리를 세라" 와 같은 부류의 함정이다.
+
+인자 수(1개 = `this` 만)와 수신자 모양으로 이 클래스 family 를 겨냥한 것을 고르면 일곱이고,
+**하나도 무조건 호출이 아니다**:
+
+| 호출부 | 언제 | 게이트 |
+|---|---|---|
+| `0x1401e7165`(`jmp`) | `"effects"` 배열 파스 끝 | 없음 — 그러나 **씬 로드/이펙트 목록 재구성 때만** 도는 함수다(`0x1401e6f50`). 꼬리에서 `mov byte [rsi+0x328], 0`(`0x1401e7147`)로 "적재 중" 플래그를 내리고 바로 `jmp` 한다 |
+| `0x1401e639b`(`jmp`) | 이펙트 체인 **모양**이 바뀌었을 때 | `0x1401e6300` 이 활성 이펙트를 훑어 `Σ(passCount+1)` 과 `Σ(0x30-stride 원소 수)` 를 세고, `[host+0x320]`/`[host+0x324]` 의 캐시와 **다를 때만** 저장 후 `jmp`(`0x1401e6371`–`0x1401e639b`) |
+| `0x1401d3c38` | `+0x304` 플래그에 `0x1010` 을 세울 때 | `test cl, 0x10; jne skip` — **비트 4 가 이미 서 있으면 안 부른다**(0→1 전이에서만) |
+| `0x1401881d1` | 〃 | 〃 — 인코딩만 다르다(`0x1401881bd` `shr edx,4` → `0x1401881c6` `test dl,1` → `0x1401881c9` `jne`) |
+| `0x1402575db` | `[rbx+0x5a8]` 자원을 새로 만든 직후 | 생성 1회 |
+| `0x1401ee097`(`jmp`) | **슬롯 19**(`0x1401ee080`, 네 vtable 전건 공용) | `rax = [this+0x1a0] − [this+0x198]; cmp rax, 8; jne ret` — 그 벡터의 원소가 **정확히 하나일 때만**(8바이트 = 포인터 1개) |
+| `0x1401ee0b3`(`jmp`) | **슬롯 20**(`0x1401ee0a0`, 〃) | `cmp [this+0x198], [this+0x1a0]; jne ret` — 그 벡터가 **비어 있지 않을 때만** |
+| `0x1401fa293`(`jmp`) | 2명령짜리 전달 썽크(`0x1401fa290`) | 게이트가 **호출부에 있다** — 이미지 안 유일한 참조는 `0x140211196` 의 `lea rax, [rip-0x16f0d]` → `mov [rbx+0x58], rax` 로, 콜백 슬롯에 **함수 포인터로 심는** 자리다(짝 슬롯 `+0x50` 은 `0x140212610`). 즉 **프로퍼티 변경 통지**형 콜백이다 |
+
+그리고 `0x1402065e0` 자신이 맨 앞에서 `cmp byte [rcx+0x328], 0; jne ret`(`0x1402065e6`–`0x1402065f0`)
+로 **"아직 적재 중이면 아무 것도 안 한다"** 를 건다 — 위 `0x1401e7147` 이 플래그를 내리는 이유가
+정확히 이것이다. 파스 도중에는 슬롯 34 가 몇 번 불려도 no-op 이고, 파스가 끝나는 그 한 번만 산다.
+
+#### (5) 그래서 무엇이 확정됐고 무엇이 안 됐나
+
+* **확정** — `0x1401ea500` 은 **가상 디스패치 슬롯 23 으로만** 도달하고, 그 슬롯을 부르는 자리는
+  **세 파생 클래스의 슬롯 34 안 4곳뿐**이며, 슬롯 34 를 이 family 로 부르는 자리는 전부
+  **에지 게이트**다(위 일곱). **매 프레임 호출 경로는 없다.**
+* **확정** — 그러므로 §3.3 의 "이 루틴이 불릴 때마다 크기가 안 변해도 클리어가 돈다" 는
+  "**이펙트 체인이 (재)구성되거나 더티 비트가 0→1 로 뒤집힐 때 1회**" 로 읽어야 한다.
+  Waple 의 현행 규약(생성/리사이즈 시 1회, `SceneRendererFrameEncoder.swift` 의 `X-⑧` 블록 안
+  `uniqueStore.pendingClear`)과 **관측이 모순되지 않는다 — 정정 0건.**
+* **[미해결]** — 슬롯 34 호출부 26곳 중 이 family 를 겨냥한 것이 **정확히** 일곱인지는 못 닫았다.
+  인자 수와 수신자 모양으로 일곱까지 좁혔고 나머지는 인자가 더 많거나(`0x140123277` 은 `r8` 에
+  포인터를 하나 더 싣는다) 수신자가 다른 필드에서 온다(`0x14017eaf3` 은 `[this+0x1528]`,
+  `0x1402f38a8` 은 `[rcx+0x2d0]` + `edx`). **전수 배제는 각 수신자의 클래스를 확정해야 하는데,
+  이 바이너리는 vtable[-1] 에 RTTI 로케이터가 없어**(§9-1 3차 기재) 그 확정이 비싸다.
+* **[미해결]** — 창 리사이즈가 **위 일곱 중 어디로 들어오는지**(즉 `fit:256` 버퍼가 치수 불변인
+  리사이즈에서 비워지는지)는 여전히 못 짚었다. §3.3 말미의 "갈라지는 구간" 은 그대로 열려 있다.
+  다만 도달 자산이 0건이라 우선순위는 최하위다(§9.0).
 
 ---
 
@@ -1311,6 +1548,49 @@ clear(name)  ⟹  for i in 0 .. n−1:  clearColorOnly( fbos[i], fbos[i].clear )
 > (`testStaticDyeFreezesPartWayDownInAnLDRBuffer` 외 셋).
 
 
+#### 4.3a 이 정체 기구는 **이 이펙트 전용이 아니다** — **[신규 2026-08-21 · 4차]**
+
+§4.3 의 정정은 "`unorm8` 피드백 버퍼는 프레임당 감소가 반 레벨 미만이 되는 순간 얼어붙는다"
+라는 **일반 기구**이고, 그것을 만족하는 자산이 코퍼스에 하나 더 있다. 전수로 재면:
+
+| 축 | 동봉 `WEAssets` | 설치본 | 이펙트(파일) | 마운트 씬 |
+|---|---:|---:|---|---:|
+| `unique` FBO 선언 | 19 | 19 | `fluidsimulation`(본체·preview) · `motionblur`(본체·preview·`clouds/preview` 사본) = **5파일 / 2종** | fluid 1 + motionblur 2 = **3 씬/트리**(양 트리 동일) |
+| `rgba_backbuffer` FBO 선언 | 13 | 13 | `blur` · `blurprecise` · `fluidsimulation`(×2) · `godrays` · `motionblur` · `shine` = **7파일 / 6종** | 동봉 **7** · 설치본 **8**(한 씬이 둘을 겹쳐 쓰는 자리가 있어 이펙트별 합 8·9 보다 작다) |
+| `unique` **∧** `rgba_backbuffer` | **5** | **5** | `fluidsimulation` 염료 2장 ×(본체·preview) + **`motionblur` 본체의 `_rt_FullCompoBuffer1`** | fluid 1 + motionblur 1 |
+| `unique` **∧** `rgba8888`(고정) | 2 | 2 | `motionblur` 의 **preview 사본 둘**(`motionblur/preview` · `clouds/preview`)이 `rgba_backbuffer` 가 아니라 `rgba8888` 을 못박았다 | 2 |
+
+**`motionblur` 가 두 번째 사례다.** `_rt_FullCompoBuffer1` 은 `scale:1` · `rgba_backbuffer` ·
+`unique` 이고, 누적 셰이더가 `gl_FragColor = mix(pastAlbedo, albedo, rate)` 한 줄이라
+(`shaders/effects/motionblur_accumulation.frag`) 프레임 간 자기 피드백이다. `rate` 는
+`{"material":"rate", …, "default":0.8, "range":[0.01, 1]}`.
+
+비 HDR 씬(= 설치본 184 중 181)에서 그 버퍼는 `rgba8888` 이므로, 목표값 `albedo` 와의 차가
+`rate·|past − albedo| < 0.5 레벨` 이 되는 순간 저장이 그대로 굳는다. **즉 누적 버퍼는 목표에
+`⌈0.5/rate⌉ 레벨보다 가까이 못 간다:**
+
+| `rate` | `0.5/rate` (레벨) | 화면 밝기로 | 어디서 나오나 |
+|---:|---:|---:|---|
+| 0.8 (셰이더 기본) | 0.63 | — (정확히 수렴) | 저작 안 한 씬 |
+| **0.21** | **2.4** | 0.9 % | `effects/motionblur/preview/scene.json` |
+| **0.06** | **8.3** | 3.3 % | `effects/clouds/preview/scene.json` |
+| 0.01 (슬라이더 하한) | 50 | 19.6 % | 워크샵 저작으로만 |
+
+**도달은 이 이펙트보다 크다** — `motionblur` 는 355 씬 중 **4 씬**(트리당 2)이 마운트하고
+`fluidsimulation` 은 **2 씬**(트리당 1)이다.
+
+> **주의 — 위 표의 0.21 · 0.06 은 조건부다.** 두 씬이 그 값을 실은 키는 `material` 키 `rate` 가
+> 아니라 **영문 라벨 `"Accumulation rate"`** 이고, WE 가 라벨 키를 푸는지는 **[미해결]**이다
+> (§1.6.1b). 라벨 키가 죽은 키라면(그쪽이 더 그럴듯하다) 두 씬은 셰이더 기본 `rate = 0.8` 로
+> 돌고 정체 간격은 0.63 레벨 = **눈에 안 보인다**. 즉 이 표는 "`rate` 가 실제로 그 값이라면"
+> 이라는 가정 위에 있다. **기구 자체**(정체 간격 = `⌈0.5/rate⌉ 레벨)는 `rate` 값과 무관하게 참이다.
+
+> **범위 밖 — 넘긴다.** `motionblur` 는 이 문서의 대상이 아니다. 여기 적는 이유는 §4.3 의 기구가
+> **이 이펙트에 특수한 것이 아님**을 못 박아 두기 위해서다. 이식자에게 주는 규칙은 하나다:
+> **`unique` 이면서 8비트로 착지하는 FBO 를 "정밀도를 올려" `.rgba16Float` 로 바꾸면 원본과
+> 갈린다.** 그 조합은 코퍼스에 트리당 **7개**다 — `rgba_backbuffer` 갈래 5개(비 HDR 씬에서 8비트)와
+> `rgba8888` 로 못박은 `motionblur` preview 사본 2개. 뒤엣것은 **HDR 씬에서도** 8비트다.
+
 ### 4.4 누가 부르는가 — 확정
 
 **죽은 코드가 아니다. 에디터 UI 전용도 아니다. 씬 스크립트(워크샵) 전용이다.**
@@ -1356,7 +1636,7 @@ WE 자신은 한 번도 쓰지 않는다. 그래서 이 결함이 지금까지 �
    `fbos.begin + 80·i` 를 **경계 검사 없이** 읽어 vtable 호출까지 간다(`0x1401ee451` →
    `0x1401ee468`). 워크샵 `effect.json` 은 신뢰 경계 밖이므로 실물에서는 **크래시 벡터**다.
    Waple 은 파스된 실인덱스를 쓰고 `materialFunctionClearTargets(_:table:fboCount:)`
-   (`SceneRendererResources.swift:154-163`)가 `0..<fboCount` 로 한 번 더 자르므로 면역이다.
+   (`SceneRendererResources.materialFunctionClearTargets(_:table:fboCount:)`)가 `0..<fboCount` 로 한 번 더 자르므로 면역이다.
 
 > **~~[미해결] 파서 쪽 잠재 결함 하나.~~ → [해결 2026-08-21] 결함이 아니다 — 기재를 철회한다.**
 >
@@ -1385,7 +1665,7 @@ WE 자신은 한 번도 쓰지 않는다. 그래서 이 결함이 지금까지 �
 ### 4.6 Waple 의 현재 선택
 
 Waple 은 **결함을 재현하지 않는다** — 파스된 실인덱스를 쓴다. 그 결정과 근거가
-`SceneRendererFrameEncoder.swift:2114-2122` 에 `[미해결]` 로 명시돼 있다.
+`SceneRendererFrameEncoder.swift` 의 `materialFunctionClearTargets` 호출 **직전 주석**에 `[미해결]` 로 명시돼 있다.
 
 이 문서의 판단: **재현하지 않는 쪽이 맞다.** 이유 셋 —
 ① 출하 콘텐츠 도달 0 이라 "충실 재현" 이 지킬 그림이 없다.
@@ -1548,28 +1828,28 @@ float amt = smoothstep(size, 0.0, length(delta));      // edge0 > edge1 → 중�
 
 | # | 축 | 실물 | Waple | 판정 | 착지 |
 |---:|---|---|---|---|---|
-| 1 | 트레일링 콤마 JSON | 관대 파스 | `parse` 가 엄격 실패 시 `AssetJSON.relaxed` 재시도 | **지원** | `EffectManifest.swift:345-350` |
-| 2 | `fbos[].format` 19종 | 해시맵 + 백버퍼 치환 | 동일 enum + `metalFormat` | **지원** — `rg1616f→.rg16Float`, `r16f→.r16Float`, `rgba_backbuffer→HDR? .rgba16Float : .rgba8Unorm` | `SceneRendererResources.swift:1621-1637` |
-| 3 | `fbos[].unique` | 인스턴스별 지속 RT | `UniqueFBOStore`(인스턴스 1개) + 1 GiB 예산 | **지원** | `SceneRendererResources.swift:92-108` · `FrameEncoder.swift:2013-2075` |
-| 4 | `fbos[].clear` | 스페이스 4성분, 생성 시 | 동일(빈 문자열=0, 3성분 거부) | **지원** | `EffectManifest.swift:530-545` |
-| 5 | **`fbos[].fit`** | **긴 변 N, 종횡비 보존** | **N×N 정사각** | **✘ 불일치** | `EffectManifest.swift:399-402` |
-| 6 | `fbos[].scale` | dst/scale | 동일 | 지원 | `FrameEncoder.swift:2030-2031` |
-| 7 | `command:"swap"` | 포인터 교환 | `fboTex.swapAt` | **지원** | `SceneRendererResources.swift:899-916` |
-| 8 | 씬 pass 인덱스 = 원본 배열 인덱스 | 명령 패스도 슬롯 소비 | `enumerated()` 로 동일 | **지원**(preview 18/18 검증, §1.4) | `SceneRendererResources.swift:734-757` |
-| 9 | `conditions`(fbo/pass/bind) | 좌변 = `effects[].combos` | 동일, `comboValue` 로 태그 1/2/3 만 | **지원** | `EffectManifest.swift:466-505` · `SceneDocument.swift:3052-3062` |
-| 10 | `functions` 파스 | action `clear` 만, 이름→인덱스 | 동일 | **지원** | `EffectManifest.swift:427-455` |
-| 11 | `functions` 소비 | **개수만 쓰는 결함** | 실인덱스 사용 | **의도적 이탈**(§4.6) | `FrameEncoder.swift:2114-2127` |
-| 12 | `executeMaterialFunction` 스크립트 API | 네이티브 즉시 클리어 | JS 적재 → 드레인 → pendingClear | **지원** | `TextScriptEngine.swift:2509-2531` |
+| 1 | 트레일링 콤마 JSON | 관대 파스 | `parse` 가 엄격 실패 시 `AssetJSON.relaxed` 재시도 | **지원** | `EffectManifest.parse(_:)` |
+| 2 | `fbos[].format` 19종 | 해시맵 + 백버퍼 치환 | 동일 enum + `metalFormat` | **지원** — `rg1616f→.rg16Float`, `r16f→.r16Float`, `rgba_backbuffer→HDR? .rgba16Float : .rgba8Unorm` | `SceneRenderer.metalFormat(_:hdr:)` |
+| 3 | `fbos[].unique` | 인스턴스별 지속 RT | `UniqueFBOStore`(인스턴스 1개) + 1 GiB 예산 | **지원** | `SceneRendererResources` 의 `UniqueFBOStore` · `SceneRendererFrameEncoder.swift` 의 `X-⑧` 블록 |
+| 4 | `fbos[].clear` | 스페이스 4성분, 생성 시 | 동일(빈 문자열=0, 3성분 거부) | **지원** | `EffectManifest.parseClearColor(_:)` |
+| 5 | **`fbos[].fit`** | **긴 변 N, 종횡비 보존** | ~~**N×N 정사각**~~ → `fittedBox` 로 푼다 | ~~**✘ 불일치**~~ → **[해결 2026-08-21] §6.2 W1**(이 표 행이 §6.2 와 갈린 채 남아 있었다 — 함정 #24) | `EffectManifest.FBO.fittedBox(baseWidth:baseHeight:)` |
+| 6 | `fbos[].scale` | dst/scale | 동일 | 지원 | `SceneRendererFrameEncoder.swift` 의 `spec.fittedBox(baseWidth:baseHeight:)` 호출 |
+| 7 | `command:"swap"` | 포인터 교환 | `fboTex.swapAt` | **지원** | `SceneRendererResources.makeSwapPass(_:effName:fboIndex:device:)` |
+| 8 | 씬 pass 인덱스 = 원본 배열 인덱스 | 명령 패스도 슬롯 소비 | `enumerated()` 로 동일 | **지원**(preview 18/18 검증, §1.4) | `SceneRendererResources` 의 패스 `enumerated()` 루프 |
+| 9 | `conditions`(fbo/pass/bind) | 좌변 = `effects[].combos` | 동일, `comboValue` 로 태그 1/2/3 만 | **지원** | `EffectManifest.parseConditions(_:)` · `SceneDocument` 의 `EffectManifest.comboValue` 호출 |
+| 10 | `functions` 파스 | action `clear` 만, 이름→인덱스 | 동일 | **지원** | `EffectManifest.parseFunctions(_:fbos:)` |
+| 11 | `functions` 소비 | **개수만 쓰는 결함** | 실인덱스 사용 | **의도적 이탈**(§4.6) | `SceneRendererFrameEncoder.swift` 의 `materialFunctionClearTargets` 호출 블록 |
+| 12 | `executeMaterialFunction` 스크립트 API | 네이티브 즉시 클리어 | JS 적재 → 드레인 → pendingClear | **지원** | `TextScriptEngine` 의 `executeMaterialFunction` 프록시(`__wapleRecordMaterialFunction`) |
 | 13 | `blending:"normal"` = 블렌딩 OFF | BlendEnable FALSE | 이펙트 파이프라인이 블렌드 미설정 | **일치**(우연히 정합) | `docs/re/material-blend.md` B3 |
-| 14 | `#require LightingV1` | LIGHTING≠0 이면 코드 생성·삽입 | **줄만 소비**, 주입 없음 | **부분** — LIGHTING=0 은 정확 일치, LIGHTING≠0 은 MSL 컴파일 실패 → 이펙트 폴백 | `ShaderPreprocessor.swift:274-329` |
-| 15 | `g_Frametime` / `g_Time` | 프레임 델타 / 경과 | `eng.timeAndPad.w` / `.x` | 지원(캡처는 1/30 고정) | `GLSLTranslator.swift:1408` |
-| 16 | `g_PointerPosition{,Last}` · `g_PointerState` | 커서 UV(y-down) · 버튼 힘 | `eng.timeAndPad.yz` · `pointerLastAndPad.xy/.z` | **지원** | `GLSLTranslator.swift:1405-1411` · `SceneRenderer.swift:785-788` |
-| 17 | `g_EffectTextureProjectionMatrixInverse` | 레이어 배치의 역투영 | `float4x4(1.0)` | **부분** — 전화면·무회전이면 정답(§5.1), 회전/부분 레이어는 임펄스가 어긋난다 | `GLSLTranslator.swift:1421` |
-| 18 | `g_TextureNResolution` | `(paddedW,paddedH,imgW,imgH)` | fbo 는 `(w,h,w,h)` | 규약 일치(이 이펙트의 슬롯은 전부 렌더타깃이라 패딩 없음). 종전엔 값이 W1 때문에 틀렸다 — `fit` FBO 슬롯에 `(256,256,…)` 이 실려 `aspect`/`texelSize` 가 어긋났다. **2026-08-21 착지**: `fit` 갈래가 `fittedBox` 로 풀린다(1920×1080 이면 `(256,144,256,144)`) | `SceneRendererResources.swift:1206-1221` |
-| 19 | 샘플러 어노테이션 `"default"`(`util/noise`, `gradient/gradient_fire`) | 자산 로드 | `t.textureDefaults[slot]` 폴백 + 이펙트 로컬 루트 | **지원**, 두 자산 모두 동봉에 존재 | `SceneRendererResources.swift:1226` |
-| 20 | `mul(v,M)` HLSL 순서 | 행벡터 | `(b*a)` | 지원 | `GLSLTranslator.swift:1633-1636` |
-| 21 | `inverse(mat3)`(common_perspective.h, `#if HLSL`) | HLSL 분기 컴파일 | `HLSL=1` 시딩 + `inverse→we_inverse` 리네임. 헤더 정의는 `inverse` 이름 그대로 방출되고 호출부만 `we_inverse` 로 가므로 **중복 정의 없음**(헤더 쪽은 죽은 함수) | 지원 | `ShaderPreprocessor.swift:38` · `GLSLTranslator.swift:1587,1943,2001` |
-| 22 | `ddx`/`ddy`/`frac`/`saturate`/`CAST*`/`texSample2D` | HLSL 방언 | 전건 매핑 | 지원 | `GLSLTranslator.swift:1586-1690` |
+| 14 | `#require LightingV1` | LIGHTING≠0 이면 코드 생성·삽입 | **줄만 소비**, 주입 없음 | **부분** — LIGHTING=0 은 정확 일치, LIGHTING≠0 은 MSL 컴파일 실패 → 이펙트 폴백 | `ShaderPreprocessor` 의 `#require` 분기 |
+| 15 | `g_Frametime` / `g_Time` | 프레임 델타 / 경과 | `eng.timeAndPad.w` / `.x` | 지원(캡처는 1/30 고정) | `GLSLTranslator` 의 `"g_Frametime"` → `eng.timeAndPad.w` 배선 |
+| 16 | `g_PointerPosition{,Last}` · `g_PointerState` | 커서 UV(y-down) · 버튼 힘 | `eng.timeAndPad.yz` · `pointerLastAndPad.xy/.z` | **지원** | `GLSLTranslator` 의 엔진 유니폼 배선(`"g_PointerPosition"` → `eng.timeAndPad.yz` 등) · `SceneRendererFrameEncoder.swift` 의 EngineU 버퍼 조립(`timeAndPad` / `pointerLastAndPad`) |
+| 17 | `g_EffectTextureProjectionMatrixInverse` | 레이어 배치의 역투영 | `float4x4(1.0)` | **부분** — 전화면·무회전이면 정답(§5.1), 회전/부분 레이어는 임펄스가 어긋난다 | `GLSLTranslator.matrixIdentity(_:)` |
+| 18 | `g_TextureNResolution` | `(paddedW,paddedH,imgW,imgH)` | fbo 는 `(w,h,w,h)` | 규약 일치(이 이펙트의 슬롯은 전부 렌더타깃이라 패딩 없음). 종전엔 값이 W1 때문에 틀렸다 — `fit` FBO 슬롯에 `(256,256,…)` 이 실려 `aspect`/`texelSize` 가 어긋났다. **2026-08-21 착지**: `fit` 갈래가 `fittedBox` 로 풀린다(1920×1080 이면 `(256,144,256,144)`) | `SceneRendererResources` 의 `texRes` 조립 |
+| 19 | 샘플러 어노테이션 `"default"`(`util/noise`, `gradient/gradient_fire`) | 자산 로드 | `t.textureDefaults[slot]` 폴백 + 이펙트 로컬 루트 | **지원**, 두 자산 모두 동봉에 존재 | `SceneRendererResources` 의 `t.textureDefaults[slot]` 폴백 |
+| 20 | `mul(v,M)` HLSL 순서 | 행벡터 | `(b*a)` | 지원 | `GLSLTranslator` 의 `rewriteCall(s, "mul")` |
+| 21 | `inverse(mat3)`(common_perspective.h, `#if HLSL`) | HLSL 분기 컴파일 | `HLSL=1` 시딩 + `inverse→we_inverse` 리네임. 헤더 정의는 `inverse` 이름 그대로 방출되고 호출부만 `we_inverse` 로 가므로 **중복 정의 없음**(헤더 쪽은 죽은 함수) | 지원 | `ShaderPreprocessor` 의 `defines["HLSL"] = 1` · `GLSLTranslator` 의 `"inverse": "we_inverse"` 리네임 · `we_inverse` 정의 방출 |
+| 22 | `ddx`/`ddy`/`frac`/`saturate`/`CAST*`/`texSample2D` | HLSL 방언 | 전건 매핑 | 지원 | `GLSLTranslator` 의 HLSL 방언 매핑표 |
 | 23 | 조건문(`if (vL.x < 0.0) {...}`) · 다중 varying(vec2/vec3/vec4×3) | — | 본문 통과 + 타입 어댑터 | 지원 | — |
 | 24 | 압력 9회 = 파이프라인 18개 | — | 패스별 `MTLRenderPipelineState` 18개(같은 셰이더 9개는 같은 MSL 이지만 별개 파이프라인) | 지원, 비용 축 | — |
 | 25 | **샘플러 어드레싱(`fbos[].uvs`)** | 기본 인자 `2`(clamp), `uvs:"repeat"` 만 `0`. 파스 `0x1401e78ca`–`0x1401e7915`, 소비 `0x1401eb976`–`0x1401eb990` | bind 슬롯 기본 `texWrap=1`(clamp) + `uvsRepeat` FBO 소스 슬롯만 `0` | **지원 — 갭 없음**(신규 확정 §2.4a). 이 이펙트는 `uvs` 0건이라 아홉 장 전건 clamp 이고, 그게 §2.4 경계조건의 전제다 | `SceneRendererResources.swift` 마커 `X-①` |
@@ -1583,7 +1863,7 @@ float amt = smoothstep(size, 0.0, length(delta));      // edge0 > edge1 → 중�
 (W1 은 **2026-08-21 착지** — 아래는 무엇이 왜 틀렸었는지의 기록 + 회귀 표면 실측이다.)
 
 **W1 (P0) `fit` 종횡비 — 조용히 틀린 그림. [해결 2026-08-21]**
-종전 `EffectManifest.swift:399-402` 이 `fixedW = clampedFixed(f["fit"]); fixedH = fixedW` 로
+종전 `EffectManifest` 의 `fit` 갈래가 `fixedW = clampedFixed(f["fit"]); fixedH = fixedW` 로
 정사각을 만들었다. 1920×1080 에서 WE 는 **256×144**, Waple 은 **256×256**. 귀결 넷 —
 
 1. `aspect = g_Texture0Resolution.y/.x` 가 **0.5625 대신 1.0**. 염료 에미터(§5.4)의 원이
@@ -1600,8 +1880,8 @@ float amt = smoothstep(size, 0.0, length(delta));      // edge0 > edge1 → 중�
 `fit` 이 없으면 그 함수가 `nil` 을 돌려 **소비처가 종전 경로를 그대로 탄다** — 이게 무회귀의
 핵심 장치다. 소비처는 둘:
 
-* `SceneRendererFrameEncoder.swift:2034-2036` — 실제 텍스처 할당(프레임 시점 `dst` 기준).
-* `SceneRendererResources.swift:1214-1216` — `g_TextureNResolution`(빌드 시점 `effW/effH` 기준).
+* `SceneRendererFrameEncoder.swift` 의 `spec.fittedBox(baseWidth:baseHeight:)` 호출 — 실제 텍스처 할당(프레임 시점 `dst` 기준).
+* `SceneRendererResources` 의 `texRes` 조립(`fit` 갈래) — `g_TextureNResolution`(빌드 시점 `effW/effH` 기준).
   `fit` 미선언 갈래는 **한 글자도 안 건드렸다**. 특히 scale 갈래는 정수 바닥이 아니라
   부동소수 나눗셈(`lh/s`)이라, 정수화하면 dst 가 scale 로 나누어떨어지지 않는 모든 씬에서
   값이 움직인다. 그건 별건이고 이 커밋의 범위가 아니다.
@@ -1632,10 +1912,10 @@ float amt = smoothstep(size, 0.0, length(delta));      // edge0 > edge1 → 중�
 1920×1080 워크샵 콘텐츠에서의 개선(위 표 1·2·5행)은 코퍼스에 자산이 없어 **수치로만** 남긴다.
 
 **W2 (P1) `LIGHTING=1` → 이펙트 통째 폴백.**
-`ShaderPreprocessor.swift:274-329` 가 `#require` 줄을 **소비**하는 것까지는 실물과 같지만
+`ShaderPreprocessor` 의 `#require` 분기 가 `#require` 줄을 **소비**하는 것까지는 실물과 같지만
 `LIGHTING≠0` 일 때의 코드 생성은 미구현이다. 그러면 `combine.frag:116` 의
 `PerformLighting_V1(...)` 호출부가 미정의로 남아 MSL 컴파일이 실패하고
-`SceneRendererResources.swift:766-768` 가 이펙트를 통째로 버린다.
+`SceneRendererResources` 의 이펙트 폴백 분기 가 이펙트를 통째로 버린다.
 **"조용히 틀린 그림" 이 아니라 "시끄러운 폴백" 이므로 현행 선택은 옳다.**
 도달 조건: 사용자가 에디터에서 Lighting 을 켜 `passes[17].combos.LIGHTING = 1` 이 실리는 경우.
 출하 콘텐츠 도달 0.
@@ -1744,6 +2024,35 @@ W1 은 순수 산술이라 리눅스 레인에서 단위 테스트로 닫히고 
 * 그래서 닫는 순서는 도달이 아니라 **닫을 수 있느냐**로 정했다. G4 는 순수 산술이라 이
   컨테이너에서 끝까지 닫힌다. G1·G5 는 바이너리, G2 는 에디터, G3 은 코퍼스가 필요하다.
 
+### 9.0b 4차 재측 — 도달표는 **정정 0건**, 다만 축 셋이 새로 잡혔다 — **[신규 2026-08-21]**
+
+§9.0 의 도달 수치를 독립 스크립트로 다시 셌다(양 트리 전수, `effect.json` 128+135 · `scene.json` 171+184).
+**§9.0 표의 수치는 한 건도 안 틀렸다 — 정정 0건.** 재현된 것:
+
+| 항목 | 3차 기재 | 4차 재측 | 판정 |
+|---|---|---|---|
+| FBO 선언 총수 | 112(동봉 55 + 설치본 57) | 55 + 57 = 112 | ✔ |
+| `clear` 보유 FBO | 24(양 트리, 전건 이 이펙트) | 12 + 12 = 24, `effect.json` **2파일**(본체·preview) | ✔ |
+| `r16f` 8 + `rg1616f` 4 | 24(양 트리) | 트리당 `r16f` 8 · `rg1616f` 4 | ✔ |
+| `fit` 보유 | 28 | 14 + 14 = 28 | ✔ |
+| `uvs` 선언 FBO | 4(동봉 2 + 설치본 2, 전건 `glitter`) | `{"repeat": 2}` ×2 트리 | ✔ |
+| `conditions` 보유 `effect.json` | 4 | 트리당 2파일(본체·preview) | ✔ |
+| `fluidsimulation` 마운트 씬 | 1 + 1 = 2 | 1 + 1 = 2 | ✔ |
+| `effects[].combos` | 355 씬 전수 **0건** | 0건 | ✔ |
+| `general.hdr == true` | 설치본 184 중 3 | 3(`shimmering_particles` · `razer_bedroom` · `presets/lightning/previewthunderbolt`) | ✔ |
+
+**새로 잡은 축 셋**(§9.0 에 없던 것):
+
+| 축 | 선언 수(동봉+설치본) | `effect.json` | 이펙트 | 마운트 씬/트리 |
+|---|---:|---:|---|---:|
+| `unique` FBO | 19 + 19 = **38** | 5 | `fluidsimulation` · `motionblur` | 3(양 트리 동일) |
+| `unique` ∧ 8비트 착지 | (5+2) × 2 = **14** | 5 | `fluidsimulation` 염료 · `motionblur` 3사본 | 3 |
+| `rgba_backbuffer` FBO | 13 + 13 = **26** | 7 | + `blur` · `blurprecise` · `godrays` · `shine` | 동봉 7 · 설치본 8 |
+| `unique` ∧ `rgba_backbuffer` | 5 + 5 = **10** | 3 | `fluidsimulation` 염료 2×2 + `motionblur` 본체 1 | 2(양 트리 동일) |
+
+⇒ **§4.3 의 LDR 정체 기구는 이 이펙트보다 도달이 크다**(§4.3a). `unique`·`rgba_backbuffer` 규약
+자체의 도달도 이 문서가 적어 온 "2 씬" 보다 크다 — 그 규약을 깨면 `motionblur` 가 같이 깨진다.
+
 **아직 열려 있는 것**
 
 1. **[미해결] `Effect::acquireRenderTargets`(`0x1401ea500`)의 호출 빈도**(§3.3).
@@ -1773,6 +2082,27 @@ W1 은 순수 산술이라 리눅스 레인에서 단위 테스트로 닫히고 
      알려진 표(여기서는 `0x140490488`)와 **정렬**해서 풀어야 실제 베이스 `0x1404911a8` 이
      나오고 그때 `0x140491260 − 0x1404911a8 = 0xB8` 로 슬롯 23 이 된다.
      (`0x140491a08`→베이스 `0x140491950`, `0x140491dc8`→베이스 `0x140491d10` 도 같다.)
+
+   **[2026-08-21 4차 재측 — 도달 경로를 전부 열거했다. 위 세 줄 중 둘은 틀렸다.]**
+   전문은 **§3.3a**. 요지 넷 —
+   * **이 함수는 `Effect` 의 메서드가 아니다.** 본체의 이중 루프가
+     `this->effects`(`+0x308`/`+0x310`)를 돌며 각 이펙트의 `fbos`(`+0xe8`/`+0xf0`, stride `0x50`)를
+     꺼낸다(`0x1401eb1ed`–`0x1401ebb42`). 같은 vtable 의 슬롯 8(`0x1401e6f50`)이 씬의
+     `"effects"` 배열을 파스한다. **VA 는 맞고 라벨이 틀렸다**(`docs/dev/re-methodology.md` 함정 #27).
+   * **`call [reg+0xB8]` 은 25곳이 아니라 24곳이고 SIB 형식은 0건이다.** 선형 디스어셈과
+     `.text` 바이트 스캔 **두 방법이 모두 24** 를 준다. 위 "25곳 · SIB 를 한 자리 놓쳤다" 는 철회한다.
+   * **"전건 다른 클래스의 vtable" 도 틀렸다.** 그 24곳 중 **4곳**(`0x140206680` · `0x140209504` ·
+     `0x140258a02` · `0x1402601fa`)이 `mov rax,[this]` / `mov rcx,this` 로 **바로 이 함수**를 부른다.
+     전부 파생 클래스의 **슬롯 34(`+0x110`)** 안이고, 순서는 `slot22 → slot23 → slot24` 다.
+   * **매 프레임 경로는 없다.** 슬롯 34 를 이 클래스 family 로 부르는 자리는 전부 에지 게이트다
+     (`"effects"` 파스 꼬리 `0x1401e7165` · 개수 변화 `0x1401e6371` · 더티 비트 0→1
+     `0x1401d3c38`·`0x1401881d1` · 자원 생성 `0x1402575db` · 슬롯 19/20 썽크 `0x1401ee097`·`0x1401ee0b3` ·
+     프로퍼티 통지 콜백 `0x1401fa293`). 그래서 Waple 의 "생성/리사이즈 시 1회"
+     규약은 **관측과 모순되지 않는다 — 정정 0건**.
+   **남은 것**: 슬롯 34 호출부 **26곳**(바이트 스캔. 선형 디스어셈은 `.pdata` 없는 리프 썽크 셋을
+   놓쳐 23곳만 준다) 중 이 family 를 겨냥한 것이 정확히 일곱인지(RTTI 로케이터가 없어 수신자
+   클래스 확정이 비싸다), 그리고 창 리사이즈가 그 일곱 중 어디로 들어오는지.
+
 2. **[미해결] 에디터가 `LIGHTING` 을 `effects[].combos` 에도 쓰는가**(§1.5).
    출하 씬 184개에 `effects[].combos` 가 0건이라 역산 불가. 에디터 프런트엔드(`ui/dist`, 1,548
    파일)의 JS 에서 `combos` 를 쓰는 자리는 `shaderpreset.combos` 하나뿐이라 **거기서도 답이
@@ -1819,6 +2149,13 @@ W1 은 순수 산술이라 리눅스 레인에서 단위 테스트로 닫히고 
    양자화) · `FluidSimulationGrid.swift`(발산→Jacobi→경사 제거) ·
    `Tests/WapleCoreTests/FluidSimulationPrecisionTests.swift`.
 
+9. **[미해결] `constantshadervalues` 의 영문 라벨 키를 WE 가 푸는가**(§1.6.1b, **신규 4차**).
+   양 트리 전수에서 `effects[].passes[].constantshadervalues` 키 88건/트리가 `material` 키가 아니라
+   **영문 UI 라벨**(`"Speed X"` · `"Blur scale"` · `"Accumulation rate"`)이고, 그 88건이 실린 씬
+   22개는 **22/22 가 preview 씬**이다. 단순 정규화로는 안 맞는 반례(`"Accumulation rate"` ↔ `rate`)가
+   있어 "죽은 키" 쪽이 더 그럴듯하지만 확정 못 한다. **출하 배경화면 도달 0건**이고 판정·착지는
+   씬 파서(`0x140154480`–`0x140155668`) 소관이라 이 문서 밖이다.
+
 **이번에 닫은 것**(툼스톤 — 종전 항목 번호를 남긴다)
 
 5. ~~[미해결] `fit` × `scale` 동시 선언~~ → **[해결] §1.3.1.** `scale` 은 `fit` 계산에 참여하지
@@ -1841,6 +2178,37 @@ W1 은 순수 산술이라 리눅스 레인에서 단위 테스트로 닫히고 
    **저작 편의 어노테이션**이고 런타임 소비는 없다. 종전 기재의 건수 "12" 도 정정했다 —
    `attachmentproject` **10** · `attachmentangles` **4**(그리고 후자는 불리언이 아니라
    짝 각도 프로퍼티 **이름 문자열**이다).
+
+---
+
+## 10. 인용 위생 — 이 문서의 **다른 파일 줄 번호 인용 40건을 전부 걷어냈다** (신규 2026-08-21 · 4차)
+
+`docs/dev/re-methodology.md` 함정 #22 는 이렇게 말한다: *"주석·문서에서 **다른 파일의 줄 번호를
+인용하지 마라** — 한 줄만 밀려도 엉뚱한 곳을 가리킨다. 그 줄의 **코드를 적어라.**"*
+이 문서는 그 규칙을 어기고 있었고, **실제로 이미 썩어 있었다.**
+
+4차 실측에서 `file.swift:N-M` 꼴 인용 **40건**(고유 35개)을 전부 기계로 대조했다. 결과:
+
+| 부류 | 건수 | 예 |
+|---|---:|---|
+| **가리키는 파일이 아예 없다** | 3 | `FrameEncoder.swift:…` — 실제 파일명은 `SceneRendererFrameEncoder.swift` 다. 세 인용 모두 존재하지 않는 파일을 가리키고 있었다 |
+| **줄은 있는데 내용이 딴판이다** | 대다수 | `SceneRendererFrameEncoder.swift:2114-2122` 는 `functions` 소비의 `[미해결]` 주석이라고 적혀 있었지만 그 줄은 **`X-⑧` 의 유니크 텍스처 대조 블록**이다(그 `[미해결]` 주석은 이 감사 시점에 **약 98줄 아래**로 밀려 있었다 — 새 줄 번호를 여기 적으면 그것도 곧 같이 썩으므로 적지 않는다. 지금은 그 파일의 `**[미해결] 실물은 인덱스 값을 안 쓴다.**` 로 시작하는 주석을 찾아라). `GLSLTranslator.swift:1408` 은 `g_Frametime` 배선이라고 적혀 있었지만 실제로는 `if seen.insert(name).inserted {` 다. `SceneDocument.swift:3052-3062` 는 `comboValue` 라고 적혀 있었지만 `requiredData(_:)` 다 |
+| 여전히 맞다 | 2 | `SceneRendererResources.swift:154-163`(`materialFunctionClearTargets`) · `:92-108`(`FBOSpec.fittedBox`) |
+
+**전건을 심볼·마커 인용으로 바꿨다.** 이제 이 문서에서 `*.swift:숫자` 를 인용하는 자리는
+**바로 위 감사 표 두 줄뿐**이고, 그 둘은 옛(썩은) 인용을 **기록으로** 옮겨 적은 것이다 —
+살아 있는 인용은 **0건**이다(`grep -cE '[A-Za-z0-9_]+\.swift:[0-9]+' docs/re/fluid-simulation.md` → 2,
+둘 다 이 절의 표 안이다).
+
+**왜 새 줄 번호로 갱신하지 않았나.** 이 세션에만 `Sources/WapleRender/**` 를 여러 클러스터가
+동시에 고치고 있어 갱신하는 순간 다시 썩는다. 이 문서는 이미 그 상황에 대한 해법을 두 자리에서
+쓰고 있었다 — §2.4a 의 `X-①`, §3.3 의 `X-⑧` 처럼 **주석 마커**로 가리키는 것이다.
+나머지도 같은 규율로 맞췄다: **함수 시그니처 · 마커 · 그 줄의 코드**로 가리킨다.
+
+> **다음 사람에게**: 이 문서에 코드 위치를 새로 적을 때 줄 번호를 쓰지 마라. `X-①`/`X-⑧` 같은
+> 마커가 있으면 마커를, 없으면 함수 시그니처(`materialFunctionClearTargets(_:table:fboCount:)`)를,
+> 그것도 없으면 **그 줄의 코드 자체**를 적어라. VA 인용은 반대로 안정적이다 —
+> `scripts/re/va_citations.py` 가 기계로 대조하므로 그쪽은 계속 VA 로 적어라.
 
 ---
 
@@ -2127,3 +2495,49 @@ for va in VAS:                      # 문서에서 뽑은 VA 목록
 `0x140491dc8`)은 바로 앞 칸(`−8`)에 `0x1401ea310` 을 갖는 파생 vtable 이고,
 `0x140491260` 만 슬롯 22 를 다른 함수로 덮었다. **어느 vtable을 통해 오든 오프셋은 `+0xB8` 로
 같다** — 그래서 §3.3 의 호출부 탐색을 `+0xB8` 로 걸었고, 그 24곳이 전부 다른 클래스였다.
+
+> **[정정 2026-08-21 · 4차 → §3.3a]** 위 마지막 문장은 **틀렸다.** 24곳 중 **4곳**
+> (`0x140206680` · `0x140209504` · `0x140258a02` · `0x1402601fa`)이 바로 이 함수를 부르고,
+> 전부 파생 클래스의 **슬롯 34(`+0x110`)** 안에서 `mov rax,[this]` / `mov rcx,this` 로 부른다.
+> 그리고 "이펙트 클래스 vtable" 이라는 이 절의 이름도 틀렸다 — 이 클래스는 **이펙트를 소유한
+> 객체**다(`+0x308`/`+0x310` 에 이펙트 목록, 각 이펙트의 `+0xe8`/`+0xf0` 에 FBO 레코드).
+> 전문·근거는 §3.3a.
+
+### 4차 실측 재현(2026-08-21)
+
+```bash
+SP=<스크래치패드>   # wpe.py · vdis2.py 가 있는 곳
+
+# ⑨ `0x1401ea500` 상수 적재 census (§3.3a(2))  → 기대: 4곳, 전부 .rdata vtable 슬롯
+python3 - <<'PY9'
+import sys; sys.path.insert(0, __import__('os').environ.get('SP','.'))
+from wpe import pe, DATA
+b = (0x1401ea500).to_bytes(8, 'little'); i = 0
+while True:
+    i = DATA.find(b, i)
+    if i < 0: break
+    print(hex(i), hex(pe.off2va(i))); i += 1
+PY9
+
+# ⑩ `call/jmp [reg+0xB8]` · `[reg+0x110]` 바이트 스캔 (§3.3a(3)(4))
+#    기대: +0xB8 → call 24 · jmp 0 · SIB 0   |   +0x110 → call 21 · jmp 5 (합 26)
+#    주의: `.pdata` 함수 시작에서 내려오는 선형 디스어셈은 +0x110 에서 **23곳**만 준다 —
+#          `.pdata` 항목이 없는 리프 썽크 셋(0x1401ee097 · 0x1401ee0b3 · 0x1401fa293)을 놓친다.
+python3 - <<'PY10'
+import sys; sys.path.insert(0, __import__('os').environ.get('SP','.'))
+from wpe import pe, DATA
+t = [s for s in pe.sections if s['name'] == '.text'][0]
+for want in (0xB8, 0x110):
+    d = want.to_bytes(4, 'little'); c = j = 0
+    for off in range(t['rawptr'], t['rawptr'] + t['rawsize'] - 8):
+        if DATA[off] != 0xFF: continue
+        m = DATA[off+1]
+        if (m >> 6) != 2: continue
+        reg = (m >> 3) & 7
+        if reg not in (2, 4): continue
+        sib = 1 if (m & 7) == 4 else 0
+        if DATA[off+2+sib:off+6+sib] != d: continue
+        c += (reg == 2); j += (reg == 4)
+    print(hex(want), 'call', c, 'jmp', j)
+PY10
+```
