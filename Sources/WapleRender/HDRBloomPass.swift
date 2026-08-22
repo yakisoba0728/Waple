@@ -36,9 +36,20 @@ protocol HDRBloomEncoding {
 /// - 추출 = PS 29931 soft-knee QuadraticThreshold 축자:
 ///   `c=max(4tap평균,0)` · `m=max(c.rgb)` · `soft=clamp(m−P.y,0,P.z)²·P.w` · `q=max(m−P.x,soft)`
 ///   · `out=c·(strength·q/max(m,1e-5))·tint`, `P=(thr, thr−knee, 2·knee, 0.25/(knee+1e-5))`.
-/// - 합성 = PS 29925 의 화면 순효과 `saturate(base+bloom)` (EOTF 디코드는 WE sRGB-뷰 스왑체인
-///   인코드와 상쇄 — 합성 셰이더 주석의 실측 근거 참조). **ACES/톤커브 없음**
+/// - 합성 = 화면 순효과 `saturate(base+bloom)`. **ACES/톤커브 없음**
 ///   (Ultra float 경로 포함 5중 확증 — 이 경로에서 hdrPost 를 통째로 대체한다; hdrPost 도 이제 동일 클램프).
+///
+///   **[2026-08-21 근거 정정 — W-20]** 종전 이 줄은 *"EOTF 디코드는 WE sRGB-뷰 스왑체인 인코드와
+///   상쇄"* 를 근거로 들었는데 **그 전제가 실측으로 반증됐다**: 포맷 enum→DXGI 사상 28 arm 에
+///   `_SRGB` 값이 0건이고(`Format::toDXGI` `0x1400d2a20`, 점프표 `0x1400d2aa4`),
+///   `DXGI_SWAP_CHAIN_DESC` 를 채우는 유일한 자리가 `R8G8B8A8_UNORM`(28)이다
+///   (`0x140008146` → `0x140008172` `CreateSwapChain`). 상쇄해 줄 하드웨어 인코드는 없다.
+///   결론(디코드 미이식)은 그대로이고 근거만 둘로 갈린다:
+///   ① WE 의 `lin()` 은 `hdr:true` 경로에만 있다 — 동봉+설치본 358 씬 중 354 씬은
+///      `combine.frag`(감마 변환 없음)이거나 최종 패스 자체가 없다(실측 348 + 6).
+///   ② `hdr:true` 4 씬에 대해서는 아래 합성부 주석의 골든 실측이 디코드 미적용 쪽을 지지한다.
+///   전문: `docs/re/tonemapping.md` §1.1·§1.2·§2.6·§9 W-20 ·
+///   정본 `spec/engine/tonemapping.json` `engine.tonemap.transferFunctionSites`.
 ///
 /// ponytail: 단일 레벨(1/4 추출→1/8 blur13 h/v→가산 합성 — LDR 선례와 동일 형상). WE 실물은
 /// 듀얼-필터 피라미드 `bloomhdriterations`단(실측 8단, 1800×1130→14×8) + 레벨당 ×0.25×scatter
@@ -298,10 +309,19 @@ final class HDRBloomPass: HDRBloomEncoding {
         return float4(blur13(source, in.uv, texelStep), 1.0);
     }
 
-    // PS 29925(라이브 Ultra 캡처) = C=base+bloom → EOTF_sRGB 디코드 → sRGB-뷰 스왑체인이 하드웨어
-    // 재인코드. 디코드·인코드가 상쇄돼 **화면 순효과 = saturate(base+bloom)**. Waple 타깃은 비-sRGB
-    // bgra8(디스플레이/PNG 가 값을 그대로 소비)이라 순효과만 이식한다 — 디코드만 옮기면 이중 감마
+    // 화면 순효과 = **saturate(base+bloom)**. Waple 타깃은 비-sRGB bgra8(디스플레이/PNG 가 값을
+    // 그대로 소비)이라 순효과만 이식한다 — 디코드만 옮기면 이중 감마가 된다
     // (실측 3299228616: EOTF 이식 p50 0.047 vs WE 골든 0.18, 클램프 p50 ≈0.19 — 골든 정합).
+    //
+    // [2026-08-21 근거 정정 — W-20] 종전 이 자리는 "EOTF_sRGB 디코드 → sRGB-뷰 스왑체인이
+    // 하드웨어 재인코드" 로 상쇄를 설명했는데 **sRGB 뷰도 sRGB 스왑체인도 없다**(위 헤더 참조:
+    // `0x1400d2a20` 28 arm 에 `_SRGB` 0건 · `0x140008146` 스왑체인 `R8G8B8A8_UNORM`).
+    // 남는 근거는 위 골든 실측과, WE 의 `lin()` 이 `hdr:true` 경로에만 있다는 사실이다.
+    //
+    // 참고: WE 의 SDR HDR 경로는 `combine_hdr.frag` 에서 `saturate(lin(albedo)) * g_RenderVar0.x`
+    // 다. `lin()` 을 건너뛰는 분기(`#if LINEAR == 1`)는 그 콤보를 거는 머티리얼
+    // `materials/util/combine_hdr_upsample_linear.json` 의 **경로 문자열이 이미지에 없어**
+    // 런타임에 도달하지 않는다 — 곧 WE 쪽에서 디코드가 꺼지는 경우는 없다.
     // ★ACES/필믹 숄더·토우 등 톤커브 없음(5중 확증, "톤맵 곡선없음=saturate클램프") — 이 경로
     // 한정으로 hdrPost 대체(hdrPost 도 이제 동일 saturate 클램프).
     fragment float4 hdrBloomCombine(

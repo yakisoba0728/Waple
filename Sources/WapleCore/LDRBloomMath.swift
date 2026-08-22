@@ -23,6 +23,24 @@ import simd
 ///    (진입 게이트 `0x140183618` `test dword [rcx+0x128], 0x2000` = `hdr` 비트13, `je` → LDR).
 ///  · `Scene::Scene` `0x140186c90`–`0x1401872ba` — 저작 생략 시 기본값.
 ///
+/// **비트13 소비 지점은 넷이다**(전부 같은 플래그, 같은 비트):
+/// 포맷 선택 `0x14017f328`+`0x14017f33d` · 파라미터 급전 `0x14017f7cb`(`je 0x14017f994` → LDR 피드) ·
+/// 머티리얼 로드 `0x14017fb79` · 드로우 루프 `0x140183618`. 비트13 을 **세우는** 자리는 아직
+/// 열려 있다 — `[composite+0x128]` 은 `0x140115b5d`–`0x140115b67` 의 범용
+/// `flags = (set | flags) & ~clear` 헬퍼로만 갱신되고, 즉치 `0x2000` 을 그 필드에 or/and 하는
+/// 자리는 이미지 전수 스캔에서 0건이다(정본 `spec/engine/tonemapping.json`
+/// `engine.bloom.pathDivergence.openQuestion`).
+///
+/// **[확정] LDR 체인은 8비트 UNORM 위에서 돈다.**
+/// 컴포지트가 만드는 컬러 타깃의 포맷은 한 자리에서 정해진다 — `0x14017f317 mov edi,1`(LDR) ·
+/// `0x14017f323 mov ecx,0xf`(HDR) · `0x14017f33d cmovne edi,ecx` · `0x14017f340 mov [rbp+0x130],edi`.
+/// enum 1 → DXGI 28 `R8G8B8A8_UNORM`, enum 0xf → DXGI 10 `R16G16B16A16_FLOAT`
+/// (`sub_1400d2a20` 점프표 `0x1400d2aa4`). 그 값이 `_rt_FullFrameBuffer`·`_rt_4FrameBuffer`·
+/// `_rt_8FrameBuffer`·`_rt_Bloom` 넷에 같이 실린다(`0x14017f5a3` · `0x14017f5ea` 외).
+/// → 추출·블러 결과가 **매 패스 [0,1] 로 잘린다.** `bloomstrength` 2.0 을 곱해 1 을 넘긴 부분은
+/// 그 자리에서 소실된다. 이식하며 이 버퍼를 float 로 올리면 "정밀도 개선" 처럼 보이지만
+/// WE 보다 밝아진다 — 올리지 마라. (뎁스 인자는 넷 다 enum `0x1b` = 없음.)
+///
 /// **[확정] LDR 은 HDR 과 달리 강도 정규화가 없다.** HDR 경로는
 /// `bloomhdrstrength / (powf(scatter, max(N,2)-2) + 1)`(`0x14017f85e`–`0x14017f893`)로 나눠서
 /// 넣지만, LDR 경로는 씬 저작값을 **그대로** 머티리얼 상수로 넘긴다:

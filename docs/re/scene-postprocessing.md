@@ -248,28 +248,58 @@ type==1 오브젝트의 `size`**(`obj+0x2f0/0x2f4`, `spec/engine/shape-quad.json
 ### 3.1 분기 게이트
 
 ```
-블룸 체인 실행:  scene.flags bit1(bloom)  &&  씬 오브젝트 리스트 비어있지 않음
-                 0x140180a51 (shr eax,1 / test al,1) · 0x140180a68 (list 비교) · 호출 0x140180ac5
-LDR vs HDR:      renderer.flags[obj+0x128] bit13(0x2000)
+블룸 체인 실행:  renderer.flags[obj+0x128] bit6(0x40)   &&  scene.flags[scene+0xe0] bit1(bloom)
+                 &&  씬 오브젝트 리스트 비어있지 않음
+                 0x140180a41 (test byte [rsi+0x128], 0x40 → je 0x140180b69)
+                 0x140180a51 (mov eax,[rcx+0xe0]) · 0x140180a57 (shr eax,1 / test al,1)
+                 0x140180a68 (list 비교) · 호출 0x140180ac5
+LDR vs HDR:      renderer.flags[obj+0x128] bit13(0x2000) — 소비 지점 **넷**
                  0x140183618 (체인) · 0x14017f7cb (파라미터 피드) · 0x14017fb79 (머티리얼 로드)
+                 0x14017f328+0x14017f33d (렌더타깃 **포맷 선택** — §3.2)
 ```
 
+**[2026-08-21 보완]** 종전 이 블록은 bit6(0x40) 게이트를 적지 않았다. 그것이 첫 관문이고
+(`0x140180a41` 의 `je` 가 블룸 없는 분기로 통째로 뛴다) `spec/engine/render-pass.json`
+`engine.renderPass.order` 는 이미 그렇게 적고 있었다 — 문서만 한 칸 얕았다.
+비트13 의 **소비** 지점은 넷이고, 비트13 을 **세우는** 자리는 아직 열려 있다
+(`spec/engine/tonemapping.json` `engine.bloom.pathDivergence.openQuestion`).
+
 ### 3.2 렌더타깃 (할당 `0x14017f1b0`–`0x14017fa6f`)
+
+**[2026-08-21 정정] 종전 이 절의 "포맷" 열은 컬러와 뎁스를 섞고 있었다.** RT 생성기
+(`sub_1401aadb0`)는 컬러 포맷 enum 을 `[rsp+0x28]`, 뎁스 포맷 enum 을 `[rsp+0x30]` 으로 받는다.
+`0x1b` 는 DXGI `UNKNOWN`(= 뎁스 없음)이라 **뎁스 인자**이고, 컬러 포맷은 다른 자리에서 온다.
+
+**컬러 포맷은 체인 전체가 한 자리에서 정해진다** — `0x14017f317 mov edi,1`(LDR 기본) ·
+`0x14017f323 mov ecx,0xf`(HDR) · `0x14017f328 shr r14d,0xd` + `0x14017f32c and r14b,1`(bit13) ·
+`0x14017f33d cmovne edi,ecx` · `0x14017f340 mov [rbp+0x130],edi`. 그 값이 피라미드 레벨
+(`0x14017f47d`)과 LDR 4버퍼(`0x14017f54a` 로 `edi` 재적재 → `0x14017f5a3`·`0x14017f5ea`)에
+**같이** 실린다. enum 1 → DXGI 28 `R8G8B8A8_UNORM`, enum 0xf → DXGI 10 `R16G16B16A16_FLOAT`
+(`sub_1400d2a20` 점프표, `docs/re/tonemapping.md` §1.1).
+
+→ 곧 **LDR 블룸 체인은 8비트 UNORM 위에서 돈다** — 추출·블러 결과가 매 패스 [0,1] 로 잘린다.
+HDR 피라미드만 fp16 이다. 정본: `spec/engine/tonemapping.json`
+`engine.tonemap.chainColorSpace`.
 
 **HDR 피라미드**(bit13 set) — 이름을 `"_rt_"`(`0x14048dfe8`) + `2<<i` + `"FrameBuffer"`(`0x14048dff0`)
 로 동적 생성(`0x14017f3ae`–`0x14017f3d3`), 최대 8단(`0x14017f541` `cmp ebx,8`),
 매 단계 `sar eax,1`(`0x14017f376`)로 반감, 0 이하가 되면 중단.
-슬롯 `obj+0x30b8 + i*8`, 실제 생성된 단 수 `obj+0x310c`, 포맷 enum `0x1b`.
-**레벨 0 = 1/2 해상도**(`_rt_2FrameBuffer`).
+슬롯 `obj+0x30b8 + i*8`, 실제 생성된 단 수 `obj+0x310c`.
+컬러 enum `0xf`(fp16), 뎁스 enum `0x1b`(없음). **레벨 0 = 1/2 해상도**(`_rt_2FrameBuffer`).
 
 **LDR**(bit13 clear):
 
-| RT | 슬롯 | 스케일 | 포맷 | 생성 VA |
-|---|---|---|---|---|
-| `_rt_FullFrameBuffer` | `0x3098` | 1 | `0x16`(LDR)/`0x1a`(HDR) — `lea eax,[rax*4+0x16]` @`0x14017f591` | `0x14017f59c` |
-| `_rt_4FrameBuffer` | `0x30a0` | 4 | `0x1b` | `0x14017f5c6` |
-| `_rt_8FrameBuffer` | `0x30a8` | 8 | `0x1b` | `0x14017f62a` |
-| `_rt_Bloom` | `0x30b0` | 8 | `0x1b` | `0x14017f66e` |
+| RT | 슬롯 | 스케일 | 컬러 enum | 뎁스 enum | 생성 VA |
+|---|---|---|---|---|---|
+| `_rt_FullFrameBuffer` | `0x3098` | 1 | `1`(LDR) / `0xf`(HDR) — 양 경로 공용 | `0x16` 또는 `0x1a` — `lea eax,[rax*4+0x16]` @`0x14017f591`, **flags bit0**(리플렉션)로 갈린다 | `0x14017f5ac` |
+| `_rt_4FrameBuffer` | `0x30a0` | 4 | `1` | `0x1b`(없음) | `0x14017f5f9` |
+| `_rt_8FrameBuffer` | `0x30a8` | 8 | `1` | `0x1b` | `0x14017f63d` |
+| `_rt_Bloom` | `0x30b0` | 8 | `1` | `0x1b` | `0x14017f681` |
+
+**[2026-08-21 정정 2]** `_rt_FullFrameBuffer` 의 뎁스 열은 종전 "`0x16`(LDR)/`0x1a`(HDR)" 였는데
+그 갈림은 HDR 이 아니라 **bit0** 이다 — `0x14017f557 movzx eax, byte [rbp+0x128]` 로 플래그
+하위바이트를 다시 읽어 `0x14017f56c and al, 1` 로 **비트0** 만 남긴 뒤 `rax*4+0x16` 을 만든다.
+비트13 은 그 식에 들어가지 않는다.
 
 ### 3.3 머티리얼 슬롯 (로드 `0x14017fb30`–`0x14017fc44`)
 
@@ -421,24 +451,51 @@ gl_FragColor = vec4(texSample(tex0) + texSample(tex1), 1.0)
 
 ## 4. 톤매핑 — **없다**
 
-`assets/shaders/` 전량에 Reinhard / ACES / Uncharted2 / filmic 형태의 곡선이 없다.
+정본: **`spec/engine/tonemapping.json`**(2026-08-21 신설) — 이 절의 부재 판정을 전수 수치로
+담고 `scripts/spec/measure_tonemapping.py` 로 재생성된다. 아래는 그 요약이다.
+
+`assets/shaders/` 137파일 전량에 Reinhard / ACES / Uncharted2 / filmic / Hable / `tonemap` /
+`whitepoint` / `exposure` / `luminance` / `histogram` / `adapt` / `dither` / `bayer` 식별자가
+**0건**이다(유일한 `ACES` 히트는 `HLSL/dx11playlisttransition.vert` 의 오타 주석 `pieaces`).
+바이너리 쪽도 판별력 있는 톤 곡선·전이함수 상수의 **적재 자리 수 합이 0** 이다.
+
 최종 합성이 적용하는 전부는:
 
-| 경로 | 최종 픽셀 연산 | 출처 |
-|---|---|---|
-| LDR + bloom | `scene + bloom` (클램프는 UNORM 타깃이 함) | `combine.frag:13-15` |
-| LDR, bloom off | 패스 자체가 없다(씬이 이미 타깃에 있다) | `render-pass.json` 7.1 |
-| HDR + bloom | `saturate(lin(scene + bloom4tap)) * g_RenderVar0.x` | `combine_hdr.frag:37,43` |
-| HDR, bloom off | `lin(scene)` | `passthroughsrgb.frag:15-17` |
-| HDR + DISPLAYHDR | `lin(saturate(scene)+bloom) * (g_RenderVar0.y*smoothstep(1,5,luma) + g_RenderVar0.x)` | `combine_hdr.frag:27-32` |
-| 에디터 | `srgb(saturate(albedo))` — **역방향**(linear→sRGB) | `combine_hdr_editor.frag:18` |
-| 비디오 HDR | `saturate(rgb / (2*g_HDRParams.y)) * (2*g_HDRParams.y)` | `combine_video_hdr.frag:10-13` |
+| 경로 | 최종 픽셀 연산 | 출처 | 코퍼스 도달(358) |
+|---|---|---|---|
+| LDR + bloom | `scene + bloom` (클램프는 UNORM 타깃이 함) | `combine.frag:13-15` | 6 |
+| LDR, bloom off | 패스 자체가 없다(씬이 이미 타깃에 있다) | `render-pass.json` 7.1 | 348 |
+| HDR + bloom | `saturate(lin(scene + bloom4tap)) * g_RenderVar0.x` | `combine_hdr.frag:37,43` | 4 |
+| HDR, bloom off | `lin(scene)` | `passthroughsrgb.frag:15-17` | **0** |
+| HDR + DISPLAYHDR | `lin(saturate(scene)+bloom) * (g_RenderVar0.y*smoothstep(1,5,luma) + g_RenderVar0.x)` | `combine_hdr.frag:27-32` | 4 중 모니터 의존 |
+| 비디오 HDR | `saturate(rgb / (2*g_HDRParams.y)) * (2*g_HDRParams.y)` | `combine_video_hdr.frag:10-13` | 0 |
+
+**[2026-08-21 정정] 종전 이 표에 "에디터 | `srgb(saturate(albedo))` — 역방향(linear→sRGB)"
+행이 있었는데 두 군데가 틀렸다.**
+
+1. **방향이 반대다.** `combine_hdr_editor.frag` 의 `srgb()` 는 이름만 그럴 뿐 본문이
+   `step(0.04045, v)` + 지수 `2.4` 로 `combine_hdr.frag`·`passthroughsrgb.frag` 의 `lin()` 과
+   **바이트 단위로 같은 디코드**(sRGB→linear)다. 방향은 이름이 아니라 상수가 정한다:
+   디코드는 무릎 `0.04045` · 지수 `2.4`, 인코드는 무릎 `0.0031308` · 지수 `1/2.4`(=`0.416666667`).
+   WE 안의 유일한 sRGB **인코드**는 `passthroughlinear.frag` 의 `_srgb()` 이고
+   (`max(1.055*pow(v, 0.416666667) - 0.055, 0)`), 감마 2.2 인코드는
+   `downsample_quarter_linear.frag` 한 줄(`pow(albedo, 1/2.2)`)뿐이다.
+2. **런타임에 로드되지 않는다.** `materials/util/combine_hdr_editor.json` 의 경로 문자열이
+   `wallpaper64.exe` 안에 **없다** — 경로를 `lea` 로 실을 방법이 없으므로 이 머티리얼은
+   화면에 닿지 않는다. 같은 이유로 `combine_hdr_upsample_linear.json`(`LINEAR=1`)과
+   `combine_hdr_upsample_dbg.json`(`COMBINEDBG=1`)도 도달 불가다. 그중 `LINEAR=1` 이 중요하다 —
+   `combine_hdr.frag` 에서 `lin()` 을 **건너뛰는 유일한 분기**인데, 그것을 거는 머티리얼이
+   없으므로 **SDR HDR-경로에서 디코드는 항상 걸린다.**
+   (이미지에 있는 `materials/…json` 경로는 전수 43개다.)
 
 `lin()`(`combine_hdr.frag:12-16`)은 정석 sRGB→선형 변환:
 `c = step(0.04045, v)`, `c*pow((v+0.055)/1.055, 2.4) + (1-c)*(v/12.92)`.
-즉 **HDR 경로에만 감마 변환이 하나 붙고 그 외에는 곡선이 전혀 없다.**
+즉 **HDR 경로에만 감마 변환이 하나 붙고 그 외에는 곡선이 전혀 없다.** 그리고 그 변환은
+블룸을 더한 **뒤**에 걸린다(`combine_hdr.frag:43`) — 곧 블룸은 감마 인코드된 값 위에서 더해진다.
 `ccsimple`(밝기/대비/채도/색상 + 3D LUT)은 블룸 **뒤**에 오는 별개 패스이며
 씬 키가 아니라 프로젝트 색보정 설정이다(정본 `render-pass.json`: `ccsimpleAfterBloom`).
+디더링 패스는 어디에도 없다 — 8비트 백버퍼로 내려가며 밴딩을 깨는 단계가 존재하지 않는다
+(`spec/engine/tonemapping.json` `engine.postprocess.ditherAbsence`).
 
 ---
 

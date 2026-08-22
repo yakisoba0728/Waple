@@ -13,6 +13,11 @@
 `spec/engine/render-pass.json`(패스 순서), `spec/engine/render-state.json`(백버퍼).
 이 문서는 그것들이 **비워 둔 색 공간 축**을 채우고, 그 과정에서 **네 곳을 반증**한다(§0).
 
+> **정본 — `spec/engine/tonemapping.json`(2026-08-21 신설, 7항목).** 이 문서의 부재 판정·
+> 전이함수 도달·색 공간·LDR 블룸 산술·경로 갈림이 기계로 재생성되는 형태로 그 파일에 있다.
+> 생성기는 `scripts/spec/measure_tonemapping.py`(`WE_ROOT` 필요, 이 컨테이너에서 돈다).
+> `Tests/WapleCoreTests/ToneMappingCanonTests.swift` 가 그 값을 잠근다.
+
 ---
 
 ## 0. 결론
@@ -31,6 +36,11 @@
 | 10 | 컬러 그레이딩 | 있다. **32×32×32 RGBA8 3D LUT** + HSV 밝기/대비/채도/색상. **씬 키가 아니라 앱(월페이퍼) 설정** `wec_*`/`wcc_*` 다(§6) |
 | 11 | 합성 순서 | 씬(+볼류메트릭) → 블룸 → **감마 디코드(HDR 한정)** → 그레이딩 → 페이드. **감마가 그레이딩보다 앞**이다(§7) |
 | 12 | 도달 | `hdr:true` 는 358씬 중 **4씬**(비-프리뷰 24씬 중 **2씬**). 즉 감마 논쟁이 화면에 닿는 표본이 애초에 4/358 이다(§8) |
+| 13 | **블룸 체인의 정밀도** | **LDR 3패스는 8비트 UNORM, HDR 피라미드만 fp16.** §1.4 의 표에서 따라 나오는 결과다 — LDR 블룸 버퍼 셋은 HDR 에서 생성되지 않으므로(`0x14017f5b8`) 컬러 enum 이 항상 `1` 이다. 곧 추출·블러 결과가 **매 패스 [0,1] 로 잘린다**. 이식하며 float 로 올리면 WE 보다 밝아진다(§1.6) |
+| 13b | **`scene-postprocessing.md` §3.2 의 포맷 열** | **정정.** 컬러/뎁스 인자를 섞어 블룸 타깃의 "포맷" 을 `0x1b`(= 뎁스 없음)로 적고 있었고, `_rt_FullFrameBuffer` 의 `0x16`/`0x1a` 갈림을 "(LDR)/(HDR)" 로 적었다 — 실제로는 **bit0**(리플렉션)이다(`0x14017f56c and al, 1`). 이 문서 §1.4 와 정면으로 갈려 있었다(§1.6) |
+| 14 | **`lin()` 을 건너뛰는 분기는 도달 불가** | §2.4 의 표에서 따라 나오지만 적혀 있지 않던 결론이다: `lin()` 을 건너뛰는 유일한 분기 `#if LINEAR == 1` 을 거는 머티리얼(`combine_hdr_upsample_linear.json`)이 **런타임 미로드**이므로 **HDR 경로에서 감마 디코드가 꺼지는 경우는 없다**(§2.4 보강) |
+| 15 | **상수 적재 자리 수 = 0** | 판별력 있는 톤 곡선·전이함수 f32 상수(2.4 · 1.055 · 12.92 · 0.04045 · 0.0031308 · 1/2.4 · 2.2 · 1/2.2 · ACES 2.51/2.43/0.59/0.14 · Uncharted2 11.2)의 **이미지 전수 적재 자리 합이 0**. 곧 엔진 CPU 쪽에 곡선이 없다(§3.1) |
+| 16 | **셰이더 luma 가중은 GPU 전용** | `0.299/0.587/0.114` 와 `0.2989/0.5870/0.1140` 모두 바이너리 **적재 자리 0**. 잡히는 것은 Rec.709 삼중 각 1건뿐이고 셋 다 `.rdata` 상수로 **데스크톱 강조색 대비 판정**(255 로 나눠 0.6333 과 비교, `DwmIsCompositionEnabled` 를 부르는 함수)이다 — 톤매핑이 아니다(§3.1) |
 
 ---
 
@@ -68,8 +78,11 @@ DXGI 값으로 바꿔 `[rt+0x90]`(컬러)·`[rt+0x94]`(뎁스)에 적는다
 | ≥0x1c | 28 | `R8G8B8A8_UNORM` | 기본 arm(`0x1400d2a9e`) |
 
 > **28 arm 중 `_SRGB` DXGI 값(29·72·75·78·91·93·99)은 0건이다.** 즉 **엔진은 sRGB 텍스처 뷰를
-> 만들 수단 자체가 없다**. `Sources/WapleRender/SceneRendererResources.swift:1604-1605` 가 이미
-> 같은 결론을 적어 두었다 — 이번 재측정은 그 문장을 확인만 했다.
+> 만들 수단 자체가 없다**. `Sources/WapleRender/SceneRendererResources.swift` 의
+> *"**sRGB 는 어디에도 없다** — 28개 arm 중 `_SRGB` DXGI 값이 0건"* 주석이 이미 같은 결론을 적어
+> 두었다 — 이번 재측정은 그 문장을 확인만 했다. **[2026-08-21] 이 표는 이제
+> `spec/engine/tonemapping.json` `engine.tonemap.chainColorSpace.formatEnumToDXGI` 가
+> 바이너리에서 직접 읽어 담는다**(`sub_1400d2a20` 의 28엔트리 점프표 `0x1400d2aa4`).
 
 ### 1.2 스왑체인 — `spec/engine/render-state.json` 의 `notMeasured` 를 닫는다
 
@@ -199,6 +212,38 @@ sdrRef  = max(80.0, min(200.0, maxLum))  ; 200.0 @0x140492904                   
 > (`DISPLAYHDR` 미적용 분기)도 `* g_RenderVar0.x` 를 곱하므로 이 값이 0 이면 HDR 씬이 검게 나온다 —
 > 실제로 그렇지 않으니 **1.0 일 것**이지만, 초기화 지점을 인용할 수 없어 추정으로 남긴다.
 
+### 1.6 그래서 체인은 **어느 정밀도로** 도는가 (신설 2026-08-21)
+
+§1.4 가 표를 세웠다. 여기서는 그 표에서 **따라 나오는 결과**만 적는다(표를 다시 쓰지 않는다).
+
+**LDR 블룸 체인 3패스는 전부 8비트 UNORM 위에서 돈다.** §1.4 의 컬러 enum 열이
+`_rt_4FrameBuffer` · `_rt_8FrameBuffer` · `_rt_Bloom` 셋 다 `hdr ? 0xf : 1` 인데, 그 셋은
+**LDR 에서만 생성**되므로 실제로 받는 값은 항상 enum `1` = `R8G8B8A8_UNORM` 이다
+(`0x14017f5b8 test r14b,r14b` 의 `jne` 가 HDR 이면 이 셋을 건너뛴다).
+
+따라 나오는 것:
+
+- 추출이 `saturate(max(rgb) − T)` 로 뽑고 `bloomstrength`(기본 2.0)를 곱해 1.0 을 넘긴 값은
+  **그 패스의 저장에서 잘린다.** 13탭 블러 두 단도 마찬가지다.
+- 그래서 이식하며 이 버퍼를 float 로 올리면 "정밀도 개선" 처럼 보이지만 **WE 보다 밝아진다.**
+- HDR 피라미드만 fp16(enum `0xf` → DXGI 10)이라 소프트-니 임계
+  (`bloomhdrthreshold` 기본 1.0)가 의미를 갖는다. **두 경로가 정밀도에서도 갈린다.**
+
+**어느 인자가 컬러이고 어느 것이 뎁스인가 — 판정 근거.** `sub_1401aadb0` 의 두 포맷 인자를
+섞으면 "블룸 타깃의 포맷이 `0x1b`" 같은 결론이 나온다(실제로 그런 서술이 있었다). 판정은
+값 하나로 끝난다: 뎁스 자리(`[rsp+0x30]`)가 `_rt_FullFrameBuffer` 에서 `0x16` = DXGI 55
+`D16_UNORM` 을 받는데 그건 **뎁스 전용 포맷**이다. 그러면 남은 `[rsp+0x28]` 이 컬러다.
+블룸 타깃 넷의 `0x1b`(= DXGI 0 UNKNOWN)은 "뎁스 없음" 이지 컬러 포맷이 아니다.
+
+> **[2026-08-21 정정 — `scene-postprocessing.md` §3.2]** 그 절이 정확히 그 혼동을 하고 있었다:
+> 블룸 타깃의 "포맷" 을 `0x1b` 로 적고, `_rt_FullFrameBuffer` 의 `0x16`/`0x1a` 갈림을
+> "(LDR)/(HDR)" 이라고 적었다. 후자는 **bit0**(리플렉션)이다 —
+> `0x14017f557 movzx eax, byte [rbp+0x128]` → `0x14017f56c and al, 1` →
+> `0x14017f591 lea eax,[rax*4+0x16]`. bit13 은 그 식에 들어가지 않는다.
+> 즉 이 문서 §1.4 와 그 문서 §3.2 가 **같은 사실을 다르게 적고 있었다**(함정 24). 그 절을 고쳤다.
+
+정본: `spec/engine/tonemapping.json` `engine.tonemap.chainColorSpace`.
+
 ---
 
 ## 2. 감마 / sRGB — 셰이더 평문 전수
@@ -283,6 +328,11 @@ gl_FragColor = vec4(pow(albedo, 1/2.2), 1.0);
 같은 함정을 파일 이름에서도 조심해야 한다 — 명명 규약은 **`passthrough<입력공간>`** 이다:
 `passthroughsrgb` = sRGB 입력을 읽어 선형 출력, `passthroughlinear` = 선형 입력을 읽어 sRGB 출력.
 
+> **[2026-08-21] 이 정정은 반영됐다.** `scene-postprocessing.md` §4 의 그 행을 지우고, 방향 판정이
+> 상수로 이뤄진다는 것과 이 머티리얼이 **런타임 미로드**라는 것(§2.4)을 같이 적었다. 두 문서가
+> 갈린 채 오래 살아 있었다 — 정본 `spec/engine/tonemapping.json`
+> `engine.tonemap.transferFunctionSites` 가 이제 방향을 상수로 판정해 기계로 담는다.
+
 ### 2.4 어느 것이 실제로 로드되는가 — 머티리얼 문자열 전수
 
 `.frag` 가 존재한다고 실행되는 것이 아니다. `wallpaper64.exe` 는 머티리얼을 **경로 문자열**로 연다.
@@ -320,6 +370,33 @@ r13b = flags[0x128] bit13                             ; = hdr
 **LDR 경로에는 감마 변환이 한 지점도 없다.** `combine.frag:13-15` 는 순수 가산이고,
 `bloom:false` 인 LDR 씬은 최종 패스 자체가 없다(씬이 이미 타깃에 그려져 있다).
 
+**[2026-08-21 보강] 위 표에서 따라 나오는 결론 하나를 명시해 둔다.**
+`combine_hdr.frag` 안에서 `lin()` 을 **건너뛰는** 자리는 `#if LINEAR == 1` 뿐인데, 그 콤보를
+거는 머티리얼이 `combine_hdr_upsample_linear.json` 하나이고 그 경로 문자열이 이미지에 **없다**.
+곧 **HDR 경로에서 감마 디코드가 꺼지는 경우는 없다** — "LINEAR 콤보로 꺼질 수도 있다" 는
+가능성은 존재하지 않는다. `COMBINEDBG=1`(분할 화면 디버그)도 같은 이유로 도달 불가다.
+
+판정 규칙을 일반화할 때는 **한 단계 약하게** 잡아야 한다. 이미지에 있는 `materials/…json`
+전체 경로는 전수 **43개**이고 `assets/materials/util/` 에는 62개가 산다. 그런데 전체 경로가 없는
+것이 전부 미로드는 아니다 — `solidlayer`(`0x140490ba0`) · `passthrough`(`0x140490b90`)는
+**맨몸 이름**이 따로 있다. 그래서 세 등급으로 나눈다:
+
+| 등급 | 뜻 | 동봉 util 62개 중 |
+|---|---|---:|
+| `loadable` | `materials/util/<name>.json` 전체 경로가 있다 | 32 |
+| `nameOnly` | 전체 경로는 없고 맨몸 이름만 있다 — **미로드로 단정하지 않는다** | 6 |
+| `unreachable` | 둘 다 없다 | 24 |
+
+`unreachable` 도 만능은 아니다. 엔진이 이름을 **이어붙여** 만드는 자리가 있기 때문이다
+(HDR 피라미드 RT 이름이 `"_rt_"` + 숫자 + `"FrameBuffer"` 로 만들어진다 —
+`0x14017f3ae`–`0x14017f3d3`). 위의 셋(`combine_hdr_editor` · `combine_hdr_upsample_linear` ·
+`combine_hdr_upsample_dbg`)은 이름이 충분히 길고 어떤 이어붙임으로도 안 나오므로 그 예외에
+걸리지 않는다. 짧은 이름(`combine` 은 `volumetrics_combine.json` 의 부분으로 잡힌다)에는
+이 논법을 쓰지 않는다.
+
+정본 `spec/engine/tonemapping.json` `engine.tonemap.transferFunctionSites.runtimeReachable` 이
+동봉 util 머티리얼 전건에 대해 이 세 등급을 기계로 담는다.
+
 ### 2.5 `volumetric-light.md` §6.3 "sRGB/감마 변환 지점이 0개" 검증
 
 그 표의 배제 근거는 **Waple 쪽 파이프라인**(`VolumetricLightPass.makeDescriptor` 의 `bgra8Unorm`,
@@ -336,9 +413,13 @@ r13b = flags[0x128] bit13                             ; = hdr
 
 ### 2.6 그래서 `lin()` 은 무엇과 짝인가 — **짝이 없다**
 
-Waple 은 네 자리에서 같은 문장을 적고 있다:
-`HDRBloomPass.swift:39,301-302` · `HDRPostPass.swift:9` · `SceneRendererFinalizer.swift:17-18`
-— *"WE 는 sRGB-뷰 스왑체인이라 하드웨어 재인코드와 상쇄되는 쌍"*.
+Waple 은 **세 자리**에서 같은 문장을 적고 있다 — `HDRBloomPass.swift`(헤더의
+*"EOTF 디코드는 WE sRGB-뷰 스왑체인…"* 과 합성부의 *"sRGB-뷰 스왑체인이 하드웨어 재인코드"*),
+그리고 `SceneRendererFinalizer.swift` 의
+*"WE sRGB-뷰 스왑체인의 하드웨어 인코드와 상쇄되는 쌍이라"*.
+**[2026-08-21 정정]** 종전 이 줄은 `HDRPostPass.swift:9` 를 넷째 자리로 셌는데, 그 파일은
+이미 W-20 정정을 반영해 *"그 전제는 실측으로 반증됐다"* 로 바뀌어 있다 — 남은 것은 셋이다.
+(줄 번호 대신 문면을 적는다 — 함정 22.)
 
 **전제가 틀렸다.** §1.1(포맷 사상에 `_SRGB` 0건) + §1.2(스왑체인 `R8G8B8A8_UNORM`) +
 `render-state.json` `noSRGBViewNoHDROutput`(RTV `pDesc=NULL`) 셋이 같은 방향을 가리킨다:
@@ -420,6 +501,54 @@ Waple 은 네 자리에서 같은 문장을 적고 있다:
 `combine_hdr.frag:31` 의 `smoothstep(1,5,luma)` 는 톤 곡선이 아니라 **HDR10 부스트 램프**다
 (휘도 1~5 구간에서 헤드룸 배수를 0→1 로 켠다). SDR 경로에는 실리지 않는다.
 
+### 3.1 상수 **적재 자리 수** — 셰이더 밖의 부재 (신설 2026-08-21)
+
+식별자 전수는 **셰이더 평문**만 본다. 곡선이 엔진 CPU 쪽에 있다면 거기서는 안 잡힌다.
+그래서 f32 비트패턴을 **이미지 전수 바이트 스캔**한다(함정 4: 호출 사이트가 아니라 적재 자리를
+센다 — 인라인 사본까지 포함하는 상한이라 0 이 강하다). 5.36MB 이미지에서 임의의 4바이트가
+우연히 맞을 기대값은 **0.00125 회**다.
+
+| 분류 | 상수 | 적재 자리 |
+|---|---|---:|
+| 전이함수 | `2.4` · `1.055` · `12.92` · `0.04045` · `0.055` · `0.0031308` · `0.416666667` · `2.2` · `1/2.2` | **전부 0** |
+| ACES(Narkowicz) | `2.51` · `2.43` · `0.59` · `0.14` | **전부 0** |
+| Uncharted2 | `W = 11.2` | **0** |
+| Rec.601 luma | `0.299`·`0.587`·`0.114` · `0.2989`·`0.5870`·`0.1140` | **전부 0** |
+| Rec.709 luma | `0.2126` · `0.7152` · `0.0722` | 각 **1**(`.rdata`) |
+
+**판별력 없는 상수는 근거로 세지 않는다.** Hable 필미의 `A=0.15 · B=0.50 · C=0.10 · D=0.20 ·
+E=0.02 · F=0.30` 은 전부 둥근 십진수라 어느 프로그램에나 나온다. 실측이 그것을 보여 준다 —
+`0.10` 은 4자리가 잡히는데 그중 셋은 `Scene::Scene` 의 `bloomhdrfeather` 기본값
+`0x3dcccccd`(`0x1401870d8` 의 즉치)와 그 형제 필드다. 정본은 이것들을 **싣되
+`discriminating:false` 라벨을 붙여** 판정에서 뺀다(숨기면 다음 사람이 근거로 쓴다).
+
+**Rec.709 3건의 정체.** 셋 다 `.rdata` 상수이고 소비처 셋이 전부 8비트 정수 색을 `255.0` 으로
+나눠 `0.6333` 과 비교하는 자리다 — `0x14003d877 mulss`(0.2126) … `0x14003d8a4 divss 255.0` →
+`0x14003d8ac subss 0.6333`. 같은 함수가 `GetProcAddress` 로 `DwmIsCompositionEnabled` 를 찾는다.
+곧 **데스크톱 강조색 대비 판정**이지 씬 톤매핑이 아니다.
+
+→ **셰이더가 쓰는 Rec.601 삼중이 이미지에 0자리라는 것**은 그 dot 이 GPU 에서만 돈다는 뜻이고,
+엔진 CPU 가 프레임 밝기를 재지 않는다는 §4(자동노출 부재)와 같은 방향이다.
+
+**양성 대조 — "0 은 스캐너가 고장난 것 아닌가".** 부재 결론의 최대 약점이 그것이라 같은 스캐너를
+설치본의 다른 이미지에 그대로 돌렸다:
+
+| 이미지 | `2.4` | `1.055` | `12.92` | `0.055` | `0.0031308` | `1/2.4` |
+|---|---:|---:|---:|---:|---:|---:|
+| `bin/FreeImage64.dll`(이미지 코덱) | **3** | **1** | **1** | **1** | **1** | **1** |
+| `bin/d3dcompiler_47.dll` | 0 | 0 | 0 | 0 | 0 | 0 |
+| `bin/webwallpaper64.exe` | 0 | 0 | 0 | 0 | 0 | 0 |
+| `bin/scenescript64.dll` | 0 | 0 | 0 | 0 | 0 | 0 |
+| **`wallpaper64.exe`** | **0** | **0** | **0** | **0** | **0** | **0** |
+
+FreeImage 는 sRGB 전이함수를 정당하게 갖고 있고 스캐너가 그것을 **찾아낸다**. 곧
+`wallpaper64.exe` 의 0 은 "재지 않은 0" 이 아니라 **실제 부재**다.
+(`FreeImage64.dll` 은 `0.04045` 만 0 인데, EOTF 무릎 없이 OETF 쪽만 쓰거나 double 로 갖고 있다는
+뜻이다 — 이 문서의 결론과 무관하므로 더 파지 않았다.)
+
+정본: `spec/engine/tonemapping.json` `engine.tonemap.operatorAbsence`
+(`discriminatingLoadSiteTotal = 0` 하나가 이 결론의 무게를 진다).
+
 ---
 
 ## 4. 노출 · 자동노출 — 없다
@@ -465,9 +594,16 @@ xmm8 = xmm6 / W   xmm6 = xmm6 / H   xmm9 = xmm7 / W   xmm7 = xmm7 / H
 | 업샘플 i→i−1 | `0x14018382a` → `[composite + i*8 + 0x30b0]` = **level[i−1]** | `0x14018389e` → `[composite + i*8 + 0x30b8]` = **level[i]** |
 
 
-**Waple 대조**: `HDRBloomPyramidPass.downsampleTapScale(level) = 1 << level`(`:166`),
-`upsampleTapScale(sourceLevel) = 2 << (sourceLevel-1)`(`:171`),
-`tapOffsetUV(scale, baseWidth, baseHeight) = scale / 풀프레임버퍼크기`(`:159-161`) — **전건 일치**.
+**Waple 대조**(산술 본체는 `Sources/WapleCore/HDRBloomMath.swift`, `HDRBloomPyramidPass` 는 위임):
+`HDRBloomMath.downsampleTapScale(level:) = 1 << max(0, level)`,
+`HDRBloomMath.upsampleTapScale(sourceLevel:) = 2 << max(0, sourceLevel - 1)`,
+`HDRBloomMath.tapOffsetUV(scale:baseWidth:baseHeight:) = scale / 풀프레임버퍼크기` — **전건 일치**.
+
+> **[2026-08-21 정정 — 함정 22]** 이 절과 §5.3·§5.5 는 종전 `HDRBloomPyramidPass.swift` 의
+> **줄 번호**(`:159` `:166` `:171` `:183` `:191` `:376-416` …)로 Waple 쪽을 가리켰다. W-25 가
+> 산술을 `WapleCore/HDRBloomMath.swift` 로 옮긴 뒤 그 줄들은 전부 **다른 코드**를 가리키게 됐고
+> (예: 종전 `:166` = `downsampleTapScale` → 현재 그 줄은 `levelCount` 의 주석), 어느 게이트도
+> 잡지 않았다. 이 문서는 이제 **심벌 이름**으로 가리킨다 — 줄은 밀려도 이름은 안 밀린다.
 
 ### 5.2 BICUBIC 선택
 
@@ -479,10 +615,11 @@ xmm8 = xmm6 / W   xmm6 = xmm6 / H   xmm9 = xmm7 / W   xmm7 = xmm7 / H
 0x140183822  cmovl rcx, r15                ; r15 = 0x31a0 = hdr_upsample
 ```
 → **소스 레벨 ≥ N−2 인 가장 깊은 두 단만 큐빅.**
-Waple `upsampleUsesBicubic(sourceLevel, levelCount) = sourceLevel >= levelCount - 2`(`:183-185`) — 일치.
+Waple `HDRBloomMath.upsampleUsesBicubic(sourceLevel:levelCount:) = sourceLevel >= levelCount - 2`
+— 일치.
 
-큐빅 커널 자체(`hdr_downsample.frag:8-51`)도 Waple `weCubicWeights`/`weBicubic`(`:390-416`)과
-줄 단위로 대응한다. `texSize = 0.5 / g_RenderVar0.xy`(`:22`) 항등식이 **업샘플에서만** 성립한다는
+큐빅 커널 자체(`hdr_downsample.frag:8-51`)도 `HDRBloomPyramidPass` MSL 소스의
+`weCubicWeights` / `weBicubic` 과 줄 단위로 대응한다. `texSize = 0.5 / g_RenderVar0.xy`(`:22`) 항등식이 **업샘플에서만** 성립한다는
 `scene-postprocessing.md` §3.5 의 경고도 그대로 유효하다(BICUBIC 콤보는 `hdr_upsample_cubic`
 하나에만 걸려 있다 — `hdr_upsample_cubic.json` 의 `"combos": {"UPSAMPLE":1,"BICUBIC":1}`).
 
@@ -500,16 +637,19 @@ Waple `upsampleUsesBicubic(sourceLevel, levelCount) = sourceLevel >= levelCount 
 | `0x3d0` | `bloomhdrscatter` | `0x3fcf3b64` | **1.61899995803833** | `0x1401870e3` |
 | `0x3d4` | `bloomhdriterations` | `8` | 8 | `0x1401870ee` |
 
-**`bloomhdrstrength` 기본값 2.0 확정** — Waple 이 최근 `0 → 2` 로 고친 것이 맞다
-(`SceneDocument.swift:1172`, 파스 `:3314`). `bloomhdrthreshold` 1.0 도 맞다(`:1173`, `:3315`).
+**`bloomhdrstrength` 기본값 2.0 확정** — Waple 이 최근 `0 → 2` 로 고친 것이 맞다. 착지 지점은
+`Sources/WapleCore/SceneDocument.swift` 의
+`out.bloomHDRStrength = float(general["bloomhdrstrength"]) ?? 2` 이고, `bloomhdrthreshold` 1.0 도
+바로 다음 줄 `?? 1` 로 맞다. (줄 번호로 적지 않는다 — 함정 22.)
 
 정규화식 `g_BloomStrength = bloomhdrstrength / (powf(bloomhdrscatter, max(N,2)−2) + 1)`
 (`0x14017f847`–`0x14017f88f`, `powf = 0x14041e350`, `+1.0` 상수 `0x140492704`)도
-Waple `normalizedStrength`(`:137-140`)와 일치.
+Waple `HDRBloomMath.normalizedStrength(strength:scatter:levels:)` 와 일치.
 
 `g_BloomBlendParams` 패킹 `(T, T−K, 2K, 0.25/(K+1e-5))`, `K = T·feather`
 (`0x14017f8bc`–`0x14017f906`, `0.25`=`0x14049268c`, `1e-5`=`0x1404925ec`)도
-Waple `blendParams`(`:191-195`)와 일치(Waple 만 `max(K,0)` 방어 추가 — WE 는 음수 feather 를 막지 않는다).
+Waple `HDRBloomMath.blendParams(threshold:feather:)` 와 일치
+(Waple 만 `max(K,0)` 방어 추가 — WE 는 음수 feather 를 막지 않는다).
 
 ### 5.4 셰이더 평문 대조
 
@@ -529,18 +669,19 @@ albedo = 4탭(v_TexCoord ± g_RenderVar0.xy / .zy / .xw / .zw)
 
 ### 5.5 재검증 총평
 
-| 항목 | WE 실측 | Waple 현행 | 판정 |
+| 항목 | WE 실측 | Waple 현행(심벌) | 판정 |
 | --- | --- | --- | --- |
-| 다운샘플 배율 `1<<i` | `0x14018374a` | `:166` | **일치** |
-| 업샘플 배율 `2<<(i-1)` | `0x140183856` | `:171` | **일치** |
-| 탭 기저 = 풀 프레임버퍼 `1/W` | `0x14018367c`–`0x1401836ba` | `:159` | **일치** |
-| BICUBIC = 깊은 두 단 | `0x140183810`–`0x140183822` | `:183` | **일치** |
-| 큐빅 커널 | `hdr_downsample.frag:8-51` | `:376-416` | **일치** |
-| `bloomhdrstrength` 기본 2.0 | `0x1401870c2` | `SceneDocument:1172,3314` | **일치** |
-| `bloomhdrthreshold` 기본 1.0 | `0x1401870cd` | `:1173,3315` | **일치** |
-| 강도 정규화 | `0x14017f88f` | `:137` | **일치** |
-| soft-knee 패킹 | `0x14017f8bc` | `:191` | **일치** |
-| 레벨 0 = 1/2 | `0x14017f376` | `Finalizer:56-57` | **일치** |
+| 다운샘플 배율 `1<<i` | `0x14018374a` | `HDRBloomMath.downsampleTapScale(level:)` | **일치** |
+| 업샘플 배율 `2<<(i-1)` | `0x140183856` | `HDRBloomMath.upsampleTapScale(sourceLevel:)` | **일치** |
+| 탭 기저 = 풀 프레임버퍼 `1/W` | `0x14018367c`–`0x1401836ba` | `HDRBloomMath.tapOffsetUV(scale:baseWidth:baseHeight:)` | **일치** |
+| BICUBIC = 깊은 두 단 | `0x140183810`–`0x140183822` | `HDRBloomMath.upsampleUsesBicubic(sourceLevel:levelCount:)` | **일치** |
+| 큐빅 커널 | `hdr_downsample.frag:8-51` | `HDRBloomPyramidPass` MSL `weCubicWeights`/`weBicubic` | **일치** |
+| `bloomhdrstrength` 기본 2.0 | `0x1401870c2` | `SceneDocument` `float(general["bloomhdrstrength"]) ?? 2` | **일치** |
+| `bloomhdrthreshold` 기본 1.0 | `0x1401870cd` | 같은 자리 `?? 1` | **일치** |
+| 강도 정규화 | `0x14017f88f` | `HDRBloomMath.normalizedStrength(strength:scatter:levels:)` | **일치** |
+| soft-knee 패킹 | `0x14017f8bc` | `HDRBloomMath.blendParams(threshold:feather:)` | **일치** |
+| 레벨 수 = `min(W,H)` 기준 | `0x14017f363`·`0x14017f541` | `HDRBloomMath.levelCount(requested:sourceWidth:sourceHeight:)` | **일치** |
+| 레벨 0 = 1/2 | `0x14017f376` | `SceneRendererFinalizer` 의 피라미드 크기 산출 | **일치** |
 
 **반증할 것이 없었다.** 최근 수정은 전건 옳다.
 
@@ -789,16 +930,18 @@ albedo.rgb = mix(albedo.rgb, albedoFiltered, g_LutParams);
 | **W-27** | `HDRPostPass.exposure` | **대응물 없음** | Waple 확장 노브(기본 1.0) | **문서화만** | 주석 한 줄 |
 | **W-28** | HDR 씬 `_rt_FullFrameBuffer` 포맷 | `R16G16B16A16_FLOAT` | `rgba16Float` (`accPixelFormat`) | **일치** | 조치 없음 |
 | **W-29** | LDR 씬 컬러 포맷 | `R8G8B8A8_UNORM`(비-sRGB) | `bgra8Unorm`(비-sRGB) | **채널 순서만 다름** | 조치 없음 |
-| **W-30** | 스왑체인/프레젠트 포맷 | `R8G8B8A8_UNORM`, 비-sRGB | `view.colorPixelFormat = .bgra8Unorm`(`SceneRenderer:1563`) | **일치(비-sRGB)** | 조치 없음 |
+| **W-30** | 스왑체인/프레젠트 포맷 | `R8G8B8A8_UNORM`, 비-sRGB | `SceneRenderer` 의 `view.colorPixelFormat = .bgra8Unorm` | **일치(비-sRGB)** | 조치 없음 |
 
 ### W-20 — 고칠 것은 코드가 아니라 근거다
 
 네 자리의 주석이 *"WE 는 sRGB-뷰 스왑체인"* 을 근거로 든다:
 
-- `Sources/WapleRender/HDRBloomPass.swift:39`
-- `Sources/WapleRender/HDRBloomPass.swift:301-302`
-- `Sources/WapleRender/HDRPostPass.swift:9`
-- `Sources/WapleRender/SceneRendererFinalizer.swift:17-18`
+- `Sources/WapleRender/HDRBloomPass.swift` 헤더 — *"EOTF 디코드는 WE sRGB-뷰 스왑체인…"*
+- `Sources/WapleRender/HDRBloomPass.swift` 합성부 — *"sRGB-뷰 스왑체인이 하드웨어 재인코드"*
+- `Sources/WapleRender/SceneRendererFinalizer.swift` — *"WE sRGB-뷰 스왑체인의 하드웨어 인코드와
+  상쇄되는 쌍이라"* (**소유 밖 — 패치안으로 넘긴다**)
+
+`Sources/WapleRender/HDRPostPass.swift` 는 이미 정정돼 있다(*"그 전제는 실측으로 반증됐다"*).
 
 **측정으로 반증된다**(§1.1·§1.2). 대신 아래 두 근거로 갈아 끼우면 같은 결론이 선다:
 
@@ -818,7 +961,7 @@ albedo.rgb = mix(albedo.rgb, albedoFiltered, g_LutParams);
 
 SDR 모니터에서는 §1.5 의 블록이 실행되지 않으므로 값이 1.0 일 가능성이 높다([미해결 B]).
 **Waple 이 macOS 에서 HDR10 디스플레이를 다루지 않는 한 조치 불필요**하다.
-다룬다면 착지 지점은 `HDRBloomPyramidPass.hdrBloomCombine`(`:490` 부근)의 마지막 곱과
+다룬다면 착지 지점은 `HDRBloomPyramidPass` MSL 의 `hdrBloomCombine` 마지막 곱과
 `HDRPostPass.hdrpost_f` 이고, 값은 `clamp(maxNits,80,200)/80` 이다.
 
 ### W-25 — 컬러 그레이딩
@@ -826,10 +969,10 @@ SDR 모니터에서는 §1.5 의 블록이 실행되지 않으므로 값이 1.0 
 Waple 에는 `ccsimple` 대응 패스가 없다. **다만 씬 키가 아니라 앱 설정이므로 "WE 재현" 갭이라기보다
 "Waple 이 아직 노출하지 않은 사용자 기능"** 이다. 부품은 이미 있다:
 
-- `WapleCore/GLSLTranslator.swift:15,1637-1638,1802` — `texSample3D` → `texture3d<float>`,
-  샘플러는 `smp`(clamp) 고정. **§6.4 의 CLAMP 규약과 일치**한다.
-- `WapleCore/TexImage.swift:133` — `texDepth` 파스(3D LUT 28건 인지).
-- `WapleRender/TexDecoder.swift:23-26` — **volume 텍스처를 2D 한 장으로 내놓는다**(32×1024).
+- `WapleCore/GLSLTranslator.swift` — `texSample3D` → `texture3d<float>`, 샘플러는 `smp`(clamp)
+  고정. **§6.4 의 CLAMP 규약과 일치**한다.
+- `WapleCore/TexImage.swift` — `texDepth` 파스(3D LUT 28건 인지).
+- `WapleRender/TexDecoder.swift` 머리 주석 — **volume 텍스처를 2D 한 장으로 내놓는다**(32×1024).
   3D 로 샘플하려면 여기서 `MTLTextureType.type3D` 로 올려야 한다.
 
 착지 순서: ① `TexDecoder` 에 3D 업로드 경로 → ② `ccsimple` 대응 패스를 `SceneRendererFinalizer`
@@ -846,11 +989,11 @@ Waple 에는 `ccsimple` 대응 패스가 없다. **다만 씬 키가 아니라 �
 
 | 항목 | 근거 쌍 |
 | --- | --- |
-| 포맷 사상에 `_SRGB` 0건 | `sub_1400d2a20` 28 arm ↔ `SceneRendererResources.swift:1604-1605` |
-| HDR 씬 = `rgba16Float`, 그 외 `bgra8Unorm` | `0x14017f317`–`0x14017f33d` ↔ `SceneRenderer.swift:721-724` |
-| 톤커브 부재 | 셰이더 137 전수 ↔ `HDRPostPass.swift:67-70` (`saturate` 만) |
+| 포맷 사상에 `_SRGB` 0건 | `sub_1400d2a20` 28 arm ↔ `SceneRendererResources.swift` 의 *"**sRGB 는 어디에도 없다** — 28개 arm 중 `_SRGB` DXGI 값이 0건"* 주석 |
+| HDR 씬 = `rgba16Float`, 그 외 `bgra8Unorm` | `0x14017f317`–`0x14017f33d` ↔ `SceneRenderer` 의 `var hdrActive: Bool { sceneIsHDR && accPixelFormat == .rgba16Float }` |
+| 톤커브 부재 | 셰이더 137 전수 ↔ `HDRPostPass.hdrpost_f` 의 `saturate(c.rgb * exposure)` |
 | 블룸 5항목 | §5.5 표 |
-| 3D LUT 경계 클램프 | `flags 0x2`(28/28) ↔ `GLSLTranslator.swift:1802` |
+| 3D LUT 경계 클램프 | `flags 0x2`(28/28) ↔ `GLSLTranslator` 의 `texSample3D` → `smp`(clamp) 고정 |
 
 ---
 
