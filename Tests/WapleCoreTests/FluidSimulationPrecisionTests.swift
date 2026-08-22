@@ -199,6 +199,95 @@ final class FluidSimulationPrecisionTests: XCTestCase {
         XCTAssertEqual(stall(30, 0.32), 1, "30 fps 에서는 lowPass 대역이 정체 레벨을 덮는다")
     }
 
+    // MARK: - P-5 아직 안 잰 축 — rg16f **속도** 감쇠 (신규 2026-08-21 · 4차 실측)
+
+    /// **§2.13(e) 는 제목이 `r16f`/`rg16f` 인데 본문은 압력(`r16f`)과 염료(`unorm8`)만 쟀다.**
+    /// 속도장(`rg1616f` = `rg16f`)의 감쇠 축은 그때 안 봤다. 여기서 그것을 잰다.
+    ///
+    /// 먼저 **출하 설정은 안전하다** — `viscosityfactor` 기본 1.0 · preview 2.29 에서
+    /// 속도는 최소 준정규까지 내려가 실질 0이 된다(고정점 없음).
+    func testVelocityDecayReachesZeroAtTheShippedViscosity() {
+        for viscosity in [1.0, 2.29] {
+            let stall = FluidSimulationPrecision.binary16VelocityDecayFixedPoint(
+                startMagnitude: 300, viscosity: viscosity, materialDissipation: 0.2,
+                lifetime: 0.1, frameTime: 1.0 / 60)
+            XCTAssertNil(stall, "viscosityfactor \(viscosity) 에서는 정체가 없어야 한다")
+        }
+    }
+
+    /// **낮은 `viscosityfactor` 에서는 rg16f 속도장이 감쇠를 통째로 멈춘다.**
+    ///
+    /// 상대 감소분 `ν·m·dt`(m = `m_Dissipation` = 0.2)가 binary16 의 상대 반 ulp
+    /// 아래로 떨어지면 저장이 증분을 통째로 버린다 — 흐름이 **영원히 그대로 흐른다**.
+    /// 슬라이더 범위가 `[0, 20]` 이라 워크샵 저작으로 도달하지만 출하 씬은 안 쓴다(도달 0).
+    func testLowViscosityFreezesTheVelocityFieldInHalfPrecision() {
+        let stall = FluidSimulationPrecision.binary16VelocityDecayFixedPoint(
+            startMagnitude: 300, viscosity: 0.1, materialDissipation: 0.2,
+            lifetime: 0.1, frameTime: 1.0 / 60)
+        XCTAssertEqual(stall?.magnitude, 300)
+        XCTAssertEqual(stall?.frames, 0, "첫 걸음부터 저장에서 사라진다")
+
+        // `viscosityfactor = 0` 은 정밀도와 무관하다 — `decay` 가 정확히 1이다.
+        let noDecay = FluidSimulationPrecision.binary16VelocityDecayFixedPoint(
+            startMagnitude: 300, viscosity: 0, materialDissipation: 0.2,
+            lifetime: 0.1, frameTime: 1.0 / 60)
+        XCTAssertEqual(noDecay?.magnitude, 300)
+    }
+
+    /// **정체 문턱은 하나의 값이 아니라 띠이고, 그 띠는 판정기가 아니다.**
+    ///
+    /// `binade` 경계 바로 아래에서는 표현 간격이 반으로 줄어 같은 `ν` 에서도 한 걸음 더 간다.
+    /// 같은 `ν = 0.1` · 60 fps 에서 `300.0` 은 즉시 멈추고 `256.0` 은 `187.5` 까지 내려간다 —
+    /// 그리고 `187.5` 에서 멈추는 이유는 감소분이 **정확히 반 ulp** 라 RTNE 가 짝수(제자리)로
+    /// 접기 때문이다.
+    func testTheStallBandIsAGuideNotAPredicate() {
+        let band = FluidSimulationPrecision.binary16DecayStallBand(materialDissipation: 0.2,
+                                                                   dt: 1.0 / 60)
+        XCTAssertEqual(band.alwaysStallsBelow, 0.0732421875, accuracy: 1e-12)
+        XCTAssertEqual(band.neverStallsAbove, 0.146484375, accuracy: 1e-12)
+
+        func stall(_ start: Double) -> (magnitude: Double, frames: Int)? {
+            FluidSimulationPrecision.binary16VelocityDecayFixedPoint(
+                startMagnitude: start, viscosity: 0.1, materialDissipation: 0.2,
+                lifetime: 0.1, frameTime: 1.0 / 60)
+        }
+        XCTAssertEqual(stall(300)?.magnitude, 300)
+        XCTAssertEqual(stall(256)?.magnitude, 187.5)
+        XCTAssertEqual(stall(256)?.frames, 548)
+        XCTAssertEqual(stall(511)?.magnitude, 375)
+    }
+
+    /// `lowPass` 대역(`‖v‖ ≤ u_Lifetime`)은 분모를 `+0.5` 로 키워 프레임당 33 % 를 깎으므로
+    /// **정체를 못 만든다.** 그래서 0 아닌 고정점은 항상 `u_Lifetime` **위**에 생긴다.
+    func testTheVelocityStallAlwaysSitsAboveTheLowPassBand() {
+        let lifetime = 0.1
+        for start in [300.0, 256.0, 511.0, 20.0] {
+            guard let stall = FluidSimulationPrecision.binary16VelocityDecayFixedPoint(
+                startMagnitude: start, viscosity: 0.1, materialDissipation: 0.2,
+                lifetime: lifetime, frameTime: 1.0 / 60) else { continue }
+            XCTAssertGreaterThan(stall.magnitude, lifetime,
+                                 "start \(start): lowPass 대역 안에서는 멈출 수 없다")
+        }
+    }
+
+    /// `binary16DecayStepSurvives` 는 위 반복의 한 걸음짜리 판정이다.
+    func testDecayStepSurvivalMatchesTheFixedPoint() {
+        let dt = FluidSimulation.simulationTimeStep(frameTime: 1.0 / 60)
+        let slow = FluidSimulation.advectionDecay(decayFactor: 0.1, materialDissipation: 0.2, dt: dt)
+        let fast = FluidSimulation.advectionDecay(decayFactor: 1.0, materialDissipation: 0.2, dt: dt)
+        XCTAssertFalse(FluidSimulationPrecision.binary16DecayStepSurvives(magnitude: 300, decay: slow))
+        XCTAssertTrue(FluidSimulationPrecision.binary16DecayStepSurvives(magnitude: 300, decay: fast))
+        // binade 경계 바로 위는 같은 `decay` 에서도 살아남는다.
+        XCTAssertTrue(FluidSimulationPrecision.binary16DecayStepSurvives(magnitude: 256, decay: slow))
+
+        // **입력을 먼저 저장 정밀도로 접어야 한다.** 표현 불가능한 값(300.1 → binary16 은 300.0)을
+        // 접지 않고 그대로 비교하면 "달라졌다" 가 되어 **없는 감쇠를 있다고 판정**한다.
+        // 이 단정이 없으면 그 실수를 어떤 테스트도 못 잡는다(4차 돌연변이 M7 로 확인).
+        XCTAssertEqual(FluidSimulationPrecision.binary16Quantize(300.1), 300)
+        XCTAssertFalse(FluidSimulationPrecision.binary16DecayStepSurvives(magnitude: 300.1, decay: slow),
+                       "300.1 은 저장되면 300.0 이고 그 자리는 이미 고정점이다")
+    }
+
     /// unorm8 저장은 최근접-짝수다(0.5 레벨 경계 확인).
     func testUnorm8StoreRoundsToNearestEven() {
         XCTAssertEqual(FluidSimulationPrecision.unorm8Store(0), 0)
