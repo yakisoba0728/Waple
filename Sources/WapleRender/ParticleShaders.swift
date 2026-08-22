@@ -1,11 +1,28 @@
 enum ParticleShaders {
-    /// 버텍스 버퍼: 정점당 인터리브드 8 float = [ndc.x, ndc.y, u, v, r, g, b, a].
+    /// 버텍스 버퍼(2D `pv_main`): 정점당 인터리브드 **12 float**
+    /// = `[ndc.x, ndc.y, u0, v0, r, g, b, a, u1, v1, blend, pad]`.
     /// frag 는 premultiplied-alpha 를 출력하므로 additive/translucent 둘 다 src=one 으로 합성 가능
     /// (translucent: dst=oneMinusSrcAlpha, additive: dst=one).
+    ///
+    /// **[2026-08-21] 8 → 12: `SPRITESHEETBLEND` 크로스페이드 배선**
+    /// (`docs/re/sprite-occlusion.md` §11.3 의 패치 전문). 뒤 4 슬롯이 **다음 시트 프레임의 UV**와
+    /// **섞임 비율**이다. 시트가 없거나 크로스페이드가 꺼진 파티클은 CPU 가 `u1,v1 = u0,v0` ·
+    /// `blend = 0` 을 실으므로 `mix(x, y, 0) == x` 로 **비트동일**이다(무회귀).
+    ///
+    /// **스트라이드를 여기 한 곳에만 둔다.** 종전엔 같은 숫자가 MSL 문자열(`vid * 8`)과
+    /// `SceneRendererFrameEncoder`(`verts.count / 8`, `func v` 의 append 8개)에 **동시에 박혀
+    /// 있었다** — 반쪽만 고치면 화면이 통째로 깨지는데 컴파일러는 아무 말도 안 한다.
+    /// 이제 MSL 은 이 상수를 보간해 쓰고 인코더도 이 상수를 나눈다(리터럴 사본 0개).
+    static let vertexFloats2D = 12
+    /// 3D 파티클(`pv3d_main`/`pv3d_fog_main`): 정점당 **13 float**
+    /// = `[world.x, world.y, world.z, u0, v0, r, g, b, a, u1, v1, blend, pad]`.
+    /// 2D 와 **뒤 4 슬롯의 뜻이 같다** — 두 경로가 갈리지 않게 일부러 같은 꼬리를 쓴다.
+    static let vertexFloats3D = 13
     static let source = """
     #include <metal_stdlib>
     using namespace metal;
-    struct PVOut { float4 pos [[position]]; float2 uv; float4 color; };
+    // uv2/blend = SPRITESHEETBLEND 크로스페이드(WE genericparticle: v_TexCoord.zw · v_TexCoordBlend).
+    struct PVOut { float4 pos [[position]]; float2 uv; float4 color; float2 uv2; float blend; };
 
     vertex PVOut pv_main(uint vid [[vertex_id]],
                          const device float* v [[buffer(0)]],
@@ -13,7 +30,7 @@ enum ParticleShaders {
                          constant float2& parallaxDepth [[buffer(2)]],
                          constant float2& aspectScale [[buffer(3)]],
                          constant float2& shakeOffset [[buffer(4)]]) {
-        uint b = vid * 8;
+        uint b = vid * \(vertexFloats2D);
         float2 pos = float2(v[b + 0], v[b + 1]);
         float2 uv  = float2(v[b + 2], v[b + 3]);
         float4 col = float4(v[b + 4], v[b + 5], v[b + 6], v[b + 7]);
@@ -21,19 +38,24 @@ enum ParticleShaders {
         // parallaxDepth(F200) = 파티클 오브젝트 마우스 시차 가중치(QuadShaders.v_main 과 동형). 기본(1,1)
         // 이거나 cameraOffset=0(헤드리스 captureFrames 항상 0 — draw() 참조)이면 곱해도 종전과 비트동일.
         float2 p = (pos + cameraOffset * parallaxDepth + shakeOffset) * aspectScale;
-        PVOut o; o.pos = float4(p.x, p.y, 0.0, 1.0); o.uv = uv; o.color = col; return o;
+        PVOut o; o.pos = float4(p.x, p.y, 0.0, 1.0); o.uv = uv; o.color = col;
+        // 시트 크로스페이드: 다음 프레임 UV(슬롯 8·9) + 섞임 비율(슬롯 10). 시트 없음/게이트 꺼짐이면
+        // CPU 가 uv1 = uv0 · blend = 0 을 실어 아래 mix 가 항등이 된다(무회귀). 슬롯 11 은 패딩.
+        o.uv2 = float2(v[b + 8], v[b + 9]); o.blend = v[b + 10]; return o;
     }
 
-    // 3D 씬 파티클: 월드 위치(카메라-페이싱 빌보드로 CPU 전개) → viewProj 원근 투영. 정점당 9 float =
-    // [world.xyz, u, v, r, g, b, a]. frag(pf_main)·블렌드는 2D 와 공유(premult α).
+    // 3D 씬 파티클: 월드 위치(카메라-페이싱 빌보드로 CPU 전개) → viewProj 원근 투영. 정점당 13 float =
+    // [world.xyz, u0, v0, r, g, b, a, u1, v1, blend, pad]. frag(pf_main)·블렌드는 2D 와 공유(premult α).
+    // 꼬리 4 슬롯의 뜻은 2D 와 같다 — 크로스페이드가 2D/3D 로 갈리지 않게 일부러 같은 레이아웃이다.
     vertex PVOut pv3d_main(uint vid [[vertex_id]],
                            const device float* v [[buffer(0)]],
                            constant float4x4& viewProj [[buffer(1)]]) {
-        uint b = vid * 9;
+        uint b = vid * \(vertexFloats3D);
         float3 wp  = float3(v[b + 0], v[b + 1], v[b + 2]);
         float2 uv  = float2(v[b + 3], v[b + 4]);
         float4 col = float4(v[b + 5], v[b + 6], v[b + 7], v[b + 8]);
-        PVOut o; o.pos = viewProj * float4(wp, 1.0); o.uv = uv; o.color = col; return o;
+        PVOut o; o.pos = viewProj * float4(wp, 1.0); o.uv = uv; o.color = col;
+        o.uv2 = float2(v[b + 9], v[b + 10]); o.blend = v[b + 11]; return o;
     }
 
     // C4-(ii): overbright(genericparticle.frag "color.rgb *= g_Overbright" — material 유니폼, 기본
@@ -42,7 +64,13 @@ enum ParticleShaders {
     fragment float4 pf_main(PVOut in [[stage_in]], texture2d<float> tex [[texture(0)]],
                             constant float& overbright [[buffer(0)]]) {
         constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
-        float4 t = tex.sample(s, in.uv);
+        // WE genericparticle.frag:73-77(SPRITESHEETBLEND) — **straight-alpha 상태**에서 두 프레임을
+        // mix 하고 **그 뒤에** premultiply 한다. premultiply 뒤에 섞는 것(= 같은 쿼드를 두 번 그리기)은
+        // 다른 식이라 실물과 갈린다(sprite-occlusion.md §11.2 의 반례: c0=1,a0=0 · c1=0,a1=1 · b=0.5
+        // 에서 두 번 그리기는 0, WE 는 0.25). blend == 0 이면 mix(x, y, 0) == x 라 비트동일이다.
+        // 원저자 주석("This is wrong because it can sample colors that are invisible on one frame")이
+        // 가리키는 알파 오염은 **실물의 성질**이라 여기서 고치지 않는다 — 고치면 WE 와 달라진다.
+        float4 t = mix(tex.sample(s, in.uv), tex.sample(s, in.uv2), in.blend);
         float A = t.a * in.color.a;
         return float4(t.rgb * in.color.rgb * A * overbright, A);
     }
@@ -51,7 +79,7 @@ enum ParticleShaders {
     // 컴파일 단위(파일)라 Mesh3DShaders.applySceneFog 를 직접 호출할 수 없어 동일 수식을 포트한다.
     // WE genericparticle.frag 는 ApplyFog(rgb)+ApplyFogAlpha(alpha) 를 ADDITIVE 게이트 없이 무조건
     // 적용(mesh generic4.frag 는 ApplyFogAlpha 가 #if ADDITIVE 안에만 있어 다름 — common_fog.h 참조).
-    struct PVOut3DFog { float4 pos [[position]]; float2 uv; float4 color; float3 worldPos; };
+    struct PVOut3DFog { float4 pos [[position]]; float2 uv; float4 color; float3 worldPos; float2 uv2; float blend; };
     // FrameU(Mesh3DShaders) 의 마지막 5개 필드와 동일 레이아웃(eye+포그 4종) — Scene3DFrameUniform 에서
     // 발췌한 Particle3DFogUniform 을 그대로 바인딩.
     struct FogU3D { float4 eye; float4 fogDistanceColor; float4 fogDistanceParams; float4 fogHeightColor; float4 fogHeightParams; };
@@ -59,17 +87,19 @@ enum ParticleShaders {
     vertex PVOut3DFog pv3d_fog_main(uint vid [[vertex_id]],
                                     const device float* v [[buffer(0)]],
                                     constant float4x4& viewProj [[buffer(1)]]) {
-        uint b = vid * 9;
+        uint b = vid * \(vertexFloats3D);
         float3 wp  = float3(v[b + 0], v[b + 1], v[b + 2]);
         float2 uv  = float2(v[b + 3], v[b + 4]);
         float4 col = float4(v[b + 5], v[b + 6], v[b + 7], v[b + 8]);
-        PVOut3DFog o; o.pos = viewProj * float4(wp, 1.0); o.uv = uv; o.color = col; o.worldPos = wp; return o;
+        PVOut3DFog o; o.pos = viewProj * float4(wp, 1.0); o.uv = uv; o.color = col; o.worldPos = wp;
+        o.uv2 = float2(v[b + 9], v[b + 10]); o.blend = v[b + 11]; return o;
     }
 
     fragment float4 pf3d_fog(PVOut3DFog in [[stage_in]], texture2d<float> tex [[texture(0)]],
                              constant FogU3D& fog [[buffer(0)]]) {
         constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
-        float4 t = tex.sample(s, in.uv);
+        // pf_main 과 같은 크로스페이드(WE 는 FOG 콤보와 SPRITESHEETBLEND 를 같은 프래그먼트에서 쓴다).
+        float4 t = mix(tex.sample(s, in.uv), tex.sample(s, in.uv2), in.blend);
         float3 rgb = t.rgb * in.color.rgb;
         // C4-(ii): overbright — eye.xyz 만 거리 계산에 쓰이고 .w 는 미사용 패딩이라 재사용(기본 1, 무회귀).
         rgb *= fog.eye.w;
@@ -95,7 +125,7 @@ enum ParticleShaders {
 
     // REFRACT(스크린 굴절 — WE genericparticle.frag:103-116). 파티클 컬러에 씬 컬러 타깃(fb=뒤 배경
     // 누적 스냅샷)을 노멀맵 오프셋으로 재샘플해 **곱한다**(유리/물방울/열왜곡). vert 는 pv_main 공유
-    // (8-float 정점) — 화면 UV 는 in.pos(렌더타깃 픽셀)에서 얻어 f_compose 규약과 동일(y-flip 없음).
+    // (12-float 정점) — 화면 UV 는 in.pos(렌더타깃 픽셀)에서 얻어 f_compose 규약과 동일(y-flip 없음).
     // refractParams = (g_RefractAmount, rg88Flag, g_Overbright(C4-(ii), 기본 1), 0).
     fragment float4 pf_refract(PVOut in [[stage_in]],
                                texture2d<float> albedoTex [[texture(0)]],
@@ -103,7 +133,10 @@ enum ParticleShaders {
                                texture2d<float> fbTex [[texture(2)]],
                                constant float4& refractParams [[buffer(0)]]) {
         constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
-        float4 t = albedoTex.sample(s, in.uv);
+        // 알베도만 크로스페이드한다 — WE 는 노멀맵(g_Texture1)을 `v_TexCoord.xy` 한 곳에서만 뜬다
+        // (genericparticle.frag:84 `DecompressNormalWithMask(texSample2D(g_Texture1, v_TexCoord.xy))`).
+        // pv_main 을 공유하므로 이 mix 를 빼면 굴절 파티클만 크로스페이드가 빠진다.
+        float4 t = mix(albedoTex.sample(s, in.uv), albedoTex.sample(s, in.uv2), in.blend);
         float4 nraw = normalTex.sample(s, in.uv);
         bool rg88 = refractParams.y > 0.5;
         // WE common_fragment.h DecompressNormalWithMask 포트. Waple RG88 디코드가 (b0,b0,b0,b1) 라

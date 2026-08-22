@@ -1014,6 +1014,88 @@ attribute 만 `VIn` 에 조건부로 싣고 그 사실을 `TranslatedShader` 로
 (메시 정점은 이미 `pos3+normal3+uv2` 8f 라 **법선은 버퍼에 이미 있다** — 오프셋 12).
 무조건 싣기는 금지다 — 2D 레이어/이펙트 쿼드는 법선이 없어 파이프라인 생성이 통째로 깨진다.
 
+### 7.7 [신설 2026-08-21] 배선 기록 — `a_Normal` 화이트리스트가 들어갔다
+
+§7.6 은 "고치려면 두 파일이 함께 가야 한다(이 라운드 미수행)" 로 끝났다. 이 절은 그 둘이
+**들어간 뒤**의 기록이다. §7.6 본문은 그대로 둔다(툼스톤) — 도달 표는 계속 유효하고,
+여기서는 "무엇을 넣었고 무엇을 **일부러 안 넣었나**" 만 적는다.
+
+#### (a) `GLSLTranslator` — 참조된 attribute 만 `VIn` 에 싣는다
+
+`GLSLTranslator.vertexAttributeWhitelist` 가 (이름, 타입, 슬롯) 셋을 정본으로 들고,
+`TranslatedShader.vertexAttributes` 가 **실제로 실린 목록**을 밖으로 알린다.
+
+```
+[("a_Position", .vec3, 0), ("a_TexCoord", .vec2, 1), ("a_Normal", .vec3, 2)]
+```
+
+* 슬롯 **0·1 은 무조건** 싣는다. 이 리포의 정점 디스크립터 셋이 전부 그 둘을 선언하고,
+  어느 쪽도 참조하지 않는 셰이더에서 `VIn` 이 비면 `[[stage_in]]` 자체가 불법이 된다.
+  두 개만 실린 경우의 방출 문자열은 **종전과 글자 그대로 같다**(무회귀 —
+  `GLSLTranslatorTests.testVInIsUnchangedForShadersThatDoNotReferenceExtraAttributes`).
+* 슬롯 **2 이상은 조건부**다. 판정은 **번역이 끝난 vertex 본문**에서 `vin.<이름>` 을
+  **낱말 단위로** 찾는다(`referencesVertexAttribute`). `vertexBuiltins`(`gl_VertexID` 등)와
+  같은 규율이다.
+  - **선언을 기준으로 실으면 안 된다.** `#if LIGHTING` 안에서만 쓰이는 `a_Normal` 을
+    콤보가 꺼진 구성에서도 실으면, 법선 없는 2D 쿼드 파이프라인이 통째로 깨진다.
+    (`testDeclaredButUnreferencedNormalIsNotLoaded` 가 대조군까지 함께 잰다.)
+  - **낱말 단위여야 한다.** `a_TexCoord` 는 실물 `a_TexCoordVec4`(6) ·
+    `a_TexCoordVec4C1`(4) · `a_TexCoordC2`(1) 의 **접두**라, 단순 `contains` 는
+    화이트리스트가 넓어지는 날 조용히 틀린다.
+
+#### (b) `SceneRenderer3D.buildCustomMeshShader` — 그때만 `attribute(2)`
+
+```swift
+if t.vertexAttributes.contains("a_Normal") {
+    vd.attributes[2].format = .float3; vd.attributes[2].offset = 12; vd.attributes[2].bufferIndex = 4
+}
+```
+
+**새 버퍼가 필요 없다** — 메시 정점이 이미 `pos3+normal3+uv2`(8f, stride 32)라 법선이
+오프셋 12 에 있다. 스키닝 메시도 CPU 프리스킨 뒤 같은 8f 라 같은 디스크립터를 탄다.
+
+**(a)와 (b)는 함께 가야 한다.** (a)만 하면 MSL **컴파일 실패**가 **파이프라인 생성 실패**로
+바뀔 뿐이다(둘 다 폴백이지만 진단이 나빠진다). (b)만 하면 아무 일도 안 일어난다.
+조건의 단일 출처가 `t.vertexAttributes` 이고, 두 자리가 같은 조건을 본다는 사실을
+`GLSLTranslatorTests.testMeshVertexDescriptorWiresNormalUnderTheSameCondition` 이
+소스 문면으로 잠근다(리눅스에서 `WapleRender` 를 실행할 수 없어 이것이 유일한 그물이다).
+
+#### 일부러 안 넣은 것 — `a_Color`·`a_Tangent4`·스키닝
+
+§7.6 의 표에서 `a_Color` 9파일(저작레인 1) · `a_Tangent4` 8(1) ·
+`a_BlendIndices`/`a_BlendWeights` 10/9(0)은 **그대로 둔다.** 이유는 하나다:
+**그 데이터가 정점 버퍼에 없다.** `VIn` 에만 실으면 실패 지점이 컴파일에서 파이프라인
+생성으로 옮겨갈 뿐 결말(스톡 폴백)이 같고, 원인 진단만 나빠진다. 버퍼 레이아웃 확장
+(`Model3D` 의 정점 패킹 + `prepare3DCustomSkinBuffers` + 디스크립터 stride)이 **선행돼야
+하는 별건**이다. `testNonWhitelistedAttributesStayUnloaded` 가 이 결정을 못박는다.
+
+#### 도달 — 무엇이 실제로 달라지나
+
+§7.6 이 센 저작레인 8건(`audiophile/{audiophile,grid}.vert` · `demon_core/core.vert` ·
+`dna_fragment/dna.vert` · `fantasticcar/{car,grid}.vert` · `ricepod/ricepod.vert` ·
+`techno/technohex.vert`)은 **pkg 안 셰이더**라 env 게이트와 무관하게 이 경로를 탄다.
+반면 `SceneRenderer3D.builtinMeshShaderWhitelist` 의 `generic{,2,3,4}` 는 베이스 팩 소스라
+`WAPLE_BUILTIN_MESH_SHADERS` 게이트 뒤에 있고, 그 게이트는 **이 변경과 독립**이다 —
+게이트가 꺼져 있으면 그 넷은 애초에 이 함수에 들어오지 않는다.
+(그래서 `builtinMeshShaderWhitelist` 주석의 "MSL 컴파일 단계에서 실패" 는 `a_Normal` 한
+이름에 대해서만 더 이상 사실이 아니다. 그 주석에도 툼스톤을 달았다.)
+
+**2D 경로에서 실패 지점이 옮겨간다(회귀 아님).** 동봉 `.vert` 중 `a_Normal` 을 참조하는 것은
+10개인데(`generic{,2,3,4}` · `chroma4` · `foliage4` · `fur4` · `genericimage{3,4}` ·
+`HLSL/dx11playlisttransition`), 그중 **`genericimage3`/`genericimage4` 는 2D 이미지 레이어
+셰이더**다(`:196`/`:220` `v_WorldNormal = mul(a_Normal, M_NML)`). 그 둘이 씬 패키지 안에 복사돼
+있으면 `buildCustomLayerShader` 경로로 들어오는데, 2D 쿼드 정점 버퍼에는 법선이 없다
+(`translatedLayerPipeline` 은 `a_Position@0` + `a_TexCoord@12`, stride 20).
+→ 종전에는 **MSL 컴파일**이 실패했고 지금은 **파이프라인 생성**이 실패한다. **둘 다 nil 을
+돌려주고 `QuadShaders` 로 폴백한다** — 화면은 같다(로그 문구만 "MSL compile error" 에서
+"pipeline compile failed" 로 바뀐다). 베이스 팩의 `genericimage*` 는 애초에 그 경로에 못
+들어온다(`packageData` 로 pkg 전용, 3394601417 주야 토글 회귀 실증 이후의 정책).
+
+**[미해결] 실제 시각 개선의 A/B 는 안 했다.** 이 컨테이너에는 Metal 도 워크샵 코퍼스도 없다.
+확정된 것은 "번역 산출물이 이제 `VIn` 에 `a_Normal` 을 싣고 디스크립터가 같은 조건으로
+슬롯 2를 꽂는다" 까지이고, **그 셰이더들이 실제로 컴파일에 성공하는지**는 macOS 판정이다
+(다른 결손 — `g_EyePosition` 등 §7.3 의 유니폼 축 — 이 남아 있으면 여전히 실패한다).
+
 ## 8. 확정하지 못한 것
 
 1. **`[미해결]` 유니폼별 cbuffer 배정.** `g_bufStatic/Dynamic/Animation/Lights` 4개가 있고

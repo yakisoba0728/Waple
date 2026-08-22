@@ -85,12 +85,18 @@ extension SceneRenderer {
         return texRes
     }
 
-    /// 파티클 스냅샷 → 인터리브드 버텍스(정점당 8 float: ndc.xy, uv, rgba).
+    /// 파티클 스냅샷 → 인터리브드 버텍스(정점당 `ParticleShaders.vertexFloats2D` = 12 float:
+    /// `ndc.xy, u0,v0, rgba, u1,v1, blend, pad`). 꼬리 4 슬롯은 `SPRITESHEETBLEND` 크로스페이드다 —
+    /// 시트가 없거나 게이트가 꺼진 파티클은 `u1,v1 = u0,v0` · `blend = 0` 이라 `mix` 가 항등이 되어
+    /// **렌더 결과가 종전과 비트동일**하다(`docs/re/sprite-occlusion.md` §11.3).
     /// sprite = 빌보드 쿼드. rope/ropeTrail = 위치 히스토리 폴리라인을 두께 있는 리본(삼각 스트립).
     /// spriteTrail = F790: 속도 방향 신장 쿼드(히스토리 리본 아님 — WE 공식 문서).
     func particleVertices(_ snapshot: [Particle], _ sys: GPUParticleSystem) -> [Float] {
         var verts: [Float] = []
-        verts.reserveCapacity(snapshot.count * (sys.isTrail ? 200 : 48))
+        // 종전 상수(쿼드 48 = 6정점×8f, 트레일 200)를 새 스트라이드로 환산.
+        // `stride` 라는 이름은 Swift 표준 `stride(from:to:by:)` 를 가리므로 쓰지 않는다.
+        let vf = ParticleShaders.vertexFloats2D
+        verts.reserveCapacity(snapshot.count * vf * (sys.isTrail ? 25 : 6))
         func toNDC(_ x: Float, _ y: Float) -> (Float, Float) { let p = sceneToNDC(x, y); return (p.x, p.y) }
         func appendQuad(_ p: Particle, stretch: Float = 1, angleOverride: Float? = nil) {
             let wx = sys.origin.x + sys.scale.x * p.pos.x
@@ -116,30 +122,42 @@ extension SceneRenderer {
             // UV = 프레임 서브렉트의 4코너(TL,TR,BR,BL). 회전 프레임이면 코너 배정을 rotationQuarters 만큼
             // 회전(비회전 q=0 은 종전과 byte-identical — 코퍼스 무회귀).
             var uv: [(Float, Float)] = [(0, 0), (1, 0), (1, 1), (0, 1)]
+            // 크로스페이드 짝. 기본값은 **현재 프레임과 동일** — 시트가 없거나 게이트가 꺼지면
+            // `mix(x, x, 0) == x` 라 종전과 비트동일하다.
+            var uvNext = uv
+            var blend: Float = 0
             var ratio = sys.texRatio
             if !sys.frames.isEmpty {
                 let fc = sys.frames.count
-                let idx: Int
+                let pair: TexImage.SheetFramePair
                 if p.frame >= 0 {
-                    idx = sheetFrameIndex(sequence: p.frame, frameCount: fc, mirror: sys.mapSeqMirror)
+                    // mapsequence: 스폰 시 프레임이 확정된다 → **크로스페이드 금지**(blend = 0).
+                    // 고정 프레임에 다음 프레임을 섞으면 틀리고, WE 가 `randomframe` 에서
+                    // `SPRITESHEETBLEND` 를 끄는 이유와 같은 이유다(§10.3). 이 분기는
+                    // `particleSheetPair` 를 아예 안 타므로 게이트가 자동으로 걸리지 않는다 —
+                    // `sprite-occlusion.md` §11.3 이 "빠뜨리기 쉬운 자리" 로 지목한 자리다.
+                    let idx = sheetFrameIndex(sequence: p.frame, frameCount: fc, mirror: sys.mapSeqMirror)
+                    pair = TexImage.fixedSheetPair(currentIndex: idx)
                 } else {
                     // F740(S-22): def.animationmode=sequence/sequencemultiplier 소비(그 외 frametime 폴터).
-                    idx = Self.particleSheetFrameIndex(age: p.age, lifetime: p.lifetime,
-                                                       frameTime: sys.frames[0].time, frameCount: fc,
-                                                       mode: sys.def.animationMode,
-                                                       seqMul: sys.def.sequenceMultiplier)
+                    // 크로스페이드 게이트(`animationmode != "randomframe"`)는 이 함수가 진다.
+                    pair = Self.particleSheetPair(age: p.age, lifetime: p.lifetime,
+                                                  frameTime: sys.frames[0].time, frameCount: fc,
+                                                  mode: sys.def.animationMode,
+                                                  seqMul: sys.def.sequenceMultiplier)
                 }
-                let fr = sys.frames[max(0, min(fc - 1, idx))]
-                let tw = Float(max(1, sys.texture.width)), th = Float(max(1, sys.texture.height))
-                let u0 = fr.atlasX / tw, v0 = fr.atlasY / th
-                let u1 = min(1, (fr.atlasX + fr.atlasWidth) / tw), v1 = min(1, (fr.atlasY + fr.atlasHeight) / th)
-                let corners = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
-                let q = fr.rotationQuarters
-                uv = (0..<4).map { corners[($0 + q) % 4] }
-                // 똑바로 세운 스프라이트 종횡비(90/270°는 축 스왑).
-                let upW = q % 2 == 0 ? fr.atlasWidth : fr.atlasHeight
-                let upH = q % 2 == 0 ? fr.atlasHeight : fr.atlasWidth
-                ratio = upH / max(1, upW)
+                let cur = sys.frames[max(0, min(fc - 1, pair.current))]
+                let nxt = sys.frames[max(0, min(fc - 1, pair.next))]
+                let tw = sys.texture.width, th = sys.texture.height
+                let q0 = TexImage.sheetFrameQuadUV(cur, textureWidth: tw, textureHeight: th)
+                let q1 = TexImage.sheetFrameQuadUV(nxt, textureWidth: tw, textureHeight: th)
+                uv = (0..<4).map { q0.corner($0) }
+                uvNext = (0..<4).map { q1.corner($0) }
+                blend = pair.blend
+                // 종횡비는 **현재 프레임** 것만 쓴다 — 쿼드 기하는 하나뿐이라 두 값을 담을 자리가 없다.
+                // 한 시트 안의 프레임 크기는 동봉 52/52 · 설치본 61/61 이 균일이라 실물에서 갈리지
+                // 않는다(`sprite-occlusion.md` §11.6 의 관측).
+                ratio = q0.ratio
             }
             let hw = sizePx * 0.5 * stretch, hh = sizePx * ratio * 0.5  // F790: stretch = local X 신장
             // 3축 회전(WE `common_particles.h` ComputeParticleTangents) 후 화면에 **정사영**한다.
@@ -168,11 +186,12 @@ extension SceneRenderer {
             // (스프라이트시트 프레임처럼 비대칭 콘텐츠가 있는 파티클의 상하반전 방지).
             let tl = ndc(-hw, hh), tr = ndc(hw, hh), br = ndc(hw, -hh), bl = ndc(-hw, -hh)
             let r = p.color.x, g = p.color.y, b = p.color.z, al = p.alpha
-            func v(_ pt: (Float, Float), _ u: (Float, Float)) {
-                verts.append(contentsOf: [pt.0, pt.1, u.0, u.1, r, g, b, al])
+            // 12 float: ndc.xy, u0,v0, rgba, u1,v1, blend, pad(0 — pv_main 미참조).
+            func v(_ pt: (Float, Float), _ u: (Float, Float), _ u2: (Float, Float)) {
+                verts.append(contentsOf: [pt.0, pt.1, u.0, u.1, r, g, b, al, u2.0, u2.1, blend, 0])
             }
-            v(tl, uv[0]); v(tr, uv[1]); v(br, uv[2])
-            v(tl, uv[0]); v(br, uv[2]); v(bl, uv[3])
+            v(tl, uv[0], uvNext[0]); v(tr, uv[1], uvNext[1]); v(br, uv[2], uvNext[2])
+            v(tl, uv[0], uvNext[0]); v(br, uv[2], uvNext[2]); v(bl, uv[3], uvNext[3])
         }
         // F790: WE spritetrail — 쿼드 장축(local X = u 축)을 속도 방향에 두고 size×신장 배로
         // 그린다(히스토리 리본 아님). 신장 = speed×length 를 [minlength, maxlength] 클램프(공식
@@ -252,8 +271,13 @@ extension SceneRenderer {
             // 꼬리가 투명해졌다. 콤보 지원은 별개 작업이라 여기서는 강제만 걷는다.
             edges.append((A, B, u, p.alpha))
         }
+        // 리본도 같은 12-float 스트라이드를 써야 한다(같은 버텍스 버퍼·같은 `pv_main`).
+        // **크로스페이드는 안 얹는다** — WE 의 rope/trail 은 `genericropeparticle.{vert,geom,frag}`
+        // 라는 **다른 셰이더**이고 그 셋에는 `SPRITESHEET`/`SPRITESHEETBLEND` 문자열이 하나도 없다
+        // (동봉 자산 grep 실측 0건). 그래서 `u1,v1 = u0,v0` · `blend = 0` 으로 실어 렌더가
+        // 종전과 비트동일하게 둔다.
         func push(_ pt: (Float, Float), _ u: Float, _ vv: Float, _ al: Float) {
-            verts.append(contentsOf: [pt.0, pt.1, u, vv, r, g, b, al])
+            verts.append(contentsOf: [pt.0, pt.1, u, vv, r, g, b, al, u, vv, 0, 0])
         }
         // 스프라이트시트: 선택 프레임 렉트로 u(가로)/v(길이) 재매핑(discharge rope 등 —
         // 미적용 시 시트 전 프레임이 리본에 통째로 늘어난다).
@@ -1726,7 +1750,7 @@ extension SceneRenderer {
               let pipe = nearPipe ?? linearPipe else { return }
         let verts = particleVertices(snapshot, sys)
         // 트레일은 파티클당 정점 수가 가변(붕괴 시 0) — 빈 버텍스면 드로우 스킵.
-        let vertexCount = verts.count / 8
+        let vertexCount = verts.count / ParticleShaders.vertexFloats2D
         guard vertexCount > 0, let vbuf = sys.scratch.load(verts, device: device) else { return }
         enc.setRenderPipelineState(pipe)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
@@ -1777,7 +1801,7 @@ extension SceneRenderer {
                                device: MTLDevice, camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) {
         guard !snapshot.isEmpty, let normal = sys.normalTexture else { return }
         let verts = particleVertices(snapshot, sys)
-        let vertexCount = verts.count / 8
+        let vertexCount = verts.count / ParticleShaders.vertexFloats2D
         guard vertexCount > 0, let vbuf = sys.scratch.load(verts, device: device) else { return }
         enc.setRenderPipelineState(pipe)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
@@ -1842,6 +1866,14 @@ extension SceneRenderer {
     /// `docs/re/sprite-occlusion.md` §11.3 에 있다. CPU 에서 쿼드를 두 번 그려 흉내 내는 우회는
     /// **틀린다** — WE 는 straight-alpha 상태에서 `mix` 하고 그 뒤에 premultiply 하는데, 두 번 그리기는
     /// premultiply 뒤에 더하는 것이라 서로 다른 식이다(§11.2 의 반례 참조).
+    ///
+    /// **[2026-08-21 배선 완료 — 위 `[미배선]` 은 해소다.]** 세 파일을 한 번에 고쳤다:
+    /// `ParticleShaders.swift`(정점 12/13 float + `pf_main`·`pf3d_fog`·`pf_refract` 의 straight-alpha
+    /// `mix`) · 이 파일(`particleVertices` 가 `.next`/`.blend` 를 적재) ·
+    /// `SceneRenderer3D.swift`(3D 정점 조립). 스트라이드 리터럴은 이제
+    /// `ParticleShaders.vertexFloats2D/3D` **한 곳**에만 있고 MSL 도 그것을 보간해 쓴다 —
+    /// 종전에 "반쪽만 넣으면 화면이 깨진다" 던 그 함정을 구조로 없앤 것이다.
+    /// 배선 기록 전문은 `docs/re/sprite-occlusion.md` §11.8.
     static func particleSheetPair(age: Float, lifetime: Float, frameTime ft: Float, frameCount fc: Int,
                                   mode: ParticleAnimationMode?, seqMul: Float) -> TexImage.SheetFramePair {
         let stopped = TexImage.SheetFramePair(current: 0, next: 0, blend: 0)
@@ -1864,7 +1896,10 @@ extension SceneRenderer {
             coord = v
         } else {
             // 같은 트랩이 frametime 폴터에도 있었다(age 가 비유한이거나 거대하면 사망).
-            let v = age / max(0.016, ft)
+            // 형제 자리 셋(`TexImage.fallbackFrameTime` · 여기 · `SceneRenderer3D.particle3DVertices`)
+            // 이 **한 상수**를 쓴다 — 같은 자산이 이미지 레이어냐 파티클이냐에 따라 재생속도가
+            // 갈리지 않게 하는 것이 그 상수의 존재 이유다(TexImage 의 그 선언 주석 참조).
+            let v = age / max(TexImage.fallbackFrameTime, ft)
             guard safeInt(Double(v)) != nil else { return stopped }
             coord = v
         }
