@@ -257,7 +257,9 @@ final class RenderColorFixRegressionTests: XCTestCase {
     /// 무조건 saturate 가 양 경로 정합(LDR UNORM ≤1 에선 항등). HDR Hue/Saturation/Color/Luminosity
     /// (mode 26-29)의 >1 입력 HSL 왜곡 봉인(잠복).
     func testS99Rgb2HslClampsHDRInput() {
-        XCTAssertTrue(BlendMSL.source.contains("c = saturate(c)"),
-                      "we_rgb2hsl 에 HDR saturate 클램프 누락")
+        // 위와 같은 구멍 — 주석 처리를 못 잡는다(돌연변이 M7, 2026-08-21). 줄 전문 일치.
+        let hasSaturateLine = BlendMSL.source.split(whereSeparator: { $0.isNewline })
+            .contains { $0.trimmingCharacters(in: .whitespaces) == "c = saturate(c);" }
+        XCTAssertTrue(hasSaturateLine, "we_rgb2hsl 에 HDR saturate 클램프 누락(주석 처리 포함)")
     }
 }

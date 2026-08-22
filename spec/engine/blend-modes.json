@@ -1,0 +1,395 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_blend_modes.py",
+ "entries": [
+  {
+   "id": "blend.editorDropdown",
+   "value": {
+    "값→UI라벨": {
+     "0": "normal",
+     "1": "darken",
+     "2": "multiply",
+     "3": "color_burn",
+     "4": "linear_burn",
+     "5": "darker_color",
+     "6": "lighten",
+     "7": "screen",
+     "8": "color_dodge",
+     "9": "linear_dodge",
+     "10": "lighter_color",
+     "11": "overlay",
+     "12": "soft_light",
+     "13": "hard_light",
+     "14": "vivid_light",
+     "15": "linear_light",
+     "16": "pin_light",
+     "17": "hard_mix",
+     "18": "difference",
+     "19": "exclusion",
+     "20": "subtract",
+     "21": "reflect",
+     "22": "glow",
+     "23": "phoenix",
+     "24": "average",
+     "25": "negation",
+     "26": "hue",
+     "27": "saturation",
+     "28": "color",
+     "29": "luminosity",
+     "30": "tint",
+     "31": "add",
+     "32": "diffuse_light"
+    },
+    "항목수": 33,
+    "도메인": "0…32 (33개) — 값 집합이 정확히 range(33)",
+    "적재자리": {
+     "0": "0x14016009f",
+     "1": "0x14016035a (lea rcx, \"1\" @0x14016035a → sub_140234c20(len=1) → 키 \"value\" @0x140160387)",
+     "2": "0x1401603f0",
+     "3": "0x140160418",
+     "4": "0x140160440",
+     "5": "0x140160468",
+     "6": "0x140160490",
+     "7": "0x1401604b8",
+     "8": "0x1401604e0",
+     "9": "0x140160508",
+     "10": "0x140160530",
+     "11": "0x140160558",
+     "12": "0x140160580",
+     "13": "0x1401605a8",
+     "14": "0x1401605d0",
+     "15": "0x1401605f8",
+     "16": "0x140160620",
+     "17": "0x140160670",
+     "18": "0x140160698",
+     "19": "0x1401606c0",
+     "20": "0x1401606e8",
+     "21": "0x140160710",
+     "22": "0x140160738",
+     "23": "0x140160760",
+     "24": "0x140160788",
+     "25": "0x1401607b0",
+     "26": "0x1401607d8",
+     "27": "0x140160800",
+     "28": "0x140160828",
+     "29": "0x140160850",
+     "30": "0x140160213 (mov word [rax+4], 0x3033 = \"30\" (길이 2 = 0x140160206 mov dword [rax],2) → 키 \"value\" @0x140160219)",
+     "31": "0x1401600c7",
+     "32": "0x140160648"
+    },
+    "짝짓는 법": "lea r8=값문자열 → lea rdx=라벨 → call 0x14015fa30. **값이 라벨보다 앞**이라 라벨 다음 정수로 짝지으면 한 칸 밀린다(함정 16)",
+    "인자 규약 근거": "0x14015fa6d `lea rdx, \"label\"` · 0x14015faf6 `mov rcx, rbp`(r8) 뒤 \"value\"",
+    "매크로 이름과 갈리는 자리": {
+     "4": "매크로 BlendSubstract / UI linear_burn",
+     "5": "매크로 없음(min) / UI darker_color",
+     "9": "매크로 BlendAdd / UI linear_dodge",
+     "10": "매크로 없음(max) / UI lighter_color",
+     "20": "매크로 BlendSubstract(4와 동일식) / UI subtract",
+     "31": "매크로 없음(A+B·o) / UI **add**",
+     "32": "매크로 없음(mix(A,A+A·B,o)) / UI diffuse_light"
+    },
+    "crossRef": "spec/engine/shaders.json shaders.blending.modes 는 **매크로 이름**을 싣는다. 둘은 다른 층이고 서로 대체하지 않는다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/wallpaperui.exe 0x14015fd90–0x140160a4c",
+     "note": "12,742,640 B. lea r8(값)+lea rdx(라벨)+call 0x14015fa30 고정 패턴"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_blend_modes.py"
+    }
+   ]
+  },
+  {
+   "id": "blend.nativeVsEmulated",
+   "value": {
+    "그룹 헤더 적재자리": [
+     {
+      "va": "0x14016007e",
+      "group": "native"
+     },
+     {
+      "va": "0x1401600f3",
+      "group": "emulated"
+     }
+    ],
+    "native": [
+     0,
+     31
+    ],
+    "emulated": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     32
+    ],
+    "판정": "드롭다운이 `group_native` 뒤에 0·31 만 놓고 `group_emulated` 뒤에 나머지 31개를 놓는다. 엔진의 `0 또는 31` 고속 경로와 **경계가 정확히 같다**",
+    "엔진측 자리": {
+     "combos.BLENDMODE 강제 0": [
+      "0x140206be0",
+      "0x1401ebc96",
+      "0x140257911"
+     ],
+     "머티리얼 blending 강제 additive(2)": [
+      "0x1401ea096",
+      "0x140208786"
+     ],
+     "_rt_FullFrameBuffer 요청 건너뜀": [
+      "0x1401e8ef2",
+      "0x1401e8f44"
+     ]
+    },
+    "종전 등급": "docs/re/material-blend.md §7.5.3 은 그룹 멤버십을 미확정 등급으로 남겨 뒀다(그 문서의 등급 표기를 보라). 이 측정이 확정으로 바꾼다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/wallpaperui.exe 0x14015fd90–0x140160a4c",
+     "note": "12,742,640 B. lea r8(값)+lea rdx(라벨)+call 0x14015fa30 고정 패턴"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x140206be0 · 0x1401ea096 · 0x1401e8ef2",
+     "note": "colorBlendMode 0/31 고속 경로"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_blend_modes.py"
+    }
+   ]
+  },
+  {
+   "id": "blend.opacityApplication",
+   "value": {
+    "mix 적용": [
+     1,
+     2,
+     3,
+     4,
+     6,
+     7,
+     8,
+     9,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     32
+    ],
+    "opacity 무시(즉시 return)": [
+     5,
+     10,
+     31
+    ],
+    "fallthrough(0 · 범위 밖)": "mix(A, BlendNormal(A,B), opacity) = mix(A,B,o)",
+    "근거": "헤더의 `#if BLENDMODE == n` 팔이 `return mix(A,…,opacity)` 인지 아닌지로 판정"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "shader",
+     "ref": "shaders/common_blending.h:106-271"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_blend_modes.py"
+    }
+   ]
+  },
+  {
+   "id": "blend.formulaParity",
+   "value": {
+    "대조 방법": "WE 원문(common_blending.h 의 정확 비교 `==` 포함) · BlendMSL.swift(MSL) · BuiltinShaderIncludes.swift(GLSL 심) 셋을 파이썬으로 옮겨 격자 평가",
+    "격자": "A·B 각 성분 0…255/255 중 52단계 + {0,0.5,1} · opacity {0,0.25,0.5,0.75,1} · 모드 0…32 와 범위 밖 {-1,33,99}",
+    "결과": "in-range 전건 |Δ| < 1e-9 — 어긋나는 모드 0개",
+    "범위 밖 이탈": {
+     "3·8·14·17·21·22": "WE 의 `blend == 0` / `blend == 1` **정확 비교**를 `s <= 0` / `s >= 1` **범위 비교**로 바꾼 자리. [0,1] 안에서는 동일",
+     "12": "WE 는 `sqrt(base)` 무가드 — base<0 에서 NaN. 포트는 `sqrt(max(b,0))`",
+     "26·27·28·29": "WE 의 `#ifdef HDR color = saturate(color)` 를 포트는 무조건 적용. LDR(UNORM ≤1) 에서는 항등"
+    },
+    "등록된 이탈": "spec/engine/deviations.json deviation.D3 (정확비교↔범위비교) · BlendMSL.swift F676 주석(HDR saturate)",
+    "클램프 규약": "`f` 변형 매크로(BlendLinearDodgef 등)는 클램프가 **없다** — 모드 15 의 s≥0.5 가지가 그것을 그대로 쓴다. 최종 클램프는 렌더타깃 포맷이 한다(LDR bgra8Unorm=클램프, HDR rgba16Float=클램프 없음 — WE 도 같다)",
+    "알파 규약": "`ApplyBlending(BLENDMODE, screen.rgb, gl_FragColor.rgb, gl_FragColor.a)` — **A·B 양변 straight(비-프리멀티)**, opacity = 이 레이어의 straight 알파. 직후 `gl_FragColor.a = screen.a` 로 알파를 배경 것으로 되돌린다(genericimage2.frag:162-167). 소스 rgb 에 알파를 곱하는 자리는 없다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "shader",
+     "ref": "shaders/common_blending.h:106-271"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/BlendMSL.swift"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_blend_modes.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/BuiltinShaderIncludes.swift"
+    }
+   ]
+  },
+  {
+   "id": "blend.corpusReach",
+   "value": {
+    "동봉": {
+     "모집단": "동봉 Sources/WapleRender/Resources/WEAssets",
+     "json": 1698,
+     "colorBlendMode": {
+      "0": 42
+     },
+     "combos.BLENDMODE": {
+      "0": 6,
+      "2": 2,
+      "9": 1,
+      "23": 1
+     }
+    },
+    "설치본": {
+     "모집단": "설치본 wallpaper_engine",
+     "json": 2143,
+     "colorBlendMode": {
+      "0": 60,
+      "11": 5,
+      "12": 1
+     },
+     "combos.BLENDMODE": {
+      "0": 6,
+      "2": 2,
+      "9": 1,
+      "12": 1,
+      "23": 1,
+      "30": 1
+     }
+    },
+    "셰이더 [COMBO] imageblending 선언": {
+     "줄수": 58,
+     "default 분포": {
+      "0": 14,
+      "2": 10,
+      "9": 10,
+      "12": 6,
+      "22": 2,
+      "30": 3,
+      "31": 8,
+      "32": 5
+     }
+    },
+    "워크샵 코퍼스": "이 컨테이너에 없다 — `spec/corpus/scene-schema.json` scene.objects.colorBlendMode 인용만 쓰고 재측정하지 않았다",
+    "이 컨테이너에서 도달한 모드": [
+     0,
+     2,
+     9,
+     11,
+     12,
+     22,
+     23,
+     30,
+     31,
+     32
+    ],
+    "이 컨테이너에서 도달 0": [
+     1,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     10,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29
+    ],
+    "세 코퍼스 전부 도달 0": [
+     5,
+     10,
+     13,
+     14,
+     17,
+     20,
+     25,
+     26,
+     29
+    ],
+    "도달 0의 뜻": "위 '세 코퍼스 전부 도달 0' 아홉은 동봉·설치본에서 재 보면 0건이고, 워크샵 코퍼스 인용(scene.objects.colorBlendMode)에서도 image 미도달이다. 구현은 되어 있으나 **회귀를 관측할 표본이 없다** — 그쪽 산식을 손대는 변경은 A/B 로 확인할 방법이 없다는 뜻이다. 반대로 워크샵에서 31 이 image 최다(447/782)이고 그것이 native 경로다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/**/*.json"
+    },
+    {
+     "kind": "asset",
+     "ref": "WE_ROOT/**/*.json"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_blend_modes.py"
+    }
+   ]
+  }
+ ]
+}

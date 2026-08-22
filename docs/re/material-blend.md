@@ -565,6 +565,8 @@ additive 0.912·1.043)을 근거로 프리멀티 오버를 **의도적으로** �
    `2 3 4 5 6 9 11…32` 이고 빠진 `0 1 7 8 10` 은 12MB 바이너리 어디서든 접히는 짧은 리터럴이다.
    **라벨↔값 짝을 이 풀 순서로 짓지 마라** — 함정 #16 그대로 한 칸씩 밀린다. 이름은
    `common_blending.h` 매크로에서 읽어야 안전하다.
+   → **[2026-08-21]** 짝을 명령에서 직접 떴다(§7.6). 매크로 이름과 UI 이름은 **일곱 자리에서
+   갈리므로**(4·5·9·10·20·31·32) 매크로 이름만으로는 저작자의 의도를 읽을 수 없다.
 3. **파서** `colorBlendMode`(문자열 `0x140490870`, 디스크립터 등록 `0x1401eeec2`, 멤버
    오프셋 `0x32c`)는 리플렉션 int 주입기 `0x1401a4930` 이 태그 1/2 는 `mov`, 태그 3 은
    `cvttsd2si`(`0x1401a4962`)로 **생짜 int32** 를 꽂는다. **범위 검사도 클램프도 없다.**
@@ -634,6 +636,12 @@ additive 0.912·1.043)을 근거로 프리멀티 오버를 **의도적으로** �
 (**추정**: 그룹 멤버십 자체는 `wallpaperui.exe` 를 더 뜯어야 확정된다. 확정된 것은
 "엔진이 native 로 처리하는 오브젝트 모드는 0 과 31 뿐" 이다).
 
+> **[2026-08-21 · 위 추정 해소 — 툼스톤]** 뜯었다. `wallpaperui.exe` 의 두 `isgrouptitle`
+> 사이(`0x14016007e`–`0x1401600f3`)에 적재되는 항목은 **정확히 {0, 31}** 이고, 나머지 31개는
+> `group_emulated`(`0x1401600f3`) 뒤에 온다. 곧 그룹 멤버십 = 엔진 고속 경로다. 위 괄호의
+> "추정" 문면은 기록으로 남긴다 — 지금의 등급은 **확정**이다. 전문은 §7.6.3,
+> 정본은 `spec/engine/blend-modes.json` `blend.nativeVsEmulated`.
+
 `genericimage2.frag` 의 해당 블록이 emulated 경로의 정본이다:
 
 ```glsl
@@ -693,6 +701,171 @@ additive` 로 계산하면(`SceneRendererResources.swift:488`) 31 은 기존 add
 `SRC_ALPHA` 라 RGB 는 같지만 **알파를 기록한다**(§6 B5/B7 의 구조 분기) — 그 차이는
 `colorBlendMode` 도입 전과 동일하므로 새 회귀는 아니다. 넣기 전에 `BlendModeCoverageTests`
 (31 대 9 의 구분)와 골든 A/B 를 돌려라.
+
+## 7.6 에디터 드롭다운 — 라벨↔값 전수와 native/emulated 확정 (2026-08-21, 클러스터 CJ)
+
+§7.5.1 은 `bin/wallpaperui.exe` 의 라벨 33개를 세면서 **"라벨↔값 짝은 이 풀 순서로 짓지 마라"**
+로 끝냈다(함정 #16). 이번에 그 짝을 **명령에서 직접** 떴다. 정본은
+`spec/engine/blend-modes.json`(`blend.editorDropdown` · `blend.nativeVsEmulated`)이고
+생성기는 `scripts/spec/measure_blend_modes.py` 다.
+
+### 7.6.1 짝을 짓는 명령 — **값이 라벨보다 앞이다**
+
+드롭다운 항목 하나는 세 명령으로 만들어진다(`bin/wallpaperui.exe`, imagebase `0x140000000`):
+
+```
+0x1401600c7  lea r8,  [rip + 0x97403a]   ; 0x140ad4108  "31"
+0x1401600ce  lea rdx, [rip + 0x974083]   ; 0x140ad4158  "ui_editor_blending_add"
+0x1401600d5  call 0x14015fa30            ; f(rcx = json, rdx = label, r8 = value)
+```
+
+`sub_14015fa30`(`0x14015fa30`–`0x14015fba9`)이 rdx 를 `"label"` 키에, r8 을 `"value"` 키에
+넣는다 — `0x14015fa6d` `lea rdx, "label"`(`0x140ac99bc`) 과, `0x14015faf6` `mov rcx, rbp`
+(rbp 는 `0x14015fa4e` 에서 r8 을 받았다) 뒤의 `"value"`(`0x140ab21f0`)다.
+
+**값 문자열이 라벨보다 먼저 적재된다.** 그래서 "라벨 다음에 나오는 정수" 로 짝지으면 한 칸
+밀린다 — 이 문서를 쓰면서 실제로 한 번 밀렸고(생성기가 두 `lea` 의 목적지를 바꿔 읽어 0건이
+나왔다) 그래서 생성기가 `ui_editor_blending_` 접두와 `\d+` 를 **양쪽 다** 단언한다.
+
+33개 중 31개가 이 고정 패턴(7+7+5바이트)이다. 나머지 둘은 MSVC 가 `std::string` 을 길게
+지어 올리는 갈래라 패턴이 다르고, **바이트 증거로** 확정했다:
+
+| 값 | 라벨 | 증거 |
+| ---: | --- | --- |
+| 1 | `ui_editor_blending_darken` | `0x14016035a` `lea rcx, "1"`(`0x140accdf0`) → `sub_140234c20`(len=1) → 키 `"value"` `0x140160387` |
+| 30 | `ui_editor_blending_tint` | `0x140160213` `mov word [rax+4], 0x3033` = `"30"`, 길이 2 는 `0x140160206` `mov dword [rax], 2` → 키 `"value"` `0x140160219` |
+
+교차검증: 33개 값 집합이 **정확히 0…32** 다(생성기가 아니면 exit(1)).
+
+### 7.6.2 전수 표 — UI 이름은 매크로 이름과 **일곱 자리에서 갈린다**
+
+| 값 | UI 라벨(`ui_editor_blending_…`) | `common_blending.h` 매크로 | 갈리나 |
+| ---: | --- | --- | :---: |
+| 0 | `normal` | `BlendNormal` | |
+| 1 | `darken` | `BlendDarken` | |
+| 2 | `multiply` | `BlendMultiply` | |
+| 3 | `color_burn` | `BlendColorBurn` | |
+| 4 | `linear_burn` | `BlendSubstract` | ● |
+| 5 | `darker_color` | (매크로 없음 — `min(A,B)`) | ● |
+| 6 | `lighten` | `BlendLighten` | |
+| 7 | `screen` | `BlendScreen` | |
+| 8 | `color_dodge` | `BlendColorDodge` | |
+| 9 | `linear_dodge` | `BlendAdd` | ● |
+| 10 | `lighter_color` | (매크로 없음 — `max(A,B)`) | ● |
+| 11 | `overlay` | `BlendOverlay` | |
+| 12 | `soft_light` | `BlendSoftLight` | |
+| 13 | `hard_light` | `BlendHardLight` | |
+| 14 | `vivid_light` | `BlendVividLight` | |
+| 15 | `linear_light` | `BlendLinearLight` | |
+| 16 | `pin_light` | `BlendPinLight` | |
+| 17 | `hard_mix` | `BlendHardMix` | |
+| 18 | `difference` | `BlendDifference` | |
+| 19 | `exclusion` | `BlendExclusion` | |
+| 20 | `subtract` | `BlendSubstract`(**4와 같은 매크로**) | ● |
+| 21 | `reflect` | `BlendReflect` | |
+| 22 | `glow` | `BlendGlow` | |
+| 23 | `phoenix` | `BlendPhoenix` | |
+| 24 | `average` | `BlendAverage` | |
+| 25 | `negation` | `BlendNegation` | |
+| 26 | `hue` | `BlendHue` | |
+| 27 | `saturation` | `BlendSaturation` | |
+| 28 | `color` | `BlendColor` | |
+| 29 | `luminosity` | `BlendLuminosity` | |
+| 30 | `tint` | `BlendTint` | |
+| 31 | `add` | (매크로 없음 — `A + B·opacity`) | ● |
+| 32 | `diffuse_light` | (매크로 없음 — `mix(A, A+A·B, o)`) | ● |
+
+**이것이 함정 #27 의 교과서적 사례다.** 매크로 이름만 인용하면:
+
+* 모드 4 를 "Subtract" 라고 부르게 되는데 저작자가 UI 에서 고른 것은 **Linear Burn** 이다.
+  Photoshop 의 Linear Burn 이 `base + blend − 1` 인 것과 정확히 맞고, 매크로 이름 쪽이 오기다.
+* 모드 9 를 "Add" 라고 부르게 되는데 UI 의 **Add 는 모드 31** 이다. 모드 9 는 **Linear Dodge**
+  (= 클램프 있는 가산)이고, 31 은 클램프 없이 `A + B·o` 인 하드웨어 additive 다.
+  워크샵 씬에서 image 오브젝트의 최다 값이 31 인 것(§7.5.5)이 이 이름으로 자연스럽게 읽힌다 —
+  저작자가 고른 것은 "Add" 였다.
+* 모드 20 은 UI 에서 **Subtract** 인데 매크로가 모드 4 와 같다. 곧 **WE 의 Subtract 는 실제로
+  Linear Burn 을 한다** — 원본의 결함이고, 이식본은 그 결함을 그대로 보존해야 한다
+  (`BlendMSL.applyBlending` `case 20` 이 `case 4` 와 같은 식인 것이 옳다).
+
+### 7.6.3 native / emulated 그룹 — §7.5.3 의 **추정을 확정으로**
+
+드롭다운은 `isgrouptitle` 두 개로 갈린다:
+
+```
+0x14016007e  lea rdx, "ui_editor_blending_group_native"     ; 0x140ad40e0
+   … normal(0) · add(31) …
+0x1401600f3  lea rdx, "ui_editor_blending_group_emulated"   ; 0x140ad4130
+   … tint(30) · darken(1) · … 나머지 31개 …
+```
+
+두 헤더 사이에 적재되는 항목은 **정확히 {0, 31}** 이다(생성기가 값 목록을 미리 알지 않고
+**적재 주소 순서로만** 판정한다 — 0/31 을 필터로 넣으면 순환 논증이 된다).
+
+이것은 §7.5.3 이 엔진에서 뜬 고속 경로와 **경계가 같다**:
+
+| 엔진 자리 | 하는 일 |
+| --- | --- |
+| `0x140206be0` · `0x1401ebc96` · `0x140257911` | `colorBlendMode ∈ {0,31}` 이면 `combos.BLENDMODE = 0` |
+| `0x1401ea096` · `0x140208786` | `colorBlendMode == 31` 이면 머티리얼 blending 을 additive(2)로 강제 |
+| `0x1401e8ef2` · `0x1401e8f44` | 같은 검사로 `_rt_FullFrameBuffer` 요청을 건너뜀 |
+
+곧 §7.5.3 의 "**추정**: 그룹 멤버십 자체는 wallpaperui.exe 를 더 뜯어야 확정된다" 는
+**해소됐다** — 뜯었고, 답은 native = {0, 31} 이다. 그 절의 옛 문면은 툼스톤으로 남긴다.
+
+### 7.6.4 수식 3자 대조 — 어긋나는 자리 0
+
+`BlendMSL.swift`(MSL) 가 원본과 갈리는 자리를 찾기 위해, 세 문면을 파이썬으로 옮겨
+격자 평가했다:
+
+1. **WE 원문** `common_blending.h` — `blend == 0.0` / `blend == 1.0` 정확 비교와
+   무가드 `sqrt(base)` 까지 문면 그대로.
+2. **`Sources/WapleRender/BlendMSL.swift`** — `select(...)` · `max(s,1e-5)` 관용구 그대로.
+3. **`Sources/WapleCore/BuiltinShaderIncludes.swift`** — GLSL 심(`step(...)` 관용구).
+
+격자: A·B 각 성분을 0…255/255 중 52단계 + `{0, 0.5, 1}`, opacity `{0, 0.25, 0.5, 0.75, 1}`,
+모드 0…32 와 범위 밖 `{-1, 33, 99}`.
+
+**결과: 입력이 [0,1] 안이면 36개 모드값 전건 `|Δ| < 1e-9`. 고칠 자리가 없다.**
+
+범위 밖([0,1] 밖) 입력에서만 갈리고, 갈리는 자리는 **전부 이미 등록된 이탈**이다:
+
+| 모드 | 갈리는 이유 | 등록처 |
+| --- | --- | --- |
+| 3 · 8 · 14 · 17 · 21 · 22 | WE 의 `blend == 0` / `blend == 1` **정확 비교**를 `s <= 0` / `s >= 1` **범위 비교**로 바꿨다 | `spec/engine/deviations.json` `deviation.D3` |
+| 12 | WE 는 `sqrt(base)` 무가드(base<0 에서 NaN) · 포트는 `sqrt(max(b,0))` | 아래 §7.6.5 |
+| 26 · 27 · 28 · 29 | WE 의 `#ifdef HDR color = saturate(color)` 를 포트는 무조건 적용 | `BlendMSL.swift` F676 주석 |
+
+8비트 입력(`k/255`)에서는 `max(s, 1e-5)` 엡실론이 **발동조차 하지 않는다** — `1−s` 의 최소
+비영값이 `1/255 ≈ 0.0039` 로 `1e-5` 보다 두 자리 크고, `s == 1` 은 `select` 가 먼저 잡는다.
+
+### 7.6.5 클램프와 알파 — 명령 단위 확인
+
+**클램프.** `f` 접미 매크로는 클램프가 **없다**(`BlendLinearDodgef(base, blend) = (base + blend)`,
+`common_blending.h:106`). 모드 15 의 `blend >= 0.5` 가지가 바로 그것을 쓰므로 **1을 넘을 수 있다**
+— MSL 포트가 `b + 2.0*(s-0.5)` 로 클램프 없이 두는 것이 원본과 같다. 최종 클램프는 렌더타깃이
+한다: Waple 은 `accPixelFormat` 이 LDR 에서 `bgra8Unorm`(UNORM 쓰기 클램프),
+HDR·high/ultra 에서 `rgba16Float`(클램프 없음)이고 — WE 도 LDR 은 UNORM, HDR 은 float 이라
+**두 경로 다 같다**. (`Sources/WapleRender/SceneRenderer.swift` 의 `var accPixelFormat` 참조.)
+
+**알파.** `genericimage2.frag:162-167` 이 emulated 경로의 정본이다:
+
+```glsl
+gl_FragColor.rgb = ApplyBlending(BLENDMODE, screen.rgb, gl_FragColor.rgb, gl_FragColor.a);
+gl_FragColor.a = screen.a;
+```
+
+* `screen` 은 `g_Texture4`(= `_rt_FullFrameBuffer`) 샘플 — **프레임버퍼 색이므로 straight** 다.
+* `gl_FragColor` 는 같은 파일 머리에서 `color.rgb *= g_Brightness; color.a *= g_UserAlpha;`
+  로 만들어진다(`genericimage2.frag:67-69`) — **rgb 에 알파를 곱하는 자리가 없다.**
+  곧 B 도 straight 이고 opacity 는 그 레이어의 straight 알파(`albedo.a × g_UserAlpha`)다.
+* 그래서 **`ApplyBlending` 의 A·B 는 절대 프리멀티가 아니다.**
+
+Waple `QuadShaders.f_blend` 가 같은 규약이다 — `c.rgb * tint.rgb`(알파 미곱) 와
+`o = c.a * tint.a`(= `albedo.a × g_UserAlpha`) 를 넘기고, `float4(r, d.a)` 로 dst 알파를
+되쓴다. WE 는 알파를 `screen.a` 로 되돌린 뒤 `WriteMask 7`(§4.2)이라 아예 기록하지 않으므로
+**"안 건드림" 이라는 결과가 같다.** 여기에 고칠 자리도 없다.
+
+---
 
 ## 8. 게이트
 

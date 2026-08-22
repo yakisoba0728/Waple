@@ -400,6 +400,17 @@ alpha = 1.0
 4. 구분자에 탭/개행이 섞인 `schemecolor` 값의 동작 차이. WE 는 `cmp byte [rbx],0x20` 하나만 보므로
    탭을 성분 내부로 삼킨다. 실측 도달 0건이라 맞추지 않았고, Waple 도 맞추지 않았다.
 
+> **[2026-08-21 · 클러스터 CJ — 상태 갱신]** 위 목록은 그대로 둔다(툼스톤). 지금 상태만 덧붙인다.
+>
+> | # | 상태 |
+> | ---: | --- |
+> | 1 | **여전히 미해결.** `[wallpaper+0x1528]` 의 RTTI 를 뜨지 않았다 |
+> | 2 | **여전히 미해결.** 능력 비트마스크의 씬 경로를 대응시키지 않았다 |
+> | 3 | **여전히 미해결.** `usershadervalues` 런타임 갱신 여부 |
+> | 4 | **여전히 미해결이지만 도달 0으로 재확인.** 동봉 161 · 설치본 180건 전건 스페이스 구분이다 |
+> | 5(§9.4) | **절반 해소.** "wallpaper64.exe 어디서 만드나" 는 **없다**로 확정했다(§9.4 의 추가 상자). 남은 것은 `bin/winrtutil64.exe` 안의 산식이다 |
+> | 6(§10, 신규) | GIF 자동 생성 경로의 **호출자 사슬** |
+
 ---
 
 ## 9. `GetDominantColor` — 편집기가 `schemecolor` 를 **만드는** 자리
@@ -435,6 +446,83 @@ alpha = 1.0
 핵심은 **`sat·val` 가중 빈도**다. 칙칙하거나 어두운 픽셀은 스스로 눌리므로, 면적이 넓어도
 배경 회색이 대표색이 되지 않는다.
 
+> **[2026-08-21 · 클러스터 CJ — 명령 단위 재확인]** 위 4단계는 맞다. 아래는 그것을 **상수 적재
+> 자리까지** 좁힌 것이고, 과제가 물은 "양자화 방식 · 가중치 · 채도 하한" 셋을 확정한다.
+> 정본은 `spec/engine/dominant-color.json` `dominantColor.algorithm`, 생성기는
+> `scripts/spec/measure_dominant_color.py`(바이트를 전수 대조하므로 낡으면 exit(1) 한다).
+
+#### 9.2a 상수와 그 적재 자리 (`bin/resourceutil64.dll`, imagebase `0x180000000`)
+
+| 상수 | 상수 VA | 적재 명령 | 쓰는 곳 |
+| --- | --- | --- | --- |
+| `255.0f` | `0x18011a3dc` | `0x180009efb` `movss xmm15` | 채널 정규화 제수 |
+| `6.0f` | `0x18011a3d4` | `0x180009f14` `movss xmm13` | hue 섹터 제수 |
+| `1.0f` | `0x18011a39c` | `0x180009f1d` `movss xmm12` | hue<0 보정 |
+| `360.0f` | `0x18011a3e0` | `0x180009f26` `movss xmm9` | 빈 수 |
+| `100.0f` | `0x18011a3d8` | `0x180009f48` `movss xmm10` | **가중치 배율** |
+| `1e-5f` | `0x18011a398` | `0x180009f5a` `movss xmm11` | **무채색 임계** |
+| `2.0`(f64) | `0x18011a3b0` | `0x180009f07` `movsd xmm14` | hue 섹터 +2 |
+| `4.0`(f64) | `0x18011a3b8` | `0x180009f37` `movsd xmm7` | hue 섹터 +4 |
+| `6.0`(f64) | `0x18011a3c0` | `0x18000a508` `movsd xmm1` | HSV→RGB `fmod` 제수 |
+
+버퍼 넷은 진입에서 0 으로 밀린다 — `0x180009e97` `mov r8d, 0xb40`(= 360 × int64, weight·count
+두 개)과 `0x180009edc` `mov r8d, 0x5a0`(= 360 × float, satSum·valSum 두 개).
+
+#### 9.2b 양자화 축 — hue 360빈, **채도·명도는 양자화하지 않는다**
+
+```
+0x180009f85  mov ecx, [rsi + rax]     ; 픽셀 dword — byte0 = R
+0x180009fd4  comiss xmm11, xmm6       ; 1e-5 > delta ?   → 무채색
+0x180009fda  comiss xmm4, xmm8        ; fmax <= 0 ?      → 무채색
+0x180009fe6  divss  xmm2, xmm4        ; S = delta / fmax  (HSV 채도)
+0x18000a035  cvttss2si ecx, xmm1      ; bin = trunc(H · 360)
+0x18000a039  cmp ecx, 0x167           ; 359 상한
+0x18000a051  cmovs ecx, eax           ; 0 하한
+```
+
+`V` 는 `xmm4` = `fmax` 다. 무채색 갈래(`0x18000a048` `xor ecx,ecx` · `0x18000a04a`
+`xorps xmm2,xmm2`)는 **빈 번호와 S 만 0 으로 만들고 `V` 는 건드리지 않는다** — 곧 흰색·회색
+픽셀도 빈 0 의 `valSum` 을 올린다. (기존 문면 "빈 0 에 `sat = 0` 으로 들어간다" 와 같은 말이고,
+V 가 그대로라는 점을 명시한다.)
+
+#### 9.2c 가중치와 "채도 하한" — **별도의 하한 상수는 없다**
+
+```
+0x18000a05a  mulss xmm0, xmm4          ; S · V
+0x18000a078  mulss xmm0, xmm10         ; × 100.0
+0x18000a08c  cvttss2si eax, xmm0       ; **절단**
+0x18000a093  add [rbp + rdx*8 + 0xa60], rcx   ; weight[bin] += (int64)eax
+0x18000a070  inc qword [rbp + rdx*8 + 0x15a0] ; count[bin] += 1
+```
+
+곧 하한 노릇을 하는 것은 **`cvttss2si` 의 절단**이다: `S·V < 0.01` 인 픽셀은 가중치 기여가
+정확히 0 이다. 다만 그 픽셀도 `count`/`satSum`/`valSum` 에는 들어가므로, **뽑힌 빈의 평균색은
+여전히 끌어내린다.** "채도 하한이 있다/없다" 는 이 두 문장을 함께 읽어야 맞다.
+
+#### 9.2d 선택과 역변환
+
+```
+0x18000a0fb  cmp r9, rax               ; weight[bin] > best ?
+0x18000a105  mov edx, r9d              ; ← best 를 **int32 로 좁힌다**
+0x18000a116  divss xmm0, xmm9          ; H = bin / 360
+0x18000a14c  divss xmm6, xmm1          ; S = satSum[bin] / count[bin]
+0x18000a150  divss xmm7, xmm1          ; V = valSum[bin] / count[bin]
+0x18000a515  mulss xmm6, xmm7          ; C = S · V
+0x18000a544  subss xmm7, xmm6          ; m = V − C
+0x18000a6a2  or edx, 0xff000000        ; 출력 = 0xFF000000 | B<<16 | G<<8 | R
+```
+
+역변환은 표준 HSV→RGB 다 — `C = S·V`, `X = C·(1 − |fmod(H·6, 2) − 1|)`(`0x18000a51d` /
+`0x18000a533` 의 `fmod` 두 번), `m = V − C`, 각 채널 `×255` 후 `[0,255]` 클램프.
+
+**결함 하나 [확정].** 최대 빈 비교(`0x18000a0fb`)는 새 최대를 `mov edx, r9d`(`0x18000a105`)로
+**32비트만** 보관하고 다음 비교에서 `movsxd rax, edx` 로 되편다. 픽셀수 × 100 이 2³¹ 을 넘으면
+(전 픽셀이 `S·V=1` 일 때 약 2,148만 픽셀 = 대략 5.7K×3.8K 이상) 비교가 뒤집힐 수 있다.
+실행 관측은 못 했으므로 **결함의 존재만 확정이고 발현 여부는 미관측**이다.
+
+**알파는 읽지 않는다 [확정].** 본체 `0x180009e30`–`0x18000a6af` 어디에도 픽셀 dword 의 byte3
+을 쓰는 명령이 없다(`shr ecx, 0x10` 까지가 전부 — `0x180009f92`).
+
 ### 9.3 Waple `ArtworkColors` 와의 차이 — 전부 확정
 
 | 축 | WE `GetDominantColor` | Waple `ArtworkColors` |
@@ -464,6 +552,87 @@ alpha = 1.0
 
 **그 다섯을 쓰는 자리는 특정하지 못했다.** `GetDominantColor` 를 그대로 이식해도 색이
 하나뿐이라 이 다섯을 채울 수 없다. 이 갭을 닫으려면 쓰기 자리를 먼저 찾아야 한다.
+
+> **[2026-08-21 · 클러스터 CJ — 어디에 **없는지**를 확정했다]** 위 문장의 "쓰기 자리" 를
+> `wallpaper64.exe` 안에서 **전수로 찾았고, 없다는 것을 확정했다.**
+>
+> **그물.** `.pdata` 의 모든 함수를 선형 디스어셈해서, 다섯 변위
+> (`+0x150`·`+0x154`·`+0x158`·`+0x15c`·`+0x160`)로 가는 **스택이 아닌** dword
+> 스토어(`mov`/`movss`)를 전수로 셌다 — **95건 / 48함수**. 다섯 중 **넷 이상**을 쓰는 함수는
+> 다섯 개뿐이고 전부 무관하다:
+>
+> | 함수 | 왜 무관한가 |
+> | --- | --- |
+> | `0x140058c15` · `0x1401dd630` · `0x1401de962` · `0x1401df620` | 전건 `movss` — **float** 다섯 개다. uint32 색이 아니다 |
+> | `0x1400d834f` | `[rdi + r9 + 0x150]` 처럼 **런타임 베이스**를 더한 4×4 행렬 복사(같은 함수가 `+0x108`…`+0x17c` 를 `0x10` 간격으로 채운다) |
+>
+> 미디어 구조체 자신을 만지는 자리는 **셋뿐이다**:
+> (a) 생성자 `0x1400c1390` 의 0 초기화 — `0x1400c1402`(qword, `+0x150`/`+0x154`) ·
+> `0x1400c1409`(qword, `+0x158`/`+0x15c`) · `0x1400c1413`(dword, `+0x160`),
+> 그리고 `0x1400c1428` `mov byte [rdx+0x174], 1` 로 `enabled` 만 1 이다.
+> (b) 복사 생성자 `0x1400c23f0`–`0x1400c249b`(`0x1400c2422`–`0x1400c2454`).
+> (c) 이벤트 빌더 `0x14011be40`–`0x14011c90c` 의 **읽기**(위 표).
+>
+> **교차 근거.** `wallpaper64.exe` 에는 WinRT 미디어 세션 문자열이 **0건**이다 —
+> `Windows.Media.Control` · `GlobalSystemMediaTransportControlsSessionManager` 를 ASCII·UTF-16
+> 양쪽으로 세도 0/0 이다. 그 문자열은 `bin/winrtutil64.exe` 에만 있고(각각 ascii 1·utf16 1 /
+> utf16 1), 그 실행 파일은 `api-ms-win-core-winrt-l1-1-0.dll` 을 임포트하며 OpenCV 4.4.0 과
+> FreeImage 를 링크한다. 곧 미디어 세션 호스트는 **별도 프로세스**이고 다섯 색은 IPC 로
+> 건너온다 — 공통 브리프 함정 #13("바이너리 하나 ≠ WE") 그대로다.
+>
+> **[미해결] 로 남는 것**은 이제 "wallpaper64 어디서 만드나" 가 아니라
+> "`winrtutil64.exe` 의 어느 함수가 만드나" 다. 그 안에서 `cv::kmeans` 는 링크만 되고
+> **호출되지 않는다**(`OPENCV_KMEANS_PARALLEL_GRANULARITY` 전역 `0x1403ab6b0` 을 읽는 자리가
+> 정적 초기화자 `0x1400017d0` 하나뿐이고, 그 초기화자를 부르는 자리도 0건이다). 즉 팔레트
+> 추출에 OpenCV kmeans 를 쓰지는 않는다 — 그 이상은 안 떴다.
+>
+> **Waple 에 대한 함의는 바뀌지 않는다.** `ArtworkColors` 는 여전히 독자 알고리즘이고,
+> `GetDominantColor` 로는 다섯 색을 채울 수 없다(색이 하나다).
+
+---
+
+## 10. `schemecolor` 를 **엔진이 직접** 짓는 자리 (2026-08-21, 클러스터 CJ)
+
+§2 는 "WE 는 이 값을 미리보기 이미지의 대표색에서 자동 산출하는 경로도 갖는다" 를
+**에디터 JS**(`getDominantColorFromFile`)로만 인용했다. 같은 일을 하는 **네이티브 경로**가
+`wallpaper64.exe` 안에 있다. 정본은 `spec/engine/dominant-color.json`
+`dominantColor.schemecolorGeneration`.
+
+함수는 `0x140110060`–`0x1401105a5`(`.pdata` 조각 5개 병합)이고, 절차는:
+
+```
+0x140110209  lea rdx, ".gif"                       ; 0x140487000  — 확장자 게이트
+0x140110223  call 0x140118880                      ; endsWith 판정 → al
+0x140110237  je  0x1401104ab                       ; .gif 가 아니면 통째로 건너뛴다
+0x14011023f  lea rcx, L"resourceutil64.dll"        ; 0x140478170 (UTF-16)
+0x14011024c  call [0x140426638]                    ; LoadLibraryExW(…, 0, 0x1000)
+0x14011027b  lea rdx, "GetDominantColorFromImage"  ; 0x140489198
+0x140110285  call [0x140426660]                    ; GetProcAddress
+0x1401102a4  call rax                              ; eax = 0xFF000000|B<<16|G<<8|R
+0x1401102c1  lea r8,  "%.5f %.5f %.5f"             ; 0x1404890d8
+0x140110322  call 0x1400162a0                      ; snprintf(buf, 0xc4, fmt, R, G, B)
+0x1401103cb  lea rdx, "schemecolor"                ; 0x140474560
+0x1401103ea  lea rdx, "value"                      ; 0x140474508
+```
+
+**[확정] 채널 순서는 R, G, B 다.** `eax` 를 쪼개는 세 명령이
+`0x1401102cd` `shr ecx, 0x10`(B) · `0x1401102da` `shr eax, 8`(G) · `0x1401102f8` `movzx eax, bl`(R)
+이고, 가변인자 자리가 `r9`=R · `[rsp+0x20]`=G · `[rsp+0x28]`=B 다. 각 채널은 `/255.0f`
+(`0x1401102b9` `movss xmm2, 255.0`) 후 double 로 넓혀 실린다.
+
+**[확정] 이것이 §2 의 "0–1 부동소수 3성분" 을 네이티브 쪽에서도 뒷받침한다** — 감마 변환도
+0–255 유지도 없고, 그냥 `채널/255` 를 소수 5자리로 찍는다.
+
+**[확정] 게이트는 `.gif` 다.** 곧 이 경로는 **애니메이션 GIF 배경화면**이 `schemecolor` 를
+안 갖고 있을 때 엔진이 첫 프레임에서 뽑아 채우는 자리다. 씬(`scene.json`) 배경화면은 이
+경로를 타지 않는다 — 씬의 `schemecolor` 는 저작 시점에 에디터가 넣는다(§2 의 JS 경로).
+
+**[미해결]** 이 함수의 호출자 사슬(어느 시점에 GIF 배경화면이 이 경로를 타는지)은 따라가지
+않았다. `wallpaper+0x3d8` 뮤텍스와 `+0x424` 상태값으로 보호되는 것까지만 봤다.
+
+**Waple 도달 0.** Waple 은 `schemecolor` 를 배선하지 않기로 했고(§7), GIF 배경화면의
+자동 생성 경로도 없다. 이 절은 **왜 안 배선해도 되는지**를 한 겹 더 뒷받침한다 — 원본에서도
+이 값을 만드는 쪽은 렌더러가 아니라 저작·임포트 단계다.
 
 ---
 
