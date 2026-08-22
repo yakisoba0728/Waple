@@ -25,6 +25,18 @@ import simd
 ///  4. `weight` 최대 빈 하나를 고르고, `H = bin/360`, `S = satSum/count`, `V = valSum/count`
 ///     로 **HSV→RGB 역변환**해 `0xFF000000 | B<<16 | G<<8 | R` 로 싼다(`0x18000a508`–`0x18000a6a2`).
 ///
+/// **[CJ 2026-08-21] 위 4단계를 명령 단위로 재확인하며 셋을 좁혔다**(정본
+/// `spec/engine/dominant-color.json` `dominantColor.algorithm`, 생성기
+/// `scripts/spec/measure_dominant_color.py` 가 바이트를 전수 대조한다):
+///
+///  · **채도 하한 상수는 없다.** 하한 노릇을 하는 것은 `0x18000a08c` 의 `cvttss2si` **절단**
+///    이고, 그래서 `S·V < 0.01` 인 픽셀은 가중치 기여가 정확히 0 이다. 다만 그 픽셀도
+///    `count`/`satSum`/`valSum` 에는 들어가므로 **뽑힌 빈의 평균색은 여전히 끌어내린다**.
+///  · 무채색 갈래(`0x18000a048` `xor ecx,ecx` · `0x18000a04a` `xorps xmm2,xmm2`)는 빈 번호와
+///    `S` 만 0 으로 만든다 — **`V`(= fmax)는 그대로 `valSum` 에 누적된다**.
+///  · 최대 빈 비교가 러닝 최대를 int32 로 좁힌다(`0x18000a105` `mov edx, r9d`). 픽셀수 × 100 이
+///    2³¹ 을 넘으면 비교가 뒤집힐 수 있다 — 결함의 **존재**는 확정이고 발현은 미관측이다.
+///
 /// 우리 구현과 다른 축(전부 확정):
 ///  · **양자화 축**: WE = hue 360빈(채도·명도는 빈 안에서 평균) / 우리 = RGB 4bit×3 = 4096빈.
 ///  · **가중치**: WE = `sat·val` 가중 빈도(칙칙하고 어두운 색을 스스로 눌러 준다) /
@@ -35,6 +47,20 @@ import simd
 /// 곧 두 결과는 일반적으로 **일치하지 않는다**. 이 갭을 닫으려면 위 [미해결](다섯 색을 만드는
 /// 자리)을 먼저 찾아야 한다 — `GetDominantColor` 를 그대로 이식해도 색이 하나뿐이라 못 채운다.
 /// 전문·재현 절차: `docs/re/scheme-color.md` §9.
+///
+/// **[CJ 2026-08-21] 그 [미해결] 을 절반 닫았다 — `wallpaper64.exe` 에는 계산 자리가 없다.**
+/// `.pdata` 전 함수를 선형 디스어셈해서 다섯 변위(`+0x150`…`+0x160`)로 가는 **스택 아닌**
+/// dword 스토어를 전수로 셌다(95건 / 48함수). 다섯 중 넷 이상을 쓰는 함수는 다섯 개뿐이고
+/// 넷은 전건 `movss`(= float 다섯 개, uint32 색이 아니다), 나머지 하나
+/// (`0x1400d834f`)는 런타임 베이스를 더한 4×4 행렬 복사다. 미디어 구조체 자신을 만지는 자리는
+/// 생성자의 0 초기화(`0x1400c1402`·`0x1400c1409`·`0x1400c1413`)와 복사 생성자
+/// (`0x1400c2422`–`0x1400c2454`)뿐이다.
+/// 교차 근거: `wallpaper64.exe` 에 WinRT 미디어 세션 문자열이 **0건**이고
+/// (`Windows.Media.Control` · `GlobalSystemMediaTransportControlsSessionManager`, ASCII·UTF-16
+/// 양쪽), 그 문자열은 `bin/winrtutil64.exe` 에만 있다. 곧 다섯 색은 **별도 프로세스에서
+/// 만들어져 IPC 로 건너온다** — 남은 [미해결] 은 "winrtutil64.exe 의 어느 함수인가" 다.
+/// (그 안에서 `cv::kmeans` 는 링크만 되고 호출되지 않는다 — 팔레트 추출에 OpenCV kmeans 를
+/// 쓰지는 않는다. 그 이상은 안 떴다.)
 public enum ArtworkColors {
     public struct Palette: Equatable {
         public var primary: SIMD3<Float>

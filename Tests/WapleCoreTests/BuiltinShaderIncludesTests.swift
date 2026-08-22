@@ -14,7 +14,11 @@ final class BuiltinShaderIncludesTests: XCTestCase {
             return XCTFail("rgb2hsl 본문을 찾지 못함")
         }
         let prelude = src[head.upperBound..<fmin.lowerBound]
-        XCTAssertTrue(prelude.contains("c = saturate(c);"),
-                      "rgb2hsl 전두부에 saturate 선적용 없음 — BlendMSL we_rgb2hsl(F676)과 불일치")
+        // `contains` 는 주석 처리(`// c = saturate(c);`)를 못 잡는다 — 돌연변이 M7 실측(2026-08-21).
+        // 줄 전문 일치로 본다.
+        let hasSaturateLine = prelude.split(whereSeparator: { $0.isNewline })
+            .contains { $0.trimmingCharacters(in: .whitespaces) == "c = saturate(c);" }
+        XCTAssertTrue(hasSaturateLine,
+                      "rgb2hsl 전두부에 saturate 선적용 없음(주석 처리 포함) — BlendMSL we_rgb2hsl(F676)과 불일치")
     }
 }

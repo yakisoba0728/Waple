@@ -1,0 +1,481 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_dominant_color.py",
+ "entries": [
+  {
+   "id": "dominantColor.entryPoints",
+   "value": {
+    "export": {
+     "GetDominantColor": {
+      "export": "0x180001a90",
+      "jmp": "0x18000a6d0"
+     },
+     "GetDominantColorFromImage": {
+      "export": "0x1800014c0",
+      "jmp": "0x18000a6d0"
+     }
+    },
+    "폴딩": "두 export 가 같은 5바이트 `jmp rel32` 로 0x18000a6d0 에 접힌다(ICF)",
+    "래퍼": "0x18000a6d0 — 이미지 로드(sub_180009c40) 후 sub_180009e30(rcx=RGBA8, edx=width, r8d=height) 호출(0x18000a71a)",
+    "본체": "0x180009e30",
+    "호출자": "에디터 JS `getDominantColorFromFile`(ui/dist/scripts/scripts.js) 와 wallpaper64.exe 0x140110060(아래 항목)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/resourceutil64.dll 0x180009e30–0x18000a6af",
+     "note": "imagebase 0x180000000. GetDominantColor 본체"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_dominant_color.py"
+    }
+   ]
+  },
+  {
+   "id": "dominantColor.algorithm",
+   "value": {
+    "1. 색공간": "RGBA8 전 픽셀 → HSV. 픽셀 dword 의 byte0 = R (0x180009f85)",
+    "2. 양자화": "hue 를 **1° 단위 360빈**. bin = clamp(trunc(H·360), 0, 359)",
+    "3. 무채색": "delta < 1e-5 **또는** fmax <= 0 이면 bin 0 · S=0. V(=fmax) 는 그대로 valSum 에 든다 — S 만 0 이다",
+    "4. 빈 누적": [
+     "weight[bin] += (int)(S·V·100)",
+     "count[bin] += 1",
+     "satSum[bin] += S",
+     "valSum[bin] += V"
+    ],
+    "5. 선택": "weight 최대 빈 하나. H = bin/360 · S = satSum/count · V = valSum/count",
+    "6. 역변환": "표준 HSV→RGB (C = S·V, X = C·(1−|fmod(H·6,2)−1|), m = V−C), 각 채널 ×255 후 [0,255] 클램프",
+    "7. 출력": "0xFF000000 | B<<16 | G<<8 | R (바이트 순서 R,G,B,A)",
+    "채도 하한": "**별도의 하한 상수는 없다.** 하한 노릇을 하는 것은 가중치의 `cvttss2si` **절단**이다(0x18000a08c) — S·V < 0.01 인 픽셀은 weight 기여가 0 이 된다. 그래도 그 빈의 count/satSum/valSum 에는 그대로 들어가므로 **선택된 빈의 평균색은 끌어내린다**",
+    "알파": "읽지 않는다 — 픽셀 dword 에서 byte3 을 쓰는 자리가 본체에 없다",
+    "표본": "전 픽셀(서브샘플·리사이즈 없음)",
+    "결함": "최대 빈 비교가 러닝 최대를 int32 로 좁힌다(0x18000a105 `mov edx, r9d`). 픽셀수 × 100 이 2^31 을 넘으면(≈2148만 픽셀 이상, 전 픽셀이 S·V=1일 때) 비교가 뒤집힐 수 있다. 실행 관측은 못 했다",
+    "상수 적재 자리": {
+     "0x18011a3dc": {
+      "값": 255.0,
+      "폭": 4,
+      "쓰는 자리": "채널 정규화 제수 (0x180009efb movss xmm15)"
+     },
+     "0x18011a3d4": {
+      "값": 6.0,
+      "폭": 4,
+      "쓰는 자리": "hue 섹터 제수 (0x180009f14 movss xmm13)"
+     },
+     "0x18011a39c": {
+      "값": 1.0,
+      "폭": 4,
+      "쓰는 자리": "hue<0 보정 가산 (0x180009f1d movss xmm12)"
+     },
+     "0x18011a3e0": {
+      "값": 360.0,
+      "폭": 4,
+      "쓰는 자리": "빈 수 = hue·360 (0x180009f26 movss xmm9)"
+     },
+     "0x18011a3d8": {
+      "값": 100.0,
+      "폭": 4,
+      "쓰는 자리": "가중치 배율 (0x180009f48 movss xmm10)"
+     },
+     "0x18011a398": {
+      "값": 9.999999747378752e-06,
+      "폭": 4,
+      "쓰는 자리": "무채색 임계 delta<1e-5 (0x180009f5a movss xmm11)"
+     },
+     "0x18011a3b0": {
+      "값": 2.0,
+      "폭": 8,
+      "쓰는 자리": "hue 섹터 오프셋 +2 (0x180009f07 movsd xmm14)"
+     },
+     "0x18011a3b8": {
+      "값": 4.0,
+      "폭": 8,
+      "쓰는 자리": "hue 섹터 오프셋 +4 (0x180009f37 movsd xmm7)"
+     },
+     "0x18011a3c0": {
+      "값": 6.0,
+      "폭": 8,
+      "쓰는 자리": "HSV→RGB fmod 제수 (0x18000a508 movsd xmm1)"
+     }
+    },
+    "명령 자리": {
+     "0x180009e97": "weight/count 배열 memset 크기 0xb40 = 360 × int64",
+     "0x180009edc": "satSum/valSum 배열 memset 크기 0x5a0 = 360 × float",
+     "0x180009f85": "픽셀 dword 적재 — byte0 = R",
+     "0x180009fd4": "comiss xmm11(1e-5), xmm6(delta) — delta<1e-5 면 무채색",
+     "0x180009fda": "comiss xmm4(fmax), xmm8(0) — fmax<=0 이면 무채색",
+     "0x180009fe6": "divss xmm2 = delta / fmax = HSV **S**",
+     "0x18000a035": "cvttss2si ecx = trunc(hue·360) — 빈 번호",
+     "0x18000a039": "cmp ecx, 0x167 — 359 상한",
+     "0x18000a051": "cmovs ecx, 0 — 음수 하한",
+     "0x18000a048": "무채색 갈래: 빈 0",
+     "0x18000a04a": "무채색 갈래: xorps xmm2 → S=0 (**V=fmax 는 그대로 누적된다**)",
+     "0x18000a05a": "mulss xmm0 = S · V",
+     "0x18000a078": "mulss xmm0 *= 100.0",
+     "0x18000a08c": "cvttss2si eax — **절단**. S·V<0.01 이면 가중치 기여 0",
+     "0x18000a093": "weight[bin] += (int64)eax",
+     "0x18000a070": "count[bin] += 1",
+     "0x18000a0fb": "cmp r9(weight[bin]), rax — 최대 빈 선택",
+     "0x18000a105": "mov edx, r9d — 러닝 최대를 **int32 로 좁힌다**(대형 이미지 오버플로 결함)",
+     "0x18000a116": "divss xmm0 = bin / 360 = H",
+     "0x18000a14c": "divss xmm6 = satSum[bin] / count[bin] = S",
+     "0x18000a150": "divss xmm7 = valSum[bin] / count[bin] = V",
+     "0x18000a515": "mulss xmm6 = S·V = C(chroma)",
+     "0x18000a544": "subss xmm7 = V − C = m",
+     "0x18000a6a2": "or edx, 0xff000000 — 출력 = 0xFF000000|B<<16|G<<8|R"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/resourceutil64.dll 0x180009e30–0x18000a6af",
+     "note": "imagebase 0x180000000. GetDominantColor 본체"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_dominant_color.py"
+    }
+   ]
+  },
+  {
+   "id": "dominantColor.schemecolorGeneration",
+   "value": {
+    "무엇": "wallpaper64.exe 가 **네이티브에서** `general.properties.schemecolor.value` 를 짓는다",
+    "게이트": "대상 파일 확장자가 `.gif` 일 때만(0x140110209). 그 밖은 0x1401104ab 로 빠진다",
+    "적재": "LoadLibraryExW(L\"resourceutil64.dll\") → GetProcAddress(\"GetDominantColorFromImage\")",
+    "포맷": "\"%.5f %.5f %.5f\" — R, G, B 순서로 각 채널/255 (버퍼 196바이트)",
+    "채널 추출": "R = eax & 0xff · G = (eax>>8)&0xff · B = (eax>>16)&0xff (0x1401102f8 / 0x1401102da / 0x1401102cd)",
+    "주입": "`schemecolor` → `value` 두 단계 Json::Value::operator[](0x140086de0) — 키 lea 는 0x1401103cb / 0x1401103ea, 그 직후 call 이 0x1401103db / 0x1401103f1",
+    "명령 자리": {
+     "0x140110209": ".gif 확장자 게이트 — lea rdx, \".gif\"(0x140487000)",
+     "0x14011023f": "lea rcx, L\"resourceutil64.dll\"(0x140478170) → LoadLibraryExW",
+     "0x14011027b": "lea rdx, \"GetDominantColorFromImage\"(0x140489198) → GetProcAddress",
+     "0x1401102a4": "call rax — 반환 eax = 0xFF000000|B<<16|G<<8|R",
+     "0x1401102c1": "lea r8, \"%.5f %.5f %.5f\"(0x1404890d8)",
+     "0x1401103cb": "lea rdx, \"schemecolor\"(0x140474560)",
+     "0x1401103ea": "lea rdx, \"value\"(0x140474508)"
+    },
+    "종전 문면과의 관계": "docs/re/scheme-color.md §2 는 이 경로를 에디터 JS `getDominantColorFromFile` 로만 인용했다. 네이티브에도 있다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x140110060–0x1401105a5",
+     "note": "imagebase 0x140000000. schemecolor 네이티브 자동생성"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_dominant_color.py"
+    }
+   ]
+  },
+  {
+   "id": "dominantColor.mediaThumbnailColors",
+   "value": {
+    "필드": [
+     {
+      "이름": "primaryColor",
+      "오프셋": "0x150",
+      "읽는 자리": "0x14011c4f1"
+     },
+     {
+      "이름": "secondaryColor",
+      "오프셋": "0x154",
+      "읽는 자리": "0x14011c558"
+     },
+     {
+      "이름": "tertiaryColor",
+      "오프셋": "0x158",
+      "읽는 자리": "0x14011c5ab"
+     },
+     {
+      "이름": "textColor",
+      "오프셋": "0x15c",
+      "읽는 자리": "0x14011c5fe"
+     },
+     {
+      "이름": "highContrastColor",
+      "오프셋": "0x160",
+      "읽는 자리": "0x14011c651"
+     }
+    ],
+    "게이트": "이벤트 빌더가 `test byte [r14], 2` (0x14011c4e7) 로 색 블록을 켠다",
+    "wallpaper64.exe 안의 자리 전수": {
+     "그물 크기(전수 스토어)": 95,
+     "닿은 함수 수": 48,
+     "5필드 중 4개 이상을 쓰는 함수": {
+      "0x140058c15": {
+       "0x150]": [
+        {
+         "va": "0x140058e21",
+         "insn": "movss dword ptr [rsi + 0x150], xmm8"
+        }
+       ],
+       "0x154]": [
+        {
+         "va": "0x140058e2a",
+         "insn": "movss dword ptr [rsi + 0x154], xmm9"
+        }
+       ],
+       "0x158]": [
+        {
+         "va": "0x140058e33",
+         "insn": "movss dword ptr [rsi + 0x158], xmm10"
+        }
+       ],
+       "0x15c]": [
+        {
+         "va": "0x140058e3c",
+         "insn": "movss dword ptr [rsi + 0x15c], xmm11"
+        }
+       ],
+       "0x160]": [
+        {
+         "va": "0x140058e45",
+         "insn": "movss dword ptr [rsi + 0x160], xmm12"
+        }
+       ]
+      },
+      "0x1400d834f": {
+       "0x150]": [
+        {
+         "va": "0x1400d92cd",
+         "insn": "mov dword ptr [rdi + r9 + 0x150], eax"
+        },
+        {
+         "va": "0x1400da41f",
+         "insn": "mov dword ptr [rdi + rdx + 0x150], eax"
+        }
+       ],
+       "0x160]": [
+        {
+         "va": "0x1400d92e4",
+         "insn": "mov dword ptr [rdi + r9 + 0x160], eax"
+        },
+        {
+         "va": "0x1400da42c",
+         "insn": "mov dword ptr [rdi + rdx + 0x160], eax"
+        }
+       ],
+       "0x154]": [
+        {
+         "va": "0x1400d9314",
+         "insn": "mov dword ptr [rdi + r9 + 0x154], eax"
+        },
+        {
+         "va": "0x1400da446",
+         "insn": "mov dword ptr [rdi + rdx + 0x154], eax"
+        }
+       ],
+       "0x158]": [
+        {
+         "va": "0x1400d9354",
+         "insn": "mov dword ptr [rdi + r9 + 0x158], eax"
+        },
+        {
+         "va": "0x1400da46d",
+         "insn": "mov dword ptr [rdi + rdx + 0x158], eax"
+        }
+       ],
+       "0x15c]": [
+        {
+         "va": "0x1400d9394",
+         "insn": "mov dword ptr [rdi + r9 + 0x15c], eax"
+        },
+        {
+         "va": "0x1400da494",
+         "insn": "mov dword ptr [rdi + rdx + 0x15c], eax"
+        }
+       ]
+      },
+      "0x1401dd630": {
+       "0x150]": [
+        {
+         "va": "0x1401dd727",
+         "insn": "movss dword ptr [rdi + 0x150], xmm2"
+        }
+       ],
+       "0x154]": [
+        {
+         "va": "0x1401dd72f",
+         "insn": "movss dword ptr [rdi + 0x154], xmm1"
+        }
+       ],
+       "0x158]": [
+        {
+         "va": "0x1401dd73b",
+         "insn": "movss dword ptr [rdi + 0x158], xmm0"
+        }
+       ],
+       "0x15c]": [
+        {
+         "va": "0x1401dd761",
+         "insn": "movss dword ptr [rdi + 0x15c], xmm1"
+        }
+       ],
+       "0x160]": [
+        {
+         "va": "0x1401dd76c",
+         "insn": "movss dword ptr [rdi + 0x160], xmm0"
+        }
+       ]
+      },
+      "0x1401de962": {
+       "0x150]": [
+        {
+         "va": "0x1401dedd5",
+         "insn": "movss dword ptr [rbx + 0x150], xmm2"
+        }
+       ],
+       "0x154]": [
+        {
+         "va": "0x1401deddd",
+         "insn": "movss dword ptr [rbx + 0x154], xmm1"
+        }
+       ],
+       "0x158]": [
+        {
+         "va": "0x1401dede9",
+         "insn": "movss dword ptr [rbx + 0x158], xmm0"
+        }
+       ],
+       "0x15c]": [
+        {
+         "va": "0x1401dee17",
+         "insn": "movss dword ptr [rbx + 0x15c], xmm1"
+        }
+       ],
+       "0x160]": [
+        {
+         "va": "0x1401dee22",
+         "insn": "movss dword ptr [rbx + 0x160], xmm0"
+        }
+       ]
+      },
+      "0x1401df620": {
+       "0x150]": [
+        {
+         "va": "0x1401dfabc",
+         "insn": "movss dword ptr [rdi + 0x150], xmm15"
+        }
+       ],
+       "0x154]": [
+        {
+         "va": "0x1401dfac9",
+         "insn": "movss dword ptr [rdi + 0x154], xmm12"
+        }
+       ],
+       "0x158]": [
+        {
+         "va": "0x1401dfad2",
+         "insn": "movss dword ptr [rdi + 0x158], xmm3"
+        }
+       ],
+       "0x15c]": [
+        {
+         "va": "0x1401dfada",
+         "insn": "movss dword ptr [rdi + 0x15c], xmm4"
+        }
+       ],
+       "0x160]": [
+        {
+         "va": "0x1401dfae2",
+         "insn": "movss dword ptr [rdi + 0x160], xmm8"
+        }
+       ]
+      }
+     }
+    },
+    "그물 설계": "`.pdata` 전 함수 선형 디스어셈 → 다섯 변위로 가는 **스택 아닌** dword 스토어(mov/movss)를 전수로 세고, 한 함수가 다섯 중 **넷 이상**을 쓰는 경우만 후보로 남긴다(연속 dword 다섯을 채우는 계산 자리라면 반드시 걸린다)",
+    "판정": "후보 다섯 함수 중 넷(0x140058c15 · 0x1401dd630 · 0x1401de962 · 0x1401df620)은 전건 `movss` 로 **float** 다섯 개를 쓴다 — uint32 색이 아니다. 남은 하나 0x1400d834f 는 `[rdi + r9 + 0x150]` 처럼 **런타임 베이스**를 더한 4×4 행렬 복사이고 같은 함수가 +0x108…+0x17c 를 0x10 간격으로 채운다. 미디어 구조체 자신을 만지는 자리는 생성자의 0 초기화(0x1400c1402 qword · 0x1400c1409 qword · 0x1400c1413 dword)와 복사 생성자(0x1400c2422–0x1400c2454) 뿐이다 — **이 이미지에는 다섯 색을 계산하는 자리가 없다**",
+    "생성자 기본값": "다섯 색 전부 0, `+0x174`(enabled) 만 1 (0x1400c1428)",
+    "교차 근거": {
+     "wallpaper64.exe": {
+      "Windows.Media.Control": {
+       "ascii": 0,
+       "utf16": 0
+      },
+      "GlobalSystemMediaTransportControlsSessionManager": {
+       "ascii": 0,
+       "utf16": 0
+      }
+     },
+     "bin/winrtutil64.exe": {
+      "Windows.Media.Control": {
+       "ascii": 1,
+       "utf16": 1
+      },
+      "GlobalSystemMediaTransportControlsSessionManager": {
+       "ascii": 0,
+       "utf16": 1
+      }
+     }
+    },
+    "그래서 어디에 있나": "WinRT 미디어 세션 문자열이 `bin/winrtutil64.exe` 에만 있다(그 실행 파일은 OpenCV·FreeImage 를 링크한다). 다섯 색은 그 프로세스에서 만들어져 IPC 로 건너온다 — **[미해결]** 정확한 산식은 아직 안 떴다",
+    "GetDominantColor 로 채울 수 없다": "그 함수는 색을 **하나만** 낸다. secondary/tertiary/text/highContrast 대응물이 없다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x14011be40–0x14011c90c",
+     "note": "미디어 썸네일 이벤트 빌더"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_dominant_color.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/ArtworkColors.swift"
+    }
+   ]
+  },
+  {
+   "id": "dominantColor.schemecolorCorpus",
+   "value": {
+    "동봉": {
+     "모집단": "동봉 Sources/WapleRender/Resources/WEAssets",
+     "project.json": 170,
+     "schemecolor 선언": 161,
+     "값이 0 0 0": 161,
+     "비영값": 0,
+     "비영값 표본": []
+    },
+    "설치본": {
+     "모집단": "설치본 wallpaper_engine",
+     "project.json": 191,
+     "schemecolor 선언": 180,
+     "값이 0 0 0": 164,
+     "비영값": 16,
+     "비영값 표본": [
+      "0.01568627450980392 0.03137254901960784 0.2",
+      "0.075 0.125 0.180",
+      "0.1 0.2 0.7",
+      "0.18 0.38 0.184"
+     ]
+    },
+    "형식": "\"r g b\" 0–1 부동소수 3성분, 스페이스 구분, 감마 변환 없음",
+    "Waple 처리": "제네릭 사용자 속성으로 원문 보존 — 배선하지 않는다(docs/re/scheme-color.md §7)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/**/project.json"
+    },
+    {
+     "kind": "asset",
+     "ref": "WE_ROOT/**/project.json"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_dominant_color.py"
+    }
+   ]
+  }
+ ]
+}

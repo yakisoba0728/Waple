@@ -18,6 +18,9 @@
 ///    빠진 `0 1 7 8 10` 은 12MB 바이너리 어디서든 접히는 짧은 리터럴이다.
 ///    **라벨↔값 짝은 이 풀 순서로 짓지 마라** — 공통 브리프 함정 #16 그대로 한 칸씩 밀린다.
 ///    이름은 아래 표처럼 `common_blending.h` 의 매크로에서 읽는 게 유일하게 안전하다.
+///    **[CJ 2026-08-21] 짝을 명령에서 직접 떴다** — 아래 "UI 이름" 절과
+///    `spec/engine/blend-modes.json` `blend.editorDropdown`(생성기
+///    `scripts/spec/measure_blend_modes.py`).
 /// 3. **파서** `colorBlendMode` 는 리플렉션 int 주입기 `0x1401a4930` 이 태그 1/2 는 `mov`,
 ///    태그 3 은 `cvttsd2si`(`0x1401a4962`)로 **생짜 int32** 를 멤버 `+0x32c` 에 꽂는다.
 ///    **범위 검사도 클램프도 없다.** 생성자 기본값은 0(`0x1401e6a14` `mov [rbx+0x32c], eax`, eax=0).
@@ -56,6 +59,42 @@
 /// `case 31: A + B*o` = `dst + src.rgb*src.a` = additive 하드웨어 블렌드이고, 알파는 `d.a` 를
 /// 되쓰므로 WE 의 `WriteMask 7`(알파 미기록)과 결과가 같다. 다르지 않은 대신 **비싸다**
 /// (레이어마다 acc 전체 blit). 코퍼스 도달이 커서 최적화 후보다 — 보고서 참조.
+///
+/// ### UI 이름 — 매크로 이름과 **일곱 자리에서 갈린다** (CJ 2026-08-21)
+///
+/// `bin/wallpaperui.exe` 의 드롭다운 생성기가 항목마다 세 명령을 낸다:
+/// `lea r8, <값문자열>` → `lea rdx, <라벨>` → `call 0x14015fa30(rcx=json, rdx=label, r8=value)`.
+/// **값이 라벨보다 앞이다** — "라벨 다음 정수" 로 짝지으면 한 칸 밀린다(함정 #16).
+/// 예: `0x1401600c7 lea r8, "31"` · `0x1401600ce lea rdx, "ui_editor_blending_add"`.
+///
+/// | n | UI 라벨 | 매크로 | | n | UI 라벨 | 매크로 |
+/// | ---: | --- | --- | --- | ---: | --- | --- |
+/// | 4 | **linear_burn** | `BlendSubstract` | | 20 | **subtract** | `BlendSubstract`(4와 동일식) |
+/// | 5 | **darker_color** | (없음) | | 31 | **add** | (없음) |
+/// | 9 | **linear_dodge** | `BlendAdd` | | 32 | **diffuse_light** | (없음) |
+/// | 10 | **lighter_color** | (없음) | | | 나머지 26개 | 매크로 이름과 같다 |
+///
+/// 곧 **UI 의 "Add" 는 9 가 아니라 31** 이고(워크샵 image 최다값이 31 인 이유),
+/// **UI 의 "Subtract"(20)는 실제로 Linear Burn 을 한다**(원본 결함 — 이식본도 그대로 둔다).
+/// 전문·전수 표: `docs/re/material-blend.md` §7.6.2.
+///
+/// ### native / emulated 그룹은 **확정**이다 (CJ 2026-08-21)
+///
+/// 드롭다운의 `isgrouptitle` 두 개(`0x14016007e` native · `0x1401600f3` emulated) 사이에
+/// 적재되는 항목은 **정확히 {0, 31}** 이다(적재 주소 순서로만 판정 — 0/31 을 미리 알고
+/// 거르면 순환 논증이다). 위 "0 과 31 은 이 표에 도달하지 않는다" 절의 엔진 고속 경로와
+/// **경계가 같다**. `docs/re/material-blend.md` §7.5.3 의 종전 **추정** 은 해소됐다.
+///
+/// ### 수식 3자 대조 — 어긋나는 자리 0 (CJ 2026-08-21)
+///
+/// WE 원문(`==` 정확 비교·무가드 `sqrt` 포함) · 이 파일(MSL) · `BuiltinShaderIncludes`(GLSL 심)
+/// 셋을 옮겨 격자 평가했다(A·B 각 성분 8비트 52단계 + {0,0.5,1}, opacity 5단계,
+/// 모드 0…32 + 범위 밖 {-1,33,99}). **입력이 [0,1] 안이면 전건 |Δ| < 1e-9.**
+/// 범위 밖에서만 갈리고 그 자리는 전부 이미 등록된 이탈이다 — 3·8·14·17·21·22 는
+/// `deviation.D3`(정확비교↔범위비교), 12 는 `sqrt(max(b,0))` 가드, 26–29 는 아래 F676.
+/// 8비트 입력에서는 `max(s,1e-5)` 엡실론이 **발동조차 하지 않는다**(`1−s` 의 최소 비영값이
+/// `1/255 ≈ 0.0039`, `s == 1` 은 `select` 가 먼저 잡는다).
+/// 정본: `spec/engine/blend-modes.json` `blend.formulaParity`.
 ///
 /// ### 모드 표 (이름은 `common_blending.h` 매크로에서 읽었다)
 ///
@@ -103,6 +142,16 @@
 /// 그래서 이 표의 A·B 는 **절대 프리멀티가 아니다** — `QuadShaders.f_blend` 가 `f_main` 과 달리
 /// `c.rgb` 에 알파를 곱하지 않고 넘기는 것이 정본이고, dst 로 쓰는 acc 스냅샷은 프리멀티 누적이지만
 /// 누적 RGB 식이 `src*a + dst*(1-a)` 로 WE 프레임버퍼와 **동일**해 A 는 그대로 맞는다.
+///
+/// ### 클램프 규약 (CJ 2026-08-21 — 머리말 3행의 "bgra8" 을 정확히)
+///
+/// `f` 접미 매크로는 클램프가 **없다**(`BlendLinearDodgef(base, blend) = (base + blend)`,
+/// `common_blending.h:106`). 모드 15 의 `s >= 0.5` 가지가 그것을 쓰므로 1을 넘을 수 있고,
+/// 이 파일이 `b + 2.0*(s-0.5)` 를 클램프 없이 두는 것이 원본과 같다. 최종 클램프는
+/// **렌더타깃 포맷**이 한다 — `SceneRenderer.accPixelFormat` 이 LDR·low/medium 에서
+/// `bgra8Unorm`(UNORM 쓰기 클램프), HDR·high/ultra 에서 `rgba16Float`(클램프 없음)이고,
+/// WE 도 LDR 은 UNORM · HDR 은 float 이라 **두 경로 다 같다**. 머리말이 "bgra8" 만 적은 것은
+/// LDR 경로만 본 것이다.
 enum BlendMSL {
     static let source = """
     inline float3 we_overlay(float3 b, float3 s) { return select(2.0*b*s, 1.0-2.0*(1.0-b)*(1.0-s), b >= 0.5); }
