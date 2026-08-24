@@ -17,7 +17,7 @@
 
 | 섹션 | 트리거 | 주요 잔여 |
 | --- | --- | --- |
-| [시각 충실도](#시각-충실도) | 해당 씬을 실제 배경으로 쓸 때 | H7 Ultra EOTF · E1 삼각마스크 · 텍스트 워드랩 · LDR 블룸 피라미드화 · g_Color1~4 |
+| [시각 충실도](#시각-충실도) | 해당 씬을 실제 배경으로 쓸 때 | H7 Ultra EOTF · E1 삼각마스크 · 텍스트 워드랩 · LDR 블룸 피라미드화 · g_Color1~3 |
 | [잠재 결함](#잠재-결함) | 실제 파일·사용에서 물릴 때 | combo Picker 값-타입 · ffmpeg 캐시 증가 · 볼륨/배속 라이브 반영 |
 | [제품화](#제품화) | 배포 결심 | Developer ID 공증 · 접근성 · 현지화(하드코딩 한국어 40+) |
 | [감사 2026-07-11 잔여](#감사-2026-07-11-잔여) | 해당 씬 사용·체감 시 | REFRACT 파티클 · wind/gravity 외력 · M6 사운드 3D |
@@ -80,7 +80,10 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 - **W-① 3D 씬 텍스트 빌보드 잔여**(2026-07-27, `08058c9`로 world-placement 배선 완료 — [SceneRenderer3D.swift](Sources/WapleRender/SceneRenderer3D.swift)) — origin/scale/angles/visible 만 attachScripts, 아래 2건은 의도적 미부착·미구현:
   (a) **alpha/color 프로퍼티 스크립트 미부착** — 실측 3509243656 UI 패널이 dd/yp/num 얽힌 shared 상태머신이라 부착 시 무관 이미지 빌보드(id=449)가 잘못된 타이밍에 오노출되고 캡처 셀프체크가 비결정(frac 0.0176~0.025, 재현 가능)이 됨. 필요 시 캡처-세이프 격리(예: alpha 스크립트 보유 text 는 빌보드 자체를 만들지 않는 draw-gate) 부터 검토.
   (b) **텍스트 '내용' 동적 재래스터 미지원** — F309 프라이밍이 확정한 1회 평가값(controllerOf[uid].last)만 래스터, update() 가 이후 콘텐츠를 바꿔도 화면엔 반영 안 됨(위치/스케일/회전/가시성만 매프레임 애니). 코퍼스 5씬(3470948192·3477054430·3589454154·3662790108·3737268876) A/B 캡처(1920×1080, main-6526db1 대비)로 블라스트 반경 확인 완료 — 3662790108(76텍스트)·3477054430(1)·3737268876(4) 는 byte-identical(새 빌보드가 캡처 시점 비가시), 3589454154·3470948192 는 소폭 개선(정보 텍스트 신규 노출, 왜곡 없음). 상세: [docs/scene-render-audit-2026-07-26.md](docs/history/scene-render-audit-2026-07-26.md) "3D/칸 메라/투영 잔여" 참조.
-- **A4 g_Color1~4 계열** — 그라디언트/파티클 다중색 유니폼(중립값 비단순), exact-name 스코프서 제외됨. 필요시 검토
+- **A4 g_Color1~3 계열** — 그라디언트/파티클 다중색 유니폼(중립값 비단순), exact-name 스코프서 제외됨. 필요시 검토
+  ([정정 2026-08-25] 종전 표기 `g_Color1~4` 는 하나가 더 많았다. **`g_Color4` 는 F613 에서 이미
+  등재됐다**(`GLSLTranslator.swift:1695` — 미등재 시 padDefault (0,0,0,0) 으로 즉시 검정이 되는
+  `g_Color` 의 vec4 변형이다). 남은 것은 `g_Color1`·`2`·`3` 셋뿐이고 셋은 등재 0건이다.)
 - **D1 텍스트 outline/spacing 파스-소비 단절** (2026-08-20 발굴) — `SceneDocument` 가
   `outline`·`outlineColor`·`outlineThickness`·`spacing`(줄간격)을 파스해 `SceneTextLayer`/
   `SceneLayer` 필드에 담지만 **`WapleCore` 밖에서 아무도 읽지 않는다**. `TextRasterizer.render`

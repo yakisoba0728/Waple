@@ -54,7 +54,7 @@ Known gaps that are tracked rather than hidden live in [BACKLOG.md](BACKLOG.md) 
 [docs/README.md](docs/README.md); a few current examples: `_rt_` composite triangle masks in one corpus scene, word
 wrap for very long unwrapped text (the 8192px raster guard no longer drops such a draw outright — it
 shrinks the point size and retries, so the text renders small instead of vanishing; the residual drop
-is the case where the retry cannot shrink any further), `g_Color1`–`4`
+is the case where the retry cannot shrink any further), `g_Color1`–`3`
 gradient uniforms, and `SHDV0069` shader-cache parsing.
 
 ## Language
@@ -148,7 +148,7 @@ Sources/
                  only, no dependencies — builds on Linux, which is where its spec lane runs
   WapleSaver/    Screensaver .saver bundle source (Objective-C — compiled directly by package-app.sh)
   WapleSnapshot/ Snapshot manifest schema and diff metrics (pure Foundation, unit-verifiable)
-Tests/           7 targets, 3,686 tests (synthetic units + real-corpus ground truth)
+Tests/           7 targets, 3,691 tests (synthetic units + real-corpus ground truth)
 scripts/         package-app.sh (app/screensaver bundle), window-id.swift (capture ID/bounds lookup),
                  make-icon.sh / make-icon.swift (app .icns), Waple.icns (generated)
 ```

@@ -210,7 +210,15 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         let proxy = WebInputProxyView(target: web)
         let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 540),
                            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        win.title = "웹 월페이퍼 조작 (실시간 연동)"
+        // [2026-08-25] AppKit 의 `window.title` 은 자동 현지화가 없다 — AGENTS.md 의 현지화 절이
+        // `NSMenuItem(title:)` 과 함께 이 자리를 콕 집어 규약으로 지정해 뒀는데 여기가 생 한국어였다.
+        //
+        // 이게 오래 남은 이유는 **오라클의 사각지대**였기 때문이다: `LocalizationCoverageTests` 는
+        // `Sources/Waple` 만 훑었고 이 파일은 `Sources/WapleRender` 다. 같은 커밋에서 스캔 루트를
+        // `Sources/` 전체로 넓히고 `.title = "…"` 대입 패턴을 추가했다 — 실측 결과 `Sources/Waple`
+        // 밖의 한국어 UI 리터럴은 **이 한 건뿐**이라 넓혀도 소음이 없다.
+        win.title = NSLocalizedString("웹 월페이퍼 조작 (실시간 연동)",
+                                      comment: "웹 월페이퍼 입력 미러 창 제목")
         win.contentView = proxy
         win.isReleasedWhenClosed = false
         win.delegate = self
@@ -268,9 +276,21 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         }
     }
 
-    // MARK: - WKNavigationDelegate — @objc 셀렉터 고정(아래 주석의 사고 이력을 읽고 지울 것)
+    // MARK: - WKNavigationDelegate — witness 자격이 계약이다(아래 사고 이력을 읽고 지울 것)
     //
-    // [2026-08-19] **이 파일의 델리게이트 메서드는 셀렉터를 명시로 고정한다.** 근거(추정 아님, CI 실측):
+    // ⚠️ **[정정 2026-08-25] 이 머리말이 아래 결론과 정반대였다.**
+    // 종전 제목과 첫 문장은 "이 파일의 델리게이트 메서드는 셀렉터를 명시로 고정한다" 였는데,
+    // **이 파일에 `@objc` 속성 선언은 한 건도 없다**(`grep -c '@objc'` 의 6건은 전부 주석 안이다).
+    // 셀렉터 고정은 시도했다가 **컴파일 실패로 폐기**한 우회이고(:341-343 에 run 번호와 함께 기록),
+    // 실제 방어는 그 아래 :351 의 **async 요구사항 `webView(_:decidePolicyFor:)` 구현**이다.
+    //
+    // 이 어긋남이 위험한 이유는 방향이 나쁜 쪽이기 때문이다 — 머리말만 읽은 사람이
+    //   ① 없는 `@objc` 를 "복원" 하려 들면 폐기된 우회를 다시 밟고(컴파일 실패),
+    //   ② 더 나쁘게는 async 구현을 완료핸들러 형태로 되돌리면 **witness 자격을 잃어 보안 게이트가
+    //      무음으로 죽는다**(아래 실측 그대로).
+    // 그래서 제목을 실제 계약(witness 자격)으로 바꾼다. 아래 이력은 그대로 둔다.
+    //
+    // [2026-08-19] 근거(추정 아님, CI 실측):
     // `-strict-concurrency=complete` 만 추가한 커밋 ead3d1d(CI run 32214982769)에서 소스 변경이 하나도
     // 없는 WebRendererSecurityTests 두 건이 debug·release 양쪽에서 실패했다 —
     //   · testWebRendererBlocksExternalTopFrameNavigation: web.url.host 가 "evil"(차단 실패, 커밋됨)

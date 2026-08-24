@@ -128,6 +128,12 @@ swift run Waple                # 메뉴바 앱으로 실행
 
 ### Xcode 없는 macOS 에서의 커밋 전 검증
 
+> **먼저 확인해라: `xcode-select -p`.**
+> `/Applications/Xcode*.app/Contents/Developer` 를 가리키면 이 절은 **필요 없다** — 그냥
+> `swift test` 를 돌려라. `/Library/Developer/CommandLineTools` 를 가리키면 아래를 쓴다.
+> (2026-08-25 실측: 이 리포를 만지는 맥 하나가 세션 도중 CommandLineTools → Xcode 27.0 Beta 5 로
+>  바뀌었다. 즉 **머신 상태를 가정하지 말고 매번 확인**하라는 뜻이다.)
+
 Xcode 없이 CommandLineTools 만 있는 맥에서는 **`XCTest` 모듈이 없다.** `swift test` 도
 `swift build --build-tests` 도 `unable to resolve module dependency: 'XCTest'` 로 안 돈다.
 즉 테스트 코드가 **타입체크조차 안 된 채** 푸시되고 판정이 전부 CI(1회 ~12분)로 밀린다.
@@ -151,6 +157,8 @@ scripts/dev/macos-test-typecheck.sh WapleCoreTests  # 지정 타깃만
   `accuracy:` 오버로드를 `FloatingPoint` 하나만 둠 · `setUp`/`tearDown` 의 `@MainActor` 누락)
   그때마다 실물 동작을 실측해 맞췄다. 스크립트 머리말에 그 셋이 적혀 있다.
   **최종 판정자는 여전히 macOS CI 다.**
+- **Xcode 가 있으면 이 스크립트를 쓰지 마라.** 타입체크는 `swift test` 가 하는 일의 부분집합이고,
+  심이라는 오차원이 하나 더 있다. 이 스크립트의 존재 이유는 `swift test` 가 **불가능한** 환경뿐이다.
 
 ### 리눅스에서의 커밋 전 검증
 
@@ -338,6 +346,15 @@ debug 병렬(275초)보다 빠르다.
   집합을 다시 대조할 것:
   `ffmpeg not installed` 5건 + 기본 에셋 부재 1건(`TexDecoderTests.testDecodesRealEmbeddedImages`,
   `WAPLE_BASE_ASSETS`) + 웹 타이밍 전제 불성립 1건(`WebHardPauseTests`). 로컬 측정은
+
+  > **[정정 2026-08-25] `TexDecoderTests.testDecodesRealEmbeddedImages` 는 더 이상 스킵되지 않는다.**
+  > 이 문장이 그 스킵을 "정상" 으로 등재해 둔 탓에 사람도 의심하지 않았는데, 그 테스트가 요구하는
+  > 두 파일(`splash_5.tex`·`lutx32_westernf.tex`)은 **동봉본에 커밋돼 있었다** — 검증 데이터가
+  > 리포 안에 있는데 한 번도 읽히지 않는 상태였다. 후보에 `bundledAssetsDirectory` 를 넣어
+  > CI 에서 통과한다(run 32758165354 에서 `passed` 확인).
+  >
+  > 위 `47` 은 **2026-08-16 실측**이라 그대로 둔다 — 재지 않은 숫자로 고치지 마라.
+  > 다음 초록 실행이 잰 값으로만 갱신한다.
   `WAPLE_BASE_ASSETS` 를 기본값(`~/Downloads/wallpaper_dev/assets`, **이 머신엔 실재**)으로 두고 돌렸다.
 - GPU 스킵은 없었다 — Metal 은 로컬(로그인 세션)·CI 양쪽에서 잡혔다.
 
