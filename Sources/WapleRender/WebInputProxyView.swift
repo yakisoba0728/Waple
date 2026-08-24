@@ -21,8 +21,22 @@ final class WebInputProxyView: NSView {
     required init?(coder: NSCoder) { nil }
 
     /// stop() 미호출 안전망 — 미호출 시 타이머가 nil self 로 계속 발화(감사 L1). stop() 은 멱등.
+    ///
+    /// [2026-08-25] `deinit` 은 액터 격리를 가질 수 없어서 메인 액터인 `stop()` 을 그냥 못 부른다.
+    /// `AppDelegate:32-34` 가 세워 둔 규약을 따른다 — **실행되는 곳이 메인임을 아는 자리에서는
+    /// `MainActor.assumeIsolated` 로 그 사실을 알린다. 검사를 끄는 게 아니라 런타임 단언이다.**
+    ///
+    /// ⚠️ **행동이 바뀐다.** 종전에는 오프메인 해제 시 `timer?.invalidate()` 가 설치 스레드가 아닌
+    /// 곳에서 불려 **조용히 잘못 동작**했다(RunLoop 규약 위반이라 타이머가 안 죽을 수 있다).
+    /// 이제는 같은 상황에서 **트랩된다**. 이 리포는 "조용히 틀리는 것보다 실패하는 쪽" 을 택해
+    /// 왔고(규약 5), 어차피 그 경로에서 종전 동작도 옳지 않았다.
+    ///
+    /// 전제의 근거: 이 뷰는 `WebRenderer` 의 조작 창 `contentView` 로만 존재하고, 그 창은
+    /// `isReleasedWhenClosed = false` 로 `interactionWindow` 가 강참조한다. 타이머 블록과
+    /// `takeSnapshot` 완료 핸들러는 둘 다 `[weak self]` 라 오프메인 강참조를 만들지 않는다.
+    /// 즉 마지막 참조는 메인에서 놓인다.
     deinit {
-        stop()
+        MainActor.assumeIsolated { stop() }
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -32,13 +46,22 @@ final class WebInputProxyView: NSView {
         // ~12fps 미러 — takeSnapshot 은 메인큐 콜백(WKWebView 규약). 조작 창이 열려있는 동안만.
         // `.common` 모드 — MediaPoller 와 같은 이유(AppDelegate:755 주석 참조). 이 타이머는
         // 조작 창 미러링이라 메뉴를 여는 동안 멈추면 그대로 눈에 보인다.
+        // [2026-08-25] 블록 본문을 `MainActor.assumeIsolated` 로 감싼다. `Timer` 의 블록은 타입상
+        // 비격리인데 이 타이머는 바로 아래에서 `RunLoop.main` 에 얹으므로 **실행되는 곳이 메인**이다.
+        // `AppDelegate:32-34` 의 규약 그대로 — 검사를 끄는 게 아니라 그 사실을 런타임 단언으로 적는다.
+        // (진단 5건: `target`/`window`/`isVisible` 참조 · `WKSnapshotConfiguration()` · `takeSnapshot`)
         let t = Timer(timeInterval: 1.0 / 12.0, repeats: true) { [weak self] _ in
-            guard let self, let web = self.target, self.window?.isVisible == true else { return }
-            let cfg = WKSnapshotConfiguration()
-            web.takeSnapshot(with: cfg) { [weak self] image, _ in
-                guard let self, let image else { return }
-                self.lastImage = image
-                self.needsDisplay = true
+            MainActor.assumeIsolated {
+                guard let self, let web = self.target, self.window?.isVisible == true else { return }
+                let cfg = WKSnapshotConfiguration()
+                web.takeSnapshot(with: cfg) { [weak self] image, _ in
+                    // takeSnapshot 완료는 WKWebView 규약상 메인 큐 배달이다(파일 머리말 참조).
+                    MainActor.assumeIsolated {
+                        guard let self, let image else { return }
+                        self.lastImage = image
+                        self.needsDisplay = true
+                    }
+                }
             }
         }
         RunLoop.main.add(t, forMode: .common)

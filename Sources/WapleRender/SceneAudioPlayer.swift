@@ -141,7 +141,15 @@ public final class SceneAudioPlayer {
 /// @unchecked Sendable 의 근거는 바로 위 문단이다 — 상태(player/index/paused/generation 등)는
 /// **메인 전용**이고, 유일한 비메인 진입인 delegate 콜백은 첫 줄에서 메인으로 홉한다(락 불요).
 /// 표기를 붙이는 이유는 그 메인 홉 클로저가 self 를 캡처하기 때문이다(엄격 동시성 진단 :237/:252).
-final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
+/// [2026-08-25] `nonisolated` — `AVAudioPlayerDelegate` 적합성 때문에 멤버 전체가 메인 액터로
+/// **추론**되고 있었다. 그런데 이 타입의 실제 설계는 바로 위 문단이 적은 그대로다: 상태는
+/// 메인 전용이고 유일한 비메인 진입(delegate 콜백)이 첫 줄에서 메인으로 홉한다. 즉 추론된 격리는
+/// 실제와 다르고, 그 어긋남이 `-strict-concurrency=complete` 진단 **17건**(`:57`–`:95` 의 비격리
+/// 파사드가 Playlist 멤버를 부르는 자리)으로 나타났다.
+///
+/// 표기를 실제 설계에 맞춘다. `@unchecked Sendable` 이 이미 같은 주장을 하고 있었으므로 새 약속이
+/// 아니라 **같은 약속을 한 번 더 명시**하는 것이다. 판례: `WallpaperSchemeHandler.swift:11-15`.
+nonisolated final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
     private let entries: [String]
     private let mode: String
     private let package: ScenePackage
