@@ -148,4 +148,55 @@ final class UIConventionTests: XCTestCase {
             fix: "→ .tileAccessibility(label:value:isSelected:onActivate:) 를 붙여라. 표준 형태는 §4.1."
         )
     }
+
+    // MARK: - notify 미러 (2026-08-25)
+
+    /// **`notify` 가 설정 창에도 흐르는가, 그리고 굽기 스피너를 건드리지 않는가.**
+    ///
+    /// `AppDelegate` 는 이 스위트에서 **한 번도 인스턴스화되지 않는다**(`grep 'AppDelegate()' Tests/` = 0건).
+    /// 즉 `notify` 의 런타임 동작을 부를 방법이 없다. 이 파일 머리말이 적은 그 상황 그대로라,
+    /// 같은 방식(소스 전문 스캔)으로 **기계가 판정할 수 있는 만큼만** 잡는다.
+    ///
+    /// 잠그는 것 둘:
+    /// ① 미러가 존재한다 — 없으면 트레이에서 설정 창만 열고 누른 동작의 성패가 화면 어디에도 안 뜬다.
+    /// ② 미러가 `isBakingStill` 을 건드리지 않는다 — 이 미러는 **모든** notify 를 받으므로,
+    ///    굽는 도중 도착한 무관한 알림이 스피너를 먼저 끄면 안 된다. (굽기는 한 번에 두 번
+    ///    알림이 올 수 있다 — `writeLockscreenStill`.)
+    ///
+    /// 못 잡는 것: 실제로 화면에 뜨는지. 그건 실기 확인 몫이다.
+    func testNotifyMirrorsIntoSettingsWindowWithoutTouchingTheBakingSpinner() throws {
+        let files = try Self.uiSources()
+        let appDelegate = try XCTUnwrap(files.first { $0.name == "AppDelegate.swift" }?.text,
+                                        "AppDelegate.swift 를 못 찾았다 — 스캔 루트가 바뀌었나?")
+        // `notify(_:)` 본문만 떼어 본다. 다음 함수 선언 전까지.
+        guard let start = appDelegate.range(of: "private func notify(_ message: String) -> Bool {") else {
+            return XCTFail("notify(_:) 선언을 못 찾았다 — 시그니처가 바뀌었으면 이 오라클도 같이 고쳐라")
+        }
+        // 중괄호를 세어 **함수 본문만** 떼어낸다. 고정 길이로 자르면 뒤따르는 다른 함수가
+        // 딸려 들어와 오탐이 난다 — 처음에 1600자로 잘랐다가 실제로 그 오탐을 봤다.
+        var depth = 1
+        var body = ""
+        for ch in appDelegate[start.upperBound...] {
+            if ch == "{" { depth += 1 }
+            if ch == "}" { depth -= 1; if depth == 0 { break } }
+            body.append(ch)
+        }
+        XCTAssertGreaterThan(body.count, 200, "본문 추출이 실패했다 — 이 오라클이 아무것도 안 본다")
+
+        // **주석을 걷어내고 본다.** 처음엔 안 걷었다가 "isBakingStill 을 건드리지 마라" 라고
+        // 적어 둔 **설명 주석 자체**를 위반으로 셌다 — 규약을 적는 행위가 규약 위반이 되는 오탐이다.
+        let code = body.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> String in
+                guard let slash = line.range(of: "//") else { return String(line) }
+                return String(line[line.startIndex..<slash.lowerBound])
+            }
+            .joined(separator: "\n")
+
+        XCTAssertTrue(code.contains("settingsWindow?.isVisible == true"),
+                      "설정 창 가시성 게이트가 없다 — settingsVM 은 lazy 라 먼저 건드리면 조기 생성된다")
+        XCTAssertTrue(code.contains("settingsVM.statusMessage = message"),
+                      "설정 창 미러가 없다 — 트레이→설정 경로에서 성패가 화면에 안 뜬다")
+        XCTAssertFalse(code.contains("isBakingStill"),
+                       "notify 미러는 굽기 스피너를 건드리면 안 된다 — 무관한 알림이 스피너를 먼저 끈다")
+    }
 }
