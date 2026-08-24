@@ -203,13 +203,24 @@ struct DisplaysView: View {
     /// 의존(오적용 풋건)도 없다.
     private var assignmentRail: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: Space.controlGap) {
-                ForEach(viewModel.entries, id: \.id) { entry in
-                    railTile(entry)
+            // [2026-08-25] 라이브러리가 비면 이 레일이 **아무것도 없는 빈 띠**로 남았다.
+            // 이 시트는 모니터별 배경 할당이 목적인데, 할당할 배경이 없다는 사실도 그다음에
+            // 무엇을 해야 하는지도 화면이 말하지 않았다 — 사용자는 빈 줄을 보고 "고장인가" 로 읽는다.
+            // 라이브러리 그리드(`WallpaperGridView:114-116`)와 창작마당(`WorkshopTabView:33`)이
+            // 이미 쓰는 `ContentUnavailableView` 문법을 그대로 준용한다.
+            if viewModel.entries.isEmpty {
+                ContentUnavailableView("라이브러리가 비어 있습니다", systemImage: "photo.on.rectangle.angled",
+                                       description: Text("창을 닫고 배경을 먼저 가져오세요."))
+                    .padding(.vertical, Space.controlGap)
+            } else {
+                LazyHStack(spacing: Space.controlGap) {
+                    ForEach(viewModel.entries, id: \.id) { entry in
+                        railTile(entry)
+                    }
                 }
+                .padding(.horizontal, Space.panelInset)
+                .padding(.vertical, Space.controlGap)
             }
-            .padding(.horizontal, Space.panelInset)
-            .padding(.vertical, Space.controlGap)
         }
         // 고정 높이(92) 대신 콘텐츠가 정하게 두고 바닥만 건다 — 큰 글씨 설정에서 캡션이 잘리던
         // 자리다(청사진 §4.5). fixedSize 가 없으면 세로로 유연한 ScrollView 가 VStack 의 남은

@@ -101,8 +101,6 @@
 "모니터별" = "Per display";
 "모니터별 배경 할당" = "Per-display wallpaper assignment";
 "모니터에 적용" = "Apply to display";
-"모바일" = "Mobile";
-"모바일 페어링은 지원하지 않습니다" = "Mobile pairing is not supported";
 "목록 제거" = "Remove from list";
 "목록 추가" = "Add to list";
 "미설치 — mkv/webm 동영상 변환에 필요합니다 (brew install ffmpeg)" = "Not installed — needed to convert mkv/webm videos (brew install ffmpeg)";
@@ -290,3 +288,8 @@
 "지원하지 않는 타입입니다: %@" = "Unsupported type: %@";
 "평점 %.1f/5" = "Rated %.1f/5";
 "화면보호기 설치 실패: %@" = "Could not install the screen saver: %@";
+
+"저장된 API 키를 지울까요?" = "Delete the saved API key?";
+"키 삭제" = "Delete key";
+"Keychain 에서 삭제되고 창작마당 검색이 멈춥니다. 다시 쓰려면 키를 새로 입력해야 합니다." = "It is removed from your Keychain and Workshop search stops working. You will have to paste a new key to use it again.";
+"창을 닫고 배경을 먼저 가져오세요." = "Close this window and import a wallpaper first.";

@@ -164,9 +164,6 @@ struct MainWindowView: View {
         ToolbarItemGroup {
             if surface == .library { filterButton }
             sortMenu
-            Button {} label: { Label("모바일", systemImage: "iphone") }
-                .disabled(true)
-                .help("모바일 페어링은 지원하지 않습니다")
             Button { showDisplays = true } label: { Label("디스플레이", systemImage: "display") }
                 .help("모니터별 배경 할당")
             Button { viewModel.onOpenSettings?() } label: { Label("설정", systemImage: "gearshape") }

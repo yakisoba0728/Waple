@@ -320,9 +320,31 @@ struct NowPlayingBar: View {
                 Text("재생목록이 비어 있습니다 — 타일 우클릭 또는 위 버튼으로 추가하세요")
                     .font(Typography.caption).foregroundStyle(.secondary)
             } else {
+                // [2026-08-25] 목록이 **읽기 전용**이었다. 추가는 타일 우클릭·위 버튼 둘로 되는데
+                // 제거는 "그 항목을 다시 찾아 우클릭" 밖에 없었다 — 목록을 보면서 지울 수 없다.
+                // 여기 제거 버튼을 둔다(추가와 같은 `togglePlaylist` 를 쓴다).
+                //
+                // **고아 id**: 라이브러리에서 지워진 배경이 재생목록에 남아 있으면 `entries` 에서
+                // 찾을 수 없다. 그때는 제목 대신 id 를 보여주고(종전과 동일) 버튼은 비활성으로 둔다 —
+                // `togglePlaylist` 는 `LibraryEntry` 를 받으므로 부를 대상이 없다. 비활성 버튼이
+                // 아무 일도 안 하는 버튼보다 낫다.
                 ForEach(viewModel.playlist.ids, id: \.self) { id in
-                    Text(viewModel.entries.first { $0.id == id }?.title ?? id)
-                        .font(Typography.caption).lineLimit(1)
+                    let entry = viewModel.entries.first { $0.id == id }
+                    HStack(spacing: Space.controlGap) {
+                        Text(entry?.title ?? id)
+                            .font(Typography.caption).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Button {
+                            if let entry { viewModel.togglePlaylist(entry) }
+                        } label: {
+                            Label("재생목록에서 제거", systemImage: "minus.circle")
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                        .disabled(entry == nil)
+                        .help("재생목록에서 제거")
+                    }
                 }
             }
         }
