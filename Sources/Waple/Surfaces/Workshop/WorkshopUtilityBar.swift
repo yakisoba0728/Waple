@@ -22,6 +22,8 @@ import SwiftUI
 /// 배너처럼 읽혔다. 재질 + 아래 구분선을 주면 같은 정보가 "창의 부속 줄" 로 읽힌다 —
 /// 툴바 아래 유틸리티 바는 맥 앱의 흔한 형태이고, 콘텐츠 우물과 층이 달라진다.
 struct WorkshopUtilityBar: View {
+    /// API 키 삭제 확인 — 되돌리기 어려운 동작이라 확인을 거친다(2026-08-25).
+    @State private var confirmClearKey = false
     @ObservedObject var vm: WorkshopViewModel
 
     var body: some View {
@@ -46,9 +48,20 @@ struct WorkshopUtilityBar: View {
                 .textFieldStyle(.roundedBorder).controlSize(.small)
                 .frame(width: Metrics.usernameFieldWidth)
                 .help("다운로드용 Steam 계정. 최초 1회 터미널에서 `steamcmd +login <계정>` 으로 로그인해 세션을 캐시하세요 — 비밀번호는 앱이 저장하지 않습니다.")
-            Button("API 키 변경") { vm.clearAPIKey() }
+            // [2026-08-25] 확인 없이 바로 지우고 있었다. 이 버튼은 **Keychain 에 저장된 키를
+            // 즉시 삭제**하는데, 사용자가 되돌릴 방법은 Steam 사이트에서 키를 다시 받아 붙여넣는
+            // 것뿐이다(앱은 사본을 안 갖는다). 되돌리기 어려운 동작에는 확인을 둔다 —
+            // 같은 규약을 `WallpaperGridView:66`(라이브러리 제거)과 `SelectionPanelView:359`
+            // (폴더 삭제·속성 초기화)가 이미 쓰고 있었고 여기만 빠져 있었다.
+            Button("API 키 변경") { confirmClearKey = true }
                 .controlSize(.small)
                 .help("Keychain 의 Steam Web API 키를 지우고 다시 입력")
+                .confirmationDialog("저장된 API 키를 지울까요?", isPresented: $confirmClearKey) {
+                    Button("키 삭제", role: .destructive) { vm.clearAPIKey() }
+                    Button("취소", role: .cancel) {}
+                } message: {
+                    Text("Keychain 에서 삭제되고 창작마당 검색이 멈춥니다. 다시 쓰려면 키를 새로 입력해야 합니다.")
+                }
         }
         .padding(.horizontal, Space.contentInset)
         .padding(.vertical, Space.controlGap)
