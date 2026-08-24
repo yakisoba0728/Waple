@@ -78,8 +78,12 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
 
     /// teardown 미호출 경로 안전망(SceneRenderer.deinit 과 동일 패턴 — 감사 L1). teardown() 은 각 필드를
     /// 옵셔널 해제로 정리해 멱등이라 마운트 전/teardown 후 재호출도 안전.
+    /// [2026-08-25] `deinit` 은 액터 격리를 가질 수 없다 — `AppDelegate:32-34` 규약대로
+    /// `MainActor.assumeIsolated` 로 "실행되는 곳이 메인" 을 런타임 단언한다.
+    /// `WebRenderer` 는 `RendererFactory` 를 거쳐 `AppDelegate`(@MainActor)가 소유하므로
+    /// 마지막 참조는 메인에서 놓인다. 아니면 조용한 경합 대신 트랩된다(그게 낫다).
     deinit {
-        teardown()
+        MainActor.assumeIsolated { teardown() }
     }
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
@@ -174,8 +178,14 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         occlusionObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main
         ) { [weak self, weak web] note in
-            guard let self, let win = web?.window, (note.object as? NSWindow) === win else { return }
-            self.occlusionChanged(visible: win.occlusionState.contains(.visible))
+            // `Notification` 은 Sendable 이 아니라 블록 안으로 그대로 들고 들어가면 `sending 'note'`
+            // 진단이 난다. 필요한 것은 **발신 창 하나**뿐이므로 경계 밖에서 꺼내 넘긴다.
+            let sender = note.object as? NSWindow
+            // queue: .main 으로 등록했으므로 이 블록은 메인에서 돈다 — 그 사실을 단언으로 적는다.
+            MainActor.assumeIsolated {
+                guard let self, let win = web?.window, sender === win else { return }
+                self.occlusionChanged(visible: win.occlusionState.contains(.visible))
+            }
         }
         // 마우스 전달(WE 동작): 전역 mouseMoved(권한 불요) → 뷰 좌표 → DOM mousemove. ~30Hz 스로틀.
         if mode == .web {

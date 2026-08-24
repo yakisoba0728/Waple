@@ -281,4 +281,36 @@ final class SceneAudioPlayerTests: XCTestCase {
         d.append(Data(repeating: 0, count: dataBytes))                      // 무음 샘플
         return d
     }
+
+    // MARK: - ObjC 노출 (2026-08-25)
+
+    /// **`audioPlayerDidFinishPlaying` 이 ObjC 셀렉터로 실제 노출돼 있는가.**
+    ///
+    /// `AVAudioPlayerDelegate` 의 이 요구사항은 **optional @objc** 라 런타임에
+    /// `respondsToSelector:` 로 조회된다. witness 매칭이 깨지면 암묵 `@objc` 노출이 사라지고,
+    /// 곡이 끝나도 다음 곡이 시작되지 않는 **무음 실패**가 된다 — 에러도 로그도 없다.
+    /// 소스 주석(`SceneAudioPlayer.swift`)이 그 사고를 적으면서 **"유닛 테스트는 이 메서드를 직접
+    /// 호출하므로 후킹 여부를 잡지 못한다"** 고 구멍까지 자백해 뒀다. 이 테스트가 그 자리를 메운다.
+    ///
+    /// 직접 호출이 아니라 **셀렉터 조회**로 본다. 그래야 `respondsToSelector:` 로 찾는 WebKit/
+    /// AVFoundation 의 실제 경로와 같은 것을 검사한다.
+    ///
+    /// [2026-08-25] `Playlist` 를 `nonisolated` 로 바꾼 커밋에서 추가했다. 격리 표기를 바꾸는 것은
+    /// witness 매칭에 영향을 줄 수 있는 변경이라, 바꾸는 그 커밋에 감시자를 같이 넣는다.
+    func testAudioPlayerDidFinishPlayingIsExposedToObjC() throws {
+        let sel = NSSelectorFromString("audioPlayerDidFinishPlaying:successfully:")
+        let list = Playlist(entries: [], mode: "loop", package: try emptyPackage(),
+                            authorVolume: 1, settingVolume: 1, minTime: 0, maxTime: 0)
+        XCTAssertTrue(list.responds(to: sel),
+                      "AVAudioPlayerDelegate 의 optional @objc 요구사항이 노출되지 않았다 — "
+                        + "곡이 끝나도 다음 곡이 시작되지 않는 무음 실패가 된다(에러도 로그도 없다).")
+
+        // negative control: 없는 셀렉터는 false 여야 한다. 아니면 위 단언이 아무것도 증명하지 못한다.
+        XCTAssertFalse(list.responds(to: NSSelectorFromString("wapleDefinitelyNotASelector:")),
+                       "responds(to:) 가 아무 셀렉터에나 true 면 위 검사는 도장이다")
+    }
+
+    private func emptyPackage() throws -> ScenePackage {
+        try ScenePackage.parse(encodePkg([("scene.json", Data("{}".utf8))]))
+    }
 }
