@@ -230,7 +230,10 @@ if let v = vec3(io["controlpoint\(i)"]) { ov.controlPoints[i] = v }   // SceneDo
 
 ## 4. 구멍 표 — 없음 + 언급만, 동봉 도달 수 내림차순 (키 경로 단위 상위 30)
 
-`python3 scripts/re/bundled_key_coverage.py --top 30` 의 출력 그대로다.
+**이 표는 기계가 만든다 — 손으로 고치지 마라.** 갱신은
+`python3 scripts/re/bundled_key_coverage.py --markdown --top 30` 의 출력으로 이 표를 통째로
+갈아 끼우는 것이다. 종전엔 사람이 정렬 출력을 마크다운으로 옮겨 적었고 **그 손옮김이 이 문서가
+썩던 경로였다** — `scripts/spec/check_gap_docs_current.py` 가 이제 그 낡음을 CI 에서 잡는다.
 `~` 는 키 이름이 두 스키마 이상에 걸침(편향 b).
 
 | 파일 | 스키마 | 키 경로 | 상태 | 타입 |
@@ -240,31 +243,31 @@ if let v = vec3(io["controlpoint\(i)"]) { ov.controlPoints[i] = v }   // SceneDo
 | 87 | scene | `version` | 언급만 | int ~ |
 | 86 | project | `version` | 언급만 | int ~ |
 | 82 | preset | `description` | 언급만 | string ~ |
-| 75 | preset | `options.droplistOptions` | **없음** | array |
+| 75 | preset | `options.droplistOptions` | 언급만 | array |
 | 75 | preset | `options.droplistVisible` | **없음** | bool |
 | 75 | preset | `variants` | 언급만 | array |
 | 69 | effect | `version` | 언급만 | int ~ |
 | 48 | scene | `objects[].depth` | 언급만 | float,int |
-| 32 | particle | `emitter[].duration` | 언급만 | int |
 | 21 | effect | `gizmos` | 언급만 | array |
 | 21 | effect | `gizmos[].vars` | 언급만 | object |
-| 21 | scene | `objects[].particlesrc` | **없음** | null |
+| 21 | scene | `objects[].particlesrc` | 언급만 | null |
 | 12 | effect | `performance` | 언급만 | string |
-| 8 | particle | `children[].controlpointstartindex` | **없음** | int,null |
-| 6 | particle | `initializer[].arcamount` | 언급만 | float |
-| 6 | scene | `objects[].instanceoverride.controlpointangle1` | 언급만 | object,string ~ |
-| 5 | preset | `variants[].objects[].instanceoverride.controlpointangle1` | 언급만 | object,string ~ |
-| 5 | zcompat-web | `actions` | 언급만 | array |
-| 5 | zcompat-web | `actions[].insert` | 언급만 | string |
-| 5 | zcompat-web | `actions[].replace` | 언급만 | string |
-| 4 | particle | `emitter[].delay` | **없음** | float,int |
-| 3 | particle | `initializer[].inputrangemax` | **없음** | int |
-| 3 | preset | `…controlpointangle1.animation.c0[].back.magic` | 언급만 | bool ~ |
-| 3 | preset | `…controlpointangle1.animation.c0[].front.magic` | 언급만 | bool ~ |
-| 3 | preset | `…controlpointangle1.animation.c0[].lockangle` | **없음** | bool ~ |
-| 3 | preset | `…controlpointangle1.animation.c0[].locklength` | **없음** | bool ~ |
-| 3 | preset | `…controlpointangle1.animation.c1[].lockangle` | **없음** | bool ~ |
-| 3 | preset | `…controlpointangle1.animation.c1[].locklength` | **없음** | bool ~ |
+| 3 | preset | `variants[].objects[].instanceoverride.controlpointangle1.animation.c0[].back.magic` | 언급만 | bool ~ |
+| 3 | preset | `variants[].objects[].instanceoverride.controlpointangle1.animation.c0[].front.magic` | 언급만 | bool ~ |
+| 3 | preset | `variants[].objects[].instanceoverride.controlpointangle1.animation.c0[].lockangle` | 언급만 | bool ~ |
+| 3 | preset | `variants[].objects[].instanceoverride.controlpointangle1.animation.c0[].locklength` | 언급만 | bool ~ |
+| 3 | preset | `variants[].objects[].instanceoverride.controlpointangle1.animation.c1[].lockangle` | 언급만 | bool ~ |
+| 3 | preset | `variants[].objects[].instanceoverride.controlpointangle1.animation.c1[].locklength` | 언급만 | bool ~ |
+| 3 | preset | `variants[].objects[].instanceoverride.controlpointangle1.animation.c2[].back.magic` | 언급만 | bool ~ |
+| 3 | preset | `variants[].objects[].instanceoverride.controlpointangle1.animation.c2[].front.magic` | 언급만 | bool ~ |
+| 3 | preset | `variants[].objects[].instanceoverride.controlpointangle1.animation.c2[].lockangle` | 언급만 | bool ~ |
+| 3 | preset | `variants[].objects[].instanceoverride.controlpointangle1.animation.c2[].locklength` | 언급만 | bool ~ |
+| 2 | config | `frag` | 언급만 | string |
+| 2 | config | `maximumprojectid` | 언급만 | string |
+| 2 | config | `vert` | 언급만 | string |
+| 2 | effect | `editable` | 언급만 | bool |
+| 2 | particle | `controlpoint[].locktopointer` | 언급만 | bool |
+| 2 | preset | `dependencies[].node` | 언급만 | string |
 
 경로 단위로 보면 하위 6칸이 `lockangle`/`locklength`/`magic` **한 가족**이 곡선 인덱스
 `c0`/`c1`/`c2` 로 흩어진 것뿐이다. 그래서 아래 상세는 **키 이름 단위**(`--by-leaf`)로
@@ -298,17 +301,26 @@ VA 는 `WE_ROOT=… python3 scripts/re/xref.py <키>` 로 뽑았고, 소속 함�
 
 ### A. 진짜 구멍 (10개) — 우선순위 순
 
+> **[해소 2026-08-22] 이 표의 10개가 전부 구현됐다.** 아래 행을 지우지 않고 상태 칸에
+> `~~옛 상태~~ → **해소(날짜)** — 리더 <자리>` 를 달았다. 도달 수·값 분포·바이너리 귀속은
+> 여전히 유효한 측정이라 표 자체는 남긴다.
+>
+> **이 낡음이 얼마나 오래 갔는지가 요점이다.** 열 개가 구현된 뒤에도 이 표는 "진짜 구멍" 이라
+> 적힌 채였고, 그래서 다음 사람이 이미 닫힌 갭을 우선순위 1번으로 집을 수 있었다. 이제
+> `scripts/spec/check_gap_docs_current.py` 가 CI 에서 이 부류를 잡는다 — 상태 칸이 정확히
+> `없음`/`언급만`/`미구현` 인 행의 키가 소스에 리더가 생기면 실패한다.
+
 | # | 키 | 도달 | 상태 | 타입/값 예시 | 대표 자산 |
 | --- | --- | ---: | --- | --- | --- |
-| A1 | `emitter[].duration` | 32 | 언급만 | int — `1`, `0` | `presets/lightning/particles/presets/thunderbolt_beam_child.json` |
-| A2 | `emitter[].delay` | 4 | **없음** | float — `0.2`, `0` | 같은 파일 |
-| A3 | `initializer[].arcamount` | 6 | 언급만 | float — `0.1`, `0.44` | `presets/lightning/particles/presets/thunderbolt.json` |
-| A4 | `children[].controlpointstartindex` | 8 | **없음** | int/null — `1`, `null` | `presets/lightning/particles/presets/thunderbolt_child_spawner.json` |
-| A5 | `initializer[]`·`operator[].inputrangemax` | 4 | **없음** | int — `300`, `50` | `scenes/particleelementpreviews/remapvalue/particles/new_particle_system.json` |
-| A6 | `operator[].inputrangemin` | 1 | **없음** | int — `150` | 같은 파일 |
-| A7 | `…animation.options.wraploop` | 3+3 | 언급만 | bool/null — `true`, `null` | `effects/blendgradient/preview/scene.json` |
-| A8 | `nopadding` (model) | 2 | **없음** | bool — `true` | `scenes/gifs/models/background.json` |
-| A9 | `operator[].collisionbehavior` · `operator[].bouncefactor` | 2 · 1 | **없음** | string — `"slide"` / float — `0.7` | `scenes/particleelementpreviews/collisionquad/…/new_particle_system.json` · `…/collisionplane/…` |
+| A1 | `emitter[].duration` | 32 | ~~언급만~~ → **해소(2026-08-22)** — 리더 ParticleSystem.swift `injected(e, "duration", 0)` | int — `1`, `0` | `presets/lightning/particles/presets/thunderbolt_beam_child.json` |
+| A2 | `emitter[].delay` | 4 | ~~**없음**~~ → **해소(2026-08-22)** — 리더 ParticleSystem.swift `injected(e, "delay", 0)` | float — `0.2`, `0` | 같은 파일 |
+| A3 | `initializer[].arcamount` | 6 | ~~언급만~~ → **해소(2026-08-22)** — 리더 ParticleSystem.swift `mapSeqArcAmount` | float — `0.1`, `0.44` | `presets/lightning/particles/presets/thunderbolt.json` |
+| A4 | `children[].controlpointstartindex` | 8 | ~~**없음**~~ → **해소(2026-08-22)** — 리더 ParticleSystem.swift `injectedInt(c, "controlpointstartindex", …)` | int/null — `1`, `null` | `presets/lightning/particles/presets/thunderbolt_child_spawner.json` |
+| A5 | `initializer[]`·`operator[].inputrangemax` | 4 | ~~**없음**~~ → **해소(2026-08-22)** — 리더 ParticleSystem.swift remap 파스 | int — `300`, `50` | `scenes/particleelementpreviews/remapvalue/particles/new_particle_system.json` |
+| A6 | `operator[].inputrangemin` | 1 | ~~**없음**~~ → **해소(2026-08-22)** — 리더 ParticleSystem.swift remap 파스 | int — `150` | 같은 파일 |
+| A7 | `…animation.options.wraploop` | 3+3 | ~~언급만~~ → **해소(2026-08-22)** — 리더 PropertyAnimation.swift `let wrapLoop = b(opts["wraploop"])` | bool/null — `true`, `null` | `effects/blendgradient/preview/scene.json` |
+| A8 | `nopadding` (model) | 2 | ~~**없음**~~ → **해소(2026-08-22)** — 리더 SceneDocument.swift `noPadding = weBool(mj["nopadding"])` | bool — `true` | `scenes/gifs/models/background.json` |
+| A9 | `operator[].collisionbehavior` · `operator[].bouncefactor` | 2 · 1 | ~~**없음**~~ → **해소(2026-08-22)** — 리더 ParticleSystem.swift `o["collisionbehavior"] as? String` | string — `"slide"` / float — `0.7` | `scenes/particleelementpreviews/collisionquad/…/new_particle_system.json` · `…/collisionplane/…` |
 
 **바이너리 근거와 붙일 자리**
 
@@ -424,10 +436,10 @@ GIF·비디오 월페이퍼 경로라 눈에 띄는 자리다.
 
 | 키 | 스키마 | 도달 | 상태 | 값 예시 | 엔진 근거 | 붙일 자리 |
 | --- | --- | ---: | --- | --- | --- | --- |
-| `general.lightconfig` | scene | 2 | 언급만 | `{"point":1,"pointshadow":1}` | 문자열 `0x14048e4e0`, SSO 적재 `0x1401876a2` → 함수 **`0x140186c90`** | `SceneDocument.swift:981` 부근 `general` 파스 / `Scene3DLighting.swift` |
-| `general.transparentsorting` | scene | 2 | 언급만 | `true` | `0x14019acc4`·`0x14019ad44` → **`0x140199780`** | `SceneDocument` `general` 파스 → 반투명 정렬 규약 |
-| `general.spritesheetrefreshsync` | scene | 2 | 언급만 | `true` | `0x140187656` → **`0x140186c90`** (`lightconfig` 와 같은 함수) | 스프라이트시트 갱신 동기 — `SceneRenderer` |
-| `emitter[].cone` | particle | 2 | 언급만 | `0` | `0x1401b94ae`(`0x1401b9100`) · `0x1401c6146`(`0x1401c5490`) | 동봉 2건은 값이 `0` 이라 무해하지만 워크샵 자산은 다를 수 있다 |
+| `general.lightconfig` | scene | 2 | ~~언급만~~ → **해소(2026-08-22)** — 리더 SceneDocument.swift `out.lightConfig = SceneLightConfig…` | `{"point":1,"pointshadow":1}` | 문자열 `0x14048e4e0`, SSO 적재 `0x1401876a2` → 함수 **`0x140186c90`** | `SceneDocument.swift:981` 부근 `general` 파스 / `Scene3DLighting.swift` |
+| `general.transparentsorting` | scene | 2 | ~~언급만~~ → **해소(2026-08-22)** — 리더 SceneDocument.swift `out.transparentSorting` | `true` | `0x14019acc4`·`0x14019ad44` → **`0x140199780`** | `SceneDocument` `general` 파스 → 반투명 정렬 규약 |
+| `general.spritesheetrefreshsync` | scene | 2 | ~~언급만~~ → **해소(2026-08-22)** — 리더 SceneDocument.swift `out.spritesheetRefreshSync` | `true` | `0x140187656` → **`0x140186c90`** (`lightconfig` 와 같은 함수) | 스프라이트시트 갱신 동기 — `SceneRenderer` |
+| `emitter[].cone` | particle | 2 | ~~언급만~~ → **해소(2026-08-22)** — 리더 ParticleSystem.swift `emitterCone.append(…)` | `0` | `0x1401b94ae`(`0x1401b9100`) · `0x1401c6146`(`0x1401c5490`) | 동봉 2건은 값이 `0` 이라 무해하지만 워크샵 자산은 다를 수 있다 |
 | shaderdecl 42건 | shaderdecl | 각 1 | 언급만 | — | — | 에디터 임포터 카탈로그. 렌더러 무관이라 **의도적으로 안 읽는 게 맞다** |
 
 `lightconfig`/`spritesheetrefreshsync` 가 **같은 함수 `0x140186c90`** 에서 읽힌다는 것은
