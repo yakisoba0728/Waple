@@ -35,7 +35,11 @@ final class WorkshopPagingTests: XCTestCase {
         }
     }
 
-    private func itemsJSON(ids: ClosedRange<Int>) -> Data {
+    /// [2026-08-25] `nonisolated` — `@Sendable` transport 클로저 안에서 불린다.
+
+    /// 인자만 보고 `Data` 를 만드는 순수 함수라 격리가 필요 없다(DiscoverViewModelTests 와 동형).
+
+    private nonisolated func itemsJSON(ids: ClosedRange<Int>) -> Data {
         let details = ids.map { "{\"publishedfileid\":\"\($0)\",\"title\":\"t\($0)\"}" }
             .joined(separator: ",")
         return Data("{\"response\":{\"publishedfiledetails\":[\(details)]}}".utf8)
@@ -65,7 +69,10 @@ final class WorkshopPagingTests: XCTestCase {
                                 folders: FolderStore(baseDirectory: dir))
     }
 
-    private func makeVM(transport: @escaping (URL) async throws -> (Data, Int)) -> WorkshopViewModel {
+    /// [2026-08-25] `@Sendable` — `WorkshopClient.transport` 가 `@Sendable` 이 되면서 이 헬퍼의
+    /// 파라미터 타입도 따라가야 한다(안 그러면 `passing non-Sendable parameter` 경고).
+    /// 호출부가 넘기는 클로저는 전부 값 픽스처만 캡처하므로 이미 조건을 만족한다.
+    private func makeVM(transport: @escaping @Sendable (URL) async throws -> (Data, Int)) -> WorkshopViewModel {
         WorkshopViewModel(client: WorkshopClient(transport: transport),
                           library: makeLibrary(),
                           keyProvider: { "KEY" })
