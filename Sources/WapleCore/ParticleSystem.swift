@@ -2262,9 +2262,23 @@ public struct ParticleSystemDef: Equatable {
             case "positionoffsetrandom":
                 // `octaves` 클램프는 **부호 없는** 비교다 — `cmp eax,8 / jae → 8` 뒤 `cmp eax,1 /
                 // cmovb → 1`(0x1401c9387–0x1401c9399). 음수는 8 로 간다.
+                //
+                // **[2026-08-25] 판정과 결과가 서로 다른 값 위에서 돌고 있었다.** 종전 코드는
+                // 비교만 `Int32(truncatingIfNeeded:)` 로 좁히고 결과로는 **안 좁힌 원값**을 돌려줬다:
+                //
+                //     UInt32(bitPattern: Int32(truncatingIfNeeded: raw)) >= 8 ? 8 : max(1, raw)
+                //                                                                        ~~~
+                // `octaves: 4294967296`(=2³²) 은 절단하면 0 이라 `>= 8` 을 통과하고, `max(1, raw)`
+                // 가 2³² 을 그대로 살려 보낸다. 이 값은 `ParticleSimulator:1437` 의 `for _ in 0..<octaves`
+                // 반복 횟수가 되고 그 fbm 은 **스폰 1개당 축마다 호출**되므로, 파티클 하나만 생겨도
+                // 렌더 스레드가 사실상 영구 정지한다. `eax` 는 32비트 레지스터고 실물은 그 폭 위에서만
+                // 판정·소비한다 — 좁힌 값을 **그대로 써야** 실물과 같다.
+                //
+                // 도달 가능한 저작값(8·-1·0..7)에서는 결과가 종전과 **비트동일**하다. 달라지는 것은
+                // 32비트 절단이 필요한 |값| ≥ 2³¹ 뿐이고, 그건 원래 실물과 갈려 있던 자리다.
                 let rawOctaves = pint(i["octaves"]) ?? 0
-                let octaves = UInt32(bitPattern: Int32(truncatingIfNeeded: rawOctaves)) >= 8
-                    ? 8 : max(1, rawOctaves)
+                let octaves32 = UInt32(bitPattern: Int32(truncatingIfNeeded: rawOctaves))
+                let octaves = octaves32 >= 8 ? 8 : Int(max(1, octaves32))
                 inits.append(.positionOffsetRandom(
                     directions: pvec3(i["directions"]) ?? Vec3(x: 1, y: 1, z: 0),   // 주입 기본(직교 분기)
                     sign: pvec3(i["sign"]) ?? Vec3(x: 0, y: 0, z: 0),               // 주입 기본 "0 0 0"
@@ -2635,7 +2649,19 @@ public struct ParticleSystemDef: Equatable {
                         verb: axes.fused,
                         input: (o["input"] as? String).flatMap { RemapInput(rawValue: $0.lowercased()) },
                         transform: (o["transformfunction"] as? String).flatMap { RemapTransform(rawValue: $0.lowercased()) },
-                        octaves: max(1, pint(o["transformoctaves"]) ?? 3),
+                        // [2026-08-25] 상한을 건다. 하한만 있고 상한이 없어서 이 값이
+                        // `ParticleSimulator:1732` 의 `for _ in 0..<max(1, octaves)` 반복 횟수로
+                        // 그대로 들어갔다 — 파티클마다 **매 스텝** 도는 루프라 큰 값 하나로 멈춘다.
+                        //
+                        // 32 는 발명한 수가 아니라 **수렴점 실측**이다. `remapNoiseOctaves` 는
+                        // `amp *= 0.5` 로 기여가 반씩 줄어 어느 지점부터 `sum` 의 ulp 아래로 떨어진다.
+                        // 실제 `SimplexNoise.snoise1` 로 무작위 20,000 표본(x ∈ ±10⁶, salt ∈ ±10³)을
+                        // 돌려 출력이 더 이상 변하지 않는 최소 옥타브를 재니 **최악 25** 였고
+                        // 512 까지 안정이었다. 32 는 그 위 여유 7 이다 — 즉 도달 가능한 어떤
+                        // 저작값에서도 결과가 비트동일하고, 바뀌는 것은 벽시계뿐이다.
+                        // (참고: `snoise1` 은 `fold()` 가 비유한값을 0 으로 막으므로 `t *= 2` 가
+                        //  inf 로 넘쳐도 NaN 은 나지 않는다 — 여기서 막는 것은 발산이 아니라 정지다.)
+                        octaves: min(32, max(1, pint(o["transformoctaves"]) ?? 3)),
                         inputScale: scale,
                         // 부재만 주입(int 1) — 공유 꼬리 `0x1401d8040` 이 `find` 로 게이트한다.
                         // 리더는 `asUInt`(`0x140085f70` @`0x1401ce831`) **직독**이고 `isNumeric`

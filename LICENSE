@@ -19,3 +19,34 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+SCOPE OF THIS LICENSE — 이 라이선스가 덮는 범위
+
+The MIT grant above applies to the Waple project's own work: the Swift, Objective-C,
+shell and Python sources, the tests, the build and verification tooling, and the
+documentation authored in this repository.
+
+It does NOT apply to third-party material that is redistributed here. In particular
+it does NOT apply to:
+
+  * Sources/WapleRender/Resources/WEAssets/
+    2,940 files (~75.8 MB) copied verbatim from the `assets/` directory of a
+    Wallpaper Engine 2.8.42 installation. These remain the property of their
+    respective rights holders. Waple neither owns them nor is in a position to
+    sublicense them, and nothing in the MIT text above should be read as granting
+    you any right to copy, redistribute or sell them. See NOTICE §0 for provenance,
+    file hashes and the technical reason they are bundled, and NOTICE §0.1 for the
+    fonts contained within that tree, several of which carry their own licenses.
+
+  * Any other file whose own header or accompanying license text states different
+    terms; that text governs for that file.
+
+If you redistribute Waple — source or binary — you are responsible for satisfying
+the terms of the third-party material it carries. Removing the WEAssets tree makes
+the build fail by design (scripts/package-app.sh), so this is a decision to make
+deliberately rather than by accident.
+
+이 절은 MIT 본문을 제한하는 것이 아니라 **본문이 애초에 덮지 못하는 것**을 밝히는
+고지다 — Waple 이 보유하지 않은 권리는 MIT 문면으로도 이전되지 않는다.

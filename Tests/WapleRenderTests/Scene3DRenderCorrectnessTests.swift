@@ -237,6 +237,55 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         XCTAssertFalse(try material("translucent", depthwrite: "disabled").depthWrite)
     }
 
+    /// **[2026-08-25] 같은 규약의 이미지 빌보드 쪽 오라클.** 위 메시 오라클과 짝이다.
+    ///
+    /// 메시 경로(`SceneRenderer3D.swift:801`)와 텍스트 빌보드(`:576`)는 이 규약을 지키는데
+    /// **이미지 빌보드만** 저작 `depthwrite` 를 그대로 실어 왔다. 규약은 같은 정본 두 항목이다 —
+    /// `renderState.authoring.blendingVsDepthwrite`(확정) + `renderState.depthStencil.table`(확정).
+    /// translucent/additive 슬롯은 항상 DepthWriteMask=ZERO 이므로 저작값이 슬롯 선택에 등장하지 않는다.
+    ///
+    /// 이 오라클이 없어서 회귀가 눈에 안 보였다. 메시 쪽만 잠가 두면 같은 규약이 다른 경로에서
+    /// 깨져도 초록이다.
+    func test3DImageBillboardTranslucentOrAdditiveForcesDepthWriteOffRegardlessOfAuthoredValue() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        func depthWrite(_ blending: String, depthwrite: String) throws -> Bool? {
+            let scene = """
+            {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+             "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+             "objects":[
+               {"id":0,"model":"models/missing.mdl"},
+               {"id":1,"image":"models/img.json","origin":"0 0 0","size":"2 2","color":"1 1 1","alpha":1}
+             ]}
+            """
+            let package = try pkg([
+                ("scene.json", Data(scene.utf8)),
+                ("models/img.json", Data(#"{"material":"materials/img.json"}"#.utf8)),
+                ("materials/img.json", Data(#"{"passes":[{"textures":["white"],"blending":"\#(blending)","depthwrite":"\#(depthwrite)"}]}"#.utf8)),
+                ("materials/white.tex", solidTex(255, 255, 255, w: 1, h: 1)),
+            ])
+            let doc = try SceneDocument.parse(package: package)
+            let renderer = SceneRenderer()
+            renderer.sceneScript = SceneScriptContext()
+            renderer.projW = Float(doc.projectionWidth)
+            renderer.projH = Float(doc.projectionHeight)
+            renderer.build3D(doc: doc, package: package, device: device)
+            let bb = try billboard(renderer, 0)
+            return mirrorValue(bb, "depthWrite", as: Bool.self)
+        }
+        // 정본 crosstab 의 overriddenRows 258 = translucent|enabled 254 + additive|enabled 4.
+        XCTAssertEqual(try depthWrite("translucent", depthwrite: "enabled"), false,
+                       "이미지 빌보드도 translucent 면 저작 depthwrite:enabled 와 무관하게 꺼져야 한다")
+        XCTAssertEqual(try depthWrite("additive", depthwrite: "enabled"), false,
+                       "additive 도 마찬가지")
+        // negative control — 이 강제가 과잉 적용이 아님을 보이는 자리. 메시 오라클과 같은 짝이다.
+        XCTAssertEqual(try depthWrite("normal", depthwrite: "enabled"), true,
+                       "normal 블렌드까지 꺼버리면 과잉 수정 — negative control")
+        XCTAssertEqual(try depthWrite("alphatocoverage", depthwrite: "enabled"), true,
+                       "alphatocoverage 는 강제 대상이 아니다 — negative control")
+        // 저작이 이미 disabled 면 그대로 false.
+        XCTAssertEqual(try depthWrite("translucent", depthwrite: "disabled"), false)
+    }
+
     func test3DMeshLightingComboZeroParsesAsUnlit() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let renderer = SceneRenderer()

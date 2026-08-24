@@ -137,6 +137,71 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertEqual(spec.component, 1)                            // "y"
     }
 
+    /// **[2026-08-25] `transformoctaves` 에 상한이 없어 정지 가능했다.**
+    ///
+    /// 이 값은 `ParticleSimulator:1732` 의 `for _ in 0..<max(1, octaves)` 반복 횟수로 그대로
+    /// 들어가고, 그 루프는 **파티클마다 매 스텝** 돈다. 하한(`max(1, …)`)만 있고 상한이 없어서
+    /// 워크샵 JSON 한 줄로 렌더 스레드를 멈출 수 있었다.
+    ///
+    /// 상한 32 는 발명한 수가 아니라 **수렴점 실측**이다. `remapNoiseOctaves` 는 `amp *= 0.5` 로
+    /// 기여가 반씩 줄어 어느 지점부터 `sum` 의 ulp 아래로 떨어진다. 실제 `SimplexNoise.snoise1` 로
+    /// 무작위 20,000 표본(x ∈ ±10⁶, salt ∈ ±10³)을 돌려 출력이 더 이상 변하지 않는 최소 옥타브를
+    /// 재니 **최악 25** 였고 512 까지 안정이었다. 32 는 그 위 여유 7 이므로 도달 가능한 어떤
+    /// 저작값에서도 결과가 비트동일하다 — 바뀌는 것은 벽시계뿐이다.
+    ///
+    /// 아래 두 번째 블록이 그 비트동일성을 시뮬레이터로 직접 확인한다(단언이 클램프 자체가
+    /// 아니라 **관측 가능한 출력**에 걸려 있어야 회귀를 실제로 잡는다).
+    func testRemapValueExTransformOctavesIsBounded() {
+        func octaves(_ v: String) -> Int? {
+            let def = ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":1}],
+             "operator":[{"name":"remapvalue","output":"multiplysize","input":"lifetimefraction",
+                          "operation":"add","transformfunction":"fbmnoise","transformoctaves":\(v),
+                          "transforminputscale":2}],
+             "renderer":[{"name":"sprite"}],"maxcount":10}
+            """), material: nil)
+            guard case let .remapValueEx(s) = def.operators.first else { return nil }
+            return s.octaves
+        }
+        XCTAssertEqual(octaves("3"), 3, "저작 기본 부근은 그대로")
+        XCTAssertEqual(octaves("32"), 32, "상한값 자신은 그대로")
+        XCTAssertEqual(octaves("0"), 1, "하한 1 은 종전대로")
+        XCTAssertEqual(octaves("-5"), 1, "음수도 하한 1")
+        XCTAssertEqual(octaves("33"), 32, "상한 초과는 32")
+        XCTAssertEqual(octaves("1000000"), 32, "정지를 유발하던 크기")
+        XCTAssertEqual(octaves("9223372036854775807"), 32, "Int64 최대")
+
+        // 어떤 값이 와도 1...32 밖으로 나가지 않는다 — 정지 불가능성의 계약.
+        for v in ["0", "1", "3", "31", "32", "33", "-1", "1000000", "4294967296"] {
+            guard let o = octaves(v) else { return XCTFail("transformoctaves(\(v)) 파스 실패") }
+            XCTAssertTrue((1...32).contains(o), "transformoctaves(\(v)) = \(o) 가 1...32 밖이다")
+        }
+
+        // 클램프가 **결과를 바꾸지 않는다**는 것을 시뮬레이터 출력으로 확인한다.
+        // 32 와 1,000,000 이 같은 크기 궤적을 내야 한다(= 잘라도 그림이 같다).
+        func sizes(_ v: String) -> [Float] {
+            let def = ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":6,"distancemax":"0 0 0"}],
+             "operator":[{"name":"remapvalue","output":"multiplysize","input":"lifetimefraction",
+                          "operation":"multiply","transformfunction":"fbmnoise","transformoctaves":\(v),
+                          "transforminputscale":7,"outputrangemin":0.5,"outputrangemax":3}],
+             "initializer":[{"name":"lifetimerandom","min":4,"max":9}],
+             "renderer":[{"name":"sprite"}],"maxcount":6}
+            """), material: nil)
+            var sim = ParticleSimulator(def: def, seed: 17)
+            var out: [Float] = []
+            for _ in 0..<12 { out += sim.step(0.05).map { $0.size } }
+            return out
+        }
+        let at32 = sizes("32")
+        // 표본이 비었거나 전부 같은 값이면 아래 비교가 아무것도 증명하지 못한다 — 먼저 막는다.
+        XCTAssertFalse(at32.isEmpty, "표본이 비면 이 테스트는 아무것도 안 본다")
+        XCTAssertGreaterThan(Set(at32).count, 1,
+                             "fbm 이 실제로 크기를 흔들지 않으면 아래 동일성 비교는 공허하다")
+        XCTAssertEqual(sizes("1000000"), at32, "클램프는 결과를 바꾸지 않아야 한다")
+        XCTAssertEqual(sizes("64"), at32, "33...∞ 는 전부 32 와 같은 그림")
+    }
+
     /// [2026-08-20] 어휘가 실물 표와 어긋나 있었다.
     ///
     /// 위 테스트는 이름이 `fullVocabulary` 인데 정작 **WE 에 없는 값**(`operation:"square"`)을
@@ -606,6 +671,41 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertEqual(octaves("3"), 3)
         XCTAssertEqual(octaves("9"), 8, "8 이상은 8")
         XCTAssertEqual(octaves("-1"), 8, "부호 없는 비교라 음수도 8")
+    }
+
+    /// **판정과 결과가 같은 32비트 값 위에 있어야 한다.**
+    ///
+    /// 종전 코드는 비교만 `Int32(truncatingIfNeeded:)` 로 좁히고 결과로는 안 좁힌 원값을 냈다.
+    /// `4294967296`(=2³²)은 절단하면 0 이라 `>= 8` 게이트를 통과하고 `max(1, raw)` 가 2³² 을
+    /// 그대로 살렸다 — 그 값이 `ParticleSimulator:1437` 의 `for _ in 0..<octaves` 반복 횟수가 되고
+    /// 그 fbm 은 스폰 1개당 축마다 돌므로 파티클 하나로 렌더 스레드가 멈춘다.
+    ///
+    /// `eax` 는 32비트 레지스터고 실물은 그 폭 위에서만 판정·소비한다. 여기서 단언하는 것은
+    /// "**어떤 저작값이 와도 결과가 1...8 안에 있다**" 는 것이고, 그게 정지 불가능성의 근거다.
+    func testPositionOffsetRandomOctavesNeverEscapesEightAfterTruncation() {
+        func octaves(_ v: String) -> Int? {
+            let d = ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
+             "initializer":[{"name":"positionoffsetrandom","octaves":\(v)}],"maxcount":4}
+            """), material: nil)
+            for i in d.initializers { if case let .positionOffsetRandom(_, _, _, _, _, o) = i { return o } }
+            return nil
+        }
+        // 32비트 절단이 0 을 만들어 게이트를 통과하던 값들 — 전부 하한 1 로 접혀야 한다.
+        XCTAssertEqual(octaves("4294967296"), 1, "2³² → 하위 32비트가 0 → 1")
+        XCTAssertEqual(octaves("8589934592"), 1, "2³³ 도 마찬가지")
+        // 하위 32비트가 1...7 이면 그 값이 그대로 남는다(실물과 같은 폭 위의 판정).
+        XCTAssertEqual(octaves("4294967299"), 3, "2³²+3 → 하위 32비트 3")
+        // 하위 32비트가 8 이상이면 8.
+        XCTAssertEqual(octaves("4294967304"), 8, "2³²+8 → 8")
+        XCTAssertEqual(octaves("9223372036854775807"), 8, "Int64 최대(하위 32비트 = 0xFFFFFFFF) → 8")
+
+        // 어떤 값이 와도 1...8 밖으로 나가지 않는다 — 이게 정지 불가능성의 계약이다.
+        for v in ["0", "1", "7", "8", "9", "-1", "-2147483648", "2147483647",
+                  "4294967295", "4294967296", "4294967299", "1000000000000"] {
+            guard let o = octaves(v) else { return XCTFail("octaves(\(v)) 파스 실패") }
+            XCTAssertTrue((1...8).contains(o), "octaves(\(v)) = \(o) 가 1...8 밖이다")
+        }
     }
 
     /// **RNG 를 한 번도 뽑지 않는다.** 핸들러 0x14023c09a–0x14023c3a1 전 구간에 난수 호출

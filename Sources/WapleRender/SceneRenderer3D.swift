@@ -477,10 +477,31 @@ extension SceneRenderer {
             if !effects.isEmpty { hasEffects = true }
             let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
                                     layer.color.z * layer.brightness, layer.alpha)
+            // [2026-08-25] 이미지 빌보드만 정본 규약 밖에 있었다.
+            //
+            // 같은 파일의 메시 경로(:801)는 `if blend == "translucent" || additive { depthWrite = false }`
+            // 를 이미 구현하고, 텍스트 빌보드(:576)는 아예 `depthWrite: false` 하드코딩이다. 이미지
+            // 빌보드 하나만 저작 `depthwrite` 를 그대로 실어 왔다.
+            //
+            // 근거는 메시 경로와 **같은 정본 두 항목**이다 —
+            // `renderState.authoring.blendingVsDepthwrite`(확정) + `renderState.depthStencil.table`
+            // (확정, wallpaper64.exe FUN_140099050 mov-imm 재추출). D3D11 depth-stencil select 는
+            // "(머티리얼 depthtest 비트) | (blending 이 translucent/additive 면 1)" 뿐이고,
+            // translucent/additive 슬롯(1)은 **항상 DepthWriteMask=ZERO** 다. 즉 저작 depthwrite 는
+            // 슬롯 선택에 등장하지 않는다.
+            //
+            // 증상: `alphaCutoff` 슬롯이 0 이라 완전 투명 텍셀도 뎁스를 채운다 — 반투명 쿼드의
+            // 전면이 뒤 콘텐츠를 **사각형으로 도려낸다**(텍스트 빌보드에서 3509243656 id=2054 로
+            // 실측된 것과 같은 기전이고, 이미지 레이어라고 다를 이유가 없다).
+            //
+            // 코퍼스 전수에 `translucent|enabled` 254건 · `additive|enabled` 4건이 실존하는
+            // 저작 형태다(전부가 3D 카메라 씬은 아니므로 실제 발현 수는 그보다 적다).
+            let bbDepthWrite = (layer.blendMode == "translucent" || layer.blendMode == "additive")
+                ? false : layer.depthWrite
             let bb = Billboard3D(texture: mtl, size: SIMD2(layer.size.x, layer.size.y),
                                  parent: layer.parent, order: layer.order,
                                  additive: layer.blendMode == "additive",
-                                 depthTest: layer.depthTest, depthWrite: layer.depthWrite,
+                                 depthTest: layer.depthTest, depthWrite: bbDepthWrite,
                                  effects: effects, texWidth: effW, texHeight: effH,
                                  isFrameBuffer: layer.isFrameBuffer,
                                  origin: SIMD3(layer.origin.x, layer.origin.y, layer.originZ),
