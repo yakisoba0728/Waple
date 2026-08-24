@@ -27,16 +27,7 @@ final class BlendModeFormulaParityTests: XCTestCase {
 
     /// 동봉 자산 루트(`BlendModeDomainTests.assetsRoot` 와 같은 규약).
     private static func assetsRoot() -> URL? {
-        let fm = FileManager.default
-        if let p = ProcessInfo.processInfo.environment["WAPLE_WE_ASSETS"], !p.isEmpty,
-           fm.fileExists(atPath: p) { return URL(fileURLWithPath: p) }
-        var dir = URL(fileURLWithPath: fm.currentDirectoryPath)
-        for _ in 0..<8 {
-            let cand = dir.appendingPathComponent("Sources/WapleRender/Resources/WEAssets")
-            if fm.fileExists(atPath: cand.path) { return cand }
-            dir = dir.deletingLastPathComponent()
-        }
-        return nil
+        bundledWEAssetsRoot()
     }
 
     private func bundledHeader() throws -> String {

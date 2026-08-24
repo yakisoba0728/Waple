@@ -41,16 +41,7 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
 
     /// 동봉 자산 루트. `AssetJSONLenientTests.bundledAssetsRoot` 과 같은 규약(중복이 아니라 같은 계약).
     static func assetsRoot() -> URL? {
-        let fm = FileManager.default
-        if let p = ProcessInfo.processInfo.environment["WAPLE_WE_ASSETS"], !p.isEmpty,
-           fm.fileExists(atPath: p) { return URL(fileURLWithPath: p) }
-        var dir = URL(fileURLWithPath: fm.currentDirectoryPath)
-        for _ in 0..<8 {
-            let cand = dir.appendingPathComponent("Sources/WapleRender/Resources/WEAssets")
-            if fm.fileExists(atPath: cand.path) { return cand }
-            dir = dir.deletingLastPathComponent()
-        }
-        return nil
+        bundledWEAssetsRoot()
     }
 
     /// `shaders/HLSL/` 은 **GLSL 이 아니다** — `dx11` 접두 파일명 그대로 D3D11 백엔드용 HLSL 원본이고

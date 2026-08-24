@@ -488,12 +488,80 @@ jobs:
           #
           # 하한은 **초록 실행이 실제로 잰 값**에서만 올린다(추정 금지). 갱신 이력:
           #   3350 → 3500  (2026-08-21, `2d19faa` 초록 실행 실측 executed=3596 skipped=65)
-          # 여유 96 은 플랫폼별 조건부 스킵 흔들림을 흡수할 만큼이면서, 테스트 파일 하나가
-          # 통째로 안 실리는 양상(대개 100건 이상)은 잡는 폭이다. 종전 여유 246 은 그걸 놓쳤다.
-          if [ "${EXECUTED:-0}" -lt 3500 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 3500 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
+          #   3500 → 3686  (2026-08-25, `0a63b64` 초록 실행 실측 executed=3686 skipped=64/65,
+          #                 run 32755977630 · debug·release 두 잡이 같은 수. 정적 개수도 3,686 으로 일치)
+          #
+          # **[2026-08-25] 종전 여유 96 의 근거는 실측과 달랐다.** 그 주석은 "테스트 파일 하나가
+          # 통째로 안 실리는 양상(대개 100건 이상)은 잡는 폭" 이라고 적었는데, 100건 넘는 테스트
+          # 파일이 **하나도 없다** — 최대가 `SceneDocumentTests.swift` 81건이다. 즉 그 여유는
+          # 어떤 파일이 통째로 빠져도 잡지 못하는 폭이었다.
+          #
+          # 그래서 래칫 규약(하한 = 직전 초록 실측치)으로 되돌린다. 여유 0 이 안전한 이유는
+          # `executed` 가 **스킵을 포함**해 정적 개수와 같기 때문이다 — 플랫폼별 스킵 흔들림은
+          # 이 수를 바꾸지 않는다(위 표에서 스킵 64/65 로 갈려도 executed 는 둘 다 3,686).
+          # 그리고 "타깃이 통째로 빠지는" 양상은 이제 개수가 아니라 **아래 존재 게이트**가 잡는다.
+          if [ "${EXECUTED:-0}" -lt 3686 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 3686 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
             exit 1
           fi
+
+          # [2026-08-25] **하한만으로는 타깃 통째 소실을 못 잡는다.**
+          #
+          # 위 하한은 이제 래칫(여유 0)이라 "개수가 줄면" 잡는다. 그런데 **개수가 줄지 않는
+          # 소실**은 여전히 못 잡는다 — 타깃 하나가 빠지면서 다른 곳에 그만큼 테스트가 늘면
+          # 총계는 유지된다. 그리고 래칫은 다음 갱신 전까지만 여유 0 이고, 오라클을 추가하는
+          # 순간 다시 여유가 벌어진다(그 창에서 타깃 넷은 각각 100건 미만이라 숨을 수 있다:
+          # WapleCompatCoreTests 25 · WapleSnapshotTests 26 · WapleLibraryTests 52 · WaplePolicyTests 74).
+          #
+          # 즉 개수 게이트로는 이 구멍이 원리적으로 안 닫힌다. 그래서
+          # **개수가 아니라 존재**를 본다 — 각 테스트 타깃에서 클래스 이름을 실제로 뽑아, 그 중
+          # 하나라도 실행 로그에 나타났는지 확인한다.
+          #
+          # 이름을 하드코딩하지 않는 이유: 하드코딩하면 클래스 rename 마다 이 게이트가 거짓
+          # 실패하고, 그걸 피하려고 목록을 느슨하게 만들면 다시 도장이 된다. 소스에서 뽑으면
+          # 스스로 따라온다.
+          #
+          # 한계 두 가지를 명시한다.
+          #   ① `Tests/<타깃>/` 디렉터리와 `Package.swift` 항목을 **같이** 지우면 찾을 대상이 없어
+          #      이 게이트가 침묵한다. 그래서 타깃 수 하한(7)도 함께 본다 — 이 숫자는 타깃을
+          #      의도적으로 늘리거나 줄일 때만 바뀐다.
+          #   ② `Test` 스텝이 중간에 죽으면 뒤쪽 타깃이 로그에 없어 여기가 빨개진다. 그건 오탐이
+          #      아니라 "스위트가 안 끝났다" 는 같은 신고다 — 다만 **`Test` 스텝의 실패를 먼저 읽어라**.
+          python3 - <<'PYEOF' || exit 1
+          import pathlib, re, sys
+
+          log = pathlib.Path("test-output.log").read_text(encoding="utf-8", errors="replace")
+          ran = set(re.findall(r"Test Suite '([A-Za-z0-9_]+)'", log))
+          ran |= set(re.findall(r"Test Case '-\[[A-Za-z0-9_]+\.([A-Za-z0-9_]+) ", log))
+
+          targets = sorted(d for d in pathlib.Path("Tests").iterdir() if d.is_dir())
+          if len(targets) < 7:
+              print(f"::error::테스트 타깃 디렉터리가 {len(targets)}개 — 하한 7 미만. "
+                    f"타깃이 통째로 사라졌다: {[d.name for d in targets]}")
+              raise SystemExit(1)
+
+          missing, rows = [], []
+          for d in targets:
+              classes = set()
+              for f in d.rglob("*.swift"):
+                  classes |= set(re.findall(r"class\s+([A-Za-z0-9_]+)\s*:\s*XCTestCase",
+                                            f.read_text(encoding="utf-8", errors="replace")))
+              if not classes:
+                  continue                      # 클래스가 없는 지원 전용 디렉터리는 대상이 아니다
+              hit = classes & ran
+              rows.append((d.name, len(classes), len(hit)))
+              if not hit:
+                  missing.append((d.name, sorted(classes)[:5]))
+
+          for name, total, hit in rows:
+              print(f"  {name}: 선언 {total} · 로그에서 확인 {hit}")
+          if missing:
+              for name, sample in missing:
+                  print(f"::error::타깃 `{name}` 의 테스트 클래스가 실행 로그에 **하나도** 없다 — "
+                        f"번들이 안 실렸거나 타깃이 빠졌다. 예: {sample}")
+              raise SystemExit(1)
+          print(f"타깃 존재 게이트 통과 — {len(rows)}개 타깃 전부 실행 로그에 나타난다.")
+          PYEOF
 
       # 합성 픽셀 골든 기준선을 아티팩트로 올린다 — `workflow_dispatch` 의 `golden_bootstrap`
       # 을 켰을 때만. (앞머리에 얹혀 있던 `Show failure summary` 의 근거 두 줄은 2026-08-21 에

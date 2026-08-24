@@ -276,16 +276,7 @@ final class ParticleRemapFlagsWiringTests: XCTestCase {
     // MARK: - ⑥ 동봉 자산 도달표 (범위 라벨: 동봉 `WEAssets` 트리)
 
     private static func bundledAssetsRoot() -> URL? {
-        let fm = FileManager.default
-        if let p = ProcessInfo.processInfo.environment["WAPLE_WE_ASSETS"], !p.isEmpty,
-           fm.fileExists(atPath: p) { return URL(fileURLWithPath: p) }
-        var dir = URL(fileURLWithPath: fm.currentDirectoryPath)
-        for _ in 0..<8 {
-            let c = dir.appendingPathComponent("Sources/WapleRender/Resources/WEAssets")
-            if fm.fileExists(atPath: c.path) { return c }
-            dir = dir.deletingLastPathComponent()
-        }
-        return nil
+        bundledWEAssetsRoot()
     }
 
     private func parsedDef(_ rel: String, root: URL) -> ParticleSystemDef? {

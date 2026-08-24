@@ -69,13 +69,38 @@ final class TexDecoderTests: XCTestCase {
 
     /// 이슈2 실물 검증: 코퍼스에 v4 임베디드 PNG 서브레이아웃이 둘 있다 — splash_*(표준 mip → imageFormat
     /// 라우팅 .embeddedImage) 와 lut/*(mip 에 여분 int → parseMip 실패 → fast-path .png). 둘 다 정상 디코드
-    /// 해야 무회귀(재정렬로 어느 것도 흰 폴백이 되지 않음). 코퍼스 부재 시 skip(Real* 하네스 규약).
+    /// 해야 무회귀(재정렬로 어느 것도 흰 폴백이 되지 않음).
+    ///
+    /// **[2026-08-25] 더 이상 스킵하지 않는다.** 필요한 두 파일이 동봉본에 있으므로 부재는
+    /// 환경 조건이 아니라 실패다 — 아래 후보 목록 주석 참조.
     func testDecodesRealEmbeddedImages() throws {
-        // WAPLE_BASE_ASSETS 오버라이드(F408: Real* 하네스 관례와 통일 — 없으면 기본 경로).
-        let base = (ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"]
-            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/assets")) + "/materials/"
+        // WAPLE_BASE_ASSETS 오버라이드(F408: Real* 하네스 관례와 통일).
+        //
+        // **[2026-08-25] 동봉본 폴백을 넣는다.** 종전엔 `WAPLE_BASE_ASSETS ?? ~/Downloads/...`
+        // 둘만 보고 없으면 스킵했다 — CI 에는 그 홈 디렉터리가 없으므로 이 테스트는 **CI 에서
+        // 영구 스킵**이었고, AGENTS.md 가 그 스킵을 "정상"으로 등재해 사람도 의심하지 않았다.
+        //
+        // 그런데 이 테스트가 요구하는 두 파일은 **리포에 커밋돼 있다**:
+        //   Sources/WapleRender/Resources/WEAssets/materials/particle/water/splash_5.tex (46,828B)
+        //   Sources/WapleRender/Resources/WEAssets/materials/lut/lutx32_westernf.tex     (32,811B)
+        // 형제 테스트 16곳은 이미 `bundledAssetsDirectory` 를 쓰는데 이 하나만 예외였다.
+        // 검증 데이터가 리포 안에 있는데 한 번도 읽히지 않는 상태였다.
+        //
+        // 우선순위: 명시 오버라이드 → 동봉본 → 종전 홈 경로. 오버라이드를 먼저 보는 이유는
+        // 다른 WE 버전으로 재검증할 수 있어야 하기 때문이고, 동봉본을 홈 경로보다 먼저 보는
+        // 이유는 그게 이 리포가 해시까지 고정해 둔 정본이기 때문이다(spec/assets/manifest.json).
+        let candidates: [String] = [
+            ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"],
+            BaseAssetsSettings.bundledAssetsDirectory?.path,
+            NSHomeDirectory() + "/Downloads/wallpaper_dev/assets",
+        ].compactMap { $0 }.filter { !$0.isEmpty }.map { $0 + "/materials/" }
+        guard let base = candidates.first(where: {
+            FileManager.default.fileExists(atPath: $0 + "particle/water/splash_5.tex")
+        }) else {
+            return XCTFail("splash_5.tex 를 어느 후보에서도 못 찾았다 — 동봉본은 리포에 있어야 한다. "
+                           + "후보: \(candidates)")
+        }
         let splash = base + "particle/water/splash_5.tex"
-        guard FileManager.default.fileExists(atPath: splash) else { throw XCTSkip("no corpus: \(splash)") }
         // splash_5: imageFormat 라우팅 → .embeddedImage 로 실물 경로를 직접 검증.
         let sData = try Data(contentsOf: URL(fileURLWithPath: splash))
         let sTex = try XCTUnwrap(TexImage.parse(sData))

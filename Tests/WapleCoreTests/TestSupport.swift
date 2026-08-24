@@ -36,3 +36,30 @@ func pkg(_ files: [(String, String)]) throws -> ScenePackage {
 func json(_ s: String) -> [String: Any] {
     try! JSONSerialization.jsonObject(with: s.data(using: .utf8)!) as! [String: Any]
 }
+// MARK: - 동봉 WEAssets 루트 (2026-08-25 통합)
+
+/// 동봉 `WEAssets` 루트. **이 파일의 위치**에서 리포 루트로 거슬러 올라간다.
+///
+/// **[2026-08-25] 종전엔 작업 디렉터리(cwd)에서 8단계 상향 탐색했다.** 그 사본이 9곳에 흩어져
+/// 있었고 전부 같은 함정을 공유했다 — 실패하면 `nil` 을 돌려주고 호출부가 `XCTSkip` 으로
+/// 사라진다. `cd /tmp && swift test --package-path <repo>` 나 Xcode 실행처럼 cwd 가 리포 밖인
+/// 실행에서는 동봉 자산 오라클 8건이 통째로 조용히 빠지고, 그 상태로 초록이 뜬다.
+///
+/// **WEAssets 2,940 파일은 리포에 커밋돼 있다.** 즉 "못 찾음" 은 환경 조건이 아니라 버그다.
+/// 소스 파일 위치는 cwd 와 달리 실행 방식에 흔들리지 않는다 — `LocalizationCoverageTests` 와
+/// `TexSpriteSheetBlendTests` 가 이미 쓰던 규약이고, 여기서 그쪽으로 통일한다.
+///
+/// `WAPLE_WE_ASSETS` 오버라이드는 유지한다(리눅스 하네스가 넣는다). 오버라이드가 가리키는
+/// 트리에 특정 파일이 없어서 나는 스킵은 정상이다 — 여기서 막는 것은 **루트 자체를 못 찾는**
+/// 경우다. `testBundledWEAssetsRootIsAlwaysFindable` 이 그 자리를 실패로 낸다.
+func bundledWEAssetsRoot() -> URL? {
+    let fm = FileManager.default
+    if let p = ProcessInfo.processInfo.environment["WAPLE_WE_ASSETS"], !p.isEmpty,
+       fm.fileExists(atPath: p) { return URL(fileURLWithPath: p) }
+    let repoRoot = URL(fileURLWithPath: #filePath)   // Tests/<Target>/TestSupport.swift
+        .deletingLastPathComponent()                  // Tests/<Target>
+        .deletingLastPathComponent()                  // Tests
+        .deletingLastPathComponent()                  // repo root
+    let cand = repoRoot.appendingPathComponent("Sources/WapleRender/Resources/WEAssets")
+    return fm.fileExists(atPath: cand.path) ? cand : nil
+}

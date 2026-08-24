@@ -44,18 +44,7 @@ final class BlendModeCanonParityTests: XCTestCase {
 
     private func header() throws -> String {
         let fm = FileManager.default
-        var root: URL?
-        if let p = ProcessInfo.processInfo.environment["WAPLE_WE_ASSETS"], !p.isEmpty,
-           fm.fileExists(atPath: p) { root = URL(fileURLWithPath: p) }
-        if root == nil {
-            var dir = URL(fileURLWithPath: fm.currentDirectoryPath)
-            for _ in 0..<8 {
-                let cand = dir.appendingPathComponent("Sources/WapleRender/Resources/WEAssets")
-                if fm.fileExists(atPath: cand.path) { root = cand; break }
-                dir = dir.deletingLastPathComponent()
-            }
-        }
-        guard let r = root else { throw XCTSkip("WEAssets 미배치") }
+        guard let r = bundledWEAssetsRoot() else { throw XCTSkip("WEAssets 미배치") }
         let url = r.appendingPathComponent("shaders/common_blending.h")
         guard fm.fileExists(atPath: url.path) else { throw XCTSkip("동봉 common_blending.h 없음") }
         return try String(contentsOf: url, encoding: .utf8)
