@@ -183,7 +183,7 @@ public enum ParticleControlPointFlag {
 /// `out = u·row0 + v·row1 + 0·row2 + row3` 를 성분별로 펼쳐 놓는다. 곱셈기
 /// `0x14024f0e0`(`0x14024f191`–`0x14024f210`)도 `dst.row0 = A[0][0]·B.row0 + A[0][1]·B.row1 + …`
 /// 로 같은 규약이다.
-public struct CPMatrix4: Equatable {
+public struct CPMatrix4: Equatable, Sendable {
     /// 16개 성분, 행 우선(`m[row * 4 + col]`).
     public var m: [Float]
 

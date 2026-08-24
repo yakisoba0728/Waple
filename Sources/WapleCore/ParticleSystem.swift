@@ -918,7 +918,7 @@ public enum RemapTransform: String, Equatable {
 ///
 /// 적용은 오퍼레이터마다 필드별 `new = old + w·(unweighted − old)` 다. 스케일 계수 자리에서는
 /// `s = 1 + w·(s₀ − 1)` 로 보이지만 그건 같은 lerp 의 특수형이다.
-public struct BlendWindow: Equatable {
+public struct BlendWindow: Equatable, Sendable {
     public let inStart: Float
     public let invInDur: Float
     public let outEnd: Float
@@ -1669,7 +1669,7 @@ public struct PeriodicEmission: Equatable {
 /// 시뮬 배선 완료 — `ParticleSimulator.windowBlocksEmission(_:)`(게이트 ①②·은퇴)와
 /// `stepEmitterWindows(_:)`(꼬리 카운트다운 ③④)가 소비한다. 전건 `.unbounded` 면 상태 배열을
 /// 아예 비워 종전 경로와 비트동일이다(동봉 30/32 가 그 경로).
-public struct EmitterWindow: Equatable {
+public struct EmitterWindow: Equatable, Sendable {
     /// ON 창 길이(초). **0 = 무한**(위 ⑤). 음수는 실물에서 즉시 게이트 차단(위 ②).
     public let duration: Float
     /// 방출 시작 전 대기(초). 0 = 대기 없음.

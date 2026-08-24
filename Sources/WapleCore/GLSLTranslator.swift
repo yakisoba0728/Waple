@@ -1,6 +1,6 @@
 import Foundation
 
-public enum GLSLType: String, Equatable {
+public enum GLSLType: String, Equatable, Sendable {
     case float, vec2, vec3, vec4, mat2, mat3, mat4, mat4x3, sampler2D
     /// 비교(섀도우) 샘플러 — `sampler2DComparison`(shader-strings.txt :25)은 HLSL 백엔드에서
     /// `Texture2D` + `SamplerComparisonState` 쌍으로 선언된다(같은 파일 :32 `SamplerComparisonState:register(s`,
