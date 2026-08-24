@@ -194,6 +194,13 @@ jobs:
       - name: Canon cross-references resolve
         run: python3 scripts/spec/check_canon_entry_refs.py
 
+      # 갭 문서(`docs/re/bundled-key-coverage.md` · `unimplemented-json-keys.md`)는 **한 방향으로만
+      # 썩는다** — 갭이 구현돼도 표는 "없음/언급만/미구현" 인 채 남는다. 실제로 §5-A 가 "진짜 구멍
+      # 10개" 라고 못박은 키가 **열 개 전부 이미 구현된** 상태로 오래 있었다. 지도가 실제보다
+      # 비관적이면 다음 사람이 이미 닫힌 갭을 다시 판다.
+      - name: Gap docs are current
+        run: python3 scripts/spec/check_gap_docs_current.py
+
       # 자산 JSON 관용 파스의 **도달**과 **배선**을 함께 본다.
       #
       # WE 는 jsoncpp 의 allowComments/allowTrailingCommas 를 둘 다 켠다(0x140091fe2·0x1400920b3).

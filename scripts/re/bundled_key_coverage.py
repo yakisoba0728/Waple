@@ -584,6 +584,10 @@ def main() -> int:
                     help="구멍 표를 키 경로 대신 **키 이름** 단위로 접는다(도달 수 = 파일 수)")
     ap.add_argument("--status", nargs="*", choices=["none", "mention", "parsed"],
                     help="이 상태만 본다")
+    ap.add_argument("--markdown", action="store_true",
+                    help="구멍 표를 **마크다운**으로만 낸다 — `docs/re/bundled-key-coverage.md` §4 를 "
+                         "손으로 옮겨 적지 않고 갈아 끼우기 위한 것이다(그 손옮김이 문서가 썩는 경로였다). "
+                         "`scripts/spec/check_gap_docs_current.py` 가 그 표를 실측과 대조한다")
     args = ap.parse_args()
 
     data = build(args.assets, args.repo)
@@ -600,6 +604,19 @@ def main() -> int:
                    "gaps_by_leaf": gaps(data, by_leaf=True)},
                   sys.stdout, ensure_ascii=False, indent=1)
         print()
+        return 0
+
+    if args.markdown:
+        g = gaps(data, by_leaf=args.by_leaf)
+        unit = "키 이름" if args.by_leaf else "키 경로"
+        label = {"none": "**없음**", "mention": "언급만", "parsed": "파스됨"}
+        print("| 파일 | 스키마 | %s | 상태 | 타입 |" % unit)
+        print("| ---: | --- | --- | --- | --- |")
+        for r in g[:args.top]:
+            ty = ",".join(sorted(r["types"])) + (" ~" if r["leaf_ambiguous"] else "")
+            cell = r["leaf"] if args.by_leaf else r["path"]
+            print("| %d | %s | `%s` | %s | %s |"
+                  % (r["files"], r["schema"], cell, label.get(r["status"], r["status"]), ty))
         return 0
 
     print("자산 루트 : %s" % data["assets_root"])
