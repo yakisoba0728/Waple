@@ -401,6 +401,26 @@ CI 에서만 터진 실패 이력이 있다(`db90fc2` 타입체커 폭발, `14dc
 
 > **WE 를 실측(리버스 엔지니어링)하려면 [docs/dev/re-methodology.md](docs/dev/re-methodology.md) 를 먼저 읽어라.** 아래는 Swift 코드베이스 쪽 함정이고, 그쪽은 바이너리·자산·정본을 다룰 때 **실제로 틀렸던** 방식 26개다(남의 VA 베끼기 · 거꾸로 디스어셈 · 주입을 소비로 착각 · 리눅스 초록을 macOS 초록으로 착각 …).
 
+**오디오 출력이 죽어 있으면 테스트 12개가 빨개진다 — 코드 결함이 아니다.**
+[2026-08-25] 실측으로 당했다. 개발 머신의 기본 출력이 블루투스 동글(Sennheiser BTD 700)이었는데
+헤드셋이 꺼지자, 장치는 `system_profiler` 목록에 **그대로 남아 있으면서** `AVAudioPlayer.play()` 가
+`false` 를 돌려줬다. 결과는 `isPlaying == true` 를 단언하는 테스트 12개(단언 15건)가 한꺼번에
+빨개지는 것이고 — `SceneAudioPlayerTests` 9 · `SceneEventHookTests` 2 · `SceneInteractionMediaE2ETests` 1 —
+실패 메시지는 전부 그냥 `XCTAssertTrue failed` 다. **원인을 가리키는 신호가 하나도 없다.**
+
+그 상태에서 소스 변경을 의심하느라 시간을 태웠다. `Sources/` 를 전부 되돌려도 같은 12개가 같은
+이름으로 실패해서야 환경임을 알았다. 지금은 `skipUnlessAudioOutputCanPlay()`(TestSupport)가
+**원인을 말하며 스킵**한다 — 무음 WAV 를 볼륨 0 으로 재생 시도해 장치 가용성만 본다.
+
+- 이 12건이 스킵되면 스킵 수가 63~64 → **75~76** 으로 뛴다. CI 스킵 상한 100 아래이지만
+  census 스텝에 그대로 찍히므로, 그 점프가 보이면 "이 머신의 오디오가 죽어 있다" 는 뜻이다.
+- **CI(macos-26)에는 재생 가능한 출력이 있어 이 게이트가 열린다** — 회귀 감시는 그대로다.
+- 최소 재현: `AVAudioPlayer(data: <무음 WAV>)` 를 만들고 `play()` 의 반환값을 본다.
+
+**`--filter` 로 오디오 테스트를 격리 실행하면 판정에 쓸 수 없다.** 같은 이유로
+`swift test --filter SceneAudioPlayerTests` 는 오디오가 죽은 머신에서 22건 중 11건이 실패한다.
+`--parallel` 이 판정에 못 쓰였던 것과 같은 부류다 — **전수로 판정해라.**
+
 **타입체커 폭발.** 긴 식을 합치면 `unable to type-check this expression in reasonable time`
 이 난다. 이건 이 리포에서 실제로 4번 일어났다. 식은 **쪼개는 방향으로만** 바꿔라.
 추출한 함수의 파라미터·반환 타입은 명시적으로 적어라. SwiftUI 뷰 빌더는 특히 취약하다.
