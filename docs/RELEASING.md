@@ -21,6 +21,28 @@ Waple 은 외부 SPM 의존성 0 원칙을 지킨다. 패키징도 macOS 기본 
 3. 워크플로 완료 후 draft 릴리스를 열어 DMG/노트/sha256 검토 → Publish.
 4. Homebrew cask 사용 시 §3 템플릿의 `version`/`sha256` 갱신.
 
+### 1-1. 태그를 못 밀 때 — 수동 실행 경로
+
+**[2026-08-25 문서화]** `release.yml` 에는 `workflow_dispatch` 경로가 있다(`7791a40` 에서 추가됐고
+이 문서가 따라오지 못했다). 브랜치 push 만 허용되는 자격증명에서는 `git push origin <tag>` 이
+HTTP 403 이라 정식 경로를 못 타는데, 그때도 프리뷰 빌드를 낼 수 있어야 해서 둔 것이다.
+
+```
+Actions → Release → Run workflow → 브랜치 선택 → tag 입력(예: v0.1.0-beta.7)
+```
+
+- 태그는 미리 만들지 않는다. `gh release create --target <실행 커밋 sha>` 가 그 커밋에 만들어 준다.
+  즉 **태그 없이 시작해도 결과물은 태그 경로와 같다.**
+- `tag` 에 `-` 가 들어가면 prerelease 로 공개된다(`v0.1.0-beta.7` → prerelease).
+- 입력값은 `v` 로 시작해야 한다. 아니면 `Extract version from tag` 스텝이 거부한다.
+
+**주의 — 같은 태그로 재시도할 때.** `gh release create` 는 **태그가 이미 있으면 `--target` 을
+무시한다**(기존 태그가 가리키는 커밋이 이긴다). 그래서 "태그 push → 공증 실패 → 태그만 남음 →
+고친 뒤 수동 실행으로 재시도" 하면 릴리스 페이지가 가리키는 커밋과 첨부 DMG 의 빌드 커밋이
+어긋난다. `Refuse to clobber an existing release` 스텝이 이제 **태그도 함께 조회**해서
+이 커밋을 가리키지 않으면 빌드 전에 멈춘다 — 그 메시지가 나오면 태그를 지우고 다시 붙이거나
+새 태그를 써라.
+
 ## 2. 패키징 스크립트(로컬)
 
 ```sh

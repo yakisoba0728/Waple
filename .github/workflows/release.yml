@@ -42,10 +42,22 @@ jobs:
 
       # 두 경로(태그 push · 수동 실행)가 **같은 변수 하나**로 합류한다. 이 아래로는
       # `GITHUB_REF_NAME` 을 쓰지 않는다 — 수동 실행에서는 그것이 브랜치 이름이라 태그가 아니다.
+      # [2026-08-25] `inputs.tag` 를 **`env:` 경유로** 받는다.
+      #
+      # `${{ inputs.tag }}` 를 `run:` 본문에 직접 적으면 GitHub 이 셸 실행 **전에** 그 자리를
+      # 문자열로 치환한다. 즉 값이 셸 문법으로 파싱되고, 아래 `case "$TAG" in v*)` 검증은
+      # 그보다 **나중**이라 막지 못한다. 이 잡은 `contents: write` 와 서명·공증 secrets 4개를
+      # 들고 있으므로 방어층 하나가 빠진 상태였다.
+      #
+      # 특권 상승은 아니다 — `workflow_dispatch` 를 부를 수 있는 사람은 워크플로 파일 자체를
+      # 고쳐서 같은 일을 할 수 있다. 그래도 "입력이 코드가 되는 자리" 를 남겨 둘 이유는 없다.
+      # `env:` 로 넘기면 값은 환경변수로만 들어가고 셸이 파싱하지 않는다.
       - name: Extract version from tag
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
+            TAG="$DISPATCH_TAG"
           else
             TAG="${GITHUB_REF_NAME}"
           fi
@@ -67,6 +79,18 @@ jobs:
       # 않는 것이 확정됐고, 실행 이력엔 릴리스가 깨진 것처럼 빨간 줄이 남는다.
       #
       # 전제 검사를 파괴적/비싼 단계 **앞**으로 옮긴다. 기존 릴리스는 건드리지 않는다.
+      # [2026-08-25] **릴리스만 보고 태그를 안 보던 구멍을 닫는다.**
+      #
+      # 아래 `gh release create` 는 `--target` 으로 이 커밋을 겨누는데, GitHub API 는 **태그가
+      # 이미 있으면 `target_commitish` 를 쓰지 않는다**(기존 태그가 가리키는 커밋이 이긴다).
+      # 그런데 이 전제 검사는 `gh release view` 로 **릴리스만** 조회했다. 그래서 이런 상태가 가능했다:
+      #   ① 태그 push → 빌드 → 공증 실패 → 잡이 죽는다. **태그는 남고 릴리스는 없다.**
+      #   ② 고친 뒤 같은 태그로 재시도(수동 실행) → 이 검사는 릴리스가 없으니 통과 →
+      #      빌드는 **새 커밋**으로 하는데 `create` 는 **옛 태그 커밋**에 릴리스를 만든다.
+      #   ③ 결과: 릴리스 페이지가 가리키는 커밋과 첨부 DMG 의 빌드 커밋이 **어긋난다**.
+      # 재현 가능한 릴리스라는 이 리포의 전제가 조용히 깨지는 자리다.
+      #
+      # 태그가 이미 있으면 그것이 **이 커밋을 가리킬 때만** 진행한다.
       - name: Refuse to clobber an existing release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -76,7 +100,22 @@ jobs:
             echo "다시 내려면 새 태그를 쓰거나, 의도적이라면 먼저 지워라: gh release delete $RELEASE_TAG"
             exit 1
           fi
-          echo "릴리스 $RELEASE_TAG 없음 — 진행한다."
+          # 태그 선존재 검사 — `gh release create --target` 은 태그가 있으면 무시된다.
+          REMOTE_SHA=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG^{}" | cut -f1)
+          if [ -z "$REMOTE_SHA" ]; then
+            REMOTE_SHA=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG" | cut -f1)
+          fi
+          if [ -n "$REMOTE_SHA" ] && [ "$REMOTE_SHA" != "$GITHUB_SHA" ]; then
+            echo "::error::태그 $RELEASE_TAG 은 이미 $REMOTE_SHA 를 가리키는데 이 실행은 $GITHUB_SHA 를 빌드한다."
+            echo "gh release create 는 태그가 있으면 --target 을 무시하므로, 릴리스 페이지의 커밋과"
+            echo "첨부 DMG 의 빌드 커밋이 어긋난다. 태그를 지우고 다시 붙이거나 새 태그를 써라."
+            exit 1
+          fi
+          if [ -n "$REMOTE_SHA" ]; then
+            echo "태그 $RELEASE_TAG 이 이 커밋($GITHUB_SHA)을 가리킨다 — 진행한다."
+          else
+            echo "릴리스·태그 $RELEASE_TAG 없음 — 진행한다."
+          fi
 
       # Developer ID 서명/공증은 secrets 이 설정된 경우에만 활성화된다.
       # 하나라도 없으면 ad-hoc 서명으로 폴백한다(로컬 패키징과 동일) — 릴리스가 멈추지 않는다.
