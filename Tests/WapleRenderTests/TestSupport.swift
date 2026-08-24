@@ -1,3 +1,4 @@
+import XCTest
 import Foundation
 import AppKit
 import AVFoundation
@@ -363,4 +364,60 @@ func bundledWEAssetsRoot() -> URL? {
         .deletingLastPathComponent()                  // repo root
     let cand = repoRoot.appendingPathComponent("Sources/WapleRender/Resources/WEAssets")
     return fm.fileExists(atPath: cand.path) ? cand : nil
+}
+
+// MARK: - 오디오 출력 가용성 게이트 (2026-08-25)
+
+/// **기본 오디오 출력이 실제로 재생을 시작할 수 있는가.**
+///
+/// [2026-08-25] 이 게이트가 없어서 실측으로 당했다. 개발 머신의 기본 출력이 블루투스 동글
+/// (Sennheiser BTD 700)이었는데 헤드셋이 꺼지자, 장치는 `system_profiler` 목록에 **그대로 남아
+/// 있으면서** `AVAudioPlayer.play()` 가 `false` 를 돌려줬다. 결과는 `isPlaying == true` 를 단언하는
+/// 테스트 **12개(단언 15건)** 가 한꺼번에 빨개지는 것이고, 실패 메시지는 전부 그냥
+/// `XCTAssertTrue failed` 다 — 원인을 가리키는 신호가 하나도 없다.
+///
+/// 그 상태에서 소스 변경을 의심하느라 시간을 태웠다. 되돌려도 같은 15건이 실패해서야 환경임을
+/// 알았고, 무음 WAV 를 `AVAudioPlayer` 로 열어 `play()` 를 부르는 최소 재현으로 확정했다.
+///
+/// 그래서 **원인을 말하는 스킵**으로 바꾼다. 이 리포는 스킵을 싫어하지만(스킵은 실패로 보고되지
+/// 않는다), 그 위험은 CI 의 스킵 상한 100 이 받아 준다 — 무코퍼스 기준 스킵이 63~64 이므로
+/// 이 12건이 CI 에서 풀리지 않으면 76 이 되고, 그 변화는 census 스텝에 그대로 찍힌다.
+/// **CI(macos-26)에는 재생 가능한 출력 장치가 있어서 이 게이트는 CI 에서 열린다** — 즉 회귀
+/// 감시는 그대로 유지되고, 헤드셋을 끈 노트북에서만 조용해진다.
+///
+/// 한 번만 재고 캐시한다(테스트마다 재면 프로세스당 12회 장치 접근이다).
+enum AudioOutputProbe {
+    nonisolated(unsafe) private static var cached: Bool?
+
+    /// 무음 WAV 0.1초를 볼륨 0 으로 재생 시도 — 소리는 나지 않고 장치 가용성만 본다.
+    static var canStartPlayback: Bool {
+        if let c = cached { return c }
+        let sr = 44100, frames = sr / 10, bytes = frames * 2
+        var d = Data()
+        func le32(_ v: Int) { var x = UInt32(v).littleEndian; d.append(Data(bytes: &x, count: 4)) }
+        func le16(_ v: Int) { var x = UInt16(v).littleEndian; d.append(Data(bytes: &x, count: 2)) }
+        d.append(Data("RIFF".utf8)); le32(36 + bytes); d.append(Data("WAVE".utf8))
+        d.append(Data("fmt ".utf8)); le32(16); le16(1); le16(1); le32(sr)
+        le32(sr * 2); le16(2); le16(16)
+        d.append(Data("data".utf8)); le32(bytes); d.append(Data(count: bytes))
+        let ok: Bool
+        if let p = try? AVAudioPlayer(data: d) {
+            p.volume = 0
+            ok = p.play() && p.isPlaying
+            p.stop()
+        } else {
+            ok = false
+        }
+        cached = ok
+        return ok
+    }
+}
+
+/// 재생 시작을 단언하는 테스트 앞에 둔다. 장치가 없으면 **원인을 말하며** 스킵한다.
+func skipUnlessAudioOutputCanPlay(file: StaticString = #filePath, line: UInt = #line) throws {
+    try XCTSkipUnless(AudioOutputProbe.canStartPlayback,
+                      "기본 오디오 출력이 재생을 시작하지 못한다(AVAudioPlayer.play() == false). "
+                        + "블루투스 헤드셋이 꺼져 있으면 장치는 목록에 남아도 재생이 안 된다 — "
+                        + "코드 결함이 아니라 환경이다. 출력 장치를 바꾸거나 헤드셋을 켜고 다시 돌려라.",
+                      file: file, line: line)
 }

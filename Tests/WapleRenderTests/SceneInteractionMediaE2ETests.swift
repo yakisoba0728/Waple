@@ -169,6 +169,7 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
     /// cursorClick 스크립트 `getLayer('dial.wav').play()`. 헤드리스 mount(오디오 미생성)라 트랜스포트를
     /// 수동 연결(캡처 결정성 유지) 후 simulateCursorClick → 실 dispatch 경로로 트랜스포트 재생 단언.
     func testSimulatedClickTriggersSoundTransport() throws {
+        try skipUnlessAudioOutputCanPlay()
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},

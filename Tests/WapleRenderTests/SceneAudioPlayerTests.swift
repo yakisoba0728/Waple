@@ -94,7 +94,8 @@ final class SceneAudioPlayerTests: XCTestCase {
     // ── 재생 통합(mute) ─────────────────────────────────────────────────────
 
     /// 유효한 무음 WAV 를 pkg 에서 추출해 AVAudioPlayer 로 재생 시작하는지(설정 음량 0=mute, TCC 불요).
-    func testStartsMutedPlayback() {
+    func testStartsMutedPlayback() throws {
+        try skipUnlessAudioOutputCanPlay()
         let pkg = ScenePackage.assemble([(name: "sounds/t.wav", data: Self.silentWAV())])
         let player = SceneAudioPlayer()
         player.start(sounds: [sound(["sounds/t.wav"])], package: pkg, settingVolume: 0)  // mute
@@ -115,7 +116,8 @@ final class SceneAudioPlayerTests: XCTestCase {
     }
 
     /// 다중 엔트리는 동시 재생이 아니라 플레이리스트 — 오브젝트당 플레이어 1개.
-    func testMultiEntryMountsSinglePlayer() {
+    func testMultiEntryMountsSinglePlayer() throws {
+        try skipUnlessAudioOutputCanPlay()
         let pkg = ScenePackage.assemble([(name: "sounds/a.wav", data: Self.silentWAV()),
                                          (name: "sounds/b.wav", data: Self.silentWAV())])
         let player = SceneAudioPlayer()
@@ -126,7 +128,8 @@ final class SceneAudioPlayerTests: XCTestCase {
     }
 
     /// 첫 엔트리 pkg 누락/디코드 실패 시 다음 후보로 폴백해 재생.
-    func testStartFallsBackToNextPlayableEntry() {
+    func testStartFallsBackToNextPlayableEntry() throws {
+        try skipUnlessAudioOutputCanPlay()
         let pkg = ScenePackage.assemble([(name: "sounds/b.wav", data: Self.silentWAV())])
         let player = SceneAudioPlayer()
         player.start(sounds: [sound(["sounds/missing.mp3", "sounds/b.wav"])], package: pkg, settingVolume: 0)
@@ -145,7 +148,8 @@ final class SceneAudioPlayerTests: XCTestCase {
     }
 
     /// 실물 ogg(Vorbis) 엔트리 → 디코드 → WAV → AVAudioPlayer 장착·재생(mute). 전 경로 검증.
-    func testOggEntryDecodesAndPlays() {
+    func testOggEntryDecodesAndPlays() throws {
+        try skipUnlessAudioOutputCanPlay()
         let pkg = ScenePackage.assemble([(name: "sounds/a.ogg", data: TinyOgg.data)])
         let player = SceneAudioPlayer()
         player.start(sounds: [sound(["sounds/a.ogg"])], package: pkg, settingVolume: 0)
@@ -157,7 +161,8 @@ final class SceneAudioPlayerTests: XCTestCase {
     // ── 이름 주소 트리거 트랜스포트(사운드 트리거 시스템) ────────────────────────
 
     /// 이름 있는 startsilent 사운드: start 후엔 미재생(등록만) → play(name:) 트리거 시 재생.
-    func testNamedStartSilentRegistersButTriggersOnPlay() {
+    func testNamedStartSilentRegistersButTriggersOnPlay() throws {
+        try skipUnlessAudioOutputCanPlay()
         let pkg = ScenePackage.assemble([(name: "sounds/dial.wav", data: Self.silentWAV())])
         let player = SceneAudioPlayer()
         player.start(sounds: [sound(["sounds/dial.wav"], mode: "single", startSilent: true, name: "dial.wav")],
@@ -173,7 +178,8 @@ final class SceneAudioPlayerTests: XCTestCase {
     }
 
     /// 상태가 진짜다: 곡 자연종료 시 isPlaying(name:) 이 false 로 떨어진다(주크박스 폴링 계약).
-    func testTriggeredSoundReportsNotPlayingAfterNaturalEnd() {
+    func testTriggeredSoundReportsNotPlayingAfterNaturalEnd() throws {
+        try skipUnlessAudioOutputCanPlay()
         let pkg = ScenePackage.assemble([(name: "sounds/sfx.wav", data: Self.silentWAV(seconds: 0.15))])
         let player = SceneAudioPlayer()
         player.start(sounds: [sound(["sounds/sfx.wav"], mode: "single", startSilent: true, name: "sfx")],
@@ -186,7 +192,8 @@ final class SceneAudioPlayerTests: XCTestCase {
     }
 
     /// stop(name:) → 즉시 정지.
-    func testStopByNameHaltsPlayback() {
+    func testStopByNameHaltsPlayback() throws {
+        try skipUnlessAudioOutputCanPlay()
         let pkg = ScenePackage.assemble([(name: "sounds/loop.wav", data: Self.silentWAV())])
         let player = SceneAudioPlayer()
         player.start(sounds: [sound(["sounds/loop.wav"], mode: "loop", startSilent: true, name: "bgm")],
@@ -224,7 +231,8 @@ final class SceneAudioPlayerTests: XCTestCase {
     }
 
     /// 재트리거는 처음부터 재시작(클릭 SFX 반복 클릭 규약) — 여전히 재생 상태.
-    func testRetriggerRestartsPlayback() {
+    func testRetriggerRestartsPlayback() throws {
+        try skipUnlessAudioOutputCanPlay()
         let pkg = ScenePackage.assemble([(name: "sounds/click.wav", data: Self.silentWAV())])
         let player = SceneAudioPlayer()
         player.start(sounds: [sound(["sounds/click.wav"], mode: "single", startSilent: true, name: "click")],
@@ -240,7 +248,8 @@ final class SceneAudioPlayerTests: XCTestCase {
     /// F410 회귀: random 모드 곡 종료로 예약된 gap 콜백이 만기되기 전 play(name:) 재트리거로 새 곡이
     /// 시작되면, stale 콜백이 stopped/paused=false 만 보고 play(at:) 로 플레이어를 교체해 새 곡을 중간에
     /// 끊었다. 세대 불일치로 폐기돼야 한다(새 곡은 자연종료까지 생존).
-    func testStaleGapCallbackDoesNotCutRetriggeredTrack() {
+    func testStaleGapCallbackDoesNotCutRetriggeredTrack() throws {
+        try skipUnlessAudioOutputCanPlay()
         // 단일 엔트리 random: 재선곡이 항상 같은 곡(결정성), gap 1.0초 고정(min==max).
         // (벽시계 표본의 양쪽 슬랙을 0.25→0.5초로 넓히려고 gap 을 0.6→1.0초로 — 과부하 머신 플레이키 완화)
         let pkg = ScenePackage.assemble([(name: "sounds/a.wav", data: Self.silentWAV(seconds: 1.0))])

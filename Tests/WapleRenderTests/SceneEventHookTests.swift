@@ -201,6 +201,7 @@ final class SceneEventHookTests: XCTestCase {
 
     /// getLayer(사운드명) 이 사운드 레이어를 반환하고 .play() 가 실제 트랜스포트로 위임된다(단독 트리거).
     func testGetLayerSoundTriggerPlaysTransport() throws {
+        try skipUnlessAudioOutputCanPlay()
         let (scene, audio) = try soundScene(["dial.wav"])
         let e = try XCTUnwrap(TextScriptEngine(
             script: "export function cursorClick(ev){ thisScene.getLayer('dial.wav').play(); }", scene: scene))
@@ -213,6 +214,7 @@ final class SceneEventHookTests: XCTestCase {
     /// 주크박스 패턴: enumerateLayers().filter(name.includes('.mp3')) → play/isPlaying/.volume 세터가
     /// 전부 네이티브 트랜스포트로 왕복(상태가 진짜 — play 전 isPlaying false, 후 true).
     func testEnumerateLayersJukeboxPattern() throws {
+        try skipUnlessAudioOutputCanPlay()
         let (scene, audio) = try soundScene(["song1.mp3"])
         let js = """
         var found = null;
