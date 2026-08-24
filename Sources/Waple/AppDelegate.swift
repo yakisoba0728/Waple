@@ -1083,6 +1083,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func notify(_ message: String) -> Bool {
         NSLog("%@", "[Waple] \(message)")
+        // [2026-08-25] **설정 창에도 흘린다.** 종전 배너는 라이브러리 창 전용이라, 트레이에서
+        // 설정 창만 열어 놓고 "바탕화면 굽기"·"화면보호기 켜기" 를 누르면 성공도 실패도 화면
+        // 어디에도 안 떴다 — 로그(`NSLog`)에만 남았다. 이 함수는 이 앱에서 사실상 **실패 채널**이다
+        // (호출부: 마운트 실패 · 타입 미지원 · preset 해석 실패 · 웹 배경 없음 · 화면보호기 설치 실패 ·
+        //  비디오 비동기 실패 · 잠금화면 스틸 실패). 그래서 설정 창의 기존 상태 줄에 그대로 싣는다 —
+        // 그 줄은 이미 `ColorRole.destructive` 로 그려진다(`SettingsView:165`).
+        //
+        // **`settingsWindow` 를 먼저 본다.** `settingsVM` 은 `lazy` 라 여기서 먼저 건드리면
+        // 설정 창을 한 번도 안 연 세션에서도 조기 생성된다. 창이 있다는 것은 VM 이 이미 있다는 뜻이다.
+        // 굽기 스피너(`isBakingStill`)는 **건드리지 않는다** — 이 미러는 모든 notify 를 받으므로,
+        // 굽는 도중 도착한 무관한 알림이 스피너를 먼저 끄면 안 된다.
+        if settingsWindow?.isVisible == true {
+            settingsVM.statusMessage = message
+        }
         guard let window = libraryWindow, window.isVisible else {
             pendingNotice = message
             refreshStatusIcon()
