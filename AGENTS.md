@@ -126,6 +126,32 @@ swift run Waple                # 메뉴바 앱으로 실행
 > (관례: 하한 = 직전 실측치, 여유는 미리 주지 않는다 — `94b0a34` 도 자기 커밋의 정적 개수와
 > 똑같은 값을 박았다).
 
+### Xcode 없는 macOS 에서의 커밋 전 검증
+
+Xcode 없이 CommandLineTools 만 있는 맥에서는 **`XCTest` 모듈이 없다.** `swift test` 도
+`swift build --build-tests` 도 `unable to resolve module dependency: 'XCTest'` 로 안 돈다.
+즉 테스트 코드가 **타입체크조차 안 된 채** 푸시되고 판정이 전부 CI(1회 ~12분)로 밀린다.
+그 공백에서 나는 실패는 단언 실패가 아니라 **컴파일 실패**라 스위트가 통째로 안 돈다.
+
+```bash
+scripts/dev/macos-test-typecheck.sh                 # 테스트 타깃 7개 전부
+scripts/dev/macos-test-typecheck.sh WapleCoreTests  # 지정 타깃만
+```
+
+리눅스 쪽 `linux-render-typecheck.sh` 와 **같은 방법론**이다 — `scripts/dev/xctest-shim/` 의
+대역 모듈을 세우고 이미 빌드된 프로덕션 모듈과 함께 `-typecheck` 한다. `Tests/`·`Sources/` 는
+건드리지 않는다.
+
+- **잡는 것**: 없는 심볼 · 타입 불일치 · 잘못된 인자 라벨 · 없는 오버로드 · override 불일치 ·
+  액터 격리 위반. CI 를 빨갛게 만드는 컴파일 실패의 대부분이다.
+- **못 잡는 것**: **단언의 참/거짓**(타입체크지 실행이 아니다). 그리고 `WapleAppTests` 는
+  `Waple` 앱 타깃이 이 환경에서 SwiftUI 매크로 부재로 **빌드 자체가 안 되므로** 그
+  `.swiftmodule` 이 낡았을 수 있다 — 앱 소스를 고쳤다면 그 결과를 믿지 마라.
+- 심이 실물과 다르면 거짓 통과/실패가 난다. 실제로 세 번 틀렸고(AppKit 재수출 누락 ·
+  `accuracy:` 오버로드를 `FloatingPoint` 하나만 둠 · `setUp`/`tearDown` 의 `@MainActor` 누락)
+  그때마다 실물 동작을 실측해 맞췄다. 스크립트 머리말에 그 셋이 적혀 있다.
+  **최종 판정자는 여전히 macOS CI 다.**
+
 ### 리눅스에서의 커밋 전 검증
 
 macOS 가 없어도 두 가지를 돌릴 수 있다.
