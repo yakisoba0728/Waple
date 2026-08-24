@@ -64,19 +64,23 @@ final class FFmpegConverterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: cached) }
 
         let exp = expectation(description: "cache hit callback")
-        var callbackURL: URL?
-        var callbackWasMain = false
+        // [2026-08-25] 참조 박스 — `FFmpegConverter.convert` 의 완료 콜백이 `@Sendable` 이 되면서
+        // 캡처한 `var` 를 콜백 안에서 바꾸는 것이 `.v6` 에서 **에러**가 된다. 동기화는
+        // `exp.fulfill()` ↔ `wait(for:)` 쌍이 이미 하고 있으므로 박스만 있으면 된다
+        // (`SceneVideoLayer.swift:84 SemaphoreResultBox` 의 근거와 같은 형태).
+        let callbackURL = SemaphoreResultBox<URL?>(nil)
+        let callbackWasMain = SemaphoreResultBox<Bool>(false)
         DispatchQueue.global(qos: .utility).async {
             FFmpegConverter.convert(source) { url in
-                callbackURL = url
-                callbackWasMain = Thread.isMainThread
+                callbackURL.value = url
+                callbackWasMain.value = Thread.isMainThread
                 exp.fulfill()
             }
         }
         wait(for: [exp], timeout: 5)
 
-        XCTAssertEqual(callbackURL, cached)
-        XCTAssertTrue(callbackWasMain, "all converter completions should enter renderer/app code on main")
+        XCTAssertEqual(callbackURL.value, cached)
+        XCTAssertTrue(callbackWasMain.value, "all converter completions should enter renderer/app code on main")
     }
 
     func testConvertDoesNotReuseZeroByteCacheHit() throws {
@@ -93,14 +97,18 @@ final class FFmpegConverterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: cached) }
 
         let exp = expectation(description: "invalid cache ignored")
-        var callbackURL: URL?
+        // [2026-08-25] 참조 박스 — `FFmpegConverter.convert` 의 완료 콜백이 `@Sendable` 이 되면서
+        // 캡처한 `var` 를 콜백 안에서 바꾸는 것이 `.v6` 에서 **에러**가 된다. 동기화는
+        // `exp.fulfill()` ↔ `wait(for:)` 쌍이 이미 하고 있으므로 박스만 있으면 된다
+        // (`SceneVideoLayer.swift:84 SemaphoreResultBox` 의 근거와 같은 형태).
+        let callbackURL = SemaphoreResultBox<URL?>(nil)
         FFmpegConverter.convert(source, timeout: 5) { url in
-            callbackURL = url
+            callbackURL.value = url
             exp.fulfill()
         }
         wait(for: [exp], timeout: 10)
 
-        XCTAssertNil(callbackURL, "zero-byte converted cache entries should not be reused")
+        XCTAssertNil(callbackURL.value, "zero-byte converted cache entries should not be reused")
     }
 
     func testArgumentsVideotoolboxThenLibx264() {
@@ -175,19 +183,23 @@ final class FFmpegConverterTests: XCTestCase {
         let cached = FFmpegConverter.cachedURL(for: src)
         defer { try? FileManager.default.removeItem(at: cached) }
         let exp = expectation(description: "convert")
-        var result: URL?
-        FFmpegConverter.convert(src, timeout: 60) { result = $0; exp.fulfill() }
+        // [2026-08-25] 참조 박스 — `FFmpegConverter.convert` 의 완료 콜백이 `@Sendable` 이 되면서
+        // 캡처한 `var` 를 콜백 안에서 바꾸는 것이 `.v6` 에서 **에러**가 된다. 동기화는
+        // `exp.fulfill()` ↔ `wait(for:)` 쌍이 이미 하고 있으므로 박스만 있으면 된다
+        // (`SceneVideoLayer.swift:84 SemaphoreResultBox` 의 근거와 같은 형태).
+        let result = SemaphoreResultBox<URL?>(nil)
+        FFmpegConverter.convert(src, timeout: 60) { result.value = $0; exp.fulfill() }
         wait(for: [exp], timeout: 90)
 
-        let mp4 = try XCTUnwrap(result, "conversion returned nil")
+        let mp4 = try XCTUnwrap(result.value, "conversion returned nil")
         XCTAssertTrue(FileManager.default.fileExists(atPath: mp4.path))
         XCTAssertEqual(mp4.pathExtension, "mp4")
         XCTAssertTrue(VideoRenderer.isSupportedContainer(mp4))     // AVFoundation 재생 가능 컨테이너
         // 캐시 히트: 재호출 시 즉시 같은 경로 반환.
         let exp2 = expectation(description: "cachehit")
-        var again: URL?
-        FFmpegConverter.convert(src, timeout: 60) { again = $0; exp2.fulfill() }
+        let again = SemaphoreResultBox<URL?>(nil)
+        FFmpegConverter.convert(src, timeout: 60) { again.value = $0; exp2.fulfill() }
         wait(for: [exp2], timeout: 5)
-        XCTAssertEqual(again, mp4)
+        XCTAssertEqual(again.value, mp4)
     }
 }

@@ -179,10 +179,13 @@ extension MediaFixRegressionTests {
 
         var completion: ((URL?) -> Void)?
         let renderer = VideoRenderer(converterAvailable: { true }, convert: { _, cb in completion = cb })
-        var received: [Notification] = []
+        // [2026-08-25] 참조 박스 — 알림 블록이 `@Sendable` 이라 캡처한 `var` 배열을 그 안에서
+        // 바꾸는 것이 `.v6` 에서 에러가 된다(`[Notification]` 자체도 Sendable 이 아니다).
+        // 동기화는 아래 `RunLoop.main.run`/`spin(until:)` 이 하고 있다.
+        let received = SemaphoreResultBox<[Notification]>([])
         let obs = NotificationCenter.default.addObserver(
             forName: .wapleVideoPlaybackFailed, object: nil, queue: nil
-        ) { received.append($0) }
+        ) { received.value.append($0) }
         defer { NotificationCenter.default.removeObserver(obs) }
 
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64))
@@ -190,8 +193,8 @@ extension MediaFixRegressionTests {
         completion?(nil)
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
 
-        XCTAssertEqual(received.count, 1, "F555: 변환 실패 notification 1건")
-        XCTAssertEqual(received.first?.userInfo?["url"] as? URL, source)
+        XCTAssertEqual(received.value.count, 1, "F555: 변환 실패 notification 1건")
+        XCTAssertEqual(received.value.first?.userInfo?["url"] as? URL, source)
         renderer.teardown()
     }
 
@@ -203,16 +206,19 @@ extension MediaFixRegressionTests {
         try Data([0x00, 0x01, 0x02]).write(to: source)
 
         let renderer = VideoRenderer(converterAvailable: { false }, convert: { _, _ in })
-        var received: [Notification] = []
+        // [2026-08-25] 참조 박스 — 알림 블록이 `@Sendable` 이라 캡처한 `var` 배열을 그 안에서
+        // 바꾸는 것이 `.v6` 에서 에러가 된다(`[Notification]` 자체도 Sendable 이 아니다).
+        // 동기화는 아래 `RunLoop.main.run`/`spin(until:)` 이 하고 있다.
+        let received = SemaphoreResultBox<[Notification]>([])
         let obs = NotificationCenter.default.addObserver(
             forName: .wapleVideoPlaybackFailed, object: nil, queue: nil
-        ) { received.append($0) }
+        ) { received.value.append($0) }
         defer { NotificationCenter.default.removeObserver(obs) }
 
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64))
         try renderer.mount(in: container, project: project(id: "nf2", fileName: "broken.mp4", dir: dir))
-        spin(until: { !received.isEmpty }, timeout: 5)
-        XCTAssertFalse(received.isEmpty, "F555: 회복 불가한 재생 실패는 표면화돼야 한다")
+        spin(until: { !received.value.isEmpty }, timeout: 5)
+        XCTAssertFalse(received.value.isEmpty, "F555: 회복 불가한 재생 실패는 표면화돼야 한다")
         renderer.teardown()
     }
 }
@@ -269,12 +275,13 @@ extension MediaFixRegressionTests {
         let cached = FFmpegConverter.cachedURL(for: src)
         defer { try? FileManager.default.removeItem(at: cached) }
         let exp1 = expectation(description: "convert1"), exp2 = expectation(description: "convert2")
-        var r1: URL?, r2: URL?
-        FFmpegConverter.convert(src, timeout: 60) { r1 = $0; exp1.fulfill() }
-        FFmpegConverter.convert(src, timeout: 60) { r2 = $0; exp2.fulfill() }
+        // [2026-08-25] 참조 박스 — 위와 같은 이유(완료 콜백이 `@Sendable`).
+        let r1 = SemaphoreResultBox<URL?>(nil), r2 = SemaphoreResultBox<URL?>(nil)
+        FFmpegConverter.convert(src, timeout: 60) { r1.value = $0; exp1.fulfill() }
+        FFmpegConverter.convert(src, timeout: 60) { r2.value = $0; exp2.fulfill() }
         wait(for: [exp1, exp2], timeout: 120)
-        XCTAssertEqual(r1, cached, "F557: 동시 변환 경주에서도 유효 캐시 반환")
-        XCTAssertEqual(r2, cached)
+        XCTAssertEqual(r1.value, cached, "F557: 동시 변환 경주에서도 유효 캐시 반환")
+        XCTAssertEqual(r2.value, cached)
     }
 }
 
