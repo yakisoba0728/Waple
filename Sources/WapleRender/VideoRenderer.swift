@@ -40,7 +40,8 @@ public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
     /// F550: 현재 장착된 소스가 ffmpeg 변환 결과물인지 — 결과물 자체의 재생 실패는 재변환하지 않는다.
     private var playingConvertedOutput = false
     private let converterAvailable: () -> Bool
-    private let convert: (URL, @escaping (URL?) -> Void) -> Void
+    /// [2026-08-25] 완료 콜백이 `@Sendable` — 주입부와 `FFmpegConverter.convert` 의 시그니처를 맞춘다.
+    private let convert: (URL, @escaping @Sendable (URL?) -> Void) -> Void
 
     private(set) var projectId: String?
     private(set) var lastError: Error?
@@ -51,7 +52,7 @@ public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
     }
 
     init(converterAvailable: @escaping () -> Bool,
-         convert: @escaping (URL, @escaping (URL?) -> Void) -> Void) {
+         convert: @escaping (URL, @escaping @Sendable (URL?) -> Void) -> Void) {
         self.converterAvailable = converterAvailable
         self.convert = convert
     }
@@ -133,7 +134,13 @@ public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
         let token = mountToken
         projectId = project.id
         playingConvertedOutput = fromConversion
-        let item = AVPlayerItem(url: url)
+        // [2026-08-25] `AVPlayerItem(url:)` 대신 `AVURLAsset` 을 지역에 들고 그것으로 만든다.
+        // 결과는 같다(전자가 내부에서 하는 일이 이것이다). 바뀌는 것은 아래에서 `item.asset` 을
+        // 읽지 않아도 된다는 것뿐이다 — `item.asset` 의 정적 타입은 `AVAsset` 이고 그 타입은
+        // Sendable 이 아니라 `Task` 경계를 넘길 때 진단이 난다. 판례: `SceneVideoLayer.swift:124-125`
+        // 의 `duration` lazy 가 이미 같은 형태로 `AVURLAsset` 을 직접 만든다.
+        let asset = AVURLAsset(url: url)
+        let item = AVPlayerItem(asset: asset)
         // 코덱/손상/DRM 실패는 AVFoundation 내부에서 비동기로 발생해 mount 성공 후 검은 화면이 된다.
         // status 를 관찰해 실패를 로깅함으로써 진단 가능하게 한다.
         statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
@@ -143,7 +150,6 @@ public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
         }
         // F565: loadValuesAsynchronously/statusOfValue/tracks 는 deprecated — load(_:) async 계열로 국소
         // 교체(로드 실패·재생 불가를 표면화 — 재생 불가 분기는 F600 참조).
-        let asset = item.asset
         Task { [weak self] in
             do {
                 // F600: hev1(hvcC 없는 HEVC) mp4 는 status=.readyToPlay + 오디오 트랙 존재로 보고돼

@@ -111,8 +111,14 @@ public enum FFmpegConverter {
 
     /// 비동기 변환. 완료 콜백은 메인 큐에서 호출(성공=mp4 URL, 실패/부재/타임아웃=nil + 로그).
     /// 캐시 히트 검사(AVURLAsset.isPlayable 동기 로드)까지 백그라운드 — 메인스레드를 블록하지 않는다.
+    ///
+    /// [2026-08-25] `completion` 이 `@Sendable` 이다. 이 콜백은 **호출 큐를 두 번 건넌다** —
+    /// 호출자 → `workQueue`(백그라운드) → `DispatchQueue.main`. 그 사실은 종전에도 참이었고
+    /// 위 주석이 이미 적고 있었지만 **타입이 그것을 말하지 않아** 컴파일러가 검사할 수 없었다.
+    /// 진단이 나던 자리는 `:121`·`:138` 의 캡처 지점이지 이 선언 줄이 아니다 — 원인과 증상이
+    /// 다른 줄에 있다는 뜻이라, 고칠 때 헷갈리지 않게 여기 적어 둔다.
     public static func convert(_ source: URL, timeout: TimeInterval = 300,
-                              completion: @escaping (URL?) -> Void) {
+                              completion: @escaping @Sendable (URL?) -> Void) {
         workQueue.async {
             let out = cachedURL(for: source)
             if FileManager.default.fileExists(atPath: out.path) {
@@ -134,7 +140,7 @@ public enum FFmpegConverter {
         }
     }
 
-    private static func completeOnMain(_ completion: @escaping (URL?) -> Void, _ result: URL?) {
+    private static func completeOnMain(_ completion: @escaping @Sendable (URL?) -> Void, _ result: URL?) {
         DispatchQueue.main.async { completion(result) }
     }
 
