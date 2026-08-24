@@ -148,7 +148,7 @@ Sources/
                  only, no dependencies — builds on Linux, which is where its spec lane runs
   WapleSaver/    Screensaver .saver bundle source (Objective-C — compiled directly by package-app.sh)
   WapleSnapshot/ Snapshot manifest schema and diff metrics (pure Foundation, unit-verifiable)
-Tests/           7 targets, 3,691 tests (synthetic units + real-corpus ground truth)
+Tests/           7 targets, 3,693 tests (synthetic units + real-corpus ground truth)
 scripts/         package-app.sh (app/screensaver bundle), window-id.swift (capture ID/bounds lookup),
                  make-icon.sh / make-icon.swift (app .icns), Waple.icns (generated)
 ```
