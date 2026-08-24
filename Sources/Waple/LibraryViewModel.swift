@@ -300,7 +300,7 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         // 백그라운드 블록은 self 를 캡처하지 않는다 — 순수 순회(scanImportableFolders)에 필요한 건
         // store 참조와 url 뿐이고, 뷰모델 상태는 아래 메인 홉에서만 만진다. 종전에는 여기서
         // `guard let self` 로 강한 참조를 잡아 두고 정작 쓰지는 않았다(캡처만 늘리는 코드였다).
-        importQueue.async {
+        importQueue.async { [weak self] in
             let folders = store.scanImportableFolders(in: url)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -323,7 +323,7 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         let store = self.store
         beginImport()
         // 해제(ditto)는 인스턴스 상태를 건드리지 않는다 — 백그라운드 블록은 self 를 캡처하지 않는다.
-        importQueue.async {
+        importQueue.async { [weak self] in
             let temp = store.extractZipToTemp(url)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -364,7 +364,7 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         //   메인이 같은 프로퍼티에 대입하는 것과 동기화가 없었다 — 큐에 들어가기 전 메인에서 읽는다.
         let prepare = self.videoPrepare
         beginImport()
-        importQueue.async {
+        importQueue.async { [weak self] in
             let folder = prepare(url)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }

@@ -269,9 +269,16 @@ enum WorkshopError: Error, LocalizedError {
 }
 
 /// 실제 fetch. transport 주입으로 네트워크 없이 테스트 가능(파싱은 WorkshopResponseParser 로 별도 검증).
-struct WorkshopClient {
+/// [2026-08-25] `Sendable` — 이 값은 뷰모델(@MainActor)에서 `Task` 안으로 넘어간다
+/// (`WorkshopViewModel:133`·`:164`, `DiscoverViewModel:88`). 그때 `sending 'self.client'` 진단이
+/// 났는데, 실제로는 **넘겨도 되는 값**이다: 저장 프로퍼티가 `transport` 클로저 하나뿐이고
+/// 가변 상태가 없다. 그 사실을 타입으로 적는다 — 클로저도 `@Sendable` 로 올려 실제 검사를 받게 한다.
+///
+/// 주입되는 클로저 둘 다 이미 조건을 만족한다: `live()` 는 파일 정적 `session` 만 캡처하고,
+/// 테스트 더블은 값 타입 픽스처만 캡처한다.
+struct WorkshopClient: Sendable {
     /// URL → (Data, HTTP status). 기본은 URLSession.
-    var transport: (URL) async throws -> (Data, Int)
+    var transport: @Sendable (URL) async throws -> (Data, Int)
 
     /// F840: `URLSession.shared` 를 쓰지 않는다. 공유 세션의 `URLCache.shared` 는 **전체 URL 문자열**을
     /// 키로 디스크 캐시(`~/Library/Caches/<bundleid>/Cache.db`)를 만드는데, 검색 URL 은

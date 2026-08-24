@@ -259,7 +259,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] note in
             let name = (note.userInfo?["url"] as? URL)?.lastPathComponent
                 ?? NSLocalizedString("비디오", comment: "파일명을 못 얻었을 때의 대체 표기")
-            DispatchQueue.main.async {
+            // [2026-08-25] 안쪽 블록에서 바깥의 약한 `self` 를 그대로 참조하면
+            // `reference to captured var 'self' in concurrently-executing code` 가 난다 —
+            // 약한 캡처는 **변수**이고, 그 변수를 다른 실행 컨텍스트에서 읽는 것이기 때문이다.
+            // 안쪽 캡처 리스트에서 다시 약하게 잡으면 값이 캡처 시점에 고정된다(의미는 동일 —
+            // 어느 쪽이든 배너를 띄울 때 self 가 살아 있어야만 뜬다).
+            DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 MainActor.assumeIsolated {
                     _ = self.notify(String(format: NSLocalizedString("비디오를 재생할 수 없습니다: %@",

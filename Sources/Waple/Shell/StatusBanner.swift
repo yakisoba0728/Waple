@@ -1,6 +1,12 @@
 import SwiftUI
 
 /// notify() 메시지의 창 내 표시 모델. 메인 스레드 전용(AppDelegate·뷰에서만 접근).
+///
+/// [2026-08-25] `@MainActor` — 위 한 줄이 이미 계약을 적고 있었는데 **타입이 그것을 말하지
+/// 않아** 컴파일러가 검사할 수 없었다. 그래서 `.task(id:)` 가 이 모델을 async 경계로 넘길 때
+/// `sending 'self.model' risks causing data races` 가 났다. 표기를 계약에 맞춘다 —
+/// 접근처는 `AppDelegate`(이미 @MainActor)와 SwiftUI 뷰 body 뿐이라 새 제약이 아니다.
+@MainActor
 final class StatusBannerModel: ObservableObject {
     @Published private(set) var message: String?
     @Published private(set) var generation = 0

@@ -24,7 +24,11 @@ final class DiscoverViewModelTests: XCTestCase {
         }
     }
 
-    private func itemsJSON(count: Int) -> Data {
+    /// [2026-08-25] `nonisolated` — `WorkshopClient.transport` 가 `@Sendable` 이 되면서
+    /// 이 픽스처 빌더가 `@Sendable` 클로저 안에서 불린다. 이 클래스는 `@MainActor` 라
+    /// 기본 격리를 상속하는데, 이 함수는 인자만 보고 `Data` 를 만드는 **순수 함수**라
+    /// 격리가 필요 없다. 격리를 벗기는 것이 맞는 자리다.
+    private nonisolated func itemsJSON(count: Int) -> Data {
         let details = (1...count).map { "{\"publishedfileid\":\"\($0)\",\"title\":\"t\($0)\"}" }
             .joined(separator: ",")
         return Data("{\"response\":{\"publishedfiledetails\":[\(details)]}}".utf8)
