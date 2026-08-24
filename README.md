@@ -35,7 +35,7 @@ Legend: ✅ implemented · 🟡 partial (the gap is named) · ❌ not implemente
 | Area | Status | What is covered |
 | --- | --- | --- |
 | GLSL → MSL transpiler | 🟡 | Source-to-source translation executed on the GPU; ~99.9% of the effect shader variants in the measured local corpus compile. Preprocessor (combos / `#include` / function-like macros), expression-level type inference (HLSL implicit vector truncation), GLSL structs, arrays, `inverse()`. Forward+ light *array* uniforms are registered but fed neutral scalars — no corpus scene enables those combos |
-| Textures | 🟡 | Packed `.tex` (LZ4 blocks), DXT1/3/5, RG88, R8, mip chains, sprite-sheet frames (`TEXS0001`–`0003`), condition variants. The `Flags & 0x40` depth bit is unhandled, so depth/volume textures may fail to parse |
+| Textures | 🟡 | Packed `.tex` (LZ4 blocks), DXT1/3/5, RG88, R8, mip chains, sprite-sheet frames (`TEXS0001`–`0003`), condition variants. `Flags & 0x40` (slice3d/volume) **does** parse — the header `texDepth` and the per-mip `depth` field are both read, and the 28 `lut/*` 3D LUTs that previously fell back to a raw-PNG path now parse as proper containers. The remaining gap is on the *sampling* side: nothing consumes a volume texture as `MTLTextureType.type3D`, so a 3D LUT is available as bytes but not yet sampled as a lookup |
 | Particles | 🟡 | Sphere/box emitters, bursts, child systems (`eventfollow`/`spawn`/`death`), sprite and trail renderers, `mapsequence`, and the common initializers/operators (movement, lifetime, oscillate, control-point attraction, turbulence, remap, …). Tokens outside that set are dropped with a log rather than emulated |
 | Layers | ✅ | Keyframe animation (position, size, rotation, alpha, colour, mirrored ping-pong), property scripts (JS), composition (`_rt_`) layers, all 32 `colorBlendMode` values using the real `common_blending.h` formulas |
 | 3D scenes | ✅ | Look-at camera, `.mdl` meshes (`MDLV0023` and variants), billboards, parent transform hierarchy, GPU skinning, Cook–Torrance PBR with point-shadow atlas |
@@ -43,7 +43,7 @@ Legend: ✅ implemented · 🟡 partial (the gap is named) · ❌ not implemente
 | Text | 🟡 | Fonts, alignment, colour, clock/date/media scripts (JavaScriptCore `update(value)`). In 3D scenes a text billboard animates placement and visibility per frame, but its *string* is rasterized once. `anchor`/`padding`/`backgroundBrightness` are parsed and preserved, not yet drawn |
 | Audio | 🟡 | Audio-reactive effects (pulse, spectrum bars) and scene-embedded sound (mp3). Sound is mixed globally in 2D — `spatialization`/`mindistance`/`attenuation` are parsed but not spatialized |
 | Mouse | ✅ | Parallax, `g_PointerPosition` cursor reaction, `cursorClick`/`Down`/`Up`/`Move` hooks |
-| HDR / bloom | 🟡 | Bloom on both the LDR and HDR paths. The HDR path now mirrors WE's own plaintext structure — a dual-filter pyramid built from `hdr_downsample.frag` with 4 taps at ±0.5 source texels, **no Gaussian pass**, a 4-tap additive upsample chain and the 4-tap `combine_hdr` add (swapped as one unit on 2026-08-02; the previous hand-rolled chain widened with a 13-tap blur and narrowed with single-tap upsample/combine, and the two errors cancelled). There is **no ACES or filmic tone curve**: WE 2.8's final step is a plain `saturate` clamp. Open: the upsample weight is kept at Waple's calibrated `0.25 x scatter` because feeding the authored `scatter` (1.619) the way the shader literally reads diverges across levels — measured, it blew one scene's mean luma from 0.09 to 0.42. The LDR path is still the 3-pass extract → blur → composite rather than a pyramid |
+| HDR / bloom | 🟡 | Bloom on both the LDR and HDR paths. The HDR path now mirrors WE's own plaintext structure — a dual-filter pyramid built from `hdr_downsample.frag` with 4 taps at ±0.5 source texels, **no Gaussian pass**, a 4-tap additive upsample chain and the 4-tap `combine_hdr` add (swapped as one unit on 2026-08-02; the previous hand-rolled chain widened with a 13-tap blur and narrowed with single-tap upsample/combine, and the two errors cancelled). There is **no ACES or filmic tone curve**: WE 2.8's final step is a plain `saturate` clamp. The upsample weight question is **closed** (2026-08-20): WE's own `hdr_downsample.frag:61` reads `albedo *= 0.25 * g_BloomScatter`, so the `0.25` is the 4-tap average and `scatter` is a separate factor on top — the two were never competing candidates. The engine loads the authored `bloomhdrscatter` unmodified, and the blow-out seen earlier came from moving the weight without also moving the paired `scatter^(max(N,2)−2)+1` division in the extraction step. Waple now matches the shader text. The LDR path is still the 3-pass extract → blur → composite rather than a pyramid |
 
 **Waple does not claim full Wallpaper Engine runtime compatibility.** Most unsupported scene features
 are skipped with a log entry, but some paths — for example a layer texture whose bytes are present but
@@ -141,10 +141,14 @@ Sources/
   WapleLibrary/  Workshop folder scan/import, library/favourites/folders/playlist persistence
   Waple/         Menu-bar app + native SwiftUI main window (DesignSystem, Shell, Surfaces),
                  desktop window, screensaver control
-  WapleCompat/   Compatibility scan, snapshot capture/compare and performance profiling CLI harness
+  WapleCompatCore/ Compatibility scan, snapshot capture/compare and profiling — as a library, so
+                 tests can depend on it (the CLI itself is a thin argument-parsing shell)
+  WapleCompat/   CLI entry point for the above (main.swift only)
+  WaplePolicy/   Wallpaper Engine playback policy model (playbackfocus/…/pausevram). Foundation
+                 only, no dependencies — builds on Linux, which is where its spec lane runs
   WapleSaver/    Screensaver .saver bundle source (Objective-C — compiled directly by package-app.sh)
   WapleSnapshot/ Snapshot manifest schema and diff metrics (pure Foundation, unit-verifiable)
-Tests/           6 targets, 2,390 tests (synthetic units + real-corpus ground truth)
+Tests/           7 targets, 3,686 tests (synthetic units + real-corpus ground truth)
 scripts/         package-app.sh (app/screensaver bundle), window-id.swift (capture ID/bounds lookup),
                  make-icon.sh / make-icon.swift (app .icns), Waple.icns (generated)
 ```
