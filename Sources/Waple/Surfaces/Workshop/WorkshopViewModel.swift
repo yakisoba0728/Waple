@@ -20,6 +20,18 @@ final class WorkshopViewModel: ObservableObject {
     /// 대안이던 `LocalizedStringKey` 로 타입을 바꾸는 길은 대입문이라 어떤 스캔 패턴에도
     /// 걸리지 않아, 런타임 버그 하나를 고치면서 오라클 사각지대를 새로 만든다.
     @Published var statusMessage: String?
+    /// [2026-08-25] **검색 실패를 빈 상태와 구분한다.**
+    ///
+    /// 종전에는 실패해도 `results` 를 비우고 `statusMessage` 만 세웠고, 뷰는 그걸 작은 캡션으로
+    /// 흘린 뒤 **"결과 없음 — 검색어를 바꿔보세요"** 를 크게 그렸다. 즉 네트워크·API 키 오류가
+    /// "검색어를 바꾸면 될 일" 처럼 보였다. 사용자가 할 수 있는 행동(재시도)도 화면에 없었다.
+    ///
+    /// 형제 화면은 이미 갈라 놨다 — `DiscoverViewModel.RowState.failed` + `DiscoverView:56-64`
+    /// 가 실패에 경고 아이콘과 "다시 시도" 버튼을 준다. 이 축을 같은 형태로 맞춘다.
+    ///
+    /// **`loadMore` 실패는 여기 안 든다.** 그쪽은 `results` 를 유지하므로 화면이 비지 않고,
+    /// 캡션 한 줄이 맞는 표현이다(그래서 캡션 자체는 남는다).
+    @Published private(set) var searchFailed = false
     @Published private(set) var hasAPIKey: Bool
     @Published var apiKeyInput = ""
     @Published var usernameInput: String
@@ -125,6 +137,7 @@ final class WorkshopViewModel: ObservableObject {
         let epoch = searchEpoch
         isSearching = true
         statusMessage = nil
+        searchFailed = false
         page = 1
         canLoadMore = false
         // 최신 세대만 isSearching 을 내린다 — 낡은 search 가 먼저 끝나도 스피너를 끄지 않게.
@@ -145,6 +158,7 @@ final class WorkshopViewModel: ObservableObject {
             if isCancellation(error) { return }
             guard epoch == searchEpoch else { return }
             results = []
+            searchFailed = true
             statusMessage = (error as? LocalizedError)?.errorDescription
                 ?? String(format: NSLocalizedString("검색 실패: %@", comment: "분류되지 않은 검색 오류"),
                           error.localizedDescription)

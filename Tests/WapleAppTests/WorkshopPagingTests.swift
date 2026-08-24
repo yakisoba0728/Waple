@@ -230,4 +230,47 @@ final class WorkshopPagingTests: XCTestCase {
         XCTAssertEqual(vm.results.count, 30)
         XCTAssertTrue(vm.canLoadMore, "재시도 가능 상태를 유지한다")
     }
+
+    /// **[2026-08-25] 검색 실패가 빈 상태와 구분되는가.**
+    ///
+    /// 종전에는 실패해도 `results` 를 비우고 `statusMessage` 만 세웠고, 뷰는 그 뒤에
+    /// "결과 없음 — 검색어를 바꿔보세요" 를 그렸다. 즉 네트워크·API 키 오류가 "검색어를 바꾸면
+    /// 될 일" 처럼 보였다. `searchFailed` 가 그 둘을 가른다.
+    ///
+    /// **취소는 실패가 아니다** — 같은 파일의 취소 테스트들이 `statusMessage == nil` 을 요구하는데,
+    /// 그 계약이 `searchFailed` 에도 그대로 적용돼야 한다. 여기서 함께 못박는다.
+    func testSearchFailureIsDistinguishedFromEmptyResults() async {
+        struct Boom: Error {}
+        let vm = makeVM(transport: { _ in throw Boom() })
+        await vm.search()
+        XCTAssertTrue(vm.searchFailed, "실패는 실패로 표시돼야 한다 — 빈 결과와 같은 화면이면 안 된다")
+        XCTAssertTrue(vm.results.isEmpty)
+        XCTAssertNotNil(vm.statusMessage, "실패 사유가 있어야 재시도 화면이 그것을 보여줄 수 있다")
+    }
+
+    /// 성공하면 실패 표시가 내려간다 — 재시도가 실제로 화면을 되돌리는지의 계약.
+    func testSuccessfulRetryClearsTheFailureState() async {
+        struct Boom: Error {}
+        let box = FailSwitch(true)
+        let vm = makeVM(transport: { [box] _ in
+            if box.failing { throw Boom() }
+            return (self.itemsJSON(ids: 1...3), 200)
+        })
+        await vm.search()
+        XCTAssertTrue(vm.searchFailed)
+
+        box.failing = false
+        await vm.search()
+        XCTAssertFalse(vm.searchFailed, "성공하면 실패 표시가 내려가야 한다")
+        XCTAssertEqual(vm.results.count, 3)
+    }
+
+    /// negative control — **빈 결과는 실패가 아니다.** 이게 깨지면 위 두 테스트가
+    /// "아무 때나 참" 인 플래그를 검사하는 셈이 된다.
+    func testEmptyResultIsNotAFailure() async {
+        let vm = makeVM(transport: { _ in (Data(#"{"response":{"publishedfiledetails":[]}}"#.utf8), 200) })
+        await vm.search()
+        XCTAssertFalse(vm.searchFailed, "0건은 실패가 아니라 빈 상태다")
+        XCTAssertTrue(vm.results.isEmpty)
+    }
 }

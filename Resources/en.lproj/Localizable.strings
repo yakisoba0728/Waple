@@ -59,6 +59,7 @@
 "거를 수 있는 항목이 없습니다" = "Nothing to filter by";
 "검색" = "Search";
 "검색 URL 을 만들 수 없습니다." = "Could not build the search URL.";
+"검색에 실패했습니다" = "Search failed";
 "검색 중…" = "Searching…";
 "검색어나 필터를 조정해보세요" = "Try a different search term or filter";
 "검증 중" = "Verifying";
