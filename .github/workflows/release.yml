@@ -7,6 +7,16 @@ on:
   push:
     tags:
       - "v*"
+  # 태그 push 가 정식 경로다. 여기에 수동 실행을 하나 더 둔 이유는 **태그를 못 미는 자격증명**이
+  # 있기 때문이다(브랜치 push 만 허용되는 세션에서 `git push origin <tag>` 이 HTTP 403 이다).
+  # 그때도 프리뷰 빌드를 낼 수 있어야 한다. 태그는 `gh release create --target <sha>` 가
+  # 그 커밋에 만들어 준다 — 즉 태그 없이 시작해도 결과물은 태그 경로와 같다.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "릴리스 태그 (예: v0.1.0-beta.6). `-` 가 들어가면 prerelease 로 공개된다."
+        required: true
+        type: string
 
 permissions:
   contents: write   # gh release create 에 필요
@@ -30,9 +40,20 @@ jobs:
       # 전수 테스트를 돌리므로, 태그는 "테스트가 그린인 커밋"에만 붙인다는 운영 전제를 둔다.
       # (릴리스 잡에서 다시 돌리면 macOS 러너 비용/시간이 2배로 든다.)
 
+      # 두 경로(태그 push · 수동 실행)가 **같은 변수 하나**로 합류한다. 이 아래로는
+      # `GITHUB_REF_NAME` 을 쓰지 않는다 — 수동 실행에서는 그것이 브랜치 이름이라 태그가 아니다.
       - name: Extract version from tag
         run: |
-          TAG="${GITHUB_REF_NAME}"          # e.g. v0.2.0 또는 v0.1.0-beta.1
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          case "$TAG" in
+            v*) ;;
+            *) echo "::error::릴리스 태그는 v 로 시작해야 한다 — 받은 값: '$TAG'"; exit 1 ;;
+          esac
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
           VERSION="${TAG#v}"                # v 접두사 제거 → 0.2.0
           PLIST_VERSION="${VERSION%%-*}"    # 프리릴리즈 접미사 제거 → 0.1.0 (CFBundleShortVersionString 은 숫자+점만 허용)
           echo "WAPLE_VERSION=$PLIST_VERSION" >> "$GITHUB_ENV"
@@ -50,12 +71,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "::error::릴리스 $GITHUB_REF_NAME 이 이미 발행돼 있다. 태그 재지목만으로는 덮어쓰지 않는다."
-            echo "다시 내려면 새 태그를 쓰거나, 의도적이라면 먼저 지워라: gh release delete $GITHUB_REF_NAME"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::릴리스 $RELEASE_TAG 이 이미 발행돼 있다. 태그 재지목만으로는 덮어쓰지 않는다."
+            echo "다시 내려면 새 태그를 쓰거나, 의도적이라면 먼저 지워라: gh release delete $RELEASE_TAG"
             exit 1
           fi
-          echo "릴리스 $GITHUB_REF_NAME 없음 — 진행한다."
+          echo "릴리스 $RELEASE_TAG 없음 — 진행한다."
 
       # Developer ID 서명/공증은 secrets 이 설정된 경우에만 활성화된다.
       # 하나라도 없으면 ad-hoc 서명으로 폴백한다(로컬 패키징과 동일) — 릴리스가 멈추지 않는다.
@@ -151,7 +172,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cat > release-notes.md <<EOF
-          ## Waple ${GITHUB_REF_NAME}
+          ## Waple ${RELEASE_TAG}
 
           Download \`Waple.dmg\`, open it, and drag **Waple.app** into \`/Applications\`.
           Requires macOS 14 or later on Apple Silicon.
@@ -185,12 +206,15 @@ jobs:
           EOF
           echo "--- release notes ---"; cat release-notes.md
           FLAGS="--draft"
-          case "$GITHUB_REF_NAME" in
+          case "$RELEASE_TAG" in
             *-*) FLAGS="--prerelease" ;;
           esac
-          gh release create "$GITHUB_REF_NAME" Waple.dmg \
+          # `--target` 이 있어야 수동 실행에서 **이 커밋에** 태그가 생긴다(태그 push 경로에서는
+          # 이미 그 커밋이라 무해하다).
+          gh release create "$RELEASE_TAG" Waple.dmg \
             $FLAGS \
-            --title "Waple ${GITHUB_REF_NAME}" \
+            --target "$GITHUB_SHA" \
+            --title "Waple ${RELEASE_TAG}" \
             --notes-file release-notes.md
 
       # 임시 키체인은 러너와 함께 사라지지만, 실패 경로에서도 남기지 않도록 명시적으로 지운다.
