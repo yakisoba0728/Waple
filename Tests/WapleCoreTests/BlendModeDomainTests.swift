@@ -20,16 +20,7 @@ final class BlendModeDomainTests: XCTestCase {
 
     /// 동봉 자산 루트(`GLSLBundledShaderRegressionTests.assetsRoot` 와 같은 규약).
     private static func assetsRoot() -> URL? {
-        let fm = FileManager.default
-        if let p = ProcessInfo.processInfo.environment["WAPLE_WE_ASSETS"], !p.isEmpty,
-           fm.fileExists(atPath: p) { return URL(fileURLWithPath: p) }
-        var dir = URL(fileURLWithPath: fm.currentDirectoryPath)
-        for _ in 0..<8 {
-            let cand = dir.appendingPathComponent("Sources/WapleRender/Resources/WEAssets")
-            if fm.fileExists(atPath: cand.path) { return cand }
-            dir = dir.deletingLastPathComponent()
-        }
-        return nil
+        bundledWEAssetsRoot()
     }
 
     /// 원본 헤더가 `#if BLENDMODE == n` 으로 다루는 n 의 집합.

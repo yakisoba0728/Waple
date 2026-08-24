@@ -217,16 +217,7 @@ final class AssetJSONLenientTests: XCTestCase {
 
     /// 동봉 자산 루트. `WAPLE_WE_ASSETS`(리눅스 하네스가 넣는다) → 상위 디렉터리 탐색 순.
     static func bundledAssetsRoot() -> URL? {
-        let fm = FileManager.default
-        if let p = ProcessInfo.processInfo.environment["WAPLE_WE_ASSETS"], !p.isEmpty,
-           fm.fileExists(atPath: p) { return URL(fileURLWithPath: p) }
-        var dir = URL(fileURLWithPath: fm.currentDirectoryPath)
-        for _ in 0..<8 {
-            let cand = dir.appendingPathComponent("Sources/WapleRender/Resources/WEAssets")
-            if fm.fileExists(atPath: cand.path) { return cand }
-            dir = dir.deletingLastPathComponent()
-        }
-        return nil
+        bundledWEAssetsRoot()
     }
 
     /// **스코프 라벨을 붙인 JSONC 인구조사 — 동봉 WEAssets 단독.**
@@ -327,4 +318,25 @@ final class AssetJSONLenientTests: XCTestCase {
         return (line, block, trailing)
     }
 
+
+    /// **[2026-08-25] 동봉 루트를 못 찾으면 스킵이 아니라 실패다.**
+    ///
+    /// `WEAssets` 2,940 파일은 리포에 커밋돼 있다. 즉 루트를 못 찾는 것은 "코퍼스가 없는 환경"이
+    /// 아니라 **탐색이 깨진 것**이다. 종전엔 9곳이 각자 cwd 에서 8단계 상향 탐색했고, 실패하면
+    /// `nil` → `XCTSkip` 으로 조용히 사라졌다 — `cd /tmp && swift test --package-path <repo>` 나
+    /// Xcode 실행처럼 cwd 가 리포 밖이면 동봉 자산 오라클이 통째로 빠진 채 초록이 떴다.
+    /// (`scripts/dev/linux-core-tests.sh` 가 2026-08-21 CRLF 결함을 리눅스가 못 잡은 원인으로
+    ///  같은 함정을 이미 기록해 뒀다.)
+    ///
+    /// 이 테스트가 그 사각지대의 유일한 감시자다. 여기가 실패하면 다른 곳의 스킵은 전부 가짜다.
+    func testBundledWEAssetsRootIsAlwaysFindable() throws {
+        guard let root = bundledWEAssetsRoot() else {
+            return XCTFail("동봉 WEAssets 루트를 못 찾았다 — 리포에 커밋된 트리이므로 이건 탐색 결함이다. "
+                           + "WAPLE_WE_ASSETS=\(ProcessInfo.processInfo.environment["WAPLE_WE_ASSETS"] ?? "(미설정)")")
+        }
+        // 루트만 있고 내용이 비면 아래 오라클들이 전부 0건을 세고도 통과한다 — 센티넬을 하나 본다.
+        let sentinel = root.appendingPathComponent("shaders/common_blending.h")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sentinel.path),
+                      "루트는 찾았는데 shaders/common_blending.h 가 없다: \(root.path)")
+    }
 }
