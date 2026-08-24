@@ -166,14 +166,17 @@ public final class SceneVideoLayer {
             return
         }
         textureCache = cache
-        let item = AVPlayerItem(url: mp4URL)
+        // [2026-08-25] `item.asset`(정적 타입 `AVAsset`, 비-Sendable) 대신 지역 `AVURLAsset` 을 쓴다 —
+        // 같은 파일 `:124-125` 의 `duration` lazy 가 이미 그 형태다. 결과는 동일하다.
+        let liveAsset = AVURLAsset(url: mp4URL)
+        let item = AVPlayerItem(asset: liveAsset)
         let out = AVPlayerItemVideoOutput(pixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             kCVPixelBufferMetalCompatibilityKey as String: true,
         ])
         item.add(out)
         output = out
-        resolveTrackOrientation(asset: item.asset)   // F5-2: liveTexture 가 참조할 방향 보정값 확정
+        resolveTrackOrientation(asset: liveAsset)   // F5-2: liveTexture 가 참조할 방향 보정값 확정
         let p = AVPlayer(playerItem: item)
         p.isMuted = true                 // 스코프 밖: 비디오 오디오 트랙.
         p.actionAtItemEnd = .none
