@@ -253,9 +253,22 @@ struct NowPlayingBar: View {
                 }
             }
         } label: {
-            Label(showsRate ? "동영상 음량 · 배속" : "음량",
-                  systemImage: currentVideoVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                .font(.title3)
+            // [2026-08-25] **삼항으로 String 을 고르면 안 된다** — 이 파일 :125 가 스스로 적어 둔
+            // 규약인데 여기서 어기고 있었다. `Label(_ title: String, systemImage:)` 는 `String` 을
+            // 받는 **비현지화 오버로드**라, 삼항이 만든 `String` 은 `LocalizedStringKey` 로 해석되지
+            // 않는다. 두 문자열 다 en.lproj 에 번역이 있는데도(`"음량" = "Volume";` 외) 영어
+            // 시스템에서 **한국어가 그대로 뜬다**. `.labelStyle(.iconOnly)` 라 이 문구는 화면이
+            // 아니라 **접근성 이름**으로 읽히므로, 증상은 VoiceOver 사용자에게만 보인다.
+            //
+            // `LocalizationCoverageTests` 도 이걸 못 잡는다 — 두 문자열이 각각 :225 `Section("음량")`
+            // 과 :263 `.help("동영상 음량 · 배속")` 에서 **우연히** 추출되기 때문이다. 즉 번역은
+            // 있는데 이 자리만 안 쓰는 상태였고, 커버리지 오라클은 초록이었다.
+            let icon = currentVideoVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill"
+            if showsRate {
+                Label("동영상 음량 · 배속", systemImage: icon).font(.title3)
+            } else {
+                Label("음량", systemImage: icon).font(.title3)
+            }
         }
         .labelStyle(.iconOnly)
         .menuStyle(.borderlessButton)

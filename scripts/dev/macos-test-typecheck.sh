@@ -50,6 +50,20 @@ set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 ROOT=$(pwd)
 
+# Xcode 가 선택돼 있으면 이 스크립트는 **쓸 이유가 없다** — `swift test` 가 도는데 굳이 심을
+# 거쳐 타입체크만 하는 것은 오차원만 늘린다. 그래서 조용히 통과시키지 않고 그 사실을 말한다.
+# (2026-08-25: 이 리포를 만지는 맥 하나가 세션 도중 CommandLineTools → Xcode 27 로 바뀌었다.
+#  머신 상태는 가정하지 말고 매번 확인하는 게 맞다.)
+DEVDIR=$(xcode-select -p 2>/dev/null || true)
+case "$DEVDIR" in
+    */Xcode*.app/Contents/Developer)
+        echo "이 머신에는 Xcode 가 선택돼 있다($DEVDIR)."
+        echo "그러면 이 스크립트가 아니라 \`swift test\` 를 돌려라 — 타입체크는 그것의 부분집합이다."
+        echo "그래도 굳이 돌리려면 WAPLE_FORCE_TYPECHECK=1 을 붙여라."
+        [ "${WAPLE_FORCE_TYPECHECK:-0}" = "1" ] || exit 0
+        ;;
+esac
+
 if [ "$(uname -s)" != "Darwin" ]; then
     echo "이 스크립트는 macOS 전용이다(리눅스는 scripts/dev/linux-*.sh)." >&2
     exit 1

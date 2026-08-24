@@ -46,15 +46,31 @@ final class LocalizationCoverageTests: XCTestCase {
             + #"|navigationTitle|help|alert|confirmationDialog|accessibilityLabel|accessibilityHint)"#
             + #"\(\s*"((?:[^"\\]|\\.)*)""#,
         #"(?:label|title|withTitle|message|placeholder|tooltip)\s*:\s*"((?:[^"\\]|\\.)*)""#,
+        // 2026-08-25(네 번째 패턴): **대입**도 본다. `win.title = "…"` 은 라벨 인자가 아니라
+        // 프로퍼티 대입이라 위 세 패턴 어디에도 안 걸렸고, AppKit 은 자동 현지화도 하지 않는다.
+        // 실측으로 `Sources/WapleRender/WebRenderer.swift` 의 창 제목 1건이 여기 걸린다.
+        #"\.(?:title|stringValue|toolTip|placeholderString)\s*=\s*"((?:[^"\\]|\\.)*)""#,
     ]
 
     private static func containsHangul(_ s: String) -> Bool {
         s.unicodeScalars.contains { (0xAC00...0xD7A3).contains($0.value) || (0x3130...0x318F).contains($0.value) }
     }
 
-    /// Sources/Waple 전체에서 한글 UI 리터럴을 추출한다(파일 단위 전문 매칭 — 여러 줄 호출도 잡는다).
+    /// `Sources/` **전체**에서 한글 UI 리터럴을 추출한다(파일 단위 전문 매칭 — 여러 줄 호출도 잡는다).
+    ///
+    /// **[2026-08-25] 종전 루트는 `Sources/Waple` 하나였다.** 그래서 `Sources/WapleRender` 의
+    /// `WebRenderer.swift` 창 제목("웹 월페이퍼 조작 (실시간 연동)")이 영어 번역 없이 통과했다 —
+    /// 사용자가 실제로 보는 창인데 오라클이 그 디렉터리를 아예 안 봤다. UI 문자열이 앱 타깃에만
+    /// 있다는 전제가 깨져 있었고, 그 전제를 어디에도 적어 두지 않아 확인할 방법도 없었다.
+    ///
+    /// 넓혀도 소음이 없다는 것을 먼저 쟀다: 위 패턴으로 `Sources/Waple` **밖**에서 잡히는 한글
+    /// 리터럴은 `WapleRender` 1건뿐이고 `WapleCore`·`WapleLibrary` 는 0건이다.
+    ///
+    /// **`Sources/WapleSaver` 는 여전히 사각지대다** — Objective-C(`.m`)라 이 스캐너가 안 읽고,
+    /// 애초에 `.saver` 번들에 `.lproj` 자체가 없어 `NSLocalizedString` 으로 해결되지도 않는다.
+    /// 그건 번들 구조를 바꿔야 하는 별건이다(BACKLOG 참조).
     private func sourceKeys() throws -> Set<String> {
-        let root = Self.repoRoot.appendingPathComponent("Sources/Waple")
+        let root = Self.repoRoot.appendingPathComponent("Sources")
         var keys: Set<String> = []
         let regexes = try Self.patterns.map { try NSRegularExpression(pattern: $0, options: [.dotMatchesLineSeparators]) }
         guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
