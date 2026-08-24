@@ -71,7 +71,7 @@ public struct Particle {
 ///
 /// D3D 행우선 관례에서 그 행들은 오브젝트 로컬 기저를 월드로 옮긴 벡터(right/up/forward)이므로,
 /// 행과의 내적 = 기저에 대한 투영 = **월드 → 로컬** 변환이다(직교 회전에서 R 의 전치).
-public struct ParticleWorldBasis: Equatable {
+public struct ParticleWorldBasis: Equatable, Sendable {
     public var row0: SIMD3<Float>
     public var row1: SIMD3<Float>
     public var row2: SIMD3<Float>
