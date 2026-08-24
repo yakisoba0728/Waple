@@ -361,4 +361,35 @@ final class SceneWELightMathTests: XCTestCase {
         XCTAssertEqual(light.innerCone, 0)
         XCTAssertEqual(light.outerCone, 0)
     }
+
+    /// **[2026-08-25] 원문 리터럴과 `Float.leastNormalMagnitude` 가 비트동일임을 못박는다.**
+    ///
+    /// `common_pbr_2.h:266` 은 `pow(falloff + 1.17549435e-38, exponent)` 라고 적는다. 그 십진
+    /// 표기는 FLT_MIN(1.17549435082…e-38)보다 아주 조금 작아서 Swift 가
+    /// `underflows and loses precision` 경고를 낸다 — 그런데 **Float 로 반올림된 결과는 정확히
+    /// FLT_MIN**(`0x00800000`, `isNormal == true`)이다. 즉 경고는 오탐이고 값은 같다.
+    ///
+    /// 그래서 소스는 `.leastNormalMagnitude` 로 적고(경고 없음) 원문 표기는 주석에 보존한다.
+    /// **이 테스트가 그 교체의 유일한 근거다** — 여기가 깨지면 교체를 되돌려야 한다.
+    /// GPU 쪽(MSL 문자열)은 손대지 않았다: `EngineAttenuationLaneTests` 가 원문 그대로를 단언한다.
+    func testHLSLFalloffEpsilonIsBitIdenticalToFLTMIN() {
+        let literal: Float = 1.17549435e-38   // 원문 표기 — 경고는 나지만 이 테스트의 핵심이다
+        XCTAssertEqual(SceneWELightMath.hlslFalloffEpsilon.bitPattern, literal.bitPattern,
+                       "엡실런이 원문 리터럴과 비트동일해야 한다")
+        XCTAssertEqual(SceneWELightMath.hlslFalloffEpsilon.bitPattern, 0x0080_0000,
+                       "FLT_MIN 의 비트 패턴이어야 한다")
+        XCTAssertTrue(SceneWELightMath.hlslFalloffEpsilon.isNormal, "정규수여야 한다(서브노멀 아님)")
+
+        // 소비 지점에서도 같은 값을 낸다 — 상수만 같고 쓰이는 곳이 다르면 의미가 없다.
+        for exponent: Float in [0, 1, 2, 8] {
+            XCTAssertEqual(powf(literal, exponent),
+                           powf(SceneWELightMath.hlslFalloffEpsilon, exponent),
+                           "exponent=\(exponent) 에서 결과가 갈린다")
+        }
+
+        // negative control — GLSL 레인 상수는 **달라야** 한다(둘이 같으면 레인 구분이 무의미).
+        XCTAssertNotEqual(SceneWELightMath.hlslFalloffEpsilon,
+                          SceneWELightMath.glslFalloffEpsilon,
+                          "HLSL/GLSL 두 레인의 하한은 서로 다른 값이다")
+    }
 }
