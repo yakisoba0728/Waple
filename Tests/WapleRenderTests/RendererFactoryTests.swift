@@ -2,6 +2,9 @@ import XCTest
 @testable import WapleRender
 import WapleCore
 
+/// [2026-08-25] `@MainActor` — `VideoRenderer`/`RendererFactory` 가 `@MainActor` 가 되면서
+/// 필요해졌다. 그 타입들은 원래부터 "상태가 메인 큐 한정"(파일 머리말)이었고 이제 타입이 그걸 말한다.
+@MainActor
 final class RendererFactoryTests: XCTestCase {
     private func project(type: WallpaperType, file: String?) -> WallpaperProject {
         WallpaperProject(id: "x", type: type, fileName: file, previewName: nil,

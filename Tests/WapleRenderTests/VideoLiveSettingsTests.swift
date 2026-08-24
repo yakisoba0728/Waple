@@ -4,6 +4,9 @@ import AVFoundation
 @testable import WapleRender
 
 /// F820: 음량/배속 라이브 반영 — apply() 전체 리마운트 없이 실행 중인 AVPlayer 에 직접 반영돼야 한다.
+/// [2026-08-25]  —  가  가 되면서 필요해졌다.
+/// 그 타입은 원래부터 "상태가 메인 큐 한정"(파일 머리말)이었고 이제 타입이 그걸 말한다.
+@MainActor
 final class VideoLiveSettingsTests: XCTestCase {
     private let projectId = "vlive1"
     private var tempDir: URL!
