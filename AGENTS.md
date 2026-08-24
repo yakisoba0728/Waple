@@ -14,7 +14,13 @@ Wallpaper Engine 을 macOS 에 재구현한 프로젝트다. 사용자용 소개
 WapleCore ←── WapleLibrary ──┐
     ↑                        ├──→ Waple (앱 실행 타깃)
     └──── WapleRender ───────┘
-    └──── WapleRender ───────→ WapleCompat (CLI) ←── WapleSnapshot
+    │
+    └──── WapleRender ──→ WapleCompatCore ──→ WapleCompat (CLI)
+                              ↑
+                        WapleSnapshot
+
+WaplePolicy   (의존 없음 · 아무도 의존하지 않음 — 리눅스 spec 레인 전용. 아래 경고)
+WapleSaver    (SwiftPM 밖 — package-app.sh 가 직접 컴파일)
 ```
 
 | 타깃 | 성격 | 의존 |
@@ -23,13 +29,28 @@ WapleCore ←── WapleLibrary ──┐
 | `WapleRender` | Metal 렌더러, 셰이더, 텍스처 디코드, 오디오·비디오·웹 | Core |
 | `WapleLibrary` | 라이브러리 스캔·임포트·영속화 | Core |
 | `Waple` | 메뉴바 앱 + SwiftUI 메인 윈도우 | Core, Library, Render |
-| `WapleCompat` | 호환성 스캔·스냅샷 캡처/비교 CLI | Core, Render, Snapshot |
+| `WapleCompatCore` | 호환성 스캔·스냅샷 캡처/비교 **라이브러리** | Core, Render, Snapshot |
+| `WapleCompat` | 위의 CLI 진입점(`main.swift` 만) | **CompatCore**, Core, Render |
 | `WapleSnapshot` | 스냅샷 매니페스트·diff. Foundation 전용 | 없음 |
+| `WaplePolicy` | WE 재생 정책(playbackfocus/…/pausevram) 순수 모델 | **없음** — 아래 경고 |
 | `WapleSaver` | 스크린세이버 `.saver` (Objective-C) | **SwiftPM 밖** — `scripts/package-app.sh` 가 직접 컴파일하므로 `swift test` 커버리지에 없다 |
 
 외부 패키지 의존은 0이다. 새로 추가하지 마라.
 `Package.swift` 는 `swift-tools-version:5.9` 지만 이건 매니페스트 API 버전일 뿐이고,
 실제 빌드는 Swift 6.3+ 이다.
+
+> **[2026-08-25] 위 표에 `WapleCompatCore`·`WaplePolicy` 가 빠져 있었고 `WapleCompat` 의 의존이
+> 틀려 있었다.** 이 문서는 "코드 만지기 전 필독" 으로 지정돼 있는데, 지도에 없는 타깃은
+> 그 타깃의 계약도 안 보인다는 뜻이다. 특히 `WaplePolicy` 가 그렇다:
+>
+> **`WaplePolicy` 에 의존을 더하지 마라.** `WapleCore` 에 붙이면 `import simd` 때문에 리눅스
+> 빌드가 통째로 죽는다(실측: `AudioResponse.swift:2 error: no such module 'simd'`).
+> 이 타깃은 `import Foundation` 하나만 쓰므로 리눅스 spec 레인에서 초 단위로 빌드된다 —
+> 정책 판정은 GPU 도 창도 필요 없는 순수 산수라 그게 맞는 자리다. 더하는 순간 그 성질이 사라진다.
+> (`Package.swift:39-45` 에 같은 경고가 실측과 함께 있다.)
+>
+> `WapleCompatCore` 분리의 이유도 지도에 안 보이면 되돌리기 쉽다: 종전엔 전부가 하나의
+> `.executableTarget` 이라 **어떤 테스트 타깃도 의존할 수 없었고**, 1,799줄이 통째로 무테스트였다.
 
 ## UI 문자열(현지화)
 
@@ -48,7 +69,7 @@ WapleCore ←── WapleLibrary ──┐
 
 ```bash
 swift build --build-tests      # ~20초 (유휴 상태 Apple Silicon)
-swift test                     # 3,038개(2026-08-21 실측 — 코퍼스 유무와 무관)
+swift test                     # 3,686개(2026-08-25 CI 실측 — 코퍼스 유무와 무관)
 swift run Waple                # 메뉴바 앱으로 실행
 ```
 
@@ -69,6 +90,18 @@ swift run Waple                # 메뉴바 앱으로 실행
   때도 같았다 — 여섯 번 연속이다. 그래서 커밋 전에 정적 개수로 하한 통과 여부를 미리 계산할 수 있다.
   하한은 `ci.yml` 에서 `3038` → **`3099`** 로 함께 래칫했다.
   **여러 작업이 동시에 `Tests/**` 를 고치는 중이라면 하한에 여유가 0 이므로 푸시 직전에 다시 세라.**
+
+  > **[2026-08-25 갱신] 일곱 번째·여덟 번째 연속으로 어긋나지 않았다.** `7791a40`(둘 다 3,683) ·
+  > `0a63b64`(둘 다 **3,686**, run `32755977630`, debug·release 두 잡 동일). 하한은
+  > `3500` → **`3686`** 으로 래칫했다.
+  >
+  > 그리고 **개수만으로는 안 되는 자리**가 있다는 것을 이번에 확인했다. 하한 3500 시절 여유가
+  > 186 이었는데 테스트 **타깃** 넷이 각각 그보다 작아(CompatCore 25 · Snapshot 26 ·
+  > Library 52 · Policy 74) `.testTarget` 하나를 통째로 지워도 초록이었다. 종전 주석이 여유를
+  > "파일 하나(대개 100건 이상) 소실은 잡는 폭" 이라고 정당화했는데 **100건 넘는 테스트 파일이
+  > 하나도 없다**(최대 `SceneDocumentTests.swift` 81건). 그래서 `ci.yml` 에 **타깃 존재 게이트**를
+  > 새로 넣었다 — 각 `Tests/<타깃>/` 에서 `XCTestCase` 클래스 이름을 뽑아 그중 하나라도 실행
+  > 로그에 나타나는지 본다. 개수가 아니라 존재를 보는 것이라 오라클 증감에 흔들리지 않는다.
 - **`Executed` 는 스킵을 포함한다.** 그래서 이 값은 코퍼스 유무와 무관하다. 같은 런에서
   skipped 가 47(release)/46(debug)로 갈렸는데도 `Executed` 는 둘 다 3,038 이었다 — 그 ±1 은
   `WebHardPauseTests.testIntervalResumesAtRemainingPhaseThenUsesOriginalPeriod` 의 시간 의존

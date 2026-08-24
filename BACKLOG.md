@@ -1,8 +1,15 @@
 # Waple 백로그
 
-**현재 상태** (2026-08-16): 유지보수 모드. 테스트 2,180개 · CI 그린(`macos-26`).
-실패는 순차 실행 기준 0 — 단 아래 두 건은 조건부로 붉어진다: `--parallel` 은 2건을 항상 실패시키고
-(AGENTS.md 레시피 경고 참조), 비디오-백드 `3538758087` 결정성 단언이 부하에 따라 간헐 실패한다.
+**현재 상태** (2026-08-25): 테스트 **3,688개** · CI 그린(`macos-26` debug·release 두 레인 + ubuntu `spec`).
+실패 0 · 스킵 64.
+
+> **[정정 2026-08-25] 이 머리말이 아홉 날 낡아 있었다.** 종전 문장은 "테스트 2,180개"(2026-08-16) 와
+> "`--parallel` 은 2건을 항상 실패시킨다" 였는데 둘 다 지금은 틀리다 — 개수는 3,688 이고,
+> `--parallel` 경고는 **2026-08-19 에 해소**됐다(AGENTS.md 의 "✅ `--parallel` 은 이제 판정에
+> 써도 된다" 절). 리포에서 가장 먼저 읽히는 줄이 가장 오래 안 고쳐지는 자리였다.
+>
+> 비디오-백드 `3538758087` 결정성 단언의 부하 의존 간헐 실패는 그대로 유효하다(아래 항목 참조).
+
 아래 항목은 "해야 할 일"이 아니라 **트리거가 오면 할 일**이다. 트리거 전에는 하지 않는다.
 
 이 문서는 **날짜순 기록**이다. `>` 인용 블록과 취소선(~~항목~~)은 그 시점의 사실이며 이후
@@ -122,12 +129,22 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   `g_Texture0Rotation`/`g_Texture0Translation`·`g_ViewUp`/`g_ViewRight`·`g_Orientation*`·
   `g_HDRParams` 는 이 체인에 **도달하지 않는다**(종전 서술의 "켜는 순간 도달한다" 는 과장이다).
 
-  그리고 유니폼은 **유일한 블로커가 아니다.** `SceneRenderer3D.swift:1039-1042` 가 이미
+  그리고 유니폼은 **유일한 블로커가 아니다.** ~~`SceneRenderer3D.swift:1039-1042` 가 이미
   적어 두었듯 4종 전부 `a_Normal` 을 무조건 참조하는데 `GLSLTranslator` 의 VIn 은
   `a_Position`/`a_TexCoord` 만 지원한다(`GLSLTranslator.swift:1797`) — 오늘은 **네 개가 전부
-  MSL 컴파일에 실패한다**. attribute 화이트리스트 확장이 동등한 선행 블로커인데 종전 D3 는
+  MSL 컴파일에 실패한다**.~~ attribute 화이트리스트 확장이 동등한 선행 블로커인데 종전 D3 는
   이걸 빠뜨린 채 자기만 "그 전제조건" 이라고 적고 있었다. `generic4` 는 추가로
   `sampler2DComparison` 이 `GLSLType` 에 없어 선언 9건(그림자 아틀라스 포함)이 드롭된다.
+
+  > **[해소 2026-08-21, 문서 갱신 2026-08-25] `a_Normal` 은 더 이상 블로커가 아니다.**
+  > `GLSLTranslator.swift:104` 에 `("a_Normal", .vec3, 2)` 가 화이트리스트로 들어갔고
+  > (참조될 때만 `VIn` 에 싣는다), `SceneRenderer3D.swift:1145` 가 정점 디스크립터에 배선한다.
+  > 같은 파일 `:1070-1073` 이 "그 서술은 `a_Normal` 한 이름에 대해서는 더 이상 사실이 아니다"
+  > 라고 자기 정정을 이미 남겨 뒀는데 **이 표만 따라오지 못했다.**
+  >
+  > 남은 블로커는 `generic4` 의 `sampler2DComparison` 하나다(`PerformLighting_V1` 경로).
+  > 즉 위 "작업 순서 ①" 은 끝났고 ②부터가 남았다. 이걸 미해결로 읽고 attribute 지원을
+  > 다시 넣으면 **이미 해소된 자리를 두 번 고치게 된다** — 그래서 취소선으로 남긴다.
 
   **값 공급**: `EngineU`(320B, `GLSLTranslator.swift:1808`)에 카메라·라이트·포그·본·모프
   슬롯이 하나도 없다. 난이도 하 9개(`g_EyePosition`·`g_ViewRight/Up`·`g_Fog*`·
@@ -309,7 +326,7 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 | `instanceoverride` 파티클 오버레이 | 133씬 | parseParticle에서 def 값 치환 1단계 |
 | ApplyBlending 14–29 모드(내장 include) | 92종/141씬 | **BlendMSL.swift에 전 모드 MSL 이미 존재** → GLSL 내장 include로 이식만 |
 | systemfont 별칭·검증 (`consolas`/`comicsans`/`sansserif`) | ~211인스턴스 | TextRasterizer 별칭 테이블 + PostScript명 검증 |
-| REFRACT 파티클 굴절 | 129건/35씬 | 대형(배경 샘플 패스) — 씬 체감 시 |
+| ~~REFRACT 파티클 굴절~~ | 129건/35씬 | **[해소 2026-07-16 `4328709c`, 표 정정 2026-08-25]** `pf_refract` 셰이더 + 파이프라인 변형 2종 + `runRefractParticle`(acc blit 스냅샷 → 드로우 → 실패 시 identity 폴백)이 전부 배선돼 있다. 이 표의 머리말은 "의도적으로 남긴 것" 인데 이건 남긴 게 아니라 **이미 한 것**이었다. 남은 것은 픽셀 회귀 오라클 부재(아래 F399)뿐이다 |
 | wind/gravity 파티클 외력 (~~vortex_v2~~·~~scriptproperties~~ **해소**) | 110씬 | **2026-08-19 재검증**: vortex_v2 는 `9ee0ccf`(2026-07-21) 로, scriptproperties 는 `cdae755`+`0acef5d`(2026-07-15) 로 **이미 구현됐다** — 이 줄의 "파스+배선" 표기가 그 둘에 대해 낡았다. wind/gravity 만 잔존한다(파스·보존 전용, `SceneDocument.swift:861-865`; `ParticleSimulator` 가 그 필드를 받지 않아 구조적으로 소비 경로가 없다 — 참고로 시뮬레이터의 `movements[].gravity` 는 **파티클별 오퍼레이터**라 이것과 별개다). **적용 공식 미확정이 여전한 관문**이다: WE 셰이더에 `g_Gravity`/`g_Wind` 가 없고 (CPU 시뮬레이터 규약), RE 산출물에도 키 문자열 주소(`json-keys.txt:697-698`)뿐 공식이 없다. 게다가 도달 110씬 중 **107씬이 정확히 기본값**(1.0·(0,-1,0) — 에디터가 패널을 열면 자동 기입)이라, 실제로 화면이 달라질 저작은 3479521040(중력 반전 2.0)·3517818807(windstrength 1000) 정도다. 파스+배선. S1-formats③ 재실측(2026-07-27): `gravitystrength` 필드 110/169씬(65%, 거의 전부 1.0·방향(0,-1,0)), `windenabled=true` 활성 1/169 — 적용 공식 미확정이라 포맷대조 레인 스코프 밖 보류, 착수 시 이 비율을 우선순위 근거로 사용 |
 | 번역기 폴백 강등 3건(`#if<TAB>` 정규화·`%=`·무공백 const) | 저빈도 | 검증 결과 컴파일실패→안전폴백(REFUTED) — 픽셀 무해, 폴백 회피용 |
 | 성능: 비가시 레이어 효과체인 스킵, acc+blit 생략(스냅샷 1회 확인 필요), TexImage 스캔 할당, ScenePackage 무복사 파스, DXT 블록 할당 | — | 감사 계획서 3계층 성능표 참조 |
@@ -436,6 +453,10 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   구동이고 알베도와 무관**하다. 고치는 방향 둘: ① 번역기 `VIn` 에 `a_Normal` 을 추가해 `generic*`
   를 실제로 번역(`WAPLE_BUILTIN_MESH_SHADERS` 화이트리스트가 이미 준비돼 있다) ② 스톡 폴백이
   WE 의 스페큘러 게이트를 따르게 한다. ②가 싸고 국소적이다. 3배 이상 밝아진 씬은 이 1종뿐이다.
+
+  > **[갱신 2026-08-25] ①의 `a_Normal` 부분은 2026-08-21 에 끝났다**(`GLSLTranslator.swift:104`).
+  > 그래도 `generic4` 는 `sampler2DComparison` 때문에 여전히 번역에 실패하므로 이 씬의 폴백
+  > 경로는 그대로다 — 즉 **증상과 권고(②가 싸다)는 유효하고, 원인 서술만 절반이 낡았다.**
 
 - **`VideoBackedSceneCaptureTests.testVideoBackedScenesCaptureContent` 가 `3538758087` 에서 간헐 실패**
   (2026-08-16 실측: 같은 커밋을 조건만 바꿔 돌리면 0/3 · 3/3 · 1/4 로 갈린다 — 부하 의존).

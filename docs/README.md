@@ -24,6 +24,29 @@
 WE 엔진 이식 프로그램의 차터·스펙·계획은 [superpowers/](superpowers/) 에 있다.
 정본 **데이터**는 리포 루트 [../spec/](../spec/) 이다.
 
+## RE 산문 — [re/](re/)
+
+**[2026-08-25] 이 절이 통째로 빠져 있었다.** `docs/re/` 는 33개 문서인데 색인에 한 줄도 없었고,
+그동안 **소스와 테스트가 191곳에서 이 파일들을 인용**하고 있었다 — 즉 코드가 근거로 삼는 문서를
+색인이 모르고 있었다. 방법론(`dev/re-methodology.md`)만 있고 **결과물**이 없던 셈이다.
+
+`spec/` 이 기계가 읽는 정본(JSON)이라면 `re/` 는 **사람이 읽는 그 근거**다 — 원본 바이너리의
+어느 주소에서 무엇을 읽었고, 어떤 해석을 버렸고, 무엇이 아직 [추정]인지가 적혀 있다.
+소스 주석이 `docs/re/<파일>.md §N` 으로 가리키는 그 대상이다.
+
+| 갈래 | 문서 |
+| --- | --- |
+| 포맷 | [package-format.md](re/package-format.md) · [tex-format.md](re/tex-format.md) · [json-number-tags.md](re/json-number-tags.md) |
+| 씬 모델 | [scene-object-model.md](re/scene-object-model.md) · [object-propagation.md](re/object-propagation.md) · [property-animation.md](re/property-animation.md) · [unimplemented-json-keys.md](re/unimplemented-json-keys.md) · [bundled-key-coverage.md](re/bundled-key-coverage.md) |
+| 파티클 | [particle-operator-vm.md](re/particle-operator-vm.md) · [particle-control-points.md](re/particle-control-points.md) · [particle-world-basis.md](re/particle-world-basis.md) · [remap-operation.md](re/remap-operation.md) |
+| 셰이더 | [shader-translation.md](re/shader-translation.md) · [shader-uniforms.md](re/shader-uniforms.md) · [shader-combos.md](re/shader-combos.md) · [material-blend.md](re/material-blend.md) |
+| 렌더 | [scene-lighting.md](re/scene-lighting.md) · [scene-postprocessing.md](re/scene-postprocessing.md) · [tonemapping.md](re/tonemapping.md) · [volumetric-light.md](re/volumetric-light.md) · [camera-motion.md](re/camera-motion.md) · [sprite-occlusion.md](re/sprite-occlusion.md) · [fluid-simulation.md](re/fluid-simulation.md) |
+| 3D·퍼펫 | [skeleton-animation.md](re/skeleton-animation.md) |
+| 텍스트·색 | [text-layer.md](re/text-layer.md) · [scheme-color.md](re/scheme-color.md) |
+| 미디어·오디오 | [media-playback.md](re/media-playback.md) · [audio-capture.md](re/audio-capture.md) · [playlist-transition.md](re/playlist-transition.md) |
+| 입력·웹·스크립트 | [pointer-interaction.md](re/pointer-interaction.md) · [web-wallpaper-bridge.md](re/web-wallpaper-bridge.md) · [scene-script-api.md](re/scene-script-api.md) |
+| 도구 | [compatibility-analyzer.md](re/compatibility-analyzer.md) |
+
 ## 이력 — [history/](history/)
 
 개발 당시의 계획서·설계서·감사 리포트 **71개**다. 참조 문서가 아니라 **기록**이다.
