@@ -175,7 +175,13 @@ public extension SceneLight3D {
     static func finiteLightFalloff(distance: Float, radius: Float, exponent: Float) -> Float {
         guard radius > 0 else { return 0 }
         let falloff = max(0, min(1, 1 - distance / radius))
-        return powf(falloff + 1.17549435e-38, exponent)
+        // [2026-08-25] 리터럴 대신 `Float.leastNormalMagnitude` 를 쓴다. **비트동일이다** —
+        // `1.17549435e-38` 은 Float 로 반올림되면 정확히 `0x00800000`(= FLT_MIN)이고
+        // `isNormal == true` 다. Swift 는 십진 표기가 FLT_MIN 보다 아주 조금 작다는 이유로
+        // `underflows and loses precision` 경고를 내지만 **결과값은 같다**(오탐).
+        // 원문 표기는 위 주석에 그대로 남아 있고, 비트동일은
+        // `SceneWELightMathTests.testHLSLFalloffEpsilonIsBitIdenticalToFLTMIN` 이 못박는다.
+        return powf(falloff + SceneWELightMath.hlslFalloffEpsilon, exponent)
     }
 
     /// Runtime-independent CPU oracle for the reachable orthographic `QuadShaders.f_lit` path.
@@ -266,7 +272,10 @@ enum SceneWELightMath {
     /// (`common_pbr_2.h:266` `pow(falloff + 1.17549435e-38, exponent)` — `#if HLSL` 가지).
     /// GLSL 레인은 `6.103515625e-5`(half 최소 정규수) 를 쓰고 그 아래를 hard-zero 로 끊는다
     /// (`common_pbr_2.h:268-269`). 우리는 HLSL 레인을 채택했다(Mesh3DShaders/QuadShaders 동일).
-    static let hlslFalloffEpsilon: Float = 1.17549435e-38
+    /// [2026-08-25] 값은 `Float.leastNormalMagnitude` 로 적는다 — 원문 리터럴
+    /// `1.17549435e-38` 과 **비트동일**(`0x00800000`)이고, 리터럴로 적으면 Swift 가 오탐 경고를 낸다.
+    /// 원문 표기는 바로 위 주석에 보존돼 있다.
+    static let hlslFalloffEpsilon: Float = .leastNormalMagnitude
     /// GLSL 레인 하한(`common_pbr_2.h:268` `flt_min`). 채택하지 않았지만 두 레인이 갈리는
     /// 지점을 테스트로 못박기 위해 상수만 보존한다.
     static let glslFalloffEpsilon: Float = 6.103515625e-5
