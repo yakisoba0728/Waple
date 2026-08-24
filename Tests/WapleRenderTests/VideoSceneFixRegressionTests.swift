@@ -4,6 +4,9 @@ import AVFoundation
 @testable import WapleRender
 
 /// 비디오 그룹 씬 수정 회귀 테스트.
+/// [2026-08-25]  —  가  가 되면서 필요해졌다.
+/// 그 타입은 원래부터 "상태가 메인 큐 한정"(파일 머리말)이었고 이제 타입이 그걸 말한다.
+@MainActor
 final class VideoSceneFixRegressionTests: XCTestCase {
     /// F600(S-1): hev1(hvcC 없는 HEVC) mp4 는 AVPlayerItem.status=.readyToPlay + 오디오 트랙 존재로
     /// 종전 실패 감지 2경로(.failed 관찰, tracks.isEmpty)를 모두 우회해 F550 ffmpeg 회복이 미발동했다

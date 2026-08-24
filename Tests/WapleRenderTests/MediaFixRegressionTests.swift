@@ -6,6 +6,9 @@ import XCTest
 
 /// fix-g4 감사 항목 회귀 테스트 — VideoRenderer/SceneAudioPlayer/FFmpegConverter/VideoTextureExtractor/
 /// RendererFactory/NowPlayingProvider/OggVorbis 수정분(F550–F566).
+/// [2026-08-25] `@MainActor` — `VideoRenderer`/`RendererFactory` 가 `@MainActor` 가 되면서
+/// 필요해졌다. 그 타입들은 원래부터 "상태가 메인 큐 한정"(파일 머리말)이었고 이제 타입이 그걸 말한다.
+@MainActor
 final class MediaFixRegressionTests: XCTestCase {
 
     // MARK: 공용 헬퍼

@@ -1,8 +1,20 @@
 import Foundation
 import WapleCore
 
+@MainActor
 public enum RendererFactory {
-    /// **nonisolated 로 남겨야 한다 — @MainActor 를 붙이지 마라.**
+    /// **[해소 2026-08-25] 아래 금지는 더 이상 유효하지 않다 — 이 팩토리는 이제 `@MainActor` 다.**
+    ///
+    /// 금지의 근거였던 비격리 호출부(`AppDelegate.captureSceneStill`)가 팩토리를 거치지 않게 됐다.
+    /// 아래 주석이 스스로 적어 둔 두 선택지 중 **첫째**(캡처 경로가 씬 전용이므로 `SceneRenderer` 를
+    /// 직접 만든다)를 택했고, 그 판정 동치성은 `StillWallpaper` 가 `.sceneCapture` 를 `case .scene:`
+    /// 에서만 낸다는 사실이 보증한다. F486(마운트+GPU 대기를 메인에서 빼낸 것)은 그대로다 —
+    /// `captureSceneStill` 은 여전히 `nonisolated` 이고 백그라운드 큐에서 돈다.
+    ///
+    /// 아래 원문을 남기는 이유는 **그 판단이 그때는 옳았기 때문**이다. 되돌리려는 사람이
+    /// 무엇을 다시 부수게 되는지 알아야 한다.
+    ///
+    /// ~~**nonisolated 로 남겨야 한다 — @MainActor 를 붙이지 마라.**~~
     /// AppDelegate.captureSceneStill(F486)이 백그라운드 큐에서 이 팩토리를 부른다(마운트+GPU 대기를
     /// 메인에서 빼낸 것이 F486 이고, 격리를 붙이면 그 비격리 호출부가 컴파일되지 않아 자동으로 되돌아간다).
     ///

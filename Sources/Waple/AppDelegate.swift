@@ -1038,8 +1038,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 그 코드는 WapleRender(SceneRenderer)에 있고 이 파일에서 표현할 수 없다 — F486 을 유지하려면
     /// 그쪽이 뷰 생성 경로를 오프메인에서 부를 수 있는 형태로 남겨야 한다.
     nonisolated private func captureSceneStill(project: WallpaperProject, size: CGSize, scale: CGFloat, to dir: URL, output: URL) -> URL? {
-        guard size.width > 0, size.height > 0,
-              let renderer = RendererFactory.makeRenderer(for: project) as? SceneRenderer else { return nil }
+        // [2026-08-25] **팩토리를 거치지 않는다.** `RendererFactory.swift:13` 이 이 선택지를
+        // 직접 지정해 뒀다 — "캡처 경로가 씬 전용이므로 팩토리를 거치지 않고 SceneRenderer 를
+        // 직접 만들게 한다(호출부 수정)".
+        //
+        // 판정 동치성의 근거: 이 함수는 `.sceneCapture` 소스에서만 불리고, `StillWallpaper` 는
+        // 그 값을 **`case .scene:` 에서만** 낸다. 즉 여기 오는 프로젝트는 항상 씬이고,
+        // 종전의 `as? SceneRenderer` 캐스트는 한 번도 실패한 적이 없는 검사였다.
+        //
+        // 이걸로 팩토리가 `@MainActor` 가 될 수 있다 — 종전엔 이 **비격리 호출부** 하나 때문에
+        // 팩토리 전체가 비격리로 묶여 있었고, 그래서 `.web` 분기의 `WebRenderer(mode:)` 생성이
+        // 진단을 남겼다. F486(마운트+GPU 대기를 메인에서 빼낸 것)은 그대로다 —
+        // 이 함수는 여전히 `nonisolated` 이고 백그라운드 큐에서 돈다.
+        guard size.width > 0, size.height > 0 else { return nil }
+        let renderer = SceneRenderer()
         let container = DispatchQueue.main.sync {
             MainActor.assumeIsolated { NSView(frame: CGRect(origin: .zero, size: size)) }
         }

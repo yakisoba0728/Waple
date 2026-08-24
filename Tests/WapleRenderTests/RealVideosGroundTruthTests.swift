@@ -5,6 +5,9 @@ import AVFoundation
 
 /// 실물 동영상 배경 전수 재생 검증(env-guarded — RealPackagesGroundTruthTests 와 동일 데이터 관례).
 /// mount → RunLoop 스핀 → item readyToPlay && 재생 중(rate>0) 어서션: 진짜 디코드·재생 확인.
+/// [2026-08-25] `@MainActor` — `VideoRenderer`/`RendererFactory` 가 `@MainActor` 가 되면서
+/// 필요해졌다. 그 타입들은 원래부터 "상태가 메인 큐 한정"(파일 머리말)이었고 이제 타입이 그걸 말한다.
+@MainActor
 final class RealVideosGroundTruthTests: XCTestCase {
     func testAllRealVideosPlay() throws {
         let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]

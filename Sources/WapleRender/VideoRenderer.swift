@@ -7,23 +7,36 @@ import WapleCore
 /// asset.load Task)는 전부 첫 줄에서 DispatchQueue.main.async 로 홉한 뒤에야 필드를 만진다.
 /// mountToken 세대 가드가 그 위에서 늦게 도착한 콜백을 무효화한다.
 ///
-/// **`@MainActor` 로 바꾸지 마라.** 표기상으로는 그쪽이 더 정확해 보이지만 두 곳이 막는다:
-///  1. `RendererFactory.makeRenderer` 가 **nonisolated 여야 한다** — AppDelegate.captureSceneStill(F486)이
+/// **[해소 2026-08-25] 아래 금지를 걷는다 — 이 타입은 이제 `@MainActor` 다.**
+/// 두 블로커를 각각 없앴고, 원문은 되돌리려는 사람을 위해 취소선으로 남긴다.
+///  1. **해소**: `AppDelegate.captureSceneStill` 이 팩토리를 거치지 않고 `SceneRenderer` 를 직접
+///     만든다. `RendererFactory.swift` 가 스스로 지정해 둔 선택지이고, `.sceneCapture` 가
+///     `case .scene:` 에서만 나온다는 사실이 동치성을 보증한다. F486 은 그대로다.
+///  2. **해소**: 아래 인스턴스를 직접 생성·구동하던 테스트 7파일에 `@MainActor` 를 달았다.
+///     테스트 타깃이 Swift 5·minimal 인 것과 무관하게, 클래스 표기만으로 해결된다.
+///
+/// ⚠️ 정적 3종(`nativeVideoExtensions`·`unsupportedExtensions`·`isSupportedContainer`)은
+/// **`nonisolated` 여야 한다.** 비격리 컨텍스트 다섯이 그것을 읽는다 — `FFmpegConverter:11` ·
+/// `StillWallpaper:23` · `DeepScan:790`·`:817` · `FFmpegConverterTests:185`. 여기서 격리를 빼지
+/// 않으면 그 다섯이 전부 에러가 된다. 패턴은 `WallpaperSchemeHandler:16/17/35/95`.
+///
+/// ~~**`@MainActor` 로 바꾸지 마라.** 표기상으로는 그쪽이 더 정확해 보이지만 두 곳이 막는다:~~
+///  1. ~~`RendererFactory.makeRenderer` 가 **nonisolated 여야 한다** — AppDelegate.captureSceneStill(F486)이
 ///     백그라운드 큐에서 그것을 부르고, 팩토리의 switch 안에 `VideoRenderer()` 생성이 있다.
-///     여기에 격리를 붙이면 그 경로가 컴파일되지 않아 F486(메인 수 초 정지 수정)이 되돌아간다.
-///  2. 테스트 타깃은 아직 Swift 5·minimal 인데 비격리 XCTest 메서드에서 이 타입을 40여 곳에서
+///     여기에 격리를 붙이면 그 경로가 컴파일되지 않아 F486(메인 수 초 정지 수정)이 되돌아간다.~~
+///  2. ~~테스트 타깃은 아직 Swift 5·minimal 인데 비격리 XCTest 메서드에서 이 타입을 40여 곳에서
 ///     직접 생성·구동한다(VideoRendererLifecycleTests·MediaFixRegressionTests 등) — 소스에 @MainActor 를
-///     붙이면 그 호출이 **에러**가 되어 `swift test` 가 통째로 안 선다.
-/// 그래서 아래 AppKit 관련 진단(container.bounds/window/occlusionState 등)은 **남겨 둔다**.
+///     붙이면 그 호출이 **에러**가 되어 `swift test` 가 통째로 안 선다.~~
 /// 실제 실행 규율은 위 문단(메인 큐 한정 + mountToken 세대 가드)이고, 그것이 이 표기의 근거다.
+@MainActor
 public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
     /// Conservative AVFoundation-native containers used directly without conversion.
     /// F230: WapleCore.VideoFormats.nativeExtensions 가 단일 소스 — 여기서 다시 선언하지 않는다.
-    public static let nativeVideoExtensions: Set<String> = VideoFormats.nativeExtensions
+    nonisolated public static let nativeVideoExtensions: Set<String> = VideoFormats.nativeExtensions
     /// Common non-native containers routed through ffmpeg conversion when available.
-    public static let unsupportedExtensions: Set<String> = ["webm", "mkv", "avi", "wmv", "flv", "ogv", "mpg", "mpeg"]
+    nonisolated public static let unsupportedExtensions: Set<String> = ["webm", "mkv", "avi", "wmv", "flv", "ogv", "mpg", "mpeg"]
 
-    public static func isSupportedContainer(_ url: URL) -> Bool {
+    nonisolated public static func isSupportedContainer(_ url: URL) -> Bool {
         nativeVideoExtensions.contains(url.pathExtension.lowercased())
     }
 
@@ -60,8 +73,12 @@ public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
     /// teardown 미호출 경로 안전망(형제 렌더러 전원이 이미 보유: WebRenderer·SceneVideoLayer·SceneRenderer).
     /// 이게 없으면 놓친 teardown 하나가 occlusionObserver(NotificationCenter 등록)를 남기고,
     /// AVQueuePlayer 가 도달 불가능한 채로 디코드를 계속 돌린다. teardown() 은 옵셔널 해제 정리라 멱등.
+    /// [2026-08-25] `deinit` 은 액터 격리를 가질 수 없다 — `AppDelegate:32-34` 규약대로
+    /// `MainActor.assumeIsolated` 로 "실행되는 곳이 메인" 을 런타임 단언한다.
+    /// 이 렌더러는 `RendererFactory`(@MainActor)가 만들고 `AppDelegate`(@MainActor)가 소유하며,
+    /// 파일 머리말이 적은 대로 상태가 **메인 큐 한정**이다. 마지막 참조는 메인에서 놓인다.
     deinit {
-        teardown()
+        MainActor.assumeIsolated { teardown() }
     }
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
@@ -208,18 +225,30 @@ public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
         occlusionObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main
         ) { [weak self] note in
-            guard let self, let win = self.container?.window, (note.object as? NSWindow) === win else { return }
-            if win.occlusionState.contains(.visible) {
-                if self.pausedByOcclusion, !self.pausedManually { self.player?.play() }
-                self.pausedByOcclusion = false
-            } else if self.player?.rate != 0 {
-                self.pausedByOcclusion = true
-                self.player?.pause()
+            // `Notification` 은 Sendable 이 아니라 블록 안으로 들고 들어가지 않는다 — 필요한 것은
+            // 발신 창 하나뿐이다(WebRenderer 의 같은 자리와 동형).
+            let sender = note.object as? NSWindow
+            // queue: .main 으로 등록했으므로 이 블록은 메인에서 돈다 — `AppDelegate:32-34` 규약대로
+            // 그 사실을 런타임 단언으로 적는다.
+            MainActor.assumeIsolated {
+                guard let self, let win = self.container?.window, sender === win else { return }
+                if win.occlusionState.contains(.visible) {
+                    if self.pausedByOcclusion, !self.pausedManually { self.player?.play() }
+                    self.pausedByOcclusion = false
+                } else if self.player?.rate != 0 {
+                    self.pausedByOcclusion = true
+                    self.player?.pause()
+                }
             }
         }
     }
 
-    private func recordPlayerItemFailure(_ error: Error?, url: URL, token: UInt64) {
+    /// [2026-08-25] `nonisolated` — **이 함수는 스스로 메인으로 홉한다**(첫 줄이
+    /// `DispatchQueue.main.async`). 그래서 어느 스레드에서 불러도 안전하고, 실제로 호출부는
+    /// `AVPlayerItem.status` KVO 라 **메인 보장이 없다**. 여기에 `MainActor.assumeIsolated` 를
+    /// 쓰면 안 된다 — 그건 "메인에서 돈다" 는 단언인데 KVO 는 그걸 보장하지 않으므로 트랩이 된다.
+    /// 격리를 벗기는 것이 맞는 자리다.
+    nonisolated private func recordPlayerItemFailure(_ error: Error?, url: URL, token: UInt64) {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.mountToken == token else { return }
             let finalError = error ?? RendererError.unsupportedCodec
