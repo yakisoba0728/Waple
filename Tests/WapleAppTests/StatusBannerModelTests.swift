@@ -1,6 +1,9 @@
 import XCTest
 @testable import Waple
 
+/// [2026-08-25] `@MainActor` — `StatusBannerModel` 이 `@MainActor` 가 되면서 필요해졌다.
+/// 그 모델은 원래부터 "메인 스레드 전용"(선언 주석)이었고 이제 타입이 그걸 말한다.
+@MainActor
 final class StatusBannerModelTests: XCTestCase {
     func testShowSetsMessageAndBumpsGeneration() {
         let m = StatusBannerModel()
