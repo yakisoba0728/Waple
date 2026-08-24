@@ -142,4 +142,59 @@ final class WorkshopDownloadTests: XCTestCase {
         XCTAssertEqual(vm.downloads["123"]?.phase, .failed)
         XCTAssertTrue(library.entries.isEmpty)
     }
+
+    // MARK: - 실패 사유 (2026-08-25)
+
+    /// **실패 사유가 타일 상태에 실리는가.**
+    ///
+    /// 종전에는 사유가 `statusMessage`(화면 전역 캡션)에만 있었다. 여러 개를 동시에 받다 실패하면
+    /// **어느 타일의 사유인지** 알 수 없었다. 이제 `DownloadUIState.failureReason` 이 함께 들고
+    /// 타일이 `.help()` 툴팁으로 보여준다.
+    func testDownloadFailureCarriesItsReasonOnTheTileState() async {
+        let fake = FakeDownloader()
+        let vm = makeVM(fake: fake)
+        let item = makeItem()
+        vm.download(item)
+        fake.completion?(nil); await pump()
+
+        let state = vm.downloads[item.id]
+        XCTAssertEqual(state?.phase, .failed)
+        XCTAssertNotNil(state?.failureReason, "타일이 사유를 들고 있어야 툴팁으로 보여줄 수 있다")
+        XCTAssertEqual(state?.failureReason, vm.statusMessage,
+                       "타일 사유와 화면 캡션은 같은 문장이어야 한다 — 두 말이 갈리면 어느 쪽이 맞는지 모른다")
+    }
+
+    /// **임포트 실패 분기는 사유를 아예 안 남기고 있었다.**
+    ///
+    /// 다운로드는 성공했는데 라이브러리 임포트가 실패한 경우다(받은 폴더에 `project.json` 이 없다).
+    /// 위 세 분기와 달리 `statusMessage` 조차 세우지 않아 **사유가 어디에도 없었다** —
+    /// 타일은 "다운로드 실패" 만 말했고 그건 사실도 아니었다(다운로드는 됐다).
+    func testImportFailureAfterSuccessfulDownloadExplainsItself() async throws {
+        let fake = FakeDownloader()
+        let vm = makeVM(fake: fake)
+        let item = makeItem()
+        vm.download(item)
+        // project.json 이 없는 폴더 — 다운로드는 성공, 임포트는 실패한다.
+        let empty = tempDir().appendingPathComponent("no-project", isDirectory: true)
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        fake.completion?(empty); await pump()
+
+        XCTAssertEqual(vm.downloads[item.id]?.phase, .failed)
+        let reason = try XCTUnwrap(vm.downloads[item.id]?.failureReason,
+                                   "임포트 실패도 사유를 남겨야 한다 — 종전엔 어디에도 없었다")
+        XCTAssertTrue(reason.contains("project.json"), "무엇이 문제인지 말해야 한다: \(reason)")
+        XCTAssertEqual(vm.statusMessage, reason)
+    }
+
+    /// negative control — 성공 경로는 사유를 남기지 않는다.
+    /// 이게 깨지면 위 둘이 "항상 채워진 필드" 를 검사하는 셈이 된다.
+    func testSuccessfulDownloadLeavesNoFailureReason() async throws {
+        let fake = FakeDownloader()
+        let vm = makeVM(fake: fake)
+        let item = makeItem()
+        vm.download(item)
+        fake.completion?(try makeWallpaperFolder(id: item.id)); await pump()
+        XCTAssertEqual(vm.downloads[item.id]?.phase, .done)
+        XCTAssertNil(vm.downloads[item.id]?.failureReason, "성공에는 실패 사유가 없어야 한다")
+    }
 }

@@ -101,6 +101,14 @@ struct RemoteTileView: View {
         .tileAccessibility(label: accessibilityTitle,
                            value: statusValue,
                            onActivate: primaryAction)
+        // [2026-08-25] 실패 사유는 **툴팁으로만** 보여준다.
+        //
+        // `statusValue` 에 실으면 VoiceOver 가 타일마다 100자 넘는 문장을 전부 읽는다 —
+        // 목록을 훑는 것이 불가능해진다. 그래서 접근성 값은 종전 "다운로드 실패" 를 유지하고,
+        // 전문은 마우스로 가져가면 나오는 `.help()` 에 둔다. 화면 전역 캡션(`statusMessage`)에도
+        // 같은 문장이 있지만, 여러 개를 동시에 받다 실패하면 **어느 타일의 사유인지** 그쪽으로는
+        // 알 수 없다 — 그게 타일에 붙이는 이유다.
+        .help(download?.failureReason ?? "")
         .focused($focused)
         // tileAccessibility 는 Return 키만 배선한다. 보조기술의 '활성화'(VO-Space)는 키 이벤트가
         // 아니라 기본 액션이라, 그 자리를 따로 채우지 않으면 아래 버튼이 combine 에 흡수된 뒤

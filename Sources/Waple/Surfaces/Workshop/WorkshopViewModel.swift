@@ -61,6 +61,17 @@ final class WorkshopViewModel: ObservableObject {
         }
         var phase: Phase
         var entryId: String?   // 임포트된 라이브러리 엔트리 id(적용용)
+        /// [2026-08-25] 실패 사유(실패가 아니면 nil). 타일이 `.help()` 툴팁으로 보여준다.
+        ///
+        /// 종전에는 사유가 `statusMessage`(화면 전역 캡션)에만 있었다. 그래서 타일은 "다운로드 실패"
+        /// 만 말하고 **왜인지는 다른 자리**에 있었고, 여러 개를 동시에 받다 실패하면 어느 타일의
+        /// 사유인지도 알 수 없었다. 더 나쁜 것은 `importDownloaded` nil 분기다 — 거기서는
+        /// `statusMessage` 를 **아예 세우지 않아** 실패 사유가 어디에도 없었다.
+        ///
+        /// **기본값을 주지 않는다.** `= nil` 로 쓰면 멤버와이즈 이니셜라이저에 기본값이 생겨
+        /// 기존 생성부 넷이 그대로 컴파일된다 — 컴파일러가 아무것도 안 잡는다. 넷을 강제로
+        /// 다시 보게 하려고 일부러 뺐다.
+        var failureReason: String?
     }
 
     /// 다운로드 실행 심 — 시그니처는 SteamCmdDownloader.download 와 같다(테스트에서 콜백 캡처용).
@@ -206,7 +217,7 @@ final class WorkshopViewModel: ObservableObject {
             return
         }
         SteamCmdDownloader.username = username
-        downloads[item.id] = DownloadUIState(phase: .downloading(nil), entryId: nil)
+        downloads[item.id] = DownloadUIState(phase: .downloading(nil), entryId: nil, failureReason: nil)
         sawErrorSignal.remove(item.id)   // F492: 재시도 시 이전 실행의 신호가 섞이지 않게 초기화
         sawSuccessSignal.remove(item.id)
         downloader(item.id, username,
@@ -232,28 +243,32 @@ final class WorkshopViewModel: ObservableObject {
 
     private func finishDownload(_ item: WorkshopItem, _ url: URL?) {
         guard let url else {
-            downloads[item.id] = DownloadUIState(phase: .failed, entryId: nil)
+            // [2026-08-25] 사유를 먼저 만들고 상태에 함께 싣는다 — 종전엔 상태를 먼저 넣고
+            // 사유는 `statusMessage` 에만 남겨서 타일이 "왜" 를 말하지 못했다.
+            let reason: String
             // F492: 원인 불문 로그인 오진단 방지 — 관측된 steamcmd 신호로 실패 유형을 나눈다.
             // ERROR! 라인은 로그인/세션 계열이 대표적이라 기존 안내를 유지하고, 성공 후 폴더 부재와
             // 무신호(타임아웃·실행 실패·네트워크)는 로그인 무관 원인을 안내한다.
             // 보간 대신 포맷 지정자 — 번역문에서 배경 제목과 계정명의 어순이 원문과 다를 수 있고,
             // 보간으로 만든 문자열은 애초에 번역 대상이 되지 않는다(§5.0).
             if sawSuccessSignal.contains(item.id) {
-                statusMessage = String(
+                reason = String(
                     format: NSLocalizedString("‘%@’ 다운로드는 완료됐지만 결과 폴더를 찾지 못했습니다 — steamcmd 의 content 폴더 위치를 확인하세요.",
                                               comment: "성공 신호는 봤는데 폴더가 없다"),
                     item.title)
             } else if sawErrorSignal.contains(item.id) {
-                statusMessage = String(
+                reason = String(
                     format: NSLocalizedString("‘%@’ 다운로드 실패 — 터미널에서 `steamcmd +login %@` 로 1회 로그인해 세션을 캐시했는지 확인하세요.",
                                               comment: "ERROR! 라인 관측 — 로그인/세션 계열이 대표적"),
                     item.title, usernameInput)
             } else {
-                statusMessage = String(
+                reason = String(
                     format: NSLocalizedString("‘%@’ 다운로드 실패 — steamcmd 가 완료 신호를 내지 않았습니다(시간 초과·네트워크·실행 오류 가능). 터미널에서 `steamcmd +login %@` 세션 캐시를 확인하고 직접 시도해 원인을 파악하세요.",
                                               comment: "무신호 실패 — 로그인 무관 원인"),
                     item.title, usernameInput)
             }
+            statusMessage = reason
+            downloads[item.id] = DownloadUIState(phase: .failed, entryId: nil, failureReason: reason)
             sawErrorSignal.remove(item.id)
             sawSuccessSignal.remove(item.id)
             return
@@ -261,11 +276,19 @@ final class WorkshopViewModel: ObservableObject {
         sawErrorSignal.remove(item.id)
         sawSuccessSignal.remove(item.id)
         guard let entry = library.importDownloaded(url) else {
-            downloads[item.id] = DownloadUIState(phase: .failed, entryId: nil)
+            // [2026-08-25] **이 분기는 사유를 아예 안 남기고 있었다.** 다운로드는 성공했는데
+            // 라이브러리 임포트가 실패한 경우인데, 타일은 "다운로드 실패" 만 말하고 화면 어디에도
+            // 왜인지가 없었다(위 세 분기와 달리 `statusMessage` 도 안 세웠다). 문구를 새로 만든다.
+            let reason = String(
+                format: NSLocalizedString("‘%@’ 은(는) 받았지만 라이브러리에 넣지 못했습니다 — 받은 폴더에 project.json 이 없거나 읽을 수 없습니다.",
+                                          comment: "다운로드는 성공, 임포트 실패"),
+                item.title)
+            statusMessage = reason
+            downloads[item.id] = DownloadUIState(phase: .failed, entryId: nil, failureReason: reason)
             return
         }
         if let score = item.voteScore { library.setRating(score, for: entry) }
-        downloads[item.id] = DownloadUIState(phase: .done, entryId: entry.id)
+        downloads[item.id] = DownloadUIState(phase: .done, entryId: entry.id, failureReason: nil)
     }
 
     func apply(_ item: WorkshopItem) {
