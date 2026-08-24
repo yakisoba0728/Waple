@@ -26,6 +26,55 @@ public enum ProfilePipeline {
 
     // MARK: --inventory : 표본 선정용 씬별 경량 메타(파스만, 마운트 없음)
 
+
+    /// **[2026-08-25] 이 두 파이프라인이 `.pkg` 만 열고 있었다.**
+    ///
+    /// `SnapshotPipeline.sceneFolders` 는 packed 가 0개면 `unpackedSceneFolders` 로 폴백하는데,
+    /// 그 폴백이 돌려주는 폴더는 **정의상 `.pkg` 가 없다**(`project.json` 로 판정한 언팩 프로젝트다).
+    /// 그런데 `--inventory`/`--vis-blast` 는 `folder/scene.pkg` 를 직접 열고 실패하면 `return` 으로
+    /// 조용히 건너뛰었다. `folders.isEmpty` 가드는 폴더가 있으니 통과한다 — 결과는
+    /// `scenes=0` + **exit 0**. 측정이 아니라 침묵이고, `vis-blast` 는 한술 더 떠
+    /// `scenes-scanned=16 scenes-affected=0` 을 **적극적으로 단언**했다.
+    ///
+    /// 이건 `DeepScan.scanScene` 이 3차 웨이브에서 이미 고친 것과 **같은 결함**이다(그 주석 참조 —
+    /// WE 2.8.42 설치본은 씬 188/188 이 언팩이고 `.pkg` 가 0개다). 그때 형제 스캐너 셋 중 둘만
+    /// 고쳐졌고 여기 둘이 남아 있었다. 마운트 선택자를 렌더러·DeepScan 과 **같은 함수**로 맞춘다 —
+    /// `project.json` 의 `file` 이 단독 결정자이고 `.pkg` 는 그 파일이 디스크에 없을 때의 폴백이다.
+    static func mountPackage(_ folder: URL) -> ScenePackage? {
+        let project = try? ProjectJSONParser.parse(folderURL: folder)
+        switch ScenePackage.resolveMountSource(folderURL: folder,
+                                               fileName: project?.fileName ?? "scene.pkg",
+                                               hasDependency: project?.dependency != nil) {
+        case .package(let pkgURL):
+            guard let d = try? Data(contentsOf: pkgURL, options: .mappedIfSafe) else { return nil }
+            return try? ScenePackage.parse(d)
+        case .directory:
+            return ScenePackage.fromDirectory(folder)
+        }
+    }
+
+
+    /// 드롭 보고 + 종료코드 판정. **전건 드롭은 성공이 아니다.**
+    ///
+    /// 이 리포는 "조용히 틀리는 것보다 실패하는 쪽" 을 택해 왔다(`ShaderPreprocessor` 의 `#if` 거부가
+    /// 그 예다). 진단 도구가 아무것도 못 읽고도 exit 0 을 내면 그 원칙이 정반대로 뒤집힌다 —
+    /// CI 나 사람이 "돌렸고 통과했다" 로 읽는다. 그래서 셋으로 나눈다:
+    ///   · 하나도 못 읽음 → **exit 2**(F520 의 "씬 0개" 가드와 같은 판정)
+    ///   · 일부 드롭      → exit 0 이되 stderr 에 건수와 앞 10건을 남긴다(부분 코퍼스는 정상 상황이다)
+    ///   · 드롭 없음      → exit 0, 조용
+    static func reportDrops(tag: String, rows: Int, folders: Int, dropped: [String]) -> Int32 {
+        guard !dropped.isEmpty else { return 0 }
+        fputs("[\(tag)] ⚠️ \(dropped.count)/\(folders) 건이 드롭됐다:\n", stderr)
+        for d in dropped.prefix(10) { fputs("[\(tag)]    · \(d)\n", stderr) }
+        if dropped.count > 10 { fputs("[\(tag)]    · … 외 \(dropped.count - 10)건\n", stderr) }
+        if rows == 0 {
+            fputs("[\(tag)] ❌ 읽어낸 씬이 **0개**다 — 이 실행은 아무것도 측정하지 않았다. "
+                  + "root 가 가리키는 트리에 마운트 가능한 씬이 있는지 확인하라.\n", stderr)
+            return 2
+        }
+        return 0
+    }
+
     struct InventoryRow { let id: String; let is3D: Bool; let layers: Int; let effects: Int
                           let particles: Int; let texBytes: Int; let hdr: Bool; let bloom: Bool }
 
@@ -44,18 +93,16 @@ public enum ProfilePipeline {
         let assetsDir = DeepScan.firstExisting([rootURL.appendingPathComponent("assets"),
                                                 rootURL.deletingLastPathComponent().appendingPathComponent("assets")])
         var rows: [InventoryRow] = []
+        var dropped: [String] = []
         for folder in folders {
             let id = folder.lastPathComponent
             autoreleasepool {
-                let pkgName = FileManager.default.fileExists(atPath: folder.appendingPathComponent("scene.pkg").path)
-                    ? "scene.pkg" : "gifscene.pkg"
-                guard let data = try? Data(contentsOf: folder.appendingPathComponent(pkgName)),
-                      let pkg = try? ScenePackage.parse(data) else { return }
+                guard let pkg = mountPackage(folder) else { dropped.append("\(id): 마운트 실패"); return }
                 let res = PkgAssets(package: pkg, assetsDir: assetsDir)
                 guard let doc = try? SceneDocument.parse(
                     package: pkg,
                     assets: { res.baseAssetURL($0).flatMap { try? Data(contentsOf: $0) } }
-                ) else { return }
+                ) else { dropped.append("\(id): 씬 파스 실패"); return }
                 let is3D = doc.camera3D != nil && !doc.objects3D.isEmpty
                 let effects = doc.layers.reduce(0) { $0 + $1.effects.count }
                 let texBytes = pkg.entries.filter { $0.name.hasSuffix(".tex") }.reduce(0) { $0 + $1.size }
@@ -70,8 +117,8 @@ public enum ProfilePipeline {
         }
         do { try csv.write(to: outCSV, atomically: true, encoding: .utf8) }
         catch { fputs("[profile] inventory write failed: \(error)\n", stderr); return 2 }
-        print("[profile inventory] scenes=\(rows.count) → \(outCSV.path)")
-        return 0
+        print("[profile inventory] scenes=\(rows.count) dropped=\(dropped.count)/\(folders.count) → \(outCSV.path)")
+        return reportDrops(tag: "profile inventory", rows: rows.count, folders: folders.count, dropped: dropped)
     }
 
     // MARK: --vis-blast : W3-① C8 가시성 상속 전파의 코퍼스 블라스트 반경(파스만, 마운트 없음)
@@ -93,21 +140,23 @@ public enum ProfilePipeline {
         let assetsDir = DeepScan.firstExisting([rootURL.appendingPathComponent("assets"),
                                                 rootURL.deletingLastPathComponent().appendingPathComponent("assets")])
         var rows: [VisBlastRow] = []
+        var dropped: [String] = []
+        var scanned = 0
         for folder in folders {
             let id = folder.lastPathComponent
             autoreleasepool {
-                let pkgName = FileManager.default.fileExists(atPath: folder.appendingPathComponent("scene.pkg").path)
-                    ? "scene.pkg" : "gifscene.pkg"
-                guard let data = try? Data(contentsOf: folder.appendingPathComponent(pkgName)),
-                      let pkg = try? ScenePackage.parse(data) else { return }
+                guard let pkg = mountPackage(folder) else { dropped.append("\(id): 마운트 실패"); return }
                 let res = PkgAssets(package: pkg, assetsDir: assetsDir)
                 let assetsFn: (String) -> Data? = { res.baseAssetURL($0).flatMap { try? Data(contentsOf: $0) } }
                 setenv("WAPLE_VIS_INHERIT", "0", 1)
                 guard let off = try? SceneDocument.parse(package: pkg, assets: assetsFn) else {
-                    unsetenv("WAPLE_VIS_INHERIT"); return
+                    unsetenv("WAPLE_VIS_INHERIT"); dropped.append("\(id): 씬 파스 실패(off)"); return
                 }
                 unsetenv("WAPLE_VIS_INHERIT")
-                guard let on = try? SceneDocument.parse(package: pkg, assets: assetsFn) else { return }
+                guard let on = try? SceneDocument.parse(package: pkg, assets: assetsFn) else {
+                    dropped.append("\(id): 씬 파스 실패(on)"); return
+                }
+                scanned += 1
                 guard off.layers.count == on.layers.count, off.texts.count == on.texts.count,
                       off.particles.count == on.particles.count else {
                     fputs("[vis-blast] ⚠️ \(id): 두 파스 배열 길이 불일치(비결정 스킵)\n", stderr); return
@@ -144,10 +193,13 @@ public enum ProfilePipeline {
         let totalLayers = sorted.reduce(0) { $0 + $1.layers }
         let totalTexts = sorted.reduce(0) { $0 + $1.texts }
         let totalParticles = sorted.reduce(0) { $0 + $1.particles }
-        print("[vis-blast] scenes-scanned=\(folders.count) scenes-affected=\(sorted.count) " +
+        // `scenes-scanned` 는 **실제로 두 번 파스한 수**다. 종전엔 `folders.count`(=열거된 폴더 수)를
+        // 찍었는데, 전건 드롭이어도 그 수가 그대로 나와 "16개를 훑었고 영향 0" 처럼 읽혔다.
+        print("[vis-blast] scenes-scanned=\(scanned)/\(folders.count) dropped=\(dropped.count) " +
+              "scenes-affected=\(sorted.count) " +
               "objects-newly-hidden=\(totalObjects) (layers=\(totalLayers) texts=\(totalTexts) particles=\(totalParticles)) → \(outCSV.path)")
         print("[vis-blast] top 5: " + sorted.prefix(5).map { "\($0.id)(\($0.total))" }.joined(separator: ", "))
-        return 0
+        return reportDrops(tag: "vis-blast", rows: scanned, folders: folders.count, dropped: dropped)
     }
 
     // MARK: --profile : 단일 씬 실측

@@ -128,4 +128,69 @@ final class DeepScanHelpersTests: XCTestCase {
                                  "상한이 너무 크면 타임아웃이 사실상 없는 것과 같다")
         XCTAssertGreaterThan(DeepScan.oggDecodeTimeBudget, 0)
     }
+
+    // MARK: --inventory / --vis-blast 의 언팩 마운트 — 2026-08-25
+
+    /// **`--inventory`/`--vis-blast` 는 언팩 코퍼스에서 전건 드롭하고도 exit 0 을 냈다.**
+    ///
+    /// `sceneFolders` 는 packed 가 0개면 `unpackedSceneFolders` 로 폴백하는데 그 폴백이 돌려주는
+    /// 폴더는 **정의상 `.pkg` 가 없다**. 그런데 두 파이프라인은 `folder/scene.pkg` 를 직접 열고
+    /// 실패하면 조용히 건너뛰었고, `folders.isEmpty` 가드는 폴더가 있으니 통과했다 —
+    /// 결과가 `scenes=0` + exit 0 이다. 위 `scanScene` 이 3차 웨이브에서 고친 것과 **같은 결함**이
+    /// 형제 둘에 남아 있었다.
+    ///
+    /// 여기서 잠그는 것은 마운트 **선택자**가 렌더러·DeepScan 과 같은 함수라는 것이다.
+    func testProfileMountPackageOpensUnpackedFolderNotJustPkg() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ProfileMount-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        // 관례 이름이 아닌 `file` — 설치본 4건이 이 형태다.
+        try Data(#"{"type":"scene","file":"ricepod.json"}"#.utf8)
+            .write(to: root.appendingPathComponent("project.json"))
+        try Data("""
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/layer.json"}]}
+        """.utf8).write(to: root.appendingPathComponent("ricepod.json"))
+
+        let pkg = try XCTUnwrap(ProfilePipeline.mountPackage(root),
+                                "언팩 폴더를 못 열면 --inventory/--vis-blast 가 전건 드롭한다")
+        // 선언된 `file` 이름으로 실제 바이트가 잡혀야 한다(엔트리 표가 루트 상대 경로다).
+        XCTAssertNotNil(pkg.data(for: "ricepod.json"), "선언된 씬 파일이 패키지에서 조회돼야 한다")
+    }
+
+    /// negative control — **없는 `.pkg` 를 열었다고 우기지 않는다.**
+    ///
+    /// `resolveMountSource` 의 결정 순서상(선언 파일 실재 → stem `.pkg` 폴백 → legacy `.pkg` →
+    /// `.directory`) `file: "scene.pkg"` 인데 그 파일이 없으면 마지막 `.directory` 로 떨어진다.
+    /// 즉 마운트 자체는 서지만 **엔트리에 `scene.pkg` 는 없어야** 한다. 이게 깨지면 위 테스트의
+    /// "언팩을 연다" 가 "아무거나 연다" 와 구별되지 않는다.
+    func testProfileMountPackageDoesNotInventMissingPkgBytes() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ProfileMountEmpty-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data(#"{"type":"scene","file":"scene.pkg"}"#.utf8)
+            .write(to: root.appendingPathComponent("project.json"))
+
+        let pkg = try XCTUnwrap(ProfilePipeline.mountPackage(root),
+                                "폴더가 실재하므로 .directory 마운트는 서야 한다")
+        XCTAssertNil(pkg.data(for: "scene.pkg"), "없는 pkg 바이트가 나오면 안 된다")
+        XCTAssertNotNil(pkg.data(for: "project.json"), "폴더 마운트라면 실재하는 파일은 잡혀야 한다")
+    }
+
+    /// **전건 드롭은 성공이 아니다.** 진단 도구가 아무것도 못 읽고 exit 0 을 내면
+    /// CI 나 사람이 "돌렸고 통과했다" 로 읽는다 — 이 리포가 반복해서 잡아내는 그 부류다.
+    func testReportDropsFailsOnlyWhenNothingWasRead() {
+        // 하나도 못 읽음 → 2
+        XCTAssertEqual(ProfilePipeline.reportDrops(tag: "t", rows: 0, folders: 16,
+                                                   dropped: (1...16).map { "s\($0)" }), 2)
+        // 일부 드롭 → 0 (부분 코퍼스는 정상 상황)
+        XCTAssertEqual(ProfilePipeline.reportDrops(tag: "t", rows: 12, folders: 16,
+                                                   dropped: ["a", "b", "c", "d"]), 0)
+        // 드롭 없음 → 0
+        XCTAssertEqual(ProfilePipeline.reportDrops(tag: "t", rows: 16, folders: 16, dropped: []), 0)
+        // 경계: 폴더가 0개면 드롭도 0이라 판정 대상이 아니다(그 자리는 F520 가드가 먼저 잡는다).
+        XCTAssertEqual(ProfilePipeline.reportDrops(tag: "t", rows: 0, folders: 0, dropped: []), 0)
+    }
 }
