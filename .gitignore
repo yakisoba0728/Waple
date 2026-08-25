@@ -9,3 +9,7 @@ Waple.dmg
 # Python 캐시
 __pycache__/
 *.pyc
+
+# 세션 부산물 — 에이전트 작업 세션에서 생긴 임시 산출물이라 커밋 대상이 아니다
+Ox
+.commandcode/

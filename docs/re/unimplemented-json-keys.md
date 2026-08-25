@@ -40,18 +40,31 @@
 > | 구분 | 개수 | 키 |
 > | --- | ---: | --- |
 > | 리터럴 판정 = 구현됨 | **18** | `schemecolor` `duration` `controlpointstartindex` `arcamount` `wraploop` `delay` `inputrangemax` `nopadding` `transparentsorting` `auto` `spritesheetrefreshsync` `cone` `lightconfig` `collisionbehavior` `keepaspect` `inputrangemin` `bouncefactor` `pointshadow` |
-> | 리터럴은 없지만 **동적 구성**(§3(c) 부류) | **2** | `controlpointangle1` `controlpointangle2` — `SceneDocument.swift:2964` 의 `io["controlpointangle\(i)"]`, `i in 0..<8`. `controlpoint1`/`controlpoint2` 와 **같은 오탐군**이다 |
+> | 리터럴은 없지만 **동적 구성**(§3(c) 부류) | **2** | `controlpointangle1` `controlpointangle2` — `SceneDocument.swift:3451`(구 `:2964`, 2026-08-25 재측정) 의 `io["controlpointangle\(i)"]`, `i in 0..<8`. `controlpoint1`/`controlpoint2` 와 **같은 오탐군**이다 |
 > | **여전히 미구현** | **2** | `version` · `description` |
 >
 > **남은 2개는 "고쳐야 할 갭" 이 아니다.** §5.2 가 이미 확정해 둔 대로 둘 다 엔진 쪽
 > **리더가 0**이다 — `version` 은 패키지/모듈 매니페스트 기록 경로에만 나오고
 > (`0x140056566`·`0x140040DA0`·`0x14011BB5D`), `description` 은 직렬화 좌변 1곳(`0x140056524`)뿐이다.
 > 즉 **엔진이 안 읽는 키를 Waple 도 안 읽는 것**이라 일치다.
-> `version` 이 `SceneDocument.swift:2798` 에 나오지만 그 줄은 주석이라 판정에 들지 않는다.
+> `version` 은 09:36 당시엔 `SceneDocument.swift:2798` 의 주석 하나뿐이었다 —
+> **[2026-08-25 재판정] 이 문장은 두 겹으로 낡았다.** ① 그 주석은 더 이상 거기 없고,
+> ② `SceneDocument.swift:1775` 에 `let schemaVersion = numericInt(scene["version"])` 이
+> **코드 리터럴로** 새로 생겼다(같은 날 다른 레인이 씬 스키마 버전 게이트를 추가).
+> 다만 그것은 **씬 루트** `version` 이고 §5.2 #1 이 "리더 0" 으로 확정한 **effect/material
+> 매니페스트 루트** `version` 과는 **동명이키**(§0.1 의 함정 서술의 또 다른 실례)라
+> "구현됨" 판정으로 뒤집지 않는다. 좌표 기준 시각은 §0.2 머리말이다.
 >
 > **결론: 이 문서가 처음 세운 22개 목록은 사실상 소진됐다.** 남은 실질 갭은 **0개**다.
 > 다만 §4 가 밝힌 대로 "동봉 도달 0 이면서 미구현" 인 키는 이 문서의 사정권 밖이고,
 > 그쪽은 형제 문서 [`bundled-key-coverage.md`](bundled-key-coverage.md) 가 총계로 다룬다.
+>
+> **[정정 2026-08-25] "남은 실질 갭 0개" 는 폐기한다.** 위 표의 "리터럴 판정 = 구현됨" 18개 중
+> **6필드는 파스·보존까지만 되고 프로덕션 소비처가 0건**이다 — `schemeColor` ·
+> `transparentSorting` · `spritesheetRefreshSync` · `orthoAuto`(=`auto`) · `noPadding` ·
+> `materialUserTextureKeepAspect`(=`keepaspect`). "파스됐다" 와 "소비된다" 는 다른 명제인데
+> **리터럴 존재만 보는 판정기는 둘을 구분하지 못한다** — §부록 B 마지막 문단이 스스로 인정한
+> 판정기 사각지대의 실례가 바로 이 6건이다. 전수 재검증 결과와 현재 좌표는 §0.2 (a) 에 있다.
 
 ---
 
@@ -67,11 +80,11 @@
 
 | 키 | 동봉 | 설치본 | 판정 | 근거 |
 | --- | ---: | ---: | --- | --- |
-| `dependencies`(effect.json) | **128/128** | **135/135** | **해소 — 갭 아님(동명이키)** | §3(b) 가 "구현됨" 으로 센 리터럴(`SceneDocument.swift:2079`·`:2499`)은 **씬 오브젝트** `dependencies` = **정수 배열**(오브젝트 id)이고, effect.json 의 것은 **문자열 배열**(`["materials/effects/tint.json","shaders/effects/tint.frag","shaders/effects/tint.vert"]`)이다. **원본의 리더는 하나뿐이고 그것이 문자열을 버린다** — 씬 오브젝트 베이스 ctor `0x1401ddbb0`–`0x1401de19b` 가 `find`(`0x1401dddb2`) 후 원소마다 `0x1401dde9d` `call 0x140088800`(=`isUInt64`: 태그1 `int64≥0` / 태그2 true / 태그3 `0≤d<2^64 && frac==0` / 그 외 false)로 거르고, 거짓이면 `0x1401ddea4 je 0x1401de0c6` 로 건너뛴다. 통과분만 `0x140086000`(정수 접근자)으로 받아 8바이트 FNV-1a 로 `unordered_set`(`this+0x210`, 마스크 `+0x228`, 로드팩터 `+0x1f8`)에 넣는다. 즉 **effect.json 의 문자열 배열은 엔진에서도 죽은 키**다 |
+| `dependencies`(effect.json) | **128/128** | **135/135** | **해소 — 갭 아님(동명이키)** | §3(b) 가 "구현됨" 으로 센 리터럴(`SceneDocument.swift:2238`·`:2669` — 구 `:2079`·`:2499`, 2026-08-25 재측정)은 **씬 오브젝트** `dependencies` = **정수 배열**(오브젝트 id)이고, effect.json 의 것은 **문자열 배열**(`["materials/effects/tint.json","shaders/effects/tint.frag","shaders/effects/tint.vert"]`)이다. **원본의 리더는 하나뿐이고 그것이 문자열을 버린다** — 씬 오브젝트 베이스 ctor `0x1401ddbb0`–`0x1401de19b` 가 `find`(`0x1401dddb2`) 후 원소마다 `0x1401dde9d` `call 0x140088800`(=`isUInt64`: 태그1 `int64≥0` / 태그2 true / 태그3 `0≤d<2^64 && frac==0` / 그 외 false)로 거르고, 거짓이면 `0x1401ddea4 je 0x1401de0c6` 로 건너뛴다. 통과분만 `0x140086000`(정수 접근자)으로 받아 8바이트 FNV-1a 로 `unordered_set`(`this+0x210`, 마스크 `+0x228`, 로드팩터 `+0x1f8`)에 넣는다. 즉 **effect.json 의 문자열 배열은 엔진에서도 죽은 키**다 |
 | `gizmos` | 21 | 21 | **해소 — 갭 아님** | 문자열이 `wallpaper64.exe` 에 ASCII·UTF-16 어느 쪽에도 **없다**(§2 의 "바이너리에 아예 없음" 목록과 일치). 에디터 전용 |
 | `performance` | 12 | 12 | **해소 — 갭 아님** | 같음(바이너리 문자열 0). 값은 `"expensive"`×10 / `"veryexpensive"`×2 |
 | `editable` | 2 | 2 | **해소 — 갭 아님** | 같음(바이너리 문자열 0) |
-| `replacementkey` | 68 | 68 | **해소 — 우리가 더 넓다** | 바이너리 문자열 0인데 `EffectManifest.swift:551` 이 파스한다(셰이더 관례 경로 폴백용). 원본보다 관대한 쪽이라 무해 |
+| `replacementkey` | 68 | 68 | **해소 — 우리가 더 넓다** | 바이너리 문자열 0인데 `EffectManifest.swift:603`(구 `:551`, 2026-08-25 재측정) 이 파스한다(셰이더 관례 경로 폴백용). 원본보다 관대한 쪽이라 무해 |
 | `group` | 128 | 135 | **해소 — 갭 아님** | 문자열 `0x140474dfc` 는 있으나 xref 4곳이 전부 `0x140021e50`–`0x14002e6e0`(프로퍼티/UI 스키마)이고 이펙트 파서가 아니다. 값은 `colorize` 47 · `animate` 19 · `image` 18 · `distort` 14 · `blur` 8 · `enhance` 7 · `interactive` 6 · `composite` 5 · `geometry` 2 · `localeffects` 2 |
 | `preview`(effect.json) | 99 | 106 | **해소 — 갭 아님** | 문자열 `0x140489ca8` xref 6곳이 전부 `0x14011d3b0`/`0x14011d7d0`(project 프리뷰 이미지 경로)이고 이펙트 파서가 아니다 |
 
@@ -82,12 +95,79 @@
 파서 `0x1401e7170`–`0x1401e8a9d` 가 `find`/`operator[]` 하는 키를 전수로 떠서 확인했다.
 따라서 이 절이 추가한 7개 키 전부 **실질 갭이 아니다** — §0 의 "남은 실질 갭 0개" 결론은 유지된다.
 
+**[정정 2026-08-25]** 이 절의 7키 판정 자체는 유효하다. 폐기된 것은 끝에서 인용한 "남은 실질
+갭 0개" 결론이다 — 파스·보존만 되고 소비처가 0건인 6필드가 그 결론을 무너뜨렸다(§0 정정 블록,
+전문 §0.2 (a)).
+
 **방법론 함정으로 남길 것**: §3(b) 의 리터럴 판정기는 **키 이름만** 보고 **부모 경로도 값 타입도
 안 본다**. 같은 이름이 서로 다른 스키마에 있으면(`dependencies`, `duration`, `version`, `name`,
 `preview`, `group`, `scale`, `format` …) 한쪽만 구현해도 "구현됨" 으로 센다.
 `dependencies` 는 그 위에 **값 타입까지 다른**(int[] vs string[]) 사례라 두 겹으로 속는다.
 판정을 믿기 전에 **부모 경로와 값 타입까지 맞춰 세라** — §5 표에 `부모 경로` 와
 `값 타입 · 실측 분포` 열이 둘 다 있는 이유가 이것이다.
+
+## 0.2 재판정 — 2026-08-25, 파스·보존 6필드와 착지 좌표 드리프트 전수 갱신
+
+> - 측정 시각 **2026-08-25 08:49 UTC**
+> - `Sources/**/*.swift`(WEAssets 제외) **167개**, 집합 md5 **`30ef161ab0a12dd0650a3b0988169294`**
+>   (재현: `find Sources -name '*.swift' -not -path '*/Resources/WEAssets/*' | sort | xargs md5sum | md5sum`)
+> - §0 이 경고한 대로 **측정 중에도 트리가 바뀌었다.** 이 재판정 몇 분 안에 `ParticleSystem.swift` 의
+>   children 루프가 :3062 → :3094 로 밀렸고, `scene["version"]` 파스(`schemaVersion`)와
+>   `versionGatedGeneral` 게이트가 **다른 작업자가 오늘 새로 넣었다**(아래 (b) 참조).
+>   **md5 가 다르면 아래 좌표를 다시 재라** — 측정법은 grep -n 전수라 1분 안에 끝난다.
+
+### (a) 리터럴 판정기의 사각지대 — 파스는 되는데 소비처가 0건인 6필드
+
+§0 이 "리터럴 판정 = 구현됨" 으로 센 18개 중 **6필드는 파스·착지까지만 있고 프로덕션 코드가
+읽지 않는다.** 검증법: `grep -rn "\.<필드명>" Sources Tests --include=*.swift` 멤버 접근 전수 —
+프로덕션(Sources/) 히트는 선언 + 착지 대입뿐이고 나머지는 전부 테스트 단언
+(`Tests/WapleCoreTests/SceneGeneralKeysTests.swift`)이다. WE 는 6키 전부 소비한다(§5.2) —
+즉 Waple 쪽만 반쪽이다.
+
+| 필드 | WE 소비(§5.2) | 선언(현재) | 파스 착지(현재) | 프로덕션 소비처 |
+| --- | --- | --- | --- | --- |
+| `schemeColor`(표 #3) | 소비 — 배경 채우기 float3 | `SceneDocument.swift:1696` | `applyGeneralSettings`(`:4010`) 내 `:4057`, 헬퍼 `:4073` | **0건** — `VideoRenderer.swift:203` 주석이 "schemecolor 를 쓰지 않는다" 고 명시 |
+| `transparentsorting`(#13) | 소비 — 정렬 게이트 bit12 | `:1587` | `:4049` | **0건** — 선언부가 착지 지점(SceneRenderer3D draw3DOrder)을 "**미배선**" 으로 특정해 둠 |
+| `spritesheetrefreshsync`(#15) | 소비 — 씬 시작을 시트 경계까지 지연 | `:1622` | `:4050` | **0건** — 선언부 결론은 "착지 불필요(Waple 이 이미 켜진 것처럼 동작)" 라는 **근거 있는 불배선** |
+| `auto`(#14 → `orthoAuto`) | 소비 — `\|= 0x18`, width/height 미독 | `:1653` | 판정 `:1782`·`:1802`, 착지 `:1987` | **0건** — 렌더러는 여전히 폴백 1920×1080 을 쓴다 |
+| `nopadding`(#12) | 소비 — `[model+0x304] \|= 4` | `:322` | `parseLayer`(`:2014`) 내 `:2136` → `:2190` | **0건** |
+| `keepaspect`(#19 → `materialUserTextureKeepAspect`) | 소비 — 종횡비 강제 해제 | `:236` | `MaterialPassResult` 필드 `:3833` → `parseMaterialPassProperties`(`:3842`) 내 `:3942` → `parseLayer` 경유 `:2160`→`:2215` | **0건** — 도달 자산 1건(videoplayer background.json)마저 Waple 미마운트 |
+
+즉 **"남은 실질 갭은 0개" 는 틀렸다.** "22개 목록의 소진" 과 "소비 배선의 완료" 는 다른 명제다.
+여섯 중 다섯은 선언부 주석이 착지 지점까지 특정해 둔 **미배선** 상태고, `spritesheetrefreshsync`
+하나만 동작 동치를 근거로 한 의도적 불배선 판정이다. AGENTS.md 의 보존 필드 규율대로 이
+필드들을 지우는 것이 정답은 절대 아니고, 남은 작업은 배선이거나 불배선 근거의 명시다.
+
+**판정기 교훈**: §부록 B 의 판정기는 마지막 문단에서 "리터럴의 존재만 본다 — 그 값이 실제로
+소비되는지는 보지 않는다" 고 스스로 인정한다. 위 6건은 그 사각지대가 실제로 틀린 결론을 낸
+사례다. 리터럴 유무(구현 여부)와 멤버 접근 전수(소비 여부)는 **별도의 두 측정**이며, 후자 없이
+"갭 0" 을 말할 수 없다.
+
+### (b) 착지 좌표 드리프트 재판정 — 이 문서가 인용한 줄번호 전수
+
+문서 곳곳의 좌표를 위 스냅샷 기준으로 재측정했고 본문에는 `(구 N)` 형식으로 병기했다.
+
+| 위치 | 구값 | 현재값(2026-08-25 08:49 UTC) |
+| --- | --- | --- |
+| §0 표 · §3(c) `io["controlpointangle\(i)"]` / `io["controlpoint\(i)"]` 루프 | `:2964` / `:2327` | `SceneDocument.swift:3451` / `:3448` |
+| §0 `version` 주석 | `:2798` | 그 자리엔 없음 — 대신 `:1775` 에 `numericInt(scene["version"])` **코드 리터럴** 신설 |
+| §3(b) `version` 주석 | `:2181` | 같은 사정(위 행) — 판정은 동명이키로 유지 |
+| §0.1 `dependencies` 리터럴 | `:2079`·`:2499` | `SceneDocument.swift:2238`·`:2669` |
+| §0.1 `EffectManifest.swift` replacementkey | `:551` | `:603` |
+| §6 #6 `json["children"]` 루프 | ≈`:1877` | `ParticleSystem.swift:3094` |
+| §6 #8 options 파스 | ≈`:213` | `PropertyAnimation.swift:702`(진입 `parse(_ binding:)` `:482`) |
+| §6 #12 model 루트 플래그 파스 | `resolveLayerTexture(...)` | `parseLayer`(`SceneDocument.swift:2014`) 내 `:2136` — 함수 귀속 자체가 옮겨졌다 |
+| §6 #13 general 블록 | ≈`:981–1000` | 추출 `SceneDocument.swift:1776` · 인라인 판정 `:1777–:1848대` · 착지 클러스터 `applyGeneralSettings`(`:4010`) `:4049–:4057` |
+| §6 #14 `general["orthogonalprojection"]` 분기 | `:981` | `SceneDocument.swift:1777`(auto 판정 `:1782` · pw/ph `:1802` · 착지 `:1987`) |
+| §6 꼬리 Scene3DLighting 상한 주석 | `:211` | `Scene3DLighting.swift:269–271` |
+
+동시 편집 관측(이 재판정 자체의 신뢰도 메모): 같은 날 다른 레인이 (1)
+`let schemaVersion = numericInt(scene["version"])`(`:1775`) 과 `versionGatedGeneral`
+(`:3989`, 호출부 `:1776`) 을 추가해 **씬 루트 version 이 처음으로 코드에 나타났고**, general
+블록 좌표가 그 만큼 통째로 밀렸다. 리터럴 판정기를 오늘 돌리면 `version` 은 "구현됨" 으로
+뒤집힌다 — 그러나 §0.1 이 경고한 대로 그것은 **씬 스키마 게이트용 동명이키**이지 §5.2 #1 이
+"리더 0" 으로 확정한 effect/material 매니페스트 `version` 이 아니다. `description` 은
+Sources 전수에서 리터럴 0건으로 여전히 미구현이다.
 
 ## 1. 후보 추출 기준
 
@@ -169,12 +249,15 @@ UTF-16 문자열은 Win32 경로·UI·로케일 전용이다. 즉 UTF-16 스캔�
   동봉 자산 자체가 `Sources/` 안에 있어서 그냥 `grep -rF Sources/` 를 돌리면 모든 키가 자기 자신에
   히트해 결과가 전멸한다. 선행 스윕이 어긋난 원인 중 하나로 의심되는 지점이다.
 - `version` 은 `"version"` 이 `SceneDocument.swift:2181` 주석에만 있어 **미구현**으로 판정했다.
+  (그 줄번호는 당시 값이다 — 2026-08-25 기준으로는 `SceneDocument.swift:1775` 에
+  `numericInt(scene["version"])` **코드 리터럴**이 생겼다. 씬 루트 동명이키라 "effect/material
+  루트 미구현" 판정 자체는 유지한다 — §0.2 (b).)
 
 **(c) 나머지 29개 중 7개는 오탐이다 — 제거한다.**
 
 | 키 | 동봉 파일 수 | 제거 사유 |
 | --- | ---: | --- |
-| `controlpoint1` | 36 | `SceneDocument.swift:2327` 의 `io["controlpoint\(i)"]`, `i in 0..<8` 로 **동적 구성**. 리터럴만 없다. |
+| `controlpoint1` | 36 | `SceneDocument.swift:3448`(구 `:2327`, 2026-08-25 재측정) 의 `io["controlpoint\(i)"]`, `i in 0..<8` 로 **동적 구성**. 리터럴만 없다. |
 | `controlpoint2` | 24 | 위와 동일. |
 | `point0` `point1` `point2` `point3` | 9/9/8/8 | `objects[].effects[].passes[].constantshadervalues` 하위 = **셰이더 상수 이름 슬롯**. `SceneDocument.parseEffects` 가 `for (k, v) in cs` 로 이름 불문 통과시킨다(lightshafts 폴리곤 꼭짓점). |
 | `multiply` | 1 | 위와 동일한 `constantshadervalues` 슬롯. |
@@ -284,20 +367,20 @@ UTF-16 문자열은 Win32 경로·UI·로케일 전용이다. 즉 UTF-16 스캔�
 | 3 | `schemecolor` | `WapleCore/WallpaperProperties.swift` `parse(generalProperties:localization:)` 가 이미 제네릭 파스하므로 **소비만 추가**: `WapleCore/SceneDocument.swift` `parse(...)` 에서 `general.properties.schemecolor.value` 를 `Vec3` 로 뽑아 `SceneDocument` 필드로 올리고, `WapleRender/SceneRenderer.swift` 의 엔진 상수 테이블에 `g_SchemeColor` 슬롯으로 노출한다. |
 | 4 | `duration` | `WapleCore/ParticleSystem.swift` `parse(_:material:instanceOverride:resolveChild:)` 의 `json["emitter"]` 루프(`case "sphererandom"`/`"boxrandom"` 근처)에서 `injected(e, "duration", …)` 를 읽어 `Emitter` 에 ON 윈도우 필드를 추가하고, `emitterPeriodic` 과 같은 병렬 배열 규약으로 `ParticleSimulator` 방출 게이트에 넘긴다. tex-json 쪽은 손대지 않는다(런타임 미도달). |
 | 5 | `controlpointangle1` | `WapleCore/ParticleSystem.swift` 의 `ParticleInstanceOverride` 에 `controlPointAngles: [Vec3?]` 를 추가하고 `WapleCore/SceneDocument.swift` `particleInstanceOverride(_:)` 에서 `io["controlpointangle\(i)"]` 를 `controlpoint\(i)` 와 같은 루프로 파스한 뒤, CP 를 소비하는 `ParticleSimulator` 의 CP 변환(attract/vortex 타깃 베이크)에서 회전을 적용한다. **CP 표현을 위치+회전으로 넓히는 게 선행 조건**이다. |
-| 6 | `controlpointstartindex` | `WapleCore/ParticleSystem.swift` `json["children"]` 루프(≈:1877)에서 정수로 읽어, 자식 시스템이 부모 CP 배열을 참조할 때의 시작 인덱스로 쓴다. 동봉 14건 중 12건이 `null` 이라 **기본 0 폴백이 필수**. |
+| 6 | `controlpointstartindex` | `WapleCore/ParticleSystem.swift` `json["children"]` 루프(현재 `:3094`, 구 ≈:1877 — 2026-08-25 재측정)에서 정수로 읽어, 자식 시스템이 부모 CP 배열을 참조할 때의 시작 인덱스로 쓴다. 동봉 14건 중 12건이 `null` 이라 **기본 0 폴백이 필수**. |
 | 7 | `arcamount` | `WapleCore/ParticleSystem.swift` `parseInitializers(_:)` 의 원/구 계열 이니셜라이저에 `injected(o, "arcamount", 0.3)` 로 추가 — 기본값 0.3 은 `H_FLOAT` 상수(`0x140492694`)에서 온다. 형제 `arcdirection`(기본 `"0 1 0"`)과 짝이라 같이 붙이는 편이 낫다. |
-| 8 | `wraploop` | `WapleCore/PropertyAnimation.swift` 의 options 파스(`mode`/`startpaused` 옆, ≈:213)에 `wrapLoop: (opts["wraploop"] as? Bool) ?? false` 를 추가하고 키프레임 샘플러의 마지막→처음 보간 경로에 태운다. `null` 은 false 로 접어야 한다(동봉 5/7 이 null). |
+| 8 | `wraploop` | `WapleCore/PropertyAnimation.swift` 의 options 파스(`mode`/`startpaused` 옆 — 현재 `opts["length"]`/`opts["fps"]` 가 있는 `:702`, 진입점 `parse(_ binding:)` 은 `:482`. 구 ≈:213)에 `wrapLoop: (opts["wraploop"] as? Bool) ?? false` 를 추가하고 키프레임 샘플러의 마지막→처음 보간 경로에 태운다. `null` 은 false 로 접어야 한다(동봉 5/7 이 null). |
 | 9 | `delay` | 4 번과 같은 자리 — `Emitter` 의 OFF(대기) 윈도우. `[emit+0x08]`/`[emit+0x10]` 구조를 그대로 min/max 쌍으로 옮긴다. |
 | 10 | `inputrangemax` | `WapleCore/ParticleSystem.swift` `parseOperators(_:)` 의 `case "remapvalue"` → `RemapSpec` 에 `inMin`/`inMax` 를 추가한다(현재 입력을 `[0,1]` 로 가정한다). 기본값은 원본 주입기대로 `0`/`1`, 실측 값은 50–300 이라 미지원 시 리맵이 통째로 뭉개진다. `parseInitializers` 쪽 쌍둥이 블록도 같이. |
 | 11 | `controlpointangle2` | 5 번과 동일 코드 경로(같은 `controlpointangle\(i)` 루프에서 함께 잡힌다). |
-| 12 | `nopadding` | `WapleCore/SceneDocument.swift` `resolveLayerTexture(...)` 의 model 루트 플래그 파스(`model["fullscreen"]`/`model["autosize"]` 옆)에 bool 로 추가 — 텍스처 패딩 없이 원본 크기 그대로 쓰는 경로. |
-| 13 | `transparentsorting` | `WapleCore/SceneDocument.swift` `parse(...)` 의 `general[...]` 블록(≈:981–1000)에서 bool 로 읽어 `SceneDocument` 에 얹고, `WapleRender/SceneRenderer3D.swift` 의 3D 오브젝트 정렬 단계에서 반투명 뎁스 정렬 토글로 소비. |
-| 14 | `auto` | `WapleCore/SceneDocument.swift:981` 의 `general["orthogonalprojection"]` dict 분기에서 `proj["auto"] == true` 면 `width`/`height` 를 **읽지 말고** 뷰포트 크기를 그대로 쓰도록 한다(원본이 `\|= 0x18` 후 두 키를 건너뛴다). |
+| 12 | `nopadding` | `WapleCore/SceneDocument.swift` model 루트 플래그 파스에 bool 로 추가 — 현재는 **`parseLayer`(`:2014`) 가 모델 JSON(`mj`)에서 바로 읽는 자리**다(구문은 `resolveLayerTexture(...)` 로 적었는데 2026-08-25 기준 플래그 파스는 `parseLayer` 내 `:2136`, 착지 `:2190`. `resolveLayerTexture` 는 같은 JSON 을 따로 소비한다). 텍스처 패딩 없이 원본 크기 그대로 쓰는 경로. |
+| 13 | `transparentsorting` | `WapleCore/SceneDocument.swift` `parse(...)` 의 `general[...]` 블록(구 ≈:981–1000 — 2026-08-25 기준 general 추출은 `:1776`, 착지는 `applyGeneralSettings`(`:4010`) 안 `:4049`)에서 bool 로 읽어 `SceneDocument` 에 얹고, `WapleRender/SceneRenderer3D.swift` 의 3D 오브젝트 정렬 단계에서 반투명 뎁스 정렬 토글로 소비. |
+| 14 | `auto` | `WapleCore/SceneDocument.swift` 의 `general["orthogonalprojection"]` dict 분기(구 `:981` — 현재 `:1777`, `auto` 판정 `:1782` · pw/ph `:1802` · 착지 `:1987`)에서 `proj["auto"] == true` 면 `width`/`height` 를 **읽지 말고** 뷰포트 크기를 그대로 쓰도록 한다(원본이 `\|= 0x18` 후 두 키를 건너뛴다). **파스·착지는 이미 있다 — 남은 것은 렌더러 배선이다**(§0.2 (a)). |
 | 15 | `spritesheetrefreshsync` | 13 번과 같은 `general` 블록. 스프라이트시트 레이어의 프레임 진행을 씬 전역 클록에 동기화하는 플래그 — `WapleRender/SceneRenderer.swift` 의 스프라이트시트 프레임 선택에 전달. |
 
 나머지 7개는 도달이 얕아 우선순위가 낮다.
 `cone`(동봉 전건 0), `lightconfig`+`pointshadow`(`WapleRender/Scene3DLighting.swift` 의 라이트
-슬롯 상한 8 을 종류별 카운트로 대체 — 코드 주석 :211 이 이미 이 필요를 적어 뒀다),
+슬롯 상한 8 을 종류별 카운트로 대체 — 코드 주석 :269–271(구 :211, 2026-08-25 재측정) 이 이미 이 필요를 적어 뒀다),
 `collisionbehavior`+`bouncefactor`(`ParticleSystem.parseOperators` 의 collision 계열,
 `bouncefactor` 는 원본이 `-(1+v)` 로 변환 저장, `collisionbehavior` 는 slide=1/stop=2/delete=3/기타=0), `inputrangemin`(10번과 동일),
 `keepaspect` — **[2026-08-21 정정] `SceneDocument` 쪽 슬롯 정규화는 이미 완료**이고 남은 갭은
