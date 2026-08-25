@@ -508,7 +508,9 @@ final class SceneScriptMountLifecycleTests: XCTestCase {
         XCTAssertEqual(late.evaluate(current: "B"), "top,apply,init:A,update:A,update:B/false|0||user|base")
     }
 
-    func testDirectRemountUsesEmptyObjectAndDoesNotDispatchToStaleEngine() throws {
+    // [2026-08-25] `@MainActor` — `simulateCursorClick` 이 `SceneRenderer` 에서 라이브 전용으로
+    // 분류돼(메인에서만 불리는 경로) `@MainActor` 가 붙었다. 이 테스트도 같은 계약을 따른다.
+    @MainActor func testDirectRemountUsesEmptyObjectAndDoesNotDispatchToStaleEngine() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let oldProject = try makeProject(
             id: "scene-lifecycle-old-\(UUID().uuidString)",

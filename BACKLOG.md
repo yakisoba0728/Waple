@@ -290,6 +290,20 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 
 ## 잠재 결함
 
+- **캡처 인스턴스가 라이브 모니터를 시작한다** (2026-08-25 발견). `AppDelegate.captureSceneStill`
+  은 `SnapshotPipeline`(:315-316)과 달리 `SceneRenderer.capturePointerUV` 를 핀하지 않는다.
+  그래서 그 캡처 인스턴스는 `mount` 안에서 **시차 전역 모니터**와(씬이 미디어 훅/아트워크를 쓰면)
+  **미디어 폴러**를 실제로 시작한다 — 둘 다 메인에서 콜백을 배달하므로, 백그라운드 큐가 그
+  인스턴스를 쓰는 동안 메인 콜백이 겹칠 수 있다.
+
+  실물에서 안 터진 이유는 **타이밍뿐**이다: 미디어 폴러는 5초 주기라 짧은 캡처 동안 한 번도
+  안 불린다. 근거가 "안 겹친다" 가 아니라 "겹칠 시간이 없다" 라서 얇다.
+
+  고치는 방향은 캡처 인스턴스가 라이브 모니터를 아예 시작하지 않게 하는 것이다(캡처 모드 게이트 —
+  `capturePointerUV` 핀을 `captureSceneStill` 에도 두거나, 미디어 폴러까지 함께 막는 명시 플래그).
+  **골든 픽셀에 닿을 수 있어** 재베이스라인과 묶어야 한다. `SceneRenderer.swift` 클래스 선언
+  주석에 같은 내용이 있다(`@unchecked Sendable` 근거의 ⚠️ 문단).
+
 *트리거: 실제 파일·사용에서 물릴 때.*
 
 - ~~PuppetModel 2D cstring Latin-1 3곳~~ → **해소(F007 정정, 2026-07-18 확인)** — 공용 [BinaryReading.swift](Sources/WapleCore/BinaryReading.swift):readCString 이 이미 `String(decoding:as: UTF8.self)` 로 전면 통합돼 있고 [PuppetModel.swift](Sources/WapleCore/PuppetModel.swift) 의 머티리얼명·본 이름·애니메이션 name/mode 3곳 전부 이 헬퍼만 경유(직접 Latin-1 디코드 없음). CJK 경로(`materials/models/太空球/…`) mojibake 방지가 목적이며 이미 반영됨

@@ -43,6 +43,12 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
 
     // MARK: - cursorClick
 
+    // [2026-08-25] 아래 라이브 입력 테스트들이 `@MainActor` 인 이유: `simulateCursorClick` /
+    // `simulateCursorMove` / `simulateAnimationEvent` / `tickAnimationEvents` 는
+    // `SceneRenderer` 에서 **라이브 전용**으로 분류돼 `@MainActor` 가 붙었다(실물에서 이 경로는
+    // `MTKViewDelegate.draw` 와 AppKit 이벤트, 즉 메인에서만 불린다). 테스트가 그 계약을 그대로
+    // 흉내내는 것이지 진단을 끄려고 붙인 표기가 아니다 — `mount`/`captureFrames` 는 여전히
+    // 비격리라 여기서도 그대로 부를 수 있다.
     /// 합성 토글 씬(실물 3394601417 축소판): 컨트롤러 visible 스크립트가 cursorClick 으로 shared.a 토글,
     /// 소비자 alpha 스크립트가 shared.a 로 빨강 오버레이 on/off. simulateCursorClick 전후 캡처 픽셀 검증.
     ///
@@ -66,7 +72,7 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
     ///
     /// 컨트롤 오브젝트에 `name` 이 **없는 것도 그대로 둔다** — 배달 대상을 이름이 아니라 디스크립터
     /// 인덱스로 잡는다는 것(`SceneRenderer.pointerEngineOwners`)의 회귀 가드다.
-    func testSimulatedClickTogglesSyntheticScene() throws {
+    @MainActor func testSimulatedClickTogglesSyntheticScene() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
@@ -133,7 +139,7 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
     /// 배달이 히트 오브젝트 스코프로 좁혀진 지금은 좌표가 load-bearing 이므로 **씬에서 되읽는다**.
     /// 소유 오브젝트가 없으면(무바인딩 = 실물 `inst[8] == 0`, 또는 텍스트라 기하 미확정) 배달은
     /// 좌표와 무관하니 종전 좌표를 그대로 쓴다.
-    func testRealDayNightToggle3394601417() throws {
+    @MainActor func testRealDayNightToggle3394601417() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 360)),
@@ -168,7 +174,7 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
     /// 합성 씬(실물 2955378002/3146703458 축소판): startsilent 사운드 오브젝트 name='dial.wav' +
     /// cursorClick 스크립트 `getLayer('dial.wav').play()`. 헤드리스 mount(오디오 미생성)라 트랜스포트를
     /// 수동 연결(캡처 결정성 유지) 후 simulateCursorClick → 실 dispatch 경로로 트랜스포트 재생 단언.
-    func testSimulatedClickTriggersSoundTransport() throws {
+    @MainActor func testSimulatedClickTriggersSoundTransport() throws {
         try skipUnlessAudioOutputCanPlay()
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let scene = """
@@ -213,7 +219,7 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
     /// 합성 씬: 호버존 레이어(name=hoverzone, 200×200@480,270)의 cursorEnter/Leave 가 shared.h 토글,
     /// 빨강 오버레이가 shared.h 로 on/off. simulateCursorMove 로 경계 진입/이탈 시 픽셀 변화 검증.
     /// (엔진이 바인드 레이어를 히트테스트 — 스크립트는 좌표를 안 본다.)
-    func testCursorEnterLeaveHoverTogglesScene() throws {
+    @MainActor func testCursorEnterLeaveHoverTogglesScene() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
@@ -259,7 +265,7 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
 
     /// animationEvent 발송 진입점(발화원 대체): simulateAnimationEvent('go') → 훅이 shared 토글 → 픽셀 변화.
     /// (실 발화원인 타임라인/퍼펫 마커는 수정 금지 파일 소관 — 여기선 스크립트 측 배선만 검증.)
-    func testSimulateAnimationEventTogglesScene() throws {
+    @MainActor func testSimulateAnimationEventTogglesScene() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
@@ -301,7 +307,7 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
     /// 실 발화원(타임라인 마커 검출): options.events{frame:15,"go"} 타임라인이 재생 클록으로
     /// 마커를 **넘는 순간** 훅 발화 — simulateAnimationEvent 아닌 tickAnimationEvents(라이브 draw 가
     /// 매 프레임 호출하는 검출 경로) 로 시간 전진. 마커 전은 미발화(타이밍 검증).
-    func testTimelineMarkerFiresAnimationEventOnRealPlaybackPath() throws {
+    @MainActor func testTimelineMarkerFiresAnimationEventOnRealPlaybackPath() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
@@ -351,7 +357,7 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
     /// animationlayers blend 타임라인의 "surprise" 마커(frame 0)가 같은 오브젝트 핸들러에 배달돼
     /// shared.guestBlink=3(surprise 핸들러 전용 값) — 이후 눈꺼풀 타임라인 half@0→blink@2→half@6→open@8
     /// 순차 발화로 0 복귀(시각순·오브젝트 스코프 검증).
-    func testRealZeldaSurpriseMarkerFiresOnPlayback() throws {
+    @MainActor func testRealZeldaSurpriseMarkerFiresOnPlayback() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 128, height: 72)),

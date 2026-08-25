@@ -123,7 +123,10 @@ final class ParallaxControllerTests: XCTestCase {
     /// resume 이 호출돼도 stale parallaxEnabled 로 mouseMoved 모니터를 되살리면 안 된다.
     /// resume(:1172) 게이트가 parallaxEnabled 를 보므로 teardown 이 이를 끄지 않으면 monitor 재기동.
     /// start() 가 emit() 을 동기 호출하므로 onOffset 발화로 run-loop 없이 관측 가능.
-    func testTeardownClearsParallaxSoResumeDoesNotRearmMonitor() {
+    /// [2026-08-25] `@MainActor` — `SceneRenderer.resume` 이 라이브 전용으로 분류돼 표기가 붙었다
+    /// (재개는 메인의 창 라이프사이클에서만 온다). `teardown` 은 여전히 비격리다 — 캡처 경로가
+    /// 오프메인에서 부르기 때문이고, 이 테스트가 그 비대칭을 그대로 밟는 것이 의도다.
+    @MainActor func testTeardownClearsParallaxSoResumeDoesNotRearmMonitor() {
         let r = SceneRenderer()
         r.parallaxEnabled = true                  // parallax 활성 씬 mount 사후상태 모사
         r.teardown()

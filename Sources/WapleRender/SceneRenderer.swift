@@ -16,7 +16,27 @@ final class WapleMTKView: MTKView {
     }
 }
 
-public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
+/// [2026-08-25] `@unchecked Sendable` — 이 타입은 **인스턴스마다 한 스레드에서만** 쓰인다.
+/// 라이브 인스턴스는 `RendererFactory`(@MainActor)가 만들어 메인에서만 돌고, 캡처 인스턴스는
+/// 만든 큐에서만 돈다(`AppDelegate.captureSceneStill` 의 백그라운드 큐 · `SnapshotPipeline`·
+/// `ProfilePipeline` 의 CLI). 두 모드가 한 인스턴스를 나눠 쓰는 경로는 없다.
+///
+/// 표기를 붙이는 이유는 그 규율이 **타입으로는 안 보이기** 때문이다 — `MainActor.assumeIsolated`
+/// 로 감싼 콜백(시차·미디어)이 `self` 를 격리 경계 너머로 넘기고, 컴파일러는 위 문단을 읽을 수 없다.
+/// 같은 근거로 `VideoRenderer`·`WebRenderer`·`MediaPoller` 가 이미 `@unchecked` 를 쓰고 있다.
+///
+/// ⚠️ **이 불변식이 완전하지 않은 자리가 하나 있다.** `AppDelegate.captureSceneStill` 은
+/// `SnapshotPipeline`(:315-316)과 달리 `SceneRenderer.capturePointerUV` 를 핀하지 않는다.
+/// 그래서 그 캡처 인스턴스는 `mount` 안에서 시차 전역 모니터와(씬이 미디어 훅/아트워크를 쓰면)
+/// 미디어 폴러를 **실제로 시작한다** — 둘 다 메인에서 콜백을 배달하므로, 백그라운드 큐가 그
+/// 인스턴스를 쓰는 동안 메인 콜백이 겹칠 수 있다.
+///
+/// 이건 이 표기가 만든 위험이 아니라 **원래 있던 것**이고(표기는 컴파일러의 신고를 멈출 뿐이다),
+/// 실물에서 안 터진 이유는 미디어 폴러가 5초 주기라 짧은 캡처 동안 한 번도 안 불리기 때문이다.
+/// **근거가 "타이밍상 안 겹친다" 라는 것 자체가 얇다** — BACKLOG 에 등재했다. 고치는 방향은
+/// 캡처 인스턴스가 라이브 모니터를 아예 시작하지 않게 하는 것이고(캡처 모드 게이트),
+/// 그건 골든 픽셀에 닿을 수 있어 이 커밋에서 하지 않았다.
+public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, @unchecked Sendable {
     /// Metal `PBRMaterialUniforms`: exactly two float4 values (32 bytes).
     struct PBRMaterialUniforms {
         var scalars: SIMD4<Float>       // x=roughness, y=metallic
@@ -411,7 +431,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     public var mediaDeliveryCountForTesting: Int { mediaPoller?.deliveryCount ?? 0 }
 
     /// 훅 이벤트 배달: eventJS 를 각 엔진 컨텍스트에서 평가해 호출 후 1회 재렌더 요청.
-    func dispatchSceneEvent(_ hook: String, eventJS: String) {
+    @MainActor func dispatchSceneEvent(_ hook: String, eventJS: String) {
         for e in eventEngines where e.hookNames.contains(hook) { e.callHook(hook, eventJS: eventJS) }
         mtkView?.needsDisplay = true
     }
@@ -423,7 +443,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// U-W5b: **브로드캐스트가 아니라 타겟팅이다.** `pointerTargets` 중 포인터가 실제로 덮는
     /// 대상에만 배달한다(무바인딩 스크립트와 히트 기하 미확정 대상은 예외 — `DeliveryScope`).
     /// `only` = cursorClick 전용 제한(홀드 맵을 통과한 대상만) — nil 이면 제한 없음.
-    func dispatchPointerEvent(hook: String, x: Float, y: Float, only: Set<Int>? = nil) {
+    @MainActor func dispatchPointerEvent(hook: String, x: Float, y: Float, only: Set<Int>? = nil) {
         // F743(S-31): input.cursorWorldPosition/cursorScreenPosition/cursorLeftDown 폴ling 실데이터화
         // (screen 좌표는 포인터 UV×프로젝션 픽셀 근사 — ponytail: WE screen 기준 실측 부재).
         // 커서 상태 폴링은 **타겟팅과 무관**하다 — `input.*` 는 오브젝트 스코프가 아니다.
@@ -463,7 +483,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// cursorClick 시뮬레이션(테스트/헤드리스 e2e 용). **좌표가 대상 오브젝트를 덮어야 발화한다** —
     /// 실물이 그렇다(U-W5b). 눌림/뗌 왕복은 건너뛰고 클릭 훅만 직접 주입하는 seam 이라
     /// 홀드 맵(W-9)은 지나지 않는다 — 그 경로는 `deliverGlobalMouse` 가 쓴다.
-    public func simulateCursorClick(x: Float, y: Float) {
+    @MainActor public func simulateCursorClick(x: Float, y: Float) {
         dispatchPointerEvent(hook: "cursorClick", x: x, y: y)
     }
 
@@ -613,7 +633,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 오브젝트 평행이동에 `addss` — 광선이 아니라 쿼드가 움직인다). 그래서 시차로 밀린 레이어도
     /// **눈에 보이는 자리**에서 클릭된다. Waple 의 등가물은 그리기와 같은 식
     /// `cameraOffset × parallaxDepth`(QuadShaders.swift:17)이며, 그 값은 NDC 단위라 씬 픽셀로 환산한다.
-    func updateHover(at p: SIMD2<Float>?) {
+    @MainActor func updateHover(at p: SIMD2<Float>?) {
         guard !hoverTargets.isEmpty else { return }
         var changed = false
         for i in hoverTargets.indices {
@@ -637,7 +657,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     /// cursorMove + cursorEnter/Leave 시뮬(테스트/헤드리스 — 씬 픽셀 좌표 직접 주입).
-    public func simulateCursorMove(x: Float, y: Float) {
+    @MainActor public func simulateCursorMove(x: Float, y: Float) {
         updateHover(at: SIMD2<Float>(x, y))
         dispatchPointerEvent(hook: "cursorMove", x: x, y: y)
     }
@@ -654,7 +674,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 미사용 유지. ② startpaused/play()/pause() 런타임 제어 미구현: 값 평가와 동일 클록(마운트부터
     /// 전 타임라인 재생)으로 발화(일관 근사 — getAnimation(name).play() 는 심 상태만). ③ effect
     /// constantshadervalues·재질 JSON 애니 마커(젤다 4지점)는 해당 스크립트/애니 평가 자체가 미구현.
-    func dispatchAnimationEvent(name: String) {
+    @MainActor func dispatchAnimationEvent(name: String) {
         dispatchSceneEvent("animationEvent", eventJS: Self.animationEventJS(name: name))
     }
 
@@ -664,7 +684,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     /// animationEvent 시뮬(테스트/헤드리스 — 브로드캐스트 배달, 실 발화원은 오브젝트 스코프).
-    public func simulateAnimationEvent(name: String) { dispatchAnimationEvent(name: name) }
+    @MainActor public func simulateAnimationEvent(name: String) { dispatchAnimationEvent(name: name) }
 
     /// 마커 타임라인 1개: 클록 파라미터 + 마커들. lastF = 단조 누적 프레임(초×fps×rate)의 직전 틱 값 —
     /// 초기 -1 로 frame 0 마커가 최초 틱에 발화(PropertyAnimation.firedMarkers 규약).
@@ -795,7 +815,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     /// 라이브 draw 틱: 각 타임라인의 누적 프레임이 (직전, 현재] 로 전진하며 지나친 마커를
     /// **같은 오브젝트의** 훅 엔진에만 발송. 일시정지 중엔 호출부가 차단(needsDisplay 재드로 방어).
-    func tickAnimationEvents(time: Float) {
+    @MainActor func tickAnimationEvents(time: Float) {
         guard !animEventTargets.isEmpty else { return }
         var fired = false
         for ti in animEventTargets.indices {
@@ -828,14 +848,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // F725: g_PointerState(cursorripple/fluidsim) 를 쓰는 셰이더가 있는 씬도 JS 훅 없이 클릭 상태를
         // 받아야 한다. 이벤트 배달 자체는 dispatchPointerEvent 가 hook 보유 엔진으로만 하므로, 전역
         // 모니터를 항상 설치핻도 무해하고 비용이 낮다(ParallaxController 의 mouseMoved 와 동일 규약).
+        // [2026-08-25] `MainActor.assumeIsolated` — AppKit 전역 모니터 콜백은 **메인 스레드**에서
+        // 배달된다(`ParallaxController.onOffset` 과 동일 규약). `startClickMonitorIfNeeded` 자체는
+        // `mount` 가 오프메인에서 부를 수 있어 비격리로 남지만, **이 클로저가 실행되는 곳은 메인**이라
+        // `deliverGlobalMouse`(라이브 전용, `@MainActor`)를 여기서 부르는 것은 정당하다.
+        // 표기 회피가 아니라 런타임 단언이다 — 규약이 깨지면 여기서 즉시 죽는다(AppDelegate:32-34).
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] ev in
-            self?.deliverGlobalMouse(isDown: ev.type == .leftMouseDown)
+            let isDown = ev.type == .leftMouseDown
+            MainActor.assumeIsolated { self?.deliverGlobalMouse(isDown: isDown) }
         }
     }
 
     /// 화면 포인터 위치 → 뷰 좌표 → 씬(프로젝션) 좌표(FitMode 보정 포함). 창 밖/레터박스는 nil.
     /// 헤드리스(창 없음)는 배달 불가 — 테스트는 simulateCursorClick 사용.
-    func pointerSceneCoords() -> SIMD2<Float>? {
+    @MainActor func pointerSceneCoords() -> SIMD2<Float>? {
         guard let view = mtkView, let win = view.window else { return nil }
         let inWindow = win.convertPoint(fromScreen: NSEvent.mouseLocation)
         let inView = view.convert(inWindow, from: nil)
@@ -846,7 +872,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                          zoom: currentCameraZoom)
     }
 
-    func deliverGlobalMouse(isDown: Bool) {
+    @MainActor func deliverGlobalMouse(isDown: Bool) {
         pointerButton.setDown(isDown)  // g_PointerState 라이브 배관(위치 무관 물리 버튼 상태) — 헤드리스는 모니터 미설치라 미도달.
         guard let p = pointerSceneCoords() else {
             // 창 밖(레터박스 포함)에서는 히트 오브젝트가 없다 — 뗌은 클릭이 아니고, 누름도
@@ -893,25 +919,36 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             (try? String(data: JSONEncoder().encode(s), encoding: .utf8) ?? "\"\"") ?? "\"\""
         }
         let poller = MediaPoller(provider: nowPlayingProvider ?? AppleScriptNowPlayingProvider())
+        // [2026-08-25] `MediaPoller` 의 콜백 4종은 **메인에서만 불린다** — 그 파일 머리말이
+        // 계약으로 적어 뒀고(Timer 는 `RunLoop.main`, 백그라운드 fetch 는 `DispatchQueue.main.async`
+        // 복귀), 코드도 그렇다. `startMediaPollingIfNeeded` 자체는 `mount` 가 오프메인에서 부를 수
+        // 있어 비격리로 남지만, **아래 네 클로저가 실행되는 곳은 메인**이다. 그 사실을 단언으로 적는다.
         poller.onPlayback = { [weak self] info in
-            self?.dispatchSceneEvent("mediaPlaybackChanged",
-                                     eventJS: "new MediaPlaybackEvent({ state: \(info.state.rawValue) })")
-            self?.dispatchSceneEvent("mediaStatusChanged",
-                                     eventJS: "new MediaStatusEvent({ enabled: \(info.state != .stopped) })")
+            MainActor.assumeIsolated {
+                self?.dispatchSceneEvent("mediaPlaybackChanged",
+                                         eventJS: "new MediaPlaybackEvent({ state: \(info.state.rawValue) })")
+                self?.dispatchSceneEvent("mediaStatusChanged",
+                                         eventJS: "new MediaStatusEvent({ enabled: \(info.state != .stopped) })")
+            }
         }
         poller.onProperties = { [weak self] info in
+          MainActor.assumeIsolated {
             // albumArtist 는 별도 조회 불가(AppleScript 스코프) — artist 로 근사. subTitle=artist(WE 웹 규약과 동일).
             self?.dispatchSceneEvent("mediaPropertiesChanged", eventJS: """
                 new MediaPropertiesEvent({ title: \(q(info.title)), artist: \(q(info.artist)), \
                 subTitle: \(q(info.artist)), albumTitle: \(q(info.album)), albumArtist: \(q(info.artist)), \
                 contentType: 'music' })
                 """)
+          }
         }
         poller.onTimeline = { [weak self] info in
-            self?.dispatchSceneEvent("mediaTimelineChanged",
-                                     eventJS: "new MediaTimelineEvent({ position: \(info.position), duration: \(info.duration) })")
+            MainActor.assumeIsolated {
+                self?.dispatchSceneEvent("mediaTimelineChanged",
+                                         eventJS: "new MediaTimelineEvent({ position: \(info.position), duration: \(info.duration) })")
+            }
         }
         poller.onThumbnail = { [weak self] _, artwork in
+          MainActor.assumeIsolated {
             // F722: $mediaThumbnail/$mediaPreviousThumbnail 레이어용 라이브 아트워크 텍스처 갱신 —
             // 직전 트랙은 previous 로 이월. 온디맨드(정지) 씬도 새 아트워크가 보이도록 재드로 요청.
             if let self, wantsArtwork, let device = self.device,
@@ -928,6 +965,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 tertiaryColor: \(v(p.tertiary)), textColor: \(v(p.textColor)), \
                 highContrastColor: \(v(p.highContrast)), hasThumbnail: true })
                 """)
+          }
         }
         poller.start()
         mediaPoller = poller
@@ -1892,6 +1930,26 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 라이브 데스크탑 경로는 반대로 항상 메인에서 마운트된다(AppDelegate.applyResolved).
         // 이 진단을 없애려면 표기가 아니라 설계를 바꿔야 한다 — 캡처 경로를 뷰 없는 오프스크린
         // 렌더 타깃으로 분리하는 것(그러면 AppKit 의존이 사라진다). 지금 규모의 변경은 별도 작업이다.
+        //
+        // [2026-08-25] **위 금지는 그대로 유효하다.** 다만 이 파일의 진단 38건 중 **13건은 이 계약과
+        // 무관했다** — 라이브 경로에서만 도는 멤버(포인터 좌표 변환·호버·시차·이벤트 디스패치·
+        // 커서 시뮬레이션)가 표기 없이 섞여 있어서, 실제 오프메인 계약이 무엇인지 이 주석만으로는
+        // 가려낼 수 없었다. 그 13건에 `@MainActor` 를 달아 **컴파일러가 경계를 지키게** 했다.
+        //
+        // 분류는 추측이 아니라 컴파일러가 했다: 후보에 표기를 달고 빌드해, `mount` 가 부르는 것
+        // (`isPrimaryScreenWindow`·`startPointerMonitor`·`startClickMonitorIfNeeded`·
+        //  `startMediaPollingIfNeeded`)과 CLI 캡처가 부르는 것(`pause` — `SnapshotPipeline:149`)이
+        // 에러로 튀어나오면 표기를 뺐다. 남은 25건이 **진짜 오프메인 계약**이고, 그건 위 문단대로
+        // 설계를 바꿔야 없어진다.
+        //
+        // 모니터 **설치 함수**(`startPointerMonitor`/`startClickMonitorIfNeeded`)와 그것이 등록하는
+        // **콜백**은 갈라진다: 설치는 `mount` 에서 오므로 비격리로 남고, 콜백은 AppKit 전역 모니터가
+        // 메인에서 배달하므로 `MainActor.assumeIsolated` 로 못 박았다(미디어 폴러 콜백 4종도 같다).
+        // 이 갈래를 하나로 합치려 들면 둘 중 하나가 반드시 거짓이 된다.
+        //
+        // 즉 이 자리는 이제 "표기를 안 붙인 곳" 이 아니라 **"붙일 수 없는 곳"** 이다.
+        // 여기에 `@MainActor` 를 붙이면 `AppDelegate.captureSceneStill` 이 컴파일되지 않는다 —
+        // 그게 이 계약의 기계적 증명이다.
         let view = WapleMTKView(frame: container.bounds, device: device)
         view.autoresizingMask = [.width, .height]
         view.colorPixelFormat = .bgra8Unorm
@@ -2078,11 +2136,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             pointerUVLast = pinned
             return
         }
-        parallax.onOffset = { [weak self] off in self?.updateParallax(off) }
+        // [2026-08-25] `ParallaxController` 는 `NSEvent.addGlobalMonitorForEvents` 로 배달한다 —
+        // AppKit 전역 모니터 콜백은 메인 스레드다. `startPointerMonitor` 자체는 `mount` 가
+        // 오프메인에서 부를 수 있어 비격리로 남지만, **이 클로저가 실행되는 곳은 메인**이다.
+        // `AppDelegate:32-34` 규약대로 그 사실을 런타임 단언으로 적는다.
+        parallax.onOffset = { [weak self] off in MainActor.assumeIsolated { self?.updateParallax(off) } }
         parallax.start()
     }
 
-    func updateParallax(_ off: CGPoint) {
+    @MainActor func updateParallax(_ off: CGPoint) {
         // 이중 안전망: 핀이 걸린 상태에서 어떤 경로로든 라이브 오프셋이 들어오면 무시한다.
         if let pinned = SceneRenderer.capturePointerUV {
             pointerUV = pinned
@@ -2562,7 +2624,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         mtkView?.enableSetNeedsDisplay = true
     }
 
-    public func resume() {
+    @MainActor public func resume() {
         if let pausedAt = scenePausedAt {
             let now = CFAbsoluteTimeGetCurrent()
             startTime += now - pausedAt
