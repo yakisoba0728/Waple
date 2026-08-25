@@ -25,17 +25,20 @@ final class WapleMTKView: MTKView {
 /// 로 감싼 콜백(시차·미디어)이 `self` 를 격리 경계 너머로 넘기고, 컴파일러는 위 문단을 읽을 수 없다.
 /// 같은 근거로 `VideoRenderer`·`WebRenderer`·`MediaPoller` 가 이미 `@unchecked` 를 쓰고 있다.
 ///
-/// ⚠️ **이 불변식이 완전하지 않은 자리가 하나 있다.** `AppDelegate.captureSceneStill` 은
-/// `SnapshotPipeline`(:315-316)과 달리 `SceneRenderer.capturePointerUV` 를 핀하지 않는다.
-/// 그래서 그 캡처 인스턴스는 `mount` 안에서 시차 전역 모니터와(씬이 미디어 훅/아트워크를 쓰면)
-/// 미디어 폴러를 **실제로 시작한다** — 둘 다 메인에서 콜백을 배달하므로, 백그라운드 큐가 그
-/// 인스턴스를 쓰는 동안 메인 콜백이 겹칠 수 있다.
+/// [2026-08-25 툼스톤] ~~⚠️ 이 불변식이 완전하지 않은 자리가 하나 있다~~ → **해소.**
+/// 종전 기록: `AppDelegate.captureSceneStill` 은 `SnapshotPipeline`(:315-316)과 달리
+/// `SceneRenderer.capturePointerUV` 를 핀하지 않았고, 그 캡처 인스턴스는 `mount` 안에서
+/// 시차 전역 모니터와(씬이 미디어 훅/아트워크를 쓰면) 미디어 폴러를 **실제로 시작했다** —
+/// 둘 다 메인에서 콜백을 배달하므로 백그라운드 큐가 그 인스턴스를 쓰는 동안 메인 콜백이
+/// 겹칠 수 있었다. "미디어 폴러가 5초 주기라 짧은 캡처 동안 안 불린다" 는 방어는 **첫 폴부터
+/// 틀렸다** — `MediaPoller.start()` 는 타이머 등록 직후 `t.fire()` 로 즉시 폴한다(MediaPoller.swift:40).
 ///
-/// 이건 이 표기가 만든 위험이 아니라 **원래 있던 것**이고(표기는 컴파일러의 신고를 멈출 뿐이다),
-/// 실물에서 안 터진 이유는 미디어 폴러가 5초 주기라 짧은 캡처 동안 한 번도 안 불리기 때문이다.
-/// **근거가 "타이밍상 안 겹친다" 라는 것 자체가 얇다** — BACKLOG 에 등재했다. 고치는 방향은
-/// 캡처 인스턴스가 라이브 모니터를 아예 시작하지 않게 하는 것이고(캡처 모드 게이트),
-/// 그건 골든 픽셀에 닿을 수 있어 이 커밋에서 하지 않았다.
+/// 고친 방법은 BACKLOG("캡처 인스턴스가 라이브 모니터를 시작한다")가 예고한 두 갈래 전부다:
+/// ① captureSceneStill 도 골든 경로와 같은 포인터 핀을 둔다(`SIMD2(0.5, 0.5)` 중앙 = 마우스 미구동
+/// 규약) ② 핀이 걸려 있으면 `startMediaPollingIfNeeded` 도 시작하지 않는다(그 함수 머리 게이트 —
+/// `startPointerMonitor` 의 기존 내부 게이트와 같은 모양). 골든 픽셀 불변의 근거: CLI 캡처는 이미
+/// 핀 상태였고 파이프라인 전체가 메인 동기 실행이라(SnapshotPipeline.swift:142-146 주석) 종전에도
+/// 폴러 배달이 캡처 창 안에 들어온 적이 없다 — 폴러를 아예 안 켜는 것과 픽셀이 같다.
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, @unchecked Sendable {
     /// Metal `PBRMaterialUniforms`: exactly two float4 values (32 bytes).
     struct PBRMaterialUniforms {
@@ -903,6 +906,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     /// 요청하는 경우(레이어/텍스트 effects[] 의 mediaArtworkSlots)도 동일하게 폴링을 트리거해야 한다 —
     /// 그렇지 않으면 buildPassBindings 가 슬롯을 기록해도 mediaArtworkTexture 가 영원히 nil.
     func startMediaPollingIfNeeded() {
+        // [2026-08-25] 캡처 핀 게이트 — `startPointerMonitor`(아래)의 기존 내부 게이트와 같은 모양이다.
+        // 포인터 핀(`SceneRenderer.capturePointerUV`)이 걸려 있다는 것은 이 인스턴스가 캡처 하네스의
+        // 것이라는 뜻이고(SnapshotPipeline.pinRenderSettings:315-316 · AppDelegate.captureSceneStill),
+        // 캡처는 라이브 입력을 켜지 않는다. "폴러는 5초 주기라 짧은 캡처 동안 안 불린다" 는 종전
+        // 방어는 첫 폴에서 성립하지 않는다 — `start()` 가 타이머 등록 직후 `t.fire()` 로 즉시 폴하고
+        // (MediaPoller.swift:40) 배달 4종은 메인에서 온다. 폴러가 켜진 인스턴스를 백그라운드 큐가
+        // 쓰면 메인 콜백이 겹칠 수 있으므로(BACKLOG 잠재 결함 "캡처 인스턴스가 라이브 모니터를
+        // 시작한다") 시작 자체를 막는다. 골든 픽셀 불변 — CLI 경로는 이미 핀 상태였고 파이프라인이
+        // 메인 동기 실행이라 배달이 캡처 창에 들어온 적이 없다(위 클래스 선언 툼스톤 문단).
+        guard SceneRenderer.capturePointerUV == nil else { return }
         let mediaHooks: Set<String> = ["mediaPlaybackChanged", "mediaPropertiesChanged",
                                        "mediaThumbnailChanged", "mediaTimelineChanged", "mediaStatusChanged"]
         func effectsWantArtwork(_ effects: [EffectGPU]) -> Bool {
@@ -1098,6 +1111,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     var pointerUV = SIMD2<Float>(0, 0)
     /// 캡처 하네스용 포인터 핀 — 설정하면 mount 가 **마우스 모니터를 아예 켜지 않고** pointerUV 를
     /// 이 값으로 고정한다(nil = 라이브 커서, 기존 동작).
+    /// [2026-08-25] 게이트 범위 확장 — 걸려 있으면 **미디어 폴러도 시작하지 않는다**
+    /// (startMediaPollingIfNeeded 머리 게이트, startPointerMonitor 내부 게이트와 같은 모양).
+    /// 핀 = "이 인스턴스는 캡처 하네스 것" 이라는 단일 표식이고 캡처는 어떤 라이브 모니터도
+    /// 켜지 않는다는 계약의 표식으로 쓰기 위함이다(BACKLOG "캡처 인스턴스가 라이브 모니터를
+    /// 시작한다" 해소 — AppDelegate.captureSceneStill 도 이 핀을 쓴다).
     ///
     /// 왜 필요한가(2026-08-02 실측, spec/golden/nondeterminism.json → oracle.nondet.rootCause):
     /// mount 가 `parallaxEnabled || hasEffects` 면 마우스 모니터를 켜고 그 콜백이 pointerUV 를

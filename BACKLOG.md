@@ -290,19 +290,8 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 
 ## 잠재 결함
 
-- **캡처 인스턴스가 라이브 모니터를 시작한다** (2026-08-25 발견). `AppDelegate.captureSceneStill`
-  은 `SnapshotPipeline`(:315-316)과 달리 `SceneRenderer.capturePointerUV` 를 핀하지 않는다.
-  그래서 그 캡처 인스턴스는 `mount` 안에서 **시차 전역 모니터**와(씬이 미디어 훅/아트워크를 쓰면)
-  **미디어 폴러**를 실제로 시작한다 — 둘 다 메인에서 콜백을 배달하므로, 백그라운드 큐가 그
-  인스턴스를 쓰는 동안 메인 콜백이 겹칠 수 있다.
-
-  실물에서 안 터진 이유는 **타이밍뿐**이다: 미디어 폴러는 5초 주기라 짧은 캡처 동안 한 번도
-  안 불린다. 근거가 "안 겹친다" 가 아니라 "겹칠 시간이 없다" 라서 얇다.
-
-  고치는 방향은 캡처 인스턴스가 라이브 모니터를 아예 시작하지 않게 하는 것이다(캡처 모드 게이트 —
-  `capturePointerUV` 핀을 `captureSceneStill` 에도 두거나, 미디어 폴러까지 함께 막는 명시 플래그).
-  **골든 픽셀에 닿을 수 있어** 재베이스라인과 묶어야 한다. `SceneRenderer.swift` 클래스 선언
-  주석에 같은 내용이 있다(`@unchecked Sendable` 근거의 ⚠️ 문단).
+- ~~캡처 인스턴스가 라이브 모니터를 시작한다~~ → **해소(2026-08-25, 포인터 핀 + 미디어 폴러 게이트)** — `AppDelegate.captureSceneStill` 이 mount 전 `SceneRenderer.capturePointerUV = (0.5, 0.5)` 를 걸고(`SnapshotPipeline.pinRenderSettings` 의 save/set/defer-restore 패턴, teardown 뒤 LIFO 복원) `startMediaPollingIfNeeded` 머리에 핀 게이트를 더했다. 시차 전역 모니터는 기존 내부 핀 게이트로 함께 막힌다. "폴러 5초 주기라 안 불린다" 방어는 애초 성립하지 않았다 — `MediaPoller.start()` 가 타이머 등록 직후 `t.fire()` 로 즉시 1회 폴한다(MediaPoller.swift:40). 핀 상태에선 폴러를 아예 안 켜므로 골든 CLI 파이프라인(메인 동기 실행이라 배달이 캡처 창에 들어온 적 없음)과 픽셀이 같다. 검증: CapturePointerPinTests +2(핀 마운트 → mediaPoller nil, 무핀 음성 대조). `SceneRenderer.swift` 클래스 선언부 ⚠️ 문단은 툼스톤 정정 주석으로 교체
+- **캡처 경로 잔여 갭 2건** (2026-08-25 핀 작업 중 확인, 미수정): ① `startClickMonitorIfNeeded` 는 캡처 인스턴스에도 무조건 설치된다 — 클릭 콜백이 `pointerSceneCoords()` 창 가드보다 먼저 `pointerButton.setDown` 을 실행해(g_PointerState 소비 씬 한정) 캡처 중 물리 클릭이 프레임에 새는 경로가 이론상 남는다. ② `captureSceneStill` 은 `pause()`/`setSpectrum(.silent)` 를 호출하지 않는다(`SnapshotPipeline.captureFrame:149-150` 과 상이) — 오디오 반응 씬 스틸의 결정성 미보장. 둘 다 골든 베이스라인과는 무관(골든은 WapleCompat CLI 단독)이라 재베이스라인 전제는 아니다
 
 *트리거: 실제 파일·사용에서 물릴 때.*
 

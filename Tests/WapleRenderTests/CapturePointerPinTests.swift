@@ -74,4 +74,71 @@ final class CapturePointerPinTests: XCTestCase {
         XCTAssertTrue((0...1).contains(r.pointerUV.x) && (0...1).contains(r.pointerUV.y),
                       "포인터 UV 는 0..1 정규화 범위여야")
     }
+
+    /// 미디어 훅 보유 씬 — 컬러 스크립트가 mediaPlaybackChanged 를 export 해
+    /// startMediaPollingIfNeeded 의 시작 조건(eventEngines 훅 검사 — SceneRenderer.swift:917)을
+    /// 만족하게 한다(실물 ColorTinter 패턴 — SceneInteractionMediaE2ETests 와 같은 배선).
+    private func mountMediaFixture(tag: String) throws -> SceneRenderer {
+        let js = "'use strict';\\nexport function update(){ return new Vec3(1,1,1); }\\nexport function mediaPlaybackChanged(event){}\\n"
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"id":1,"image":"models/x.json","origin":"50 50 0","size":"10 10",
+           "color":{"value":"1 1 1","script":"\(js)"}}]}
+        """
+        let pkgData = encodePkg([
+            ("scene.json", Data(scene.utf8)),
+            ("models/x.json", Data(model.utf8)),
+            ("materials/m.json", Data(material.utf8)),
+            ("materials/pic.tex", solidTex(255, 255, 255)),
+        ])
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_ptrpin_media_\(tag)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try pkgData.write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: tag, type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: tag, tags: [], contentRating: nil, workshopId: nil,
+                                       dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        // 실물 AppleScriptNowPlayingProvider 대신 항상 nil 프로바이더(SnapshotPipeline.StoppedNowPlaying
+        // 과 동일 역할 — CompatCore 전용 타입이라 테스트에서 재정의) — 폴러가 켜져도 osascript 기동이 없다.
+        r.nowPlayingProvider = StoppedProvider()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        return r
+    }
+
+    private struct StoppedProvider: NowPlayingProvider {
+        func fetch() -> NowPlayingInfo? { nil }
+    }
+
+    /// [2026-08-25] 스틸 캡처 경로용 검증(렌더러 측 절반) — **핀이 걸린 마운트는 미디어 폴러도
+    /// 시작하지 않는다.** AppDelegate.captureSceneStill 자체는 앱 타깃 private 라 여기서 직접 부를 수
+    /// 없어(구조상 한계), 그 경로가 쓰는 계약 "핀 = 라이브 모니터 0개" 을 렌더러 수준에서 검증한다.
+    /// 시차 모니터 쪽 절반은 위 testPinnedPointerIsNotOverwrittenByLiveCursor 가 담당한다.
+    /// 근거: MediaPoller.start() 는 등록 직후 t.fire() 로 즉시 첫 폴을 돌리므로(MediaPoller.swift:40)
+    /// "5초 주기라 캡처 동안 안 불린다" 는 방어는 성립하지 않았다(BACKLOG 잠재 결함).
+    func testPinnedMountDoesNotStartMediaPoller() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal 없음") }
+        let old = SceneRenderer.capturePointerUV
+        defer { SceneRenderer.capturePointerUV = old }
+        SceneRenderer.capturePointerUV = SIMD2<Float>(0.5, 0.5)
+
+        let r = try mountMediaFixture(tag: "poller_pinned")
+        defer { r.teardown() }
+        XCTAssertNil(r.mediaPoller, "핀 걸린(캡처) 인스턴스는 미디어 폴러를 시작하지 않아야")
+    }
+
+    /// 음성 대조 — 같은 씬이라도 핀이 없으면 폴러가 실제로 켜진다. 이 대조가 없으면 위 테스트는
+    /// 픽스처가 시작 조건을 아예 못 만나는 공집합 통과일 수 있다(음성 대조 규약은
+    /// testPinnedPointerIsNotOverwrittenByLiveCursor 주석과 같다).
+    func testUnpinnedMountStillStartsMediaPoller() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal 없음") }
+        let old = SceneRenderer.capturePointerUV
+        defer { SceneRenderer.capturePointerUV = old }
+        SceneRenderer.capturePointerUV = nil
+
+        let r = try mountMediaFixture(tag: "poller_unpinned")
+        defer { r.teardown() }
+        XCTAssertTrue(r.mediaPoller?.isRunningForTesting == true,
+                      "무핀 마운트는 종전대로 미디어 폴러를 켜야")
+    }
 }
