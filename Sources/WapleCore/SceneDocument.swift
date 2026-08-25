@@ -1766,7 +1766,14 @@ extension SceneDocument {
         if !userProps.isEmpty {
             scene = (resolveUserBindings(scene, userProps: userProps, depth: 0) as? [String: Any]) ?? scene
         }
-        let general = scene["general"] as? [String: Any] ?? [:]
+        // scene.json `version` 기능 게이트 — 게이트 판정은 최상위 version 하나를 미리 읽고,
+        // 아래에서 general 사본을 만들어 이후의 **모든** general 소비(프롤로그 hdr/bloom · parseCamera ·
+        // parse 말미 applyGeneralSettings)가 한 번만 게이트를 통과하게 한다(`scene["general"]` 의
+        // 유일한 읽기 자리가 여기다 — 그래서 사본 갈아끼우기만으로 전파가 끝난다).
+        // `numericInt`(JSONNumerics.numericInt)는 불리언을 수로 안 세는 엄격 판이라 `{"version":true}`
+        // 같은 비정수는 "누락과 동일" 취급한다(아래 헬퍼 주석의 보수 원칙과 같은 방향).
+        let schemaVersion = numericInt(scene["version"])
+        let general = Self.versionGatedGeneral(scene["general"], schemaVersion: schemaVersion)
         let proj = general["orthogonalprojection"] as? [String: Any] ?? [:]
         // `auto: true` 면 WE 는 width/height 를 **읽지 않고** 정사영 크기를 0(=출력 해상도)으로 둔다
         // (`0x140187565` `or [scene+0xE0],0x18` 직후 `0x14018756D` 이 값 저장 블록을 건너뛴다).
@@ -3955,6 +3962,48 @@ extension SceneDocument {
     }
 
     // MARK: - parse general 후처리 추출 헬퍼
+
+    /// scene.json `version` 기능 게이트 — 최상위 version 이 가리키는 스키마 세대보다 새 키를
+    /// general 사본에서 **제거해 소비 자체를 막는다**(값을 고쳐 읽는 게 아니라 키 부재로 떨어뜨려
+    /// 각 필드의 생성자 기본값이 남는다 — WE 도 저작되지 않은 키와 같은 착지다).
+    ///
+    /// 근거(외부 코퍼스 관측, Waple-wallpaper-source 저장소):
+    /// `corpus_scan/scene-json-schema.md:189` — "version gating: pre-v3 scenes lack HDR/zoom;
+    /// pre-v4 lack wind/gravity." 같은 문서 :60-82 가 키 목록과 임계를 블록으로 묶는다:
+    ///  · :60-72 "HDR / bloom-HDR / zoom keys (version ≥ 3)" → `hdr` · `zoom` ·
+    ///    `bloomhdrstrength/threshold/feather/scatter/iterations` · `bloomtint`(:71) ·
+    ///    `perspectiveoverridefov`(:72). 단 `bloom/bloomstrength/bloomthreshold` 는 :38-42 의
+    ///    전씬 공통(core) 키라 **게이트 밖**이다.
+    ///  · :74-82 "Wind/gravity (version ≥ 4–5)" + :189 확정문 → `windenabled/strength/direction`
+    ///    · `gravitystrength/direction` 의 임계는 **v4**.
+    /// 관측치는 {1,3,4,5}(같은 문서 :20, 161씬 중 누락 2건)라 v1 씬에서 v3+·v4+ 키가,
+    /// v3 씬에서 v4+ 키가 무시된다. WE 실물 바이너리가 version 을 어떤 분기로 쓰는지는 미확정이고
+    /// 이 게이트는 코퍼스 관측 서술의 재현이다 — 그래서 판정 근거를 엔진 VA 가 아니라 위 문서 줄로 단다.
+    ///
+    /// **version 누락/비정수 시엔 게이트를 적용하지 않고 종전 동작(무게이트 전소비)을 유지한다.**
+    /// 누락 2씬(같은 문서 :20)에 대해 WE 실물이 어떻게 굴러가는지 관측된 바 없어(WE 미관츠 행동),
+    /// 관측된 것만 고친다는 이 리포 원칙상 보수 쪽(현행 유지)을 택했다. 동봉 에디터 프리뷰 48씬은
+    /// `"version" : 0` 이라(<3) 게이트가 걸리는데, 저작값이 전부 생성자 기본값과 같아(bloomhdr* 2/1/
+    /// 0.1/8/1.619 · wind/gravity 비활성·항등 벡터 · perspectiveoverridefov 95) 문서 결과는 동일하다
+    /// (2026-08-25 전수 실측 — Sources/WapleRender/Resources/WEAssets/scenes/**/scene.json).
+    private static func versionGatedGeneral(_ raw: Any?, schemaVersion: Int?) -> [String: Any] {
+        var general = raw as? [String: Any] ?? [:]
+        guard let v = schemaVersion else { return general }   // version 누락/비정수 → 무게이트(위 주석)
+        if v < 3 {
+            // v3+ 키(scene-json-schema.md:60-72). bloomtint/perspectiveoverridefov 도 같은 블록이다.
+            for k in ["hdr", "zoom", "bloomhdrstrength", "bloomhdrthreshold", "bloomhdrfeather",
+                      "bloomhdrscatter", "bloomhdriterations", "bloomtint", "perspectiveoverridefov"] {
+                general.removeValue(forKey: k)
+            }
+        }
+        if v < 4 {
+            // v4+ 키(scene-json-schema.md:74-82, 임계 확정문 :189).
+            for k in ["windenabled", "windstrength", "winddirection", "gravitystrength", "gravitydirection"] {
+                general.removeValue(forKey: k)
+            }
+        }
+        return general
+    }
 
     /// parse() 후반의 general 딕셔너리 기반 씬 글로벌 설정 적용(순수 할당, 흐름 제어 없음).
     /// 타입체커 식 깊이 분산 목적(기능 동치, 2026-07-31).
