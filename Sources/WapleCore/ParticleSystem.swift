@@ -275,7 +275,9 @@ public enum Initializer: Equatable {
     ///   ③ x86 — 이니셜라이저 게이트 `stricmp`@0x1401cb069, 오퍼레이터 게이트 @0x1401cf157
     /// 주입 기본은 `setcolor`(0x1401bc980 → 테이블 슬롯 0). 실물 도달 1건은 `input` 을 생략한다.
     case inheritInitialValueFromEvent(input: EventValueInput)
-    /// 파스·보존 전용(이벤트 시스템 연동 보류). 실물 remapinitialvalue — 출력 리맵 스펙 미확정.
+    /// 파스·보존 전용(이벤트 시스템 연동 보류). 실물 remapinitialvalue — 출력 구간
+    /// (`outputrangemin`/`outputrangemax`)은 아래 2026-08-25 정정대로 실물 키로 읽고,
+    /// transform·CP 넷 등 나머지 키는 여전히 미파스 보존이다.
     ///
     /// **[2026-08-21] `inputrangemin`/`inputrangemax` 를 실었다.** 이니셜라이저 주입기
     /// `0x1401bc4b0`–`0x1401bc980` 이 오퍼레이터판(`0x1401bfbb0`)과 **바이트 구조까지 같고**
@@ -305,10 +307,37 @@ public enum Initializer: Equatable {
     /// > CP 넷과 `transforminputscale`·`transformoctaves` 여섯이 그 뒤에 있다.
     /// > 판정(= `min`/`max` 가 유령 키다)은 구간을 넓혀도 그대로다.
     ///
-    /// 아래 `min`/`max` 는 유령 키를 읽고 있어 동봉 자산 3건 전건에서 nil 이다
-    /// (실 출력 구간은 `outputrangemin`/`outputrangemax` 다). 시뮬 미소비라 지금은 무해하지만,
-    /// 소비를 붙일 때는 **키 이름부터 갈아야 한다** — 이 라운드의 범위 밖이라 남겨 둔다.
-    case remapInitialValue(output: String?, min: Vec3?, max: Vec3?,
+    /// > **[2026-08-25 정정 — 유령 키 `min`/`max` 를 갈아냈다.]** 종전 이 케이스는
+    /// > `min:`/`max:` 로 `"min"`/`"max"` 를 읽었는데 그 둘은 위 반증 메모대로 유령 키라,
+    /// > **동봉 도달 3건 전건이 nil** 이었다(프리뷰 1 · thunderbolt_beam_child ×2).
+    /// > 실물 키는 `outputrangemin`/`outputrangemax` 다. x86 lea 전수 판정을 문자열 수준에서
+    /// > 독립 재검증했다(`Waple-wallpaper-source/binaries` 전 바이너리 바이트 검색,
+    /// > ASCII·UTF-16LE 양쪽, stdlib 파이썬):
+    /// >   · `outputrangemin`/`outputrangemax` 는 파서를 가진 네 바이너리에서 각각 **정확히
+    /// >     1회** 히트한다 — wallpaper32.exe 0x3dc960/0x3dc92c · wallpaper64.exe
+    /// >     0x48e710/0x48e688 · wallpaper64_rich.exe 는 wallpaper64 와 **같은 오프셋**(Rich 헤더
+    /// >     주입 +0xD0 는 .rdata 배치를 안 옮긴다) · wallpaperui.exe 0xad27c8/0xad2800.
+    /// >     그 자리는 리더가 읽는 키들이 한 덩어리로 박힌 .rdata 군이다 — wallpaper64.exe 기준:
+    /// >     operation@0x48e610 · input@0x48e61c · output@0x48e624 · inputcomponent@0x48e630 ·
+    /// >     outputrangemax@0x48e688 · inputcontrolpoint0@0x48e698 · outputcontrolpoint0@0x48e6c8 ·
+    /// >     outputcomponent@0x48e6e0 · inputrangemin@0x48e6f0 · inputrangemax@0x48e700 ·
+    /// >     **outputrangemin@0x48e710** · blendinstart/end·blendoutstart/end@0x48e720–0x48e750 ·
+    /// >     transformfunction@0x48e778 · transforminputscale@0x48e790 · transformoctaves@0x48e7a8.
+    /// >   · 독립 토큰 `"min"`/`"max"`(널 종결)는 각 파일에 **한 쌍씩**밖에 없고 전부 이 군 밖이다 —
+    /// >     wallpaper64.exe 0x4879c0/0x4879c4(remapinitialvalue@0x48ed10 에서 약 29KB 떨어진 별개
+    /// >     군), wallpaper32.exe 0x3d6b6c/0x3d6b68, wallpaperui.exe 0xad2564/0xad2584(offsetmin/
+    /// >     offsetmax·huemin/max 사이의 이니셜라이저 기본값 군 — `lifetimerandom` 류의 진짜
+    /// >     min/max 다).
+    /// >   · scenescript64.dll · webwallpaper64.exe 는 remapinitialvalue/outputrange*/initialvalue
+    /// >     전부 **0회** — 파티클 키 테이블은 주 실행파일(+UI 사본)에만 있다.
+    /// >   · UTF-16LE 히트는 전 바이너리 0회 — 키는 전부 ASCII다.
+    ///
+    /// `nil` = **키 부재**다. 오퍼레이터판 `RemapSpec`(outMin/outMax, 부재 기본 0/1 —
+    /// `RemapOperation.swift` 의 0x1401bfe64·0x1401bff52)과 달리 여기선 부재 기본을 심지 않는데,
+    /// 오퍼레이터 쪽 기본은 실측됐지만 **이니셜라이저 주입기의 outputrange* 부재 기본 VA 는 아직
+    /// 못 따왔다**(inputrange* 만 0x1401bc58c/0x1401bc676 가 실측돼 있다). 소비를 붙일 때 먼저
+    /// 측정하고 심을 것 — 지금은 보존이 계약이다.
+    case remapInitialValue(output: String?, outputMin: Vec3?, outputMax: Vec3?,
                            inputMin: Vec3 = Vec3(x: 0, y: 0, z: 0),
                            inputMax: Vec3 = Vec3(x: 1, y: 1, z: 1))
 }
@@ -2301,9 +2330,13 @@ public struct ParticleSystemDef: Equatable {
                 // 이벤트 시스템 연동 보류 — 파스·보존까지만(시뮬 무시).
                 inits.append(.remapInitialValue(
                     output: i["output"] as? String,
-                    min: pvec3OrScalar(i["min"]),
-                    max: pvec3OrScalar(i["max"]),
-                    // 주입기 0x1401bc4b0: 부재 min = int 0(0x1401bc58c) · max = int 1(0x1401bc676).
+                    // [2026-08-25] 실물 키는 outputrangemin/outputrangemax 다 — 종전에 읽던
+                    // "min"/"max" 는 유령 키라 동봉 3건 전건이 nil 이었다(케이스 주석 툼스톤:
+                    // wallpaper64.exe 0x48e710/0x48e688 · 인접 군 operation@0x48e610 등).
+                    outputMin: pvec3OrScalar(i["outputrangemin"]),
+                    outputMax: pvec3OrScalar(i["outputrangemax"]),
+                    // 주입기 0x1401bc4b0: 부재 inputrangemin = int 0(0x1401bc58c) ·
+                    // inputrangemax = int 1(0x1401bc676).
                     inputMin: injectedVec3OrScalar(i, "inputrangemin", Vec3(x: 0, y: 0, z: 0)),
                     inputMax: injectedVec3OrScalar(i, "inputrangemax", Vec3(x: 1, y: 1, z: 1))))
             case let other:

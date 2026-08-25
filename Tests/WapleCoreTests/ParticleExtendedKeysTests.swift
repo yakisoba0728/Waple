@@ -752,7 +752,8 @@ final class ParticleExtendedKeysTests: XCTestCase {
         {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":2}],
          "initializer":[{"name":"inheritcontrolpointvelocity","controlpoint":3,"min":0.5},
                         {"name":"inheritinitialvaluefromevent","input":"setsize"},
-                        {"name":"remapinitialvalue","output":"size","min":0,"max":2}],
+                        {"name":"remapinitialvalue","output":"size",
+                         "outputrangemin":0,"outputrangemax":2}],
          "operator":[{"name":"inheritvaluefromevent"}],
          "renderer":[{"name":"sprite"}],"maxcount":4}
         """), material: nil)
@@ -782,9 +783,13 @@ final class ParticleExtendedKeysTests: XCTestCase {
         """), material: nil)
         XCTAssertTrue(wrongSection.initializers.isEmpty,
                       "operator 전용 이름을 initializer[] 에서 받으면 오귀속이 되돌아온 것이다")
+        // **[2026-08-25 키 정정]** 종전 픽스처는 유령 키 `"min":0,"max":2` 를 읽게 놓고
+        // nil 이 아닌 값을 단언할 수 없었다(동봉 3건 전건 nil 이 결함의 실체). 실물 키는
+        // outputrangemin/outputrangemax 다 — 바이트 검색 근거는 케이스 주석 툼스톤.
+        // 스칼라 → vec3 브로드캐스트(`pvec3OrScalar`)도 함께 본다.
         XCTAssertTrue(def.initializers.contains(.remapInitialValue(output: "size",
-                                                                   min: Vec3(x: 0, y: 0, z: 0),
-                                                                   max: Vec3(x: 2, y: 2, z: 2))))
+                                                                   outputMin: Vec3(x: 0, y: 0, z: 0),
+                                                                   outputMax: Vec3(x: 2, y: 2, z: 2))))
         // 시뮬은 무시(이벤트 시스템 연동 보류) — 스폰/스텝 정상, 무드로.
         var sim = ParticleSimulator(def: def, seed: 52)
         let ps = sim.step(0.1)
@@ -1043,6 +1048,70 @@ final class ParticleExtendedKeysTests: XCTestCase {
         let bad = ranges(#","inputrangemin":"nope","inputrangemax":[1,2]"#)
         XCTAssertEqual(bad?.0, Vec3(x: 0, y: 0, z: 0))
         XCTAssertEqual(bad?.1, Vec3(x: 0, y: 0, z: 0))
+    }
+
+    /// ①-d `remapinitialvalue` 의 **출력** 구간. **[2026-08-25]** 종전 파스는 유령 키
+    /// `"min"`/`"max"` 를 읽어 동봉 도달 3건 전건이 nil 이었다 — 실물 키는
+    /// `outputrangemin`/`outputrangemax` 다(바이너리 바이트 검색 근거는 케이스 주석 툼스톤:
+    /// wallpaper64.exe 0x48e710/0x48e688 · 인접 군 operation@0x48e610–transformoctaves@0x48e7a8 ·
+    /// 독립 토큰 \0min\0/\0max\0 는 군 밖). 리더는 inputrange* 와 같은 vec3-또는-스칼라 경로다.
+    func testInitializerOutputRangeParsed() {
+        func out(_ body: String) -> (Vec3?, Vec3?) {
+            let def = ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
+             "initializer":[{"name":"remapinitialvalue","output":"color",
+                             "input":"distancetocontrolpoint"\(body)}],
+             "maxcount":4}
+            """), material: nil)
+            for i in def.initializers {
+                if case let .remapInitialValue(_, lo, hi, _, _) = i { return (lo, hi) }
+            }
+            return (nil, nil)
+        }
+        // vec3 문자열 판 — 동봉 프리뷰(scenes/particleelementpreviews/remapinitialvalue)와
+        // 정확히 같은 값이다.
+        let vec = out(#","outputrangemin":"0 0 1","outputrangemax":"1 0 0""#)
+        XCTAssertEqual(vec.0, Vec3(x: 0, y: 0, z: 1))
+        XCTAssertEqual(vec.1, Vec3(x: 1, y: 0, z: 0))
+        // 스칼라 브로드캐스트 판 — rain_screen 의 velocity 리맵(-100/-200 류)과 같은 모양.
+        let scalar = out(#","outputrangemin":-5,"outputrangemax":7"#)
+        XCTAssertEqual(scalar.0, Vec3(x: -5, y: -5, z: -5))
+        XCTAssertEqual(scalar.1, Vec3(x: 7, y: 7, z: 7))
+        // 부재 = nil — 이니셜라이저 쪽 outputrange* 부재 기본은 미측이라 심지 않는다(보존 계약).
+        let absent = out("")
+        XCTAssertNil(absent.0)
+        XCTAssertNil(absent.1)
+        // 유령 키는 아무것도 안 읽힌다 — 종전 결함(min/max 를 읽는 척)의 재발 방지 핀.
+        let ghost = out(#","min":0,"max":2"#)
+        XCTAssertNil(ghost.0, "\"min\" 은 이 원소의 키가 아니다")
+        XCTAssertNil(ghost.1, "\"max\" 도 아니다")
+        // 있는데 못 읽는 값 → nil (pvec3OrScalar 규약).
+        let garbage = out(#","outputrangemin":"nope""#)
+        XCTAssertNil(garbage.0)
+    }
+
+    /// [2026-08-25] 동봉 프리뷰 회귀 — `scenes/particleelementpreviews/remapinitialvalue` 의
+    /// `outputrangemin:"0 0 1"` / `outputrangemax:"1 0 0"` 이 **실제로 파스돼야 한다**.
+    /// 종전엔 유령 키 min/max 를 읽어 이 값이 통째로 버려졌다(동봉 3건 전건 nil).
+    /// thunderbolt_beam_child ×2 는 출력 구간을 안 쓰므로(inputrangemax 만) 여기서 대조하지 않는다.
+    func testBundledRemapInitialValuePreviewParsesOutputRange() throws {
+        guard let root = AssetJSONLenientTests.bundledAssetsRoot() else {
+            throw XCTSkip("동봉 WEAssets 를 못 찾았다")
+        }
+        let url = root.appendingPathComponent(
+            "scenes/particleelementpreviews/remapinitialvalue/particles/new_particle_system.json")
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url))
+                                as? [String: Any])
+        let def = ParticleSystemDef.parse(obj, material: nil)
+        var found = false
+        for i in def.initializers {
+            if case let .remapInitialValue(_, lo, hi, _, _) = i {
+                found = true
+                XCTAssertEqual(lo, Vec3(x: 0, y: 0, z: 1), "동봉값 outputrangemin:\"0 0 1\"")
+                XCTAssertEqual(hi, Vec3(x: 1, y: 0, z: 0), "동봉값 outputrangemax:\"1 0 0\"")
+            }
+        }
+        XCTAssertTrue(found, "remapinitialvalue 이니셜라이저가 파스돼야 한다")
     }
 
     /// ② `emitter[].duration` / `emitter[].delay`(초). 파서 0x1401c1c70 이
