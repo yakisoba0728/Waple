@@ -240,13 +240,13 @@ if let v = vec3(io["controlpoint\(i)"]) { ov.controlPoints[i] = v }   // SceneDo
 | ---: | --- | --- | --- | --- |
 | 168 | scene | `general.camerapreview` | 언급만 | bool |
 | 125 | effect | `description` | 언급만 | string ~ |
-| 87 | scene | `version` | 언급만 | int ~ |
-| 86 | project | `version` | 언급만 | int ~ |
+| 87 | scene | `version` | ~~언급만~~ → **해소(2026-08-25)** — `SceneDocument.swift:1775` 가 `numericInt(scene["version"])` 으로 읽는다(v<3/v<4 기능 게이트, 커밋 `c2d8ecc1`) | int ~ |
+| 86 | project | `version` | ~~언급만~~ → **해소(2026-08-25, 이름 단위)** — 씬 루트 리터럴 신설로 측정기의 이 **이름** 구멍이 닫혔다. 단 project 매니페스트 자체의 version 리더는 여전히 0이다(저자 저장 카운터 — 분기 금지, 동명이키) | int ~ |
 | 82 | preset | `description` | 언급만 | string ~ |
 | 75 | preset | `options.droplistOptions` | 언급만 | array |
 | 75 | preset | `options.droplistVisible` | **없음** | bool |
 | 75 | preset | `variants` | 언급만 | array |
-| 69 | effect | `version` | 언급만 | int ~ |
+| 69 | effect | `version` | ~~언급만~~ → **해소(2026-08-25, 이름 단위)** — 씬 루트 리터럴 신설로 측정기의 이 **이름** 구멍이 닫혔다. 단 effect.json 매니페스트의 version 리더는 여전히 0이다(§5.2 #1·§D — `0x140056220` 은 별개 매니페스트 리더, 동명이키) | int ~ |
 | 48 | scene | `objects[].depth` | 언급만 | float,int |
 | 21 | effect | `gizmos` | 언급만 | array |
 | 21 | effect | `gizmos[].vars` | 언급만 | object |
@@ -419,6 +419,10 @@ GIF·비디오 월페이퍼 경로라 눈에 띄는 자리다.
 `key · file · status · name · description · version · options` 다 — **이펙트 매니페스트가
 아니라 별개 매니페스트 리더**다. 즉 `effect.json` 의 `description` 을 읽는 코드는 엔진에 없다.
 `version` 은 자산 242건이 전부 `1`(일부 `0`)이라 분기 근거도 관측되지 않는다.
+**[2026-08-25] Waple 쪽 상태 갱신** — 씬 루트 `version` 은 이제 Waple 도 읽는다
+(`SceneDocument.swift:1775`, v<3/v<4 기능 게이트). 매니페스트 루트 `version`(effect/project)은
+엔진·Waple 어느 쪽 리더도 여전히 없다 — §4 표의 행 86·69 툼스톤이 말하는 "해소" 는
+측정기의 이름 단위 구멍 기준이지 매니페스트 리더 구현이 아니다.
 
 `controlpointangleN` 은 **메타데이터가 아니라 유보 중인 진짜 구멍**이지만, 우리 소스가
 이미 그 사실과 VA(`0x140491490+` · `0x14024e08e`)를 `SceneDocument.swift:2297-2303` 에
