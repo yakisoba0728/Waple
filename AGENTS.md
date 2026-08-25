@@ -69,7 +69,7 @@ WapleSaver    (SwiftPM 밖 — package-app.sh 가 직접 컴파일)
 
 ```bash
 swift build --build-tests      # ~20초 (유휴 상태 Apple Silicon)
-swift test                     # 3,693개(2026-08-25 CI 실측 — 코퍼스 유무와 무관)
+swift test                     # 3,708개(2026-08-25 CI 실측 — 코퍼스 유무와 무관)
 swift run Waple                # 메뉴바 앱으로 실행
 ```
 
