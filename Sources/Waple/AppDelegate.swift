@@ -1052,6 +1052,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 이 함수는 여전히 `nonisolated` 이고 백그라운드 큐에서 돈다.
         guard size.width > 0, size.height > 0 else { return nil }
         let renderer = SceneRenderer()
+        // [2026-08-25] **포인터 핀** — SnapshotPipeline.captureFrame 이 골든 캡처마다
+        // pinRenderSettings(SnapshotPipeline.swift:315-316)로 하는 일을 앱 내부 스틸 경로에도
+        // 그대로 둔다. 핀이 없으면 아래 mount 가 시차 전역 모니터를 켜고(ParallaxController.start()
+        // 가 즉시 emit — 그 순간의 실제 커서가 g_PointerPosition 으로 구워진다,
+        // spec/golden/nondeterminism.json → oracle.nondet.rootCause) 미디어 폴러도 켠다
+        // (start() 의 첫 폴은 즉시 fire — MediaPoller.swift:40). 둘 다 메인에서 콜백을 배달하므로
+        // 백그라운드 큐가 이 인스턴스를 쓰는 동안 겹칠 수 있었다(SceneRenderer 클래스 선언 주석
+        // [2026-08-25 툼스톤] 문단 · BACKLOG 잠재 결함 "캡처 인스턴스가 라이브 모니터를 시작한다").
+        // 값 SIMD2(0.5, 0.5) = 마우스 미구동 중앙 규약(SnapshotPipeline.capturePointerUV:49).
+        // 복원은 defer LIFO 로 teardown **뒤**에 — 핀이 걸린 상태로 정리까지 끝내고 푼다.
+        let oldCapturePointer = SceneRenderer.capturePointerUV
+        SceneRenderer.capturePointerUV = SIMD2<Float>(0.5, 0.5)
+        defer { SceneRenderer.capturePointerUV = oldCapturePointer }
         let container = DispatchQueue.main.sync {
             MainActor.assumeIsolated { NSView(frame: CGRect(origin: .zero, size: size)) }
         }
