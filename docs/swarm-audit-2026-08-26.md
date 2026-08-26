@@ -54,17 +54,96 @@
 - **좌표**: `Waple-wallpaper-source/analysis/decompiled/all/`
 - wallpaper64.exe 의 .pdata 를 직접 파싱하면 유효 RUNTIME_FUNCTION 14,788개(엔트리 정렬 오프셋 +4, 첫 엔트리 RVA 0x1000)가 나오고, 오퍼레이터 VM 0x14023fbc0–0x14023fccd·0x14023fccd–0x14024bace, 파서 팩토리 0x1401c5490–0x1401d152c 가 모두 존재한다. 그러나 analysis/decompiled/all/ 의 11,252개 파일 중 그 주소대에는 FUN_14023fc90 하나(39바이트, func_0x0001402ed390 호출 1줄짜리 stub)만 있고 manifest.json 
 
-### [C WE] Waple RE 문서의 핸들러 VA 가 전부 '점프테이블 raw 값'이고 실제 실행 VA = 인용값 + 0xD0
+### ~~[C WE] Waple RE 문서의 핸들러 VA 가 전부 '점프테이블 raw 값'이고 실제 실행 VA = 인용값 + 0xD0~~ **← 전면 철회 (2026-08-26)**
 - **좌표**: `Waple/docs/re/remap-operation.md (+ docs/re/particle-operator-vm.md, Sources/WapleCore/ParticleSimulator.swift 주석)`
-- 모든 간접점프는 테이블 raw 값에 lea reg,[0x1400000D0] 를 더한다. opid 디스패치: 0x14023fe40 lea r9,[0x1400000d0], 0x14023fe8c mov eax,[r9+rcx*4+0x24bb58]. 변환 디스패치: 0x140245200 lea rdx,[0x1400000d0], 0x140245214 mov ecx,[rdx+rax*4+0x24bc9c], 0x14024521b add rcx,rdx, 0x14024521e jmp rcx. 검증된 교정 쌍(문서→실측): opid19 진입 0x140244874→0x140244944(경계 명령 mov ec
+- ~~모든 간접점프는 테이블 raw 값에 lea reg,[0x1400000D0] 를 더한다. opid 디스패치: 0x14023fe40 lea r9,[0x1400000d0], 0x14023fe8c mov eax,[r9+rcx*4+0x24bb58]. 변환 디스패치: 0x140245200 lea rdx,[0x1400000d0], 0x140245214 mov ecx,[rdx+rax*4+0x24bc9c], 0x14024521b add rcx,rdx, 0x14024521e jmp rcx. 검증된 교정 쌍(문서→실측): opid19 진입 0x140244874→0x140244944(경계 명령 mov ec~~
+
+> **정정(2026-08-26, 무손상 원본 `wallpaper_engine/wallpaper64.exe` 직접 디스어셈블).**
+> **이 발견은 유령이다. `0x1400000D0` 이라는 점프테이블 베이스는 존재하지 않는다.**
+> 위에 인용된 `0x14023fe40`·`0x140245200` 자체가 **밀린 코퍼스 좌표**다. 아래 [G WE2] 항목의
+> 시프트를 되돌린 진짜 주소에서 읽으면 베이스는 `0x140000000`(`__ImageBase`)이다:
+>
+> ```
+> 0x14023fe40 − 0xD0 = 0x14023fd70:  lea r9,  [rip - 0x23fd77]   -> 0x140000000
+> 0x140245200 − 0xD0 = 0x140245130:  lea rdx, [rip - 0x245137]   -> 0x140000000
+> 0x14023fdbc: mov eax,[r9+rcx*4+0x24bb58] ; add rax,r9
+> 0x140245144: mov ecx,[rdx+rax*4+0x24bc9c] ; add rcx,rdx ; jmp rcx
+> ```
+>
+> `.text` 전 구간을 `.pdata` 실측 함수 경계로 잘라 디스어셈블한 결과,
+> **`0x140000000` 을 겨누는 `lea` 는 597회**(그중 **337회**가 `[base+idx*4+disp]` 테이블
+> 적재를 몰고 간다), **`0x1400000D0` 을 겨누는 `lea` 는 0회**다. 즉 교과서적인 MSVC x64
+> 점프테이블 — `__ImageBase` 기준 32비트 RVA 표다. 겉보기 `0x1400000D0` 은 밀린 코퍼스를
+> 읽어서 생긴 착시다(명령이 0xD0 위에 있으니 RIP 상대 목적지도 0xD0 위로 계산된다).
+>
+> 따라서 **`실제 핸들러 VA = 테이블 raw 값 + 0x140000000`** 이고, 이는 원래 Waple 인용이
+> 이미 쓰고 있던 규칙이다. **`+0xD0` 교정은 틀렸다.**
+>
+> "검증된 교정 쌍"도 방향이 거꾸로다. 문서가 인용한 `0x140244874` 는 그대로 두면
+> `mov ecx,[r14+0x14]` 로 깨끗이 디코드되지만, 교정 대상이라던 `0x140244944` 는
+> `00 00`(0 패딩)이라 아무 명령도 아니다.
 
 ### [G WE2] decompiled 코퍼스 전체 주소가 진짜 VA+0xD0 로 어긋남 (inject_rich_header.py 결함)
 - **좌표**: `Waple-wallpaper-source/scripts/inject_rich_header.py`:63
 - binaries/wallpaper64.exe 는 inject_rich_header.py 가 donor DOS-stub+Rich block(0xD0 bytes)을 PE 앞에 끼워 넣으면서 section header 의 raw_ptr 을 갱신하지 않았다. 헤더는 .text raw=0x400 을 가리키지만 실제 본문은 +0xD0 밀려 0x4D0 에서 시작한다. Ghidra가 이 파일을 로드해 생긴 analysis/decompiled/all/ 의 11,252개 함수 주소는 전부 진짜 VA+0xD0. 검증: (a) corpus FUN_140001150 본문(mov ecx,0x50; call)은
 
+> **보강(2026-08-26, 재실측 — 이 항목의 방향은 옳다).**
+> 시프트의 존재와 **방향 모두 재확인**했다. 코퍼스가 `X` 라 부르는 자리에는 실제로는
+> `X − 0xD0` 의 내용이 들어 있다. 즉 **적용할 교정은 `코퍼스 주소 − 0xD0`** 다
+> (문서 어디에도 이 실행 가능한 방향이 명시돼 있지 않아 여기 못박는다).
+> `.pdata` 실측 함수 시작 **14,792개**를 정답지로 놓고 코퍼스 11,252개를 대조하면:
+>
+> ```
+> 코퍼스 주소 그대로     일치     86 / 11,252   ( 0.76%)
+> 코퍼스 주소 + 0xD0     일치    145 / 11,252   ( 1.29%)
+> 코퍼스 주소 − 0xD0     일치  3,290 / 11,252   (29.24%)   ← 옳은 방향
+> ```
+>
+> 표본: 코퍼스 `FUN_140001150` → 진짜 함수 `0x140001080`, 프롤로그
+> `48 83 ec 28 b9 50 00 00 00 e8`(= `sub rsp,0x28` / `mov ecx,0x50` / `call`).
+>
+> **그러나 남은 71% 는 다른 시프트가 아니다.** 밀린 바이트를 디스어셈블하면서 생긴
+> **가짜 함수 경계**다. 그러므로 **코퍼스는 산술 교정으로 살릴 수 없고, 재생성해야 한다.**
+>
+> **좋은 소식 — 재생성 입력이 이미 저장소에 있다.** 덮어써진 것은 `binaries/` 사본뿐이고,
+> `wallpaper_engine/wallpaper64.exe` 와 `wallpaper_engine/distribution/wallpaper64.exe`
+> 가 둘 다 **5,360,112 바이트 · MD5 `438cb215f20a8f6c38f57fbc3d9da588`** 인 무손상 원본이다
+> (git 추적 중). 그 파일은 헤더가 말하는 `.text raw=0x400` 에 진짜 코드가 있고 `.pdata` 가
+> 14,792/14,792 = 100% 정합이다. 주입은 pre-PE 영역에 순수 추가였으므로 손상본에서
+> 원본을 역산해도 바이트 단위로 같은 파일이 나온다(MD5 일치 확인).
+>
+> `inject_rich_header.py` 는 2026-08-26 에 수정됐다 — 이제 섹션 `PointerToRawData`,
+> `SizeOfHeaders`, SECURITY·DEBUG 디렉터리의 파일 오프셋을 함께 민다. 재생성 절차와
+> 자체 점검(`--verify-only`)은 그 파일 머리말 참조.
+
 ### [G WE2] 감사 문서가 strings 덤프의 파일 오프셋을 VA 로 인용 (+0x1200 오류)
 - **좌표**: `Waple-wallpaper-source/WE-ENGINE-ANALYSIS-2026-07-27.md`:178
 - analysis/strings/*.txt 의 column 2 는 명백히 'column 2: file offset' 라고 자체 서술했음에도(파일 헤더 확인), 감사 문서는 이를 VA 처럼 '@0x488040', '@0x476eb8', '@0x473e98', '@0x485748' 등으로 인용한다. 예: 'DXGI device lost in render loop.' 은 file off 0x488040 → 실제 VA 0x140489240; PLPV0005 file 0x476EB8 → VA 0x1404780B8. 문자열 자체의 존재와 subsystem 판정은 유효하나 좌표 인용이 모두 틀렸다.
+
+> **보강(2026-08-26, 재실측 — 이 항목은 옳다. 단 `+0x1200` 은 `.rdata` 한정이다).**
+> 두 예시 모두 그대로 재현됐다: dump `0x488040` → VA `0x140489240`(**일치**),
+> dump `0x476eb8` → VA `0x1404780b8`(**일치**). `analysis/strings/*.txt` 의 헤더는
+> 실제로 `column 2: file offset` 라고 적혀 있고, `analysis/extract_strings.py` 는
+> **무손상 원본**(`Z:\...\wallpaper64.exe`)을 읽는다 — 그래서 덤프의 오프셋은
+> 손상본이 아니라 원본 기준이다.
+>
+> 변환식은 `VA = ImageBase + SectionVA + (파일오프셋 − 섹션 RawPtr)` 이고,
+> **델타는 섹션마다 다르다.** `+0x1200` 은 `.rdata` 값이라 문자열 대부분에는 맞지만
+> 전부에 쓰면 안 된다:
+>
+> | 섹션 | VA − RawPtr |
+> | --- | --- |
+> | `.text` | `+0xC00` |
+> | `.rdata` | `+0x1200` |
+> | `.data` | `+0x2000` |
+> | `.pdata` | `+0x8400` |
+> | `.rsrc` | `+0xAA00` |
+>
+> 실제 사례: `subsystems-identified.md` 의 RTTI 좌표(`0x4dfcb0` 등)는 `.data` 라
+> `+0x2000` 이다 — `+0x1200` 을 쓰면 또 틀린다.
+>
+> 부수 효과 하나: 이 두 오차(원본 기준 오프셋 · 갱신 안 된 RawPtr)가 정확히 상쇄되므로,
+> **덤프 오프셋 → VA 변환에는 `0xD0` 보정이 필요 없다.** 두 좌표계를 섞지 말 것.
 
 ### [G WE2] "11,252 함수 디컴파일"은 실질 커버리지의 약 3배 과대 표기
 - **좌표**: `Waple-wallpaper-source/scripts/DecompileAll.java`:52
@@ -73,6 +152,21 @@
 ### [G WE2] Rich 헤더 주입이 PE 본문을 +0xD0 변위시켰고 섹션 raw_ptr은 갱신되지 않아, Ghidra 디컴파일 코퍼스 전체(11,252 함수)의 주소가 로드시 진값+0xD0로 어긋남
 - **좌표**: `Waple-wallpaper-source/binaries/wallpaper64.exe`
 - commit된 wallpaper64.exe와 wallpaper64_rich.exe는 MD5 동일(263677f0891626089b3553dcf52018ac)이며 둘 다 e_lfanew=0x110(원본 0x40), 크기 5360320(원본 5360112, +208). inject_rich_header.py는 본문 앞에 0xD0 스텁을 끼워 넣으면서 섹션 raw_ptr/SizeOfHeaders를 갱신하지 않았다. 증거: (a) .pdata 첫 RUNTIME_FUNCTION은 raw_ptr(0x4e1c00)에서 전부 0이고 raw+0xD0에서만 정상 파싱(StartRVA=0x1000); (
+
+> **보강(2026-08-26, 재실측 — 이 항목은 옳다).**
+> MD5·크기·`e_lfanew`·`.pdata` 증거 전부 재현됐다. 정확한 `.pdata` 수치는
+> **stated raw_ptr 에서 `.text` 안에 드는 항목 0개, `raw+0xD0` 에서 14,792개(=100%)** 다.
+>
+> 갱신 누락 필드는 섹션 `PointerToRawData`·`SizeOfHeaders` **둘만이 아니다.** 같은
+> `0xD0` 만큼 어긋난 파일 오프셋 필드를 두 종류 더 찾았다:
+> - `IMAGE_DIRECTORY_ENTRY_SECURITY` 의 첫 필드(RVA 가 아니라 **파일 오프셋**이다) —
+>   `0x51a000` 이라 적혀 있지만 실제 `WIN_CERTIFICATE`(dwLength `0x29f0`, rev `0x0200`,
+>   type `0x0002`)는 `0x51a0d0` 에 있다.
+> - `IMAGE_DEBUG_DIRECTORY` 3항의 `PointerToRawData`(`0x49c5cc`/`0x49c5f4`/`0x49c608`) —
+>   전부 실제보다 `0xD0` 앞.
+>
+> 시프트의 방향·귀결·재생성 경로는 위 [G WE2] 코퍼스 항목의 보강 참조.
+> 스크립트는 2026-08-26 에 수정됐다.
 
 ### [G WE2] 전임 리포트의 '조작 증거 정정' 자체가 오류 — RapidJSON·소스경로·FFTS 문자열은 모두 실재한다
 - **좌표**: `Waple-wallpaper-source/analysis/reports/subsystems-identified.md`
@@ -165,8 +259,26 @@
 
 ### RE 근거 좌표 (7건)
 - **[C WE]** RTTI 산출물 2건이 실패 상태 — rtti-vtables.json 은 빈 배열, rtti-references.json 11키 중 10키 빈 배열 + 유일 레코드는 무의미 좌표 — `rtti-references.json:13`
-- **[C WE]** [근거 오류] RemapOperation InjectedDefault int 0/1 의 네 인용 VA 는 명령어 중간 바이트다 — `RemapOperation.swift:137`
-- **[G WE2]** §4/§9/§10 MDL 디코더 주소가 Ghidra 주입본 기준 — 원본 바이너리 RVA와 +0xD0 어긋남, 문서 무기재 — `WE-ENGINE-ANALYSIS-2026-07-27.md:163`
+- ~~**[C WE]** [근거 오류] RemapOperation InjectedDefault int 0/1 의 네 인용 VA 는 명령어 중간 바이트다 — `RemapOperation.swift:137`~~ **← 철회. 같은 유령이다(아래 정정)**
+- **[G WE2]** §4/§9/§10 MDL 디코더 주소가 Ghidra 주입본 기준 — 원본 바이너리 RVA와 +0xD0 어긋남, 문서 무기재 — `WE-ENGINE-ANALYSIS-2026-07-27.md:163` **← 방향 옳음. 교정은 `코퍼스 주소 − 0xD0`(예: `FUN_140261950` → 진짜 `0x140261880`)**
+
+> **정정(2026-08-26, 무손상 원본 직접 디스어셈블).** `RemapOperation.swift` 인용이
+> "명령어 중간 바이트"라는 판정은 **밀린 코퍼스로 대조해서 나온 착시**다. 원본에서 읽으면
+> 인용 VA 가 전부 깨끗한 명령 경계이고, 주석이 말하는 명령과 정확히 같다:
+>
+> | 인용 VA | 주석이 말하는 것 | 원본 실측 |
+> | --- | --- | --- |
+> | `0x1401d8040` | 공유 주입 꼬리 | 함수 시작 · `push rdi` |
+> | `0x1401d8071` | 타입 태그 | `mov byte [rsp+0x28], 1` |
+> | `0x1401d809d` | 값 | `mov qword [rax], 1` (= 부재 기본 int 1) |
+> | `0x140244986`·`0x140244996` | `[r14+0x2c]` 두 번 읽기 | `mov ecx,[r14+0x2c]` · `movzx r9d,byte [r14+0x2c]` |
+> | `0x140246fc9`·`0x140246fd9` | 같은 쌍(다른 핸들러) | `mov ecx,[r14+0x2c]` · `movzx r10d,byte [r14+0x2c]` |
+> | `0x1401bffe1` | `transforminputscale` 2.0 | `movss xmm2,[rip+0x2d27bf]` → `0x1404927a8`, 그 자리 float = **2.0** |
+> | `0x1401bfff8` | `transformoctaves` 3 | `mov r8d, 3` |
+> | `0x1401cae45`·`0x1401cedf3` | 즉치 `0x34000000` 두 자리 | 둘 다 `mov dword [rax], 0x34000000` |
+> | `0x140245137`–`0x14024513c` | `dec`+`cmp 5`+`ja` | `dec eax` / `cmp eax,5` / `ja 0x140245928` — 점프 목적지까지 일치 |
+>
+> 즉 **Waple 소스 인용은 교정 대상이 아니다.** 자세한 규모 실측은 §3-④ 정정 참조.
 - **[G WE2]** 미기록: wallpaper64 메인 프로시저의 WM_USER IPC 전체 맵 (점프표 RVA 0x2E690) — `0000000140021f20__FUN_140021f20.c:1456`
 - **[G WE2]** '조작 철회' 보고서 자체의 오검출: FFTS·RapidJSON·소스경로 누출은 원본에 UTF-16LE로 실존 — `subsystems-identified.md:211`
 - **[G WE2]** FFT 미확정('FFT UNKNOWN') 해소 — FFTS가 정적으로 링크되어 있다 — `0000000140147580__FUN_140147580.c:1775`
@@ -232,8 +344,42 @@
 
 ### ④ RE 근거 좌표의 +0xD0 시프트 (C·G·L 교차, critical)
 `inject_rich_header.py` 가 PE 본문을 +0xD0 밀면서 섹션 raw_ptr 을 갱신하지 않아, **디컴파일 코퍼스 11,252 함수 전체의 주소가 어긋남**.
-Waple 소스 주석의 핸들러 VA 인용 20여 개가 이 규칙으로 교정 필요.
-추가로 `.pdata` 기준 실제 함수는 14,788개인데 코퍼스는 11,252개(교집합 0.6%) — **오퍼레이터 VM·파서 영역이 통째로 누락**.
+~~Waple 소스 주석의 핸들러 VA 인용 20여 개가 이 규칙으로 교정 필요.~~
+추가로 `.pdata` 기준 실제 함수는 ~~14,788개~~ **14,792개**인데 코퍼스는 11,252개(교집합 0.6%) — **오퍼레이터 VM·파서 영역이 통째로 누락**.
+
+> **정정(2026-08-26, 무손상 원본 실측).** 결함은 하나뿐이고, 그 파급 범위를 이 문서가
+> 두 군데에서 잘못 잡았다.
+>
+> **(1) 시프트는 실재하고 방향도 옳다.** 코퍼스 주소 `X` 에는 `X − 0xD0` 의 내용이 있다.
+> **적용할 교정은 `− 0xD0`** 다. 다만 그 산술로는 11,252개 중 3,290개(29.24%)만 맞고,
+> 나머지는 밀린 바이트를 디스어셈블해 생긴 **가짜 함수 경계**라 교정 자체가 불가능하다.
+> **코퍼스는 재생성해야 한다** — 무손상 원본 `wallpaper_engine/wallpaper64.exe`
+> (5,360,112 B · MD5 `438cb215f20a8f6c38f57fbc3d9da588`)가 저장소에 그대로 있으므로
+> 입력은 이미 확보돼 있다. 스크립트는 2026-08-26 에 수정됐다.
+>
+> **(2) "Waple 소스 인용 20여 개 교정 필요" 는 규모도 지시도 틀렸다 — 전면 철회.**
+> 실측 규모부터 20여 개가 아니다: `Sources/**/*.swift` 에 `0x140……` 형태 인용이
+> **6,053곳 / 고유 VA 4,140개 / 63개 파일**(고유 VA 의 92.2%가 `.text` 안)이다.
+>
+> 그리고 그 인용들은 **교정 대상이 아니라 이미 옳다.** VA 가 정확히 하나이고 명령
+> 니모닉이 정확히 하나인 줄만 뽑아(**508 표본**) 원본을 두 후보 오프셋에서 디스어셈블한 결과:
+>
+> ```
+> 인용값 그대로   주석의 니모닉과 일치   449 / 508   (88.4%)
+> 인용값 − 0xD0   일치                    31 / 479   ( 6.5%)  ← 잡음 수준
+> ```
+>
+> 표본 둘: `PlaybackPolicy.swift` 의 `0x14006d1fe` 는 주석이 `cmp ecx,1 / jne` 라 하고
+> 원본도 `cmp ecx,1` / `jne 0x14006d21f`(−0xD0 은 `sub edx,1`). `0x14006d365` 는 주석이
+> `mulss xmm0,[0x1404926e4]` = `0.800000011920929f` 라 하고, 원본은 `mulss xmm0,[rip+0x425377]`
+> → 목적지 `0x1404926e4`, 그 자리 float 는 정확히 **0.800000011920929**(−0xD0 은 `add`).
+>
+> 즉 Waple 소스 주석은 코퍼스가 아니라 **정상 도구(r2 · 직접 PE 파싱)** 로 만들어졌다.
+> 여기에 `+0xD0` 을 적용했다면 **옳은 인용 6,053곳을 망가뜨렸을 것이다.**
+>
+> **(3) "점프테이블 베이스 `0x1400000D0`" 은 유령이다** — §1 [C WE] 항목 정정 참조.
+> `.text` 전수 주사에서 `0x140000000`(`__ImageBase`) 을 겨누는 `lea` 는 **597회**,
+> `0x1400000D0` 을 겨누는 `lea` 는 **0회**다.
 
 ### ⑤ 문서 수치 진실성 (B·F·X·R 교차)
 - CI 래치 `3708` vs 리포 정본 grep 명령 결과 `3699` — `@MainActor func test` 9건이 패턴 사각지대
