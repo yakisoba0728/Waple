@@ -6,7 +6,20 @@
 /// 실제: `public protocol MTKViewDelegate: NSObjectProtocol {
 ///        func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize)
 ///        func draw(in view: MTKView) }`
-public protocol MTKViewDelegate: AnyObject {
+/// [2026-08-26] **요구사항에 `@MainActor` 를 붙인다 — 실물이 그렇다.**
+///
+/// 안 붙이면 `SceneRenderer.draw(in:)` 이 비격리 witness 가 되고, 그 안에서 `@MainActor` 인
+/// `tickAnimationEvents` 를 부르는 것이 오류가 된다(`SceneRenderer.swift:2310`,
+/// `[#ActorIsolatedCall]`). macOS CI 는 초록인데 이 하네스만 붉었다 — 즉 **커버 55/55 라고
+/// 적혀 있던 이 게이트가 실제로는 rc=1 로 죽어 있었다.** 원본 HEAD `eecc889` 를 CI 와 같은
+/// Swift 6.3.2 로 돌려 확인한 사실이고, 6.2 에서도 같다(툴체인 차이가 아니라 심 부정확이다).
+///
+/// **프로토콜 전체에 붙이면 안 된다.** 그러면 `SceneRenderer` 가 전역 액터 추론으로 통째로
+/// `@MainActor` 가 되어 `mount`/`captureFrames`/`teardown`/`init` 이 전부 격리되고,
+/// `AppDelegate.captureSceneStill`(비격리·백그라운드 큐)이 컴파일되지 않는다 — 그 함수들에
+/// `@MainActor` 를 붙이지 말라는 `SceneRenderer.swift:1937`·`:1969` 의 금지와 정면으로 부딪힌다.
+/// 실측으로도 그 형태는 테스트 4곳을 깨뜨렸다. 실물 swiftinterface 와 같은 **요구사항 단위**가 맞다.
+@preconcurrency @MainActor public protocol MTKViewDelegate: AnyObject {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize)
     func draw(in view: MTKView)
 }

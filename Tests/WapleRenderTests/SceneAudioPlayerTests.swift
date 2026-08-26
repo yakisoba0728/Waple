@@ -306,6 +306,21 @@ final class SceneAudioPlayerTests: XCTestCase {
     ///
     /// [2026-08-25] `Playlist` 를 `nonisolated` 로 바꾼 커밋에서 추가했다. 격리 표기를 바꾸는 것은
     /// witness 매칭에 영향을 줄 수 있는 변경이라, 바꾸는 그 커밋에 감시자를 같이 넣는다.
+#if canImport(ObjectiveC)
+    // [2026-08-26] `#if canImport(ObjectiveC)` — 이 테스트의 **판정 대상 자체가 ObjC 런타임 노출**이라
+    // 리눅스에는 물어볼 대상이 없다(`NSSelectorFromString`·`responds(to:)` 둘 다 스코프 밖 —
+    // objc-interop 이 꺼져 있다. `APP_EXCLUDED` 의 `AppDelegate.swift` 와 같은 사유다).
+    //
+    // **왜 이제야 필요해졌나**: 종전에는 `linux-shim/metalkit.swift` 의 `MTKViewDelegate` 격리
+    // 누락으로 소스 단계가 먼저 죽어 `--tests` 까지 온 적이 없었다. 같은 커밋에서 심을 고치자
+    // 이 단계가 처음 돌았고 이 파일이 드러났다.
+    //
+    // **파일 통째 제외가 아니라 함수 가드인 이유**: `SceneEventHookTests.soundScene` 이 이 클래스의
+    // `silentWAV()` 를 쓴다. 파일을 `RENDER_TEST_EXCLUDED` 에 넣으면 그 파일까지 따라 나가
+    // `cannot find 'SceneAudioPlayerTests' in scope` 로 깨진다(실측). 함수 하나만 가드하면
+    // 커버리지 손실이 0 이다.
+    //
+    // macOS 에서는 그대로 돌므로 CI 실행 수 불변이고, 선언이 남으므로 정적 개수도 불변이다.
     func testAudioPlayerDidFinishPlayingIsExposedToObjC() throws {
         let sel = NSSelectorFromString("audioPlayerDidFinishPlaying:successfully:")
         let list = Playlist(entries: [], mode: "loop", package: try emptyPackage(),
@@ -318,6 +333,7 @@ final class SceneAudioPlayerTests: XCTestCase {
         XCTAssertFalse(list.responds(to: NSSelectorFromString("wapleDefinitelyNotASelector:")),
                        "responds(to:) 가 아무 셀렉터에나 true 면 위 검사는 도장이다")
     }
+#endif
 
     private func emptyPackage() throws -> ScenePackage {
         try ScenePackage.parse(encodePkg([("scene.json", Data("{}".utf8))]))
