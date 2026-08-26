@@ -291,7 +291,7 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 ## 잠재 결함
 
 - ~~캡처 인스턴스가 라이브 모니터를 시작한다~~ → **해소(2026-08-25, 포인터 핀 + 미디어 폴러 게이트)** — `AppDelegate.captureSceneStill` 이 mount 전 `SceneRenderer.capturePointerUV = (0.5, 0.5)` 를 걸고(`SnapshotPipeline.pinRenderSettings` 의 save/set/defer-restore 패턴, teardown 뒤 LIFO 복원) `startMediaPollingIfNeeded` 머리에 핀 게이트를 더했다. 시차 전역 모니터는 기존 내부 핀 게이트로 함께 막힌다. "폴러 5초 주기라 안 불린다" 방어는 애초 성립하지 않았다 — `MediaPoller.start()` 가 타이머 등록 직후 `t.fire()` 로 즉시 1회 폴한다(MediaPoller.swift:40). 핀 상태에선 폴러를 아예 안 켜므로 골든 CLI 파이프라인(메인 동기 실행이라 배달이 캡처 창에 들어온 적 없음)과 픽셀이 같다. 검증: CapturePointerPinTests +2(핀 마운트 → mediaPoller nil, 무핀 음성 대조). `SceneRenderer.swift` 클래스 선언부 ⚠️ 문단은 툼스톤 정정 주석으로 교체
-- **캡처 경로 잔여 갭 2건** (2026-08-25 핀 작업 중 확인, 미수정): ① `startClickMonitorIfNeeded` 는 캡처 인스턴스에도 무조건 설치된다 — 클릭 콜백이 `pointerSceneCoords()` 창 가드보다 먼저 `pointerButton.setDown` 을 실행해(g_PointerState 소비 씬 한정) 캡처 중 물리 클릭이 프레임에 새는 경로가 이론상 남는다. ② `captureSceneStill` 은 `pause()`/`setSpectrum(.silent)` 를 호출하지 않는다(`SnapshotPipeline.captureFrame:149-150` 과 상이) — 오디오 반응 씬 스틸의 결정성 미보장. 둘 다 골든 베이스라인과는 무관(골든은 WapleCompat CLI 단독)이라 재베이스라인 전제는 아니다
+- ~~**캡처 경로 잔여 갭 2건**~~ → **① 해소(2026-08-26, `4653a7f`) · ② 여전히 열림.** ① `startClickMonitorIfNeeded` 에 캡처 게이트를 넣었다(포인터·미디어폴러와 같은 모양). **"이론상" 이 아니었다** — `.z` 를 한 프레임 임펄스로 되돌리는 `pointerButton.endFrame()` 은 리포 전체에서 `draw(in:)`(`SceneRenderer.swift:2375`) 한 곳뿐이고 `captureFrames` 는 그 경로를 타지 않으므로, 캡처 중 눌린 상태는 **그 캡처의 모든 프레임**에 `clickImpulse=1` 로 남았다. 같은 커밋에서 전역 핀 자체를 인스턴스 소유로 바꿨다(데이터레이스·라이브 오염·defer 교차 동시 해소). ② `captureSceneStill` 이 `pause()`/`setSpectrum(.silent)` 를 안 부르는 건 그대로다(`SnapshotPipeline.captureFrame:149-150` 과 상이) — 오디오 반응 씬 스틸의 결정성 미보장. 골든 베이스라인과 무관한 것도 그대로다
 
 *트리거: 실제 파일·사용에서 물릴 때.*
 
