@@ -735,19 +735,29 @@ final class AppLogicTests: XCTestCase {
         guard let resolved else { return XCTFail("프리셋이 해석되지 않았다") }
 
         let bare = storedFields(minimalProject())
-        // resolve 는 필드를 교차 대입한다(presetFolderURL := project.folderURL). 그래서 같은
+        // resolve 는 필드를 **교차 대입**한다(presetFolderURL := project.folderURL). 그래서 같은
         // 이름끼리 맞추는 대신 **두 입력이 가진 값들의 집합**에 속하는지를 본다.
-        var fromInputs = Set(storedFields(preset).values)
-        fromInputs.formUnion(storedFields(target).values)
+        // `Optional(...)` 껍질은 벗겨서 비교한다 — 같은 값이라도 받는 필드의 옵셔널 여부가
+        // 다르면 `String(describing:)` 표기가 갈리기 때문이다(`presetFolderURL`(URL?) 에 들어간
+        // `folderURL`(URL) 값이 실제로 그랬다. 이 벗기기 없이 짰다가 표준 오라클이 정상 코드에도
+        // 실패해서 발견했다).
+        var fromInputs = Set(storedFields(preset).values.map(Self.unwrappedDescription))
+        fromInputs.formUnion(storedFields(target).values.map(Self.unwrappedDescription))
 
         for (label, value) in storedFields(resolved) {
             XCTAssertNotEqual(
                 value, bare[label],
                 "재구성이 `\(label)` 을 흘렸다 — 생성자 기본값(\(value))이 그대로 남았다")
             XCTAssertTrue(
-                fromInputs.contains(value),
+                fromInputs.contains(Self.unwrappedDescription(value)),
                 "`\(label)` 의 값(\(value))이 두 입력 어디에서도 오지 않았다")
         }
+    }
+
+    /// `Optional(x)` → `x`. 그 밖은 그대로.
+    private static func unwrappedDescription(_ s: String) -> String {
+        guard s.hasPrefix("Optional("), s.hasSuffix(")") else { return s }
+        return String(s.dropFirst("Optional(".count).dropLast())
     }
 
     /// 위 일반 오라클이 실제로 무엇을 잡았는지 사람이 읽을 수 있게 남기는 회귀 못.
@@ -768,6 +778,26 @@ final class AppLogicTests: XCTestCase {
         // 프리셋이 선언한 축이 이기고, target 만 선언한 축은 그대로 실려 온다.
         XCTAssertEqual(resolved?.playbackProperties,
                        ["playbackfullscreen": "pause", "playbackfocus": "mute", "playbacksleep": "stop"])
+    }
+
+    /// [2026-08-26] `with(...)` 의 옵셔널 파라미터는 **이중 옵셔널**이라 `??` 를 인자 자리에
+    /// 직접 쓰면 좌변이 `.some(…)` 으로 승격돼 우변이 죽는다(컴파일러는 경고만 준다).
+    /// `resolve` 에서 실제로 그렇게 썼다가 앱 계층 타입체크 경고로 잡았고, 그때 죽은 것이
+    /// 바로 이 "프리셋이 비면 target 값" 폴백 세 개다. 기존 테스트들은 전부 프리셋 쪽에
+    /// 값이 **있는** 경우만 봐서 못 잡았다 — 그래서 없는 쪽을 여기서 못 박는다.
+    func testPresetResolveFallsBackToTargetWhenPresetLeavesFieldsEmpty() {
+        let preset = populatedProject(seed: "preset", type: .preset)
+            .with(previewName: String?.none, contentRating: String?.none, workshopId: String?.none)
+        let target = populatedProject(seed: "target", type: .scene)
+        let resolved = PresetResolver.resolve(
+            project: preset,
+            originalFolder: preset.folderURL,
+            dependencyFolder: { _ in target.folderURL },
+            parse: { $0 == target.folderURL ? target : nil })
+
+        XCTAssertEqual(resolved?.previewName, "target.jpg", "프리셋에 없으면 target 미리보기")
+        XCTAssertEqual(resolved?.contentRating, "Everyone-target")
+        XCTAssertEqual(resolved?.workshopId, "ws-target")
     }
 
     // MARK: - PlaybackPolicyGate (재생정책 stage 1, 2026-08-26)

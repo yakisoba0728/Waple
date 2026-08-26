@@ -85,12 +85,22 @@ enum PresetResolver {
             // 기준은 `project`(프리셋)다. 이 함수가 돌려주는 것은 "해석된 그 프리셋" 이고,
             // 라이브러리 엔트리로서의 정체성(id·title·tags·presetOverrides)이 프리셋 쪽이다.
             // 내용 쪽 필드만 target 으로 다시 가리킨다.
+            // ⚠️ `??` 를 `with(...)` 인자 자리에 **직접 쓰면 안 된다.** 옵셔널 필드의 파라미터가
+            //    이중 옵셔널이라 좌변 `String?` 이 `.some(…)` 으로 승격돼 **항상 non-nil** 이 되고,
+            //    우변(target 폴백)이 통째로 죽는다. 이 자리에서 실제로 그렇게 썼다가 실측으로
+            //    잡았다 — `warning: left side of nil coalescing operator '??' has non-optional
+            //    type 'String?', so the right side is never used`(AppLogic.swift:91–93).
+            //    경고일 뿐이라 빌드는 서고, "프리셋이 비면 target 값" 규약만 조용히 사라진다.
+            //    타입을 명시한 지역 상수로 **먼저 접은 뒤** 넘긴다.
+            let previewName: String? = project.previewName ?? target.previewName
+            let contentRating: String? = project.contentRating ?? target.contentRating
+            let workshopId: String? = project.workshopId ?? target.workshopId
             return project.with(
                 type: target.type,
                 fileName: target.fileName,
-                previewName: project.previewName ?? target.previewName,
-                contentRating: project.contentRating ?? target.contentRating,
-                workshopId: project.workshopId ?? target.workshopId,
+                previewName: previewName,
+                contentRating: contentRating,
+                workshopId: workshopId,
                 dependency: safeDependency,
                 folderURL: target.folderURL,
                 presetFolderURL: project.folderURL,
