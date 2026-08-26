@@ -377,7 +377,7 @@ JSON 정본처럼 마커를 넣을 수 없는 자리만 도구 안의 `CORRECTIO
 ### 4.6 CI 테스트 수 하한
 `.github/workflows/ci.yml` 이 실행 테스트 수의 하한을 박아 둔다(테스트가 조용히 사라지거나
 스위트가 중간에 죽는 것을 잡는다). 하한은 **CI 가 초록으로 실제 측정한 수**에만 맞춰 올려라.
-정적 개수는 `grep -rE '^\s*(public |private |internal )?func test' Tests/ --include=*.swift | wc -l`.
+정적 개수는 `grep -rE '^\s*(@\w+(\([^)]*\))?\s+|(private|fileprivate|internal|public|open|final|static|class|nonisolated|override|mutating)\s+)*func test' Tests/ --include=*.swift | wc -l`.
 현재 하한 **3500**(2026-08-21, `2d19faa` 초록 실행 실측 `executed=3596 skipped=65`).
 여유는 **100 안쪽**으로 유지해라 — 종전 여유 246 은 테스트 파일 하나가 통째로 안 실리는
 양상(대개 100건 이상)을 못 잡는 폭이었다. 같은 스텝의 **스킵 상한 100** 과 짝이다: 하한은

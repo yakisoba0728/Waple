@@ -401,7 +401,7 @@ jobs:
           # **이 하한을 손대는 사람에게**: 이 값은 tip 의 실측치와 정확히 같게 박는 관례라
           # (아래 `94b0a34` 문단) 여유가 0 이다. 여러 작업이 동시에 `Tests/**` 를 고치는 중이면
           # **푸시 직전에 정적 개수를 다시 세서** 이 값 이상인지 확인해라 — 한 줄이면 된다:
-          #   grep -rE '^\s*(public |private |internal )?func test' Tests/ --include=*.swift | wc -l
+          #   grep -rE '^\s*(@\w+(\([^)]*\))?\s+|(private|fileprivate|internal|public|open|final|static|class|nonisolated|override|mutating)\s+)*func test' Tests/ --include=*.swift | wc -l
           # (참고: 이 커밋을 쓰던 시점의 워킹트리는 이미 3119 였다 — 다른 작업들이 20개를 더 얹었다.
           #  하한은 그 3119 가 아니라 **CI 가 실제로 잰 3099** 로 둔다. 안 재 본 숫자를 하한으로
           #  박으면 그게 곧 근거 없는 게이트다.)
@@ -466,7 +466,7 @@ jobs:
           # 신고하고 있었다. 하한 초과 실패를 볼 때는 `Test` 스텝의 실패부터 먼저 읽어야 한다.
           # [2026-08-20] 실측 갱신: executed **2459** / skipped 46 / 실패 0
           # (run 32398914480 기준 2452 → remapvalue 어휘 1건 + 관용 JSON 6건 추가로 2459). 같은 시점의 정적 개수
-          # (`grep -rE '^\s*(public |private |internal )?func test' Tests/ --include=*.swift | wc -l`)도
+          # (`grep -rE '^\s*(@\w+(\([^)]*\))?\s+|(private|fileprivate|internal|public|open|final|static|class|nonisolated|override|mutating)\s+)*func test' Tests/ --include=*.swift | wc -l`)도
           # 정확히 2459 다 — 두 세는 법이 어긋나지 않는다는 것을 실측으로 확인했다.
           #
           # **[2026-08-20] 근거가 하한보다 낡아 있었다.** 이 주석은 `2369`(커밋 c109ac1)를 인용하는데
