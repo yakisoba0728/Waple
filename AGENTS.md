@@ -19,7 +19,7 @@ WapleCore ←── WapleLibrary ──┐
                               ↑
                         WapleSnapshot
 
-WaplePolicy   (의존 없음 · 아무도 의존하지 않음 — 리눅스 spec 레인 전용. 아래 경고)
+WaplePolicy   (의존 없음 · 앱 타깃과 WapleAppTests 가 의존 — 리눅스 spec 레인 전용. 아래 경고)
 WapleSaver    (SwiftPM 밖 — package-app.sh 가 직접 컴파일)
 ```
 
@@ -32,7 +32,7 @@ WapleSaver    (SwiftPM 밖 — package-app.sh 가 직접 컴파일)
 | `WapleCompatCore` | 호환성 스캔·스냅샷 캡처/비교 **라이브러리** | Core, Render, Snapshot |
 | `WapleCompat` | 위의 CLI 진입점(`main.swift` 만) | **CompatCore**, Core, Render |
 | `WapleSnapshot` | 스냅샷 매니페스트·diff. Foundation 전용 | 없음 |
-| `WaplePolicy` | WE 재생 정책(playbackfocus/…/pausevram) 순수 모델 | **없음** — 아래 경고 |
+| `WaplePolicy` | WE 재생 정책(playbackfocus/…/pausevram) 순수 모델 | **없음**(자신은 의존 0 — 아래 경고). `Waple`·`WapleAppTests` 가 이 모듈에 의존한다(2026-08-26) |
 | `WapleSaver` | 스크린세이버 `.saver` (Objective-C) | **SwiftPM 밖** — `scripts/package-app.sh` 가 직접 컴파일하므로 `swift test` 커버리지에 없다 |
 
 외부 패키지 의존은 0이다. 새로 추가하지 마라.
