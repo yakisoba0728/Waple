@@ -424,20 +424,25 @@ enum PlaybackPolicyGate {
         return declaredAny ? policy : nil
     }
 
-    /// 이 벽지에 대한 판정. **선언이 하나도 없으면 평가기를 부르지 않고 `.running`.**
-    static func verdict(for project: WallpaperProject, conditions: PlaybackConditions) -> PlaybackVerdict {
-        verdict(declaring: project.playbackProperties, conditions: conditions)
-    }
-
-    /// 위와 같되 딕셔너리를 직접 받는다(파서를 거치지 않은 입력·테스트용).
-    static func verdict(declaring properties: [String: String],
-                        conditions: PlaybackConditions) -> PlaybackVerdict {
-        guard let policy = declaredPolicy(properties) else { return .running }
-        return PlaybackEvaluator.evaluate(policy, conditions)
-    }
+    // [2026-08-26 승계] **여기 있던 `verdict(...)` 둘은 걷어냈다.**
+    //
+    // 그 둘은 벽지 선언만 보고 판정을 냈고, 선언이 없으면 평가기를 부르지 않고 `.running` 으로
+    // 단축했다. 그 단축은 "전역 정책면이 없다" 는 전제 위에서만 옳았는데 **그 전제가 깨졌다** —
+    // `PlaybackPolicyRuntime.swift` 가 전역면을 세웠다(근거: 코퍼스 191개 중 이 6키를 선언한
+    // `project.json` 이 0개이고, 정책은 WE 의 `config.json` `general/user` 에 산다).
+    //
+    // 판정을 내는 자리는 이제 `PlaybackPolicyResolver` **하나**다. 두 경로를 남겨 두면 둘 중
+    // 어느 쪽이 진짜인지가 호출부마다 갈린다.
+    //
+    // 이 층이 사라진 것은 아니다 — 위 `declaredPolicy` 는 여전히 "이 벽지가 **스스로** 무엇을
+    // 선언했는가" 라는 별개의 질문에 답한다. 종전 `verdict` 의 의미(선언 없는 축 = run)는
+    // 이제 `PlaybackPolicyResolver.effective(global: .allRun, declaring:)` 로 정확히 표현된다.
 }
 
-// MARK: - stage 2 — 아직 없는 것 (플랫폼 관측자)
+// MARK: - stage 2 — 남은 것 (플랫폼 관측자)
+//
+// [2026-08-26] 전역면·병합·창 파생 마스크는 `PlaybackPolicyRuntime.swift` 에 착지했다.
+// 아래 목록 중 남은 것은 **관측자 배선과 판정 적용**이다.
 //
 // [2026-08-26] 위 게이트는 **순수 판정까지만**이다. `PlaybackConditions` 를 실제 시스템
 // 상태로 채우는 관측자는 **하나도 쓰지 않았다** — 전부 macOS 전용 API 라 이 작업이 검증에

@@ -824,17 +824,22 @@ final class AppLogicTests: XCTestCase {
 
     func testPolicyGateIsACompleteNoOpWhenNothingIsDeclared() {
         XCTAssertNil(PlaybackPolicyGate.declaredPolicy([:]), "선언 없음 → 정책 없음")
+        // [2026-08-26] 종전엔 `PlaybackPolicyGate.verdict` 가 선언 없음을 `.running` 으로 단축했다.
+        // 그 단축은 전역면이 없다는 전제 위에서만 옳았고, 그 전제는 깨졌다. 같은 계약을
+        // **전역 = 전 축 run** 으로 표현한다 — 정책이 어디에도 없으면 무동작이라는 뜻은 그대로다.
         XCTAssertEqual(
-            PlaybackPolicyGate.verdict(for: project(playback: [:]), conditions: hostileConditions),
+            PlaybackPolicyResolver.verdict(for: project(playback: [:]),
+                                           conditions: hostileConditions, global: .allRun),
             .running,
-            "아무것도 선언하지 않은 벽지는 어떤 조건에서도 무동작이어야 한다(무회귀 계약)")
+            "정책이 어디에도 없으면 어떤 조건에서도 무동작이어야 한다(무회귀 계약)")
     }
 
     func testPolicyGateTreatsEmptyStringAsAbsent() {
         let empty = Dictionary(uniqueKeysWithValues: PlaybackTrigger.allCases.map { ($0.weConfigKey, "") })
         XCTAssertNil(PlaybackPolicyGate.declaredPolicy(empty),
                      "빈 문자열은 WE 의 '전역 설정 따름' 기본 주입이라 부재와 같다")
-        XCTAssertEqual(PlaybackPolicyGate.verdict(declaring: empty, conditions: hostileConditions),
+        XCTAssertEqual(PlaybackPolicyResolver.verdict(for: project(playback: empty),
+                                                      conditions: hostileConditions, global: .allRun),
                        .running)
     }
 
@@ -859,9 +864,10 @@ final class AppLogicTests: XCTestCase {
 
     func testPolicyGateDeclaredAxisReachesTheEvaluator() {
         // 전체화면 축만 pause 로 선언 → 전체화면인 화면만 정지(layout=perMonitor 이므로 부분 정지).
-        let verdict = PlaybackPolicyGate.verdict(
+        let verdict = PlaybackPolicyResolver.verdict(
             for: project(playback: ["playbackfullscreen": "pause"]),
-            conditions: PlaybackConditions(allMonitorsMask: 0b11, fullscreenMask: 0b10))
+            conditions: PlaybackConditions(allMonitorsMask: 0b11, fullscreenMask: 0b10),
+            global: .allRun)
         XCTAssertFalse(verdict.stop)
         XCTAssertFalse(verdict.muted)
         XCTAssertFalse(verdict.isPaused(monitorIndex: 0))
@@ -870,9 +876,9 @@ final class AppLogicTests: XCTestCase {
 
     func testPolicyGateUnrecognisedValueFallsToRun() {
         // 매퍼 0x140141918: 미인식 문자열은 조용히 run. 오타가 '정책 없음' 이지 실패가 아니다.
-        let verdict = PlaybackPolicyGate.verdict(
+        let verdict = PlaybackPolicyResolver.verdict(
             for: project(playback: ["playbackfullscreen": "paws"]),
-            conditions: hostileConditions)
+            conditions: hostileConditions, global: .allRun)
         XCTAssertEqual(verdict, .running)
     }
 
@@ -900,9 +906,10 @@ final class AppLogicTests: XCTestCase {
             return XCTFail("프리셋이 해석되지 않았다")
         }
 
-        let verdict = PlaybackPolicyGate.verdict(
+        let verdict = PlaybackPolicyResolver.verdict(
             for: resolved,
-            conditions: PlaybackConditions(allMonitorsMask: 1, fullscreenMask: 1))
+            conditions: PlaybackConditions(allMonitorsMask: 1, fullscreenMask: 1),
+            global: .allRun)
         XCTAssertTrue(verdict.isPaused(monitorIndex: 0),
                       "프리셋 해석을 거치면서 선언한 정책이 사라졌다")
     }
