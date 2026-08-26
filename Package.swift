@@ -44,9 +44,19 @@ let package = Package(
         // 빌드된다 — 정책 판정은 GPU 도 창도 필요 없는 순수 산수라 그게 맞는 자리다.
         // 앞으로도 여기에 의존을 더하지 마라. 더하는 순간 이 성질이 사라진다.
         .target(name: "WaplePolicy", swiftSettings: strictConcurrency),
+        // [2026-08-26] `WaplePolicy` 를 앱 타깃에 건다 — 재생정책 배선의 첫 단추.
+        //
+        // 모델·평가기는 진작 완성돼 있었는데 **아무도 의존하지 않아** 프로덕션 참조가 0이었다
+        // (`Sources/WaplePolicy/PlaybackPolicy.swift` 677줄, 소비자는 자기 테스트뿐).
+        // 소비 지점은 `Sources/Waple/AppLogic.swift` 의 `PlaybackPolicyGate` 하나다.
+        //
+        // **방향을 혼동하지 마라.** 위 `WaplePolicy` 타깃 주석의 금지는 "`WaplePolicy` **가**
+        // 무언가에 의존하는 것" 이다(그 순간 리눅스 spec 레인이 죽는다). 여기처럼 다른 타깃이
+        // `WaplePolicy` **를** 의존하는 것은 그 성질에 아무 영향이 없다 — `WaplePolicy` 는
+        // 여전히 `import Foundation` 하나뿐이고 `swift build --target WaplePolicy` 도 그대로 선다.
         .executableTarget(
             name: "Waple",
-            dependencies: ["WapleCore", "WapleLibrary", "WapleRender"],
+            dependencies: ["WapleCore", "WapleLibrary", "WapleRender", "WaplePolicy"],
             swiftSettings: strictConcurrency
         ),
         // [2026-08-19] `WapleCompat` 을 **라이브러리 + 얇은 실행파일**로 쪼갠다.
@@ -85,6 +95,17 @@ let package = Package(
         // SnapshotTests 가 relDiff/structureLoss 를 인라인으로 재구현해 **자기 산수를 단언하는**
         // 상태였고(프로덕션 로직을 지워도 통과했다), 같은 실수를 반복하지 않는다.
         .testTarget(name: "WapleRenderTests", dependencies: ["WapleRender", "WapleCore", "WapleSnapshot"]),
-        .testTarget(name: "WapleAppTests", dependencies: ["Waple", "WapleCore", "WapleLibrary", "WapleRender"]),
+        // [2026-08-26] `WaplePolicy` 추가 — **`WapleCore` 와 `WaplePolicy` 를 동시에 보는 첫 타깃**이다.
+        //
+        // 그런 타깃이 없다는 것이 `ProjectJSONParser.parsePlaybackProperties` 주석이 약속한
+        // "앱 측 감시 테스트"(파서의 여섯 키 리터럴 ↔ `PlaybackTrigger.allCases` 의 weConfigKey)가
+        // 여태 쓰이지 못한 이유였다. 새 테스트 타깃을 하나 더 만들지 않은 것은, 감시 대상이
+        // **앱 계층의 소비자**(`PlaybackPolicyGate`)라 `@testable import Waple` 이 어차피 필요하고,
+        // `ci.yml` 의 타깃 존재 게이트도 타깃 수만큼 늘기 때문이다.
+        //
+        // 리눅스에서는 이 타깃이 안 돈다(`Waple` 이 AppKit/SwiftUI 다). 대신
+        // `scripts/dev/linux-render-typecheck.sh --app` 이 타입체크로 덮는다 —
+        // 그 경로는 `--lib` 단계에서 이미 `WaplePolicy` 모듈을 emit 하므로 추가 배선이 필요 없다.
+        .testTarget(name: "WapleAppTests", dependencies: ["Waple", "WapleCore", "WapleLibrary", "WapleRender", "WaplePolicy"]),
     ]
 )
