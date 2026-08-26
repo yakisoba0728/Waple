@@ -40,10 +40,29 @@ public struct WallpaperProject: Equatable, Sendable {
     /// 값이 bool(태그 5)이 아닌 순간 전부 false 로 떨어뜨린다(0x14010d11b·0x14010d141).
     public let supportsAudioProcessing: Bool
 
+    /// WE 재생정책 속성(project.json `general.properties.<키>.value`)의 **원문 문자열**.
+    ///
+    /// 키는 여섯 개다 — `playbackfocus`·`playbackmaximized`·`playbackfullscreen`·
+    /// `playbackaudio`·`playbacksleep`·`playbackonbattery`
+    /// (analysis/strings/json-keys.txt:409-414 · spec/engine/playback-policy.json 의
+    /// `playbackPolicy.axes`). 값은 UI 콤보의 문자열 그대로("run"/"mute"/"pause"/
+    /// "pauseall"/"stop")이며, 액션으로의 접기는 앱 계층의 WaplePolicy 매퍼 포트가 한다
+    /// (PlaybackAction.init(weConfigValue:) — mapper 0x140141880, 미인식 → run).
+    ///
+    /// **여기 `[String: String]` 이상을 담지 않는 것은 의도다.** 이 모듈(WapleCore)은 리눅스
+    /// spec 레인 보호를 위해 WaplePolicy 에 의존할 수 없다(Package.swift 의 WaplePolicy 경고 —
+    /// 실측 `AudioResponse.swift:2 error: no such module 'simd'`). 부재 키는 딕셔너리에
+    /// **안 들어간다** — 소비자(PlaybackPolicyGate)가 "부재 = run" 을 판정한다. WE 는 월페이퍼별
+    /// 속성을 "" 기본값으로 주입해 "전역 설정 따름"을 뜻하게 하는데(FUN_140046ff0 →
+    /// FUN_140086eb0(param_1,"playbackfocus","")), Waple 에는 아직 전역 정책면이 없으므로
+    /// 빈 문자열도 부재와 같게 취급해 소비자에게 넘기지 않는다.
+    public let playbackProperties: [String: String]
+
     public init(id: String, type: WallpaperType, fileName: String?, previewName: String?,
                 title: String, tags: [String], contentRating: String?, workshopId: String?,
                 dependency: String?, folderURL: URL, presetOverrides: [String: PropertyValue] = [:],
-                presetFolderURL: URL? = nil, supportsAudioProcessing: Bool = false) {
+                presetFolderURL: URL? = nil, supportsAudioProcessing: Bool = false,
+                playbackProperties: [String: String] = [:]) {
         self.id = id
         self.type = type
         self.fileName = fileName
@@ -57,5 +76,6 @@ public struct WallpaperProject: Equatable, Sendable {
         self.presetOverrides = presetOverrides
         self.presetFolderURL = presetFolderURL
         self.supportsAudioProcessing = supportsAudioProcessing
+        self.playbackProperties = playbackProperties
     }
 }
