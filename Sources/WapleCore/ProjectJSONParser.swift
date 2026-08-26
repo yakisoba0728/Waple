@@ -94,7 +94,8 @@ public enum ProjectJSONParser {
             folderURL: folderURL,
             presetOverrides: presetOverrides,
             presetFolderURL: type == .preset ? folderURL : nil,
-            supportsAudioProcessing: parseSupportsAudioProcessing(obj)
+            supportsAudioProcessing: parseSupportsAudioProcessing(obj),
+            playbackProperties: parsePlaybackProperties(obj)
         )
     }
 
@@ -123,6 +124,42 @@ public enum ProjectJSONParser {
         let raw = general["supportsaudioprocessing"]
         guard EffectManifest.isJSONBool(raw) else { return false }
         return (raw as? NSNumber)?.boolValue ?? false
+    }
+
+    /// WE 재생정책 여섯 키(`general.properties.<키>.value`)의 문자열 값을 수집한다.
+    ///
+    /// 키 목록은 `analysis/strings/json-keys.txt:409-414`(playbackfocus/maximized/fullscreen/
+    /// onbattery/sleep/audio)와 정본 spec/engine/playback-policy.json 의 `playbackPolicy.axes` 가
+    /// 확정한다. WapleCore 는 WaplePolicy 를 import 할 수 없어(Package.swift 경고 — 리눅스
+    /// `no such module 'simd'`) 이 모듈 안에서 리터럴로 두고, 양쪽의 일치는 앱 측 테스트가
+    /// PlaybackTrigger.allCases 의 weConfigKey 와 대조해 감시한다.
+    ///
+    /// 수집 규칙:
+    /// - **값이 비어 있거나(빈 문자열) 문자열이 아니면 부재로 본다.** WE 는 월페이퍼별 속성을 ""
+    ///   기본값으로 주입해 "전역 설정 따름"을 뜻하게 한다(FUN_140046ff0 →
+    ///   FUN_140086eb0(param_1,"playbackfocus","") — analysis/decompiled/all/0000000140046ff0).
+    ///   Waple 에는 전역 정책면이 아직 없으므로 빈 값 ≡ 부재다. 숫자·불리언 value 도 WE 의
+    ///   저장 형식(콤보 문자열)과 어긋나므로 받지 않는다 — 매퍼 포트가 기대하는 입력은
+    ///   config.json `general/user` 와 같은 `[String: String]` 이다
+    ///   (PlaybackPolicy.init(weConfig:) 서명).
+    /// - **부재 키는 딕셔너리에 넣지 않는다** — 소비자(PlaybackPolicyGate)의 "부재 = run"
+    ///   무회귀 계약이 판정의 단일 지점을 갖게 하기 위해서다.
+    private static func parsePlaybackProperties(_ obj: [String: Any]) -> [String: String] {
+        guard let properties = (obj["general"] as? [String: Any])?["properties"] as? [String: Any] else {
+            return [:]
+        }
+        let playbackKeys = [
+            "playbackfocus", "playbackmaximized", "playbackfullscreen",
+            "playbackaudio", "playbacksleep", "playbackonbattery",
+        ]
+        var out: [String: String] = [:]
+        for key in playbackKeys {
+            guard let prop = properties[key] as? [String: Any],
+                  let value = prop["value"] as? String,
+                  !value.isEmpty else { continue }
+            out[key] = value
+        }
+        return out
     }
 
     private static func parsePresetOverrides(_ value: Any?) -> [String: PropertyValue] {
