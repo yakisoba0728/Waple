@@ -38,9 +38,13 @@ final class RealPackagesGroundTruthTests: XCTestCase {
         // 실제 커서 위치가 g_PointerPosition 으로 들어가 캡처 픽셀에 구워진다(스냅샷 파이프라인에서
         // 세션마다 29종이 달랐던 근본원인 — spec/golden/nondeterminism.json → oracle.nondet.rootCause).
         // SnapshotPipeline.capturePointerUV 와 동일한 중앙 고정(리터럴 중복은 위 epoch 과 동형 관례).
-        let oldPointer = SceneRenderer.capturePointerUV
-        SceneRenderer.capturePointerUV = SIMD2<Float>(0.5, 0.5)
-        defer { SceneRenderer.capturePointerUV = oldPointer }
+        //
+        // [2026-08-26] ~~프로세스 전역 `SceneRenderer.capturePointerUV` 를 여기서 한 번 핀하고
+        // defer 로 복원한다.~~ → **핀이 인스턴스 프로퍼티가 됐다**(SceneRenderer 클래스 선언의
+        // [2026-08-26 정정] 문단). 그래서 위 epoch/base-assets 처럼 루프 밖에서 한 번 거는 것이
+        // 아니라, 아래 루프가 씬마다 만드는 렌더러에 **각각** 대입한다. 핀 값·핀 시점(mount 전)은
+        // 종전 그대로라 이 하네스의 캡처 픽셀은 불변이다.
+        let capturePointerUV = SIMD2<Float>(0.5, 0.5)
 
         // WE base-assets(공유 텍스처 + common_*.h)가 있으면 연결 — common.h 헬퍼 의존 효과까지 실측.
         // env WAPLE_BASE_ASSETS 우선, 기본 ~/Downloads/wallpaper_dev/assets. 테스트 후 원복.
@@ -67,6 +71,7 @@ final class RealPackagesGroundTruthTests: XCTestCase {
                 let r = SceneRenderer()
                 // 미디어 씬(media*Changed 소비)이 실제 AppleScript 폴링을 돌리지 않게 스텁 주입(결정적 + TCC 무).
                 r.nowPlayingProvider = StoppedNowPlayingProvider()
+                r.capturePointerUV = capturePointerUV   // 위 [2026-08-26] 문단 — 씬마다 새 인스턴스라 여기서 건다.
                 try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 360)), project: project)
                 mounted += 1
                 // t=6.0: 인트로 페이드(검정 커버 알파 애니 — 실물 3577990983 류)가 끝난 정상상태 캡처.

@@ -1052,19 +1052,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 이 함수는 여전히 `nonisolated` 이고 백그라운드 큐에서 돈다.
         guard size.width > 0, size.height > 0 else { return nil }
         let renderer = SceneRenderer()
-        // [2026-08-25] **포인터 핀** — SnapshotPipeline.captureFrame 이 골든 캡처마다
-        // pinRenderSettings(SnapshotPipeline.swift:315-316)로 하는 일을 앱 내부 스틸 경로에도
-        // 그대로 둔다. 핀이 없으면 아래 mount 가 시차 전역 모니터를 켜고(ParallaxController.start()
-        // 가 즉시 emit — 그 순간의 실제 커서가 g_PointerPosition 으로 구워진다,
-        // spec/golden/nondeterminism.json → oracle.nondet.rootCause) 미디어 폴러도 켠다
-        // (start() 의 첫 폴은 즉시 fire — MediaPoller.swift:40). 둘 다 메인에서 콜백을 배달하므로
-        // 백그라운드 큐가 이 인스턴스를 쓰는 동안 겹칠 수 있었다(SceneRenderer 클래스 선언 주석
-        // [2026-08-25 툼스톤] 문단 · BACKLOG 잠재 결함 "캡처 인스턴스가 라이브 모니터를 시작한다").
-        // 값 SIMD2(0.5, 0.5) = 마우스 미구동 중앙 규약(SnapshotPipeline.capturePointerUV:49).
-        // 복원은 defer LIFO 로 teardown **뒤**에 — 핀이 걸린 상태로 정리까지 끝내고 푼다.
-        let oldCapturePointer = SceneRenderer.capturePointerUV
-        SceneRenderer.capturePointerUV = SIMD2<Float>(0.5, 0.5)
-        defer { SceneRenderer.capturePointerUV = oldCapturePointer }
+        // [2026-08-25] **포인터 핀** — SnapshotPipeline.captureFrame 이 골든 캡처마다 하는 일을
+        // 앱 내부 스틸 경로에도 그대로 둔다. 핀이 없으면 아래 mount 가 시차 전역 모니터를 켜고
+        // (ParallaxController.start() 가 즉시 emit — 그 순간의 실제 커서가 g_PointerPosition 으로
+        // 구워진다, spec/golden/nondeterminism.json → oracle.nondet.rootCause) 미디어 폴러도 켜고
+        // (start() 의 첫 폴은 즉시 fire — MediaPoller.swift:40) 전역 클릭 모니터도 켠다.
+        // 셋 다 메인에서 콜백을 배달하므로 백그라운드 큐가 이 인스턴스를 쓰는 동안 겹칠 수 있었다
+        // (SceneRenderer 클래스 선언 주석 · BACKLOG "캡처 인스턴스가 라이브 모니터를 시작한다").
+        // 값 SIMD2(0.5, 0.5) = 마우스 미구동 중앙 규약(SnapshotPipeline.capturePointerUV:49 —
+        // 그 상수는 WapleCompatCore 라 앱 타깃에서 못 부른다. 리터럴 중복은 GT 하네스와 동형 관례다).
+        //
+        // [2026-08-26] ~~프로세스 전역 `SceneRenderer.capturePointerUV` 를 save/set/defer-restore 한다.
+        // 복원은 defer LIFO 로 teardown 뒤에 — 핀이 걸린 상태로 정리까지 끝내고 푼다.~~
+        // → **인스턴스 프로퍼티 한 줄 대입으로 바뀌었다.** 종전 전역 방식은 이 함수에서 특히 나빴다:
+        // 이 함수는 `nonisolated` 이고 백그라운드 큐에서 도는데(위 F486 문단), 같은 전역을
+        // `@MainActor` 인 `SceneRenderer.updateParallax` 가 읽어 **비원자 옵셔널의 교차 스레드 접근**이
+        // 됐다. 게다가 전역이라 캡처가 도는 수 초 동안 마운트되는 **라이브** 배경까지 "캡처 인스턴스"
+        // 로 오인돼 커서 반응 없이 태어났고(`desktopStillSync` 는 적용마다 3초 뒤 이 경로를 돈다),
+        // save/defer-restore 는 재진입 불가라 동시 캡처 2건이면 핀이 영구 잔존할 수 있었다.
+        // 이제 이 렌더러 인스턴스에만 쓰므로 복원할 전역 자체가 없다 — 그래서 defer 도 사라졌다.
+        // 캡처 동작은 종전과 동일하다(핀 값·핀 시점 그대로, 라이브 모니터 미기동).
+        renderer.capturePointerUV = SIMD2<Float>(0.5, 0.5)
         let container = DispatchQueue.main.sync {
             MainActor.assumeIsolated { NSView(frame: CGRect(origin: .zero, size: size)) }
         }

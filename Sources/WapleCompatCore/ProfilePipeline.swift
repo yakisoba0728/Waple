@@ -277,6 +277,13 @@ public enum ProfilePipeline {
             NSView(frame: NSRect(x: 0, y: 0, width: SnapshotPipeline.thumbW, height: SnapshotPipeline.thumbH))
         }
         let r = SceneRenderer()
+        // [2026-08-26] 포인터 핀은 이제 **인스턴스 소유**다. 종전에는 프로세스 전역
+        // `SceneRenderer.capturePointerUV` 였고, 위 `pinRenderSettings`(:244)가 그것을 걸어 주었기
+        // 때문에 여기서 아무것도 안 해도 이 인스턴스가 핀 상태로 태어났다. 전역을 없애면서 그
+        // 경로가 끊겼다 — **그런데 이 파일은 전역 이름을 한 번도 쓰지 않아서 컴파일은 그대로
+        // 통과하고 핀만 조용히 사라진다.** 이 리포가 특히 싫어하는 실패 모양이라 명시 대입으로 막는다.
+        // 값은 캡처 경로와 같은 상수를 쓴다(SnapshotPipeline.capturePointerUV = 중앙 (0.5, 0.5)).
+        r.capturePointerUV = SnapshotPipeline.capturePointerUV
         r.nowPlayingProvider = SnapshotPipeline.StoppedNowPlaying()
 
         // 콜드 마운트(#1) — Metal 컴파일러 콜드.
