@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waple × WE 교차 분석</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#EDF1F4;
+  --surface:#FFFFFF;
+  --surface-2:#F6F9FB;
+  --ink:#17222E;
+  --ink-2:#48586B;
+  --ink-3:#7C8DA0;
+  --line:#D7DEE6;
+  --line-strong:#C2CCD6;
+  --accent:#0F6E80;
+  --accent-soft:#E2EFF2;
+  --waple:#3F58B5;
+  --waple-soft:#E4E8F8;
+  --we:#A85A28;
+  --we-soft:#F5E8DD;
+  --ok:#2E7D46;
+  --ok-soft:#E1F0E6;
+  --warn:#9A6510;
+  --warn-soft:#F6EBD4;
+  --danger:#B03A31;
+  --danger-soft:#F7E3E1;
+  --blank:#8593A4;
+  --blank-soft:#EAEEF2;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10151B;
+    --surface:#181F27;
+    --surface-2:#1F2831;
+    --ink:#E7EDF3;
+    --ink-2:#AAB7C5;
+    --ink-3:#71818F;
+    --line:#2B3641;
+    --line-strong:#3A4754;
+    --accent:#54B5CB;
+    --accent-soft:#17323A;
+    --waple:#8FA3EF;
+    --waple-soft:#232C4E;
+    --we:#DE9258;
+    --we-soft:#3C2B1D;
+    --ok:#5CBA7E;
+    --ok-soft:#1B3325;
+    --warn:#D8A44C;
+    --warn-soft:#372C16;
+    --danger:#E2726A;
+    --danger-soft:#3C211E;
+    --blank:#8494A5;
+    --blank-soft:#242E38;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10151B;
+  --surface:#181F27;
+  --surface-2:#1F2831;
+  --ink:#E7EDF3;
+  --ink-2:#AAB7C5;
+  --ink-3:#71818F;
+  --line:#2B3641;
+  --line-strong:#3A4754;
+  --accent:#54B5CB;
+  --accent-soft:#17323A;
+  --waple:#8FA3EF;
+  --waple-soft:#232C4E;
+  --we:#DE9258;
+  --we-soft:#3C2B1D;
+  --ok:#5CBA7E;
+  --ok-soft:#1B3325;
+  --warn:#D8A44C;
+  --warn-soft:#372C16;
+  --danger:#E2726A;
+  --danger-soft:#3C211E;
+  --blank:#8494A5;
+  --blank-soft:#242E38;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{
+  font-family:"IBM Plex Sans KR",-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  background:var(--bg);
+  color:var(--ink);
+  font-size:16px;
+  line-height:1.72;
+  padding:0 20px 96px;
+}
+.mono{font-family:"IBM Plex Mono","SF Mono",Menlo,Consolas,monospace}
+.wrap{max-width:1040px;margin:0 auto}
+
+/* ---------- header ---------- */
+header.top{
+  padding:52px 0 0;
+  border-bottom:1px solid var(--line);
+}
+.masthead{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:16px;
+}
+.kicker{
+  font-family:"IBM Plex Mono",monospace;
+  font-size:11.5px;font-weight:600;
+  letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent);
+  margin-bottom:14px;
+}
+h1{
+  font-size:clamp(26px,4vw,36px);
+  font-weight:700;line-height:1.28;letter-spacing:-.01em;
+  max-width:26ch;
+}
+.repo-pair{
+  flex:none;text-align:right;font-size:12.5px;color:var(--ink-2);
+  display:flex;flex-direction:column;gap:6px;padding-top:6px;
+}
+.repo-dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:7px;vertical-align:baseline}
+.meta-strip{
+  display:flex;flex-wrap:wrap;gap:0 34px;
+  padding:20px 0 22px;margin-top:26px;
+  border-top:1px solid var(--line);
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--ink-2);
+  font-variant-numeric:tabular-nums;
+}
+.meta-strip b{color:var(--ink);font-weight:600}
+nav.toc{
+  position:sticky;top:0;z-index:5;
+  background:var(--bg);
+  border-bottom:1px solid var(--line);
+  margin:0 -20px;padding:0 20px;
+}
+nav.toc ol{
+  list-style:none;display:flex;flex-wrap:wrap;gap:2px 4px;
+  max-width:1040px;margin:0 auto;padding:8px 0;
+}
+nav.toc a{
+  display:inline-block;padding:3px 10px;border-radius:4px;
+  font-size:13px;font-weight:500;color:var(--ink-2);text-decoration:none;
+}
+nav.toc a:hover{color:var(--accent);background:var(--accent-soft)}
+.theme-btn{
+  border:1px solid var(--line-strong);background:var(--surface);
+  color:var(--ink-2);border-radius:4px;
+  font-family:"IBM Plex Mono",monospace;font-size:11.5px;
+  padding:3px 10px;cursor:pointer;margin-left:auto;
+}
+.theme-btn:hover{color:var(--accent)}
+.theme-btn:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ---------- verdicts ---------- */
+.verdicts{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:14px;
+  margin:34px 0 8px;
+}
+.v-card{
+  background:var(--surface);border:1px solid var(--line);border-radius:8px;
+  padding:18px 20px 16px;
+}
+.v-tag{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px;
+}
+.v-card h3{font-size:16.5px;font-weight:700;line-height:1.4;margin-bottom:8px}
+.v-card p{font-size:13.5px;color:var(--ink-2);line-height:1.62}
+.v-waple .v-tag{color:var(--waple)} .v-waple{border-top:3px solid var(--waple)}
+.v-we .v-tag{color:var(--we)} .v-we{border-top:3px solid var(--we)}
+.v-x .v-tag{color:var(--accent)} .v-x{border-top:3px solid var(--accent)}
+
+/* ---------- sections ---------- */
+section{margin-top:64px}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:6px}
+.sec-no{
+  font-family:"IBM Plex Mono",monospace;font-weight:600;font-size:13px;
+  color:var(--accent);letter-spacing:.06em;flex:none;
+}
+h2{font-size:23px;font-weight:700;letter-spacing:-.005em;line-height:1.35}
+.sec-sub{color:var(--ink-2);font-size:14.5px;margin:6px 0 22px;max-width:76ch}
+h3.block{
+  font-size:16px;font-weight:700;margin:34px 0 12px;
+  display:flex;align-items:center;gap:10px;
+}
+h3.block::before{content:"";flex:none;width:8px;height:8px;background:var(--accent);border-radius:1px}
+p.lede{font-size:15px;color:var(--ink-2);max-width:80ch;margin-bottom:18px}
+.hl{background:linear-gradient(transparent 62%, var(--accent-soft) 0);padding:0 1px}
+
+ul.facts{list-style:none;display:grid;gap:10px;margin:14px 0 6px}
+ul.facts li{
+  padding-left:20px;position:relative;font-size:14.5px;color:var(--ink-2);
+}
+ul.facts li::before{
+  content:"";position:absolute;left:2px;top:.72em;width:8px;height:2px;background:var(--line-strong);
+}
+ul.facts li b{color:var(--ink);font-weight:600}
+code{
+  font-family:"IBM Plex Mono",monospace;font-size:.86em;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:4px;
+  padding:.08em .38em;color:var(--ink);word-break:break-all;
+}
+
+.callout{
+  background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:6px;padding:16px 20px;margin:20px 0;
+  font-size:14.5px;color:var(--ink-2);
+}
+.callout b{color:var(--ink)}
+.callout.newfact{border-left-color:var(--we)}
+.callout .co-label{
+  display:block;font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:6px;
+}
+.callout.newfact .co-label{color:var(--we)}
+
+/* ---------- matrix table ---------- */
+.table-scroll{
+  overflow-x:auto;background:var(--surface);
+  border:1px solid var(--line);border-radius:8px;
+  margin-top:16px;
+}
+table.matrix{border-collapse:collapse;width:100%;min-width:860px;font-size:13.5px}
+table.matrix th{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:600;
+  letter-spacing:.08em;text-transform:uppercase;text-align:left;
+  color:var(--ink-3);padding:12px 14px;border-bottom:1px solid var(--line-strong);
+  background:var(--surface-2);white-space:nowrap;
+}
+table.matrix td{
+  padding:12px 14px;border-bottom:1px solid var(--line);
+  vertical-align:top;line-height:1.58;color:var(--ink-2);
+}
+table.matrix tr:last-child td{border-bottom:none}
+table.matrix td.feat{font-weight:600;color:var(--ink);min-width:170px}
+table.matrix td.verd{min-width:340px}
+.chip{
+  display:inline-flex;align-items:center;gap:6px;
+  font-size:11.5px;font-weight:600;border-radius:999px;
+  padding:2px 9px;white-space:nowrap;
+}
+.chip i{width:6px;height:6px;border-radius:50%;flex:none}
+.c-done{background:var(--ok-soft);color:var(--ok)}      .c-done i{background:var(--ok)}
+.c-part{background:var(--warn-soft);color:var(--warn)}  .c-part i{background:var(--warn)}
+.c-doc{background:var(--waple-soft);color:var(--waple)} .c-doc i{background:var(--waple)}
+.c-none{background:var(--danger-soft);color:var(--danger)} .c-none i{background:var(--danger)}
+.e-proven{background:var(--ok-soft);color:var(--ok)}
+.e-strong{background:var(--warn-soft);color:var(--warn)}
+.e-blank{background:var(--blank-soft);color:var(--blank)}
+.meter{display:inline-flex;gap:2px;margin-left:8px;vertical-align:1px}
+.meter s{width:10px;height:5px;border-radius:1px;background:var(--line);text-decoration:none}
+.meter.s3 s{background:var(--ok)}
+.meter.s2 s:nth-child(-n+2){background:var(--warn)}
+.meter.s1 s:nth-child(1){background:var(--blank)}
+td.ev{white-space:nowrap;font-weight:600}
+
+/* ---------- contradictions ---------- */
+ol.contra{list-style:none;display:grid;gap:12px;counter-reset:c}
+ol.contra li{
+  counter-increment:c;
+  background:var(--surface);border:1px solid var(--line);border-radius:8px;
+  padding:16px 20px 15px;
+}
+ol.contra li::before{
+  content:counter(c,decimal-leading-zero);
+  font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:600;color:var(--ink-3);
+  display:block;margin-bottom:6px;
+}
+ol.contra b.topic{display:block;font-size:14.5px;color:var(--ink);margin-bottom:5px}
+ol.contra p{font-size:13.5px;color:var(--ink-2)}
+
+/* ---------- actions ---------- */
+.actions{border-top:2px solid var(--ink);margin-top:16px}
+.action-row{
+  display:grid;grid-template-columns:64px 92px 1fr;gap:0 18px;
+  padding:15px 4px;border-bottom:1px solid var(--line);
+  align-items:start;
+}
+.a-no{font-family:"IBM Plex Mono",monospace;font-size:13px;color:var(--ink-3);padding-top:3px;font-variant-numeric:tabular-nums}
+.a-pri{padding-top:2px}
+.pri{display:inline-block;font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:600;letter-spacing:.06em;border-radius:4px;padding:2px 8px;white-space:nowrap}
+.pri.hi{background:var(--danger-soft);color:var(--danger)}
+.pri.md{background:var(--warn-soft);color:var(--warn)}
+.pri.lo{background:var(--blank-soft);color:var(--blank)}
+.a-body b{display:block;font-size:14.5px;color:var(--ink);margin-bottom:3px;font-weight:700}
+.a-body span{font-size:13.5px;color:var(--ink-2)}
+
+/* ---------- appendix ---------- */
+.run-stats td:first-child,.run-stats th:first-child{text-align:left}
+.stats-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:18px 0 8px;
+}
+.stat{
+  background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 18px;
+}
+.stat .n{font-family:"IBM Plex Mono",monospace;font-size:24px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
+.stat .l{font-size:12.5px;color:var(--ink-3);margin-top:2px}
+footer{margin-top:72px;padding-top:20px;border-top:1px solid var(--line);
+  font-size:12.5px;color:var(--ink-3);line-height:1.8}
+footer .mono{font-size:11.5px}
+
+@media (max-width:860px){
+  .verdicts{grid-template-columns:1fr}
+  .repo-pair{display:none}
+  .action-row{grid-template-columns:44px 84px 1fr;gap:0 12px}
+}
+@media print{
+  body{background:#fff;padding-bottom:0}
+  nav.toc{position:static}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="masthead">
+    <div>
+      <div class="kicker">Deep Audit · Cross-Evidence Report</div>
+      <h1>Waple × Wallpaper&nbsp;Engine<br>이중 저장소 교차 분석</h1>
+    </div>
+    <div class="repo-pair mono">
+      <span><span class="repo-dot" style="background:var(--waple)"></span>Waple — macOS 재구현 (SwiftPM)</span>
+      <span><span class="repo-dot" style="background:var(--we)"></span>wallpaper-source — WE 리버스엔지니어링</span>
+    </div>
+  </div>
+  <div class="meta-strip">
+    <span>기준일 <b>2026-08-25</b></span>
+    <span>Waple HEAD <b>a5a3c0f9</b></span>
+    <span>WE 버전 <b>2.8.42</b></span>
+    <span>에이전트 <b>8+8+1 = 17</b></span>
+    <span>소비 토큰 <b>≈3.75M</b></span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="목차">
+  <div style="max-width:1040px;margin:0 auto;display:flex">
+  <ol>
+    <li><a href="#s1">① Waple</a></li>
+    <li><a href="#s2">② RE 워크스페이스</a></li>
+    <li><a href="#s3">③ 교차 대조</a></li>
+    <li><a href="#matrix">정렬 매트릭스</a></li>
+    <li><a href="#contra">모순 12건</a></li>
+    <li><a href="#actions">다음 액션</a></li>
+    <li><a href="#appendix">부록</a></li>
+  </ol>
+  <button class="theme-btn" id="themeToggle" type="button">테마</button>
+  </div>
+</nav>
+
+<div class="verdicts">
+  <div class="v-card v-waple">
+    <div class="v-tag">① Waple · 구현 저장소</div>
+    <h3>매우 성숙 — 갭은 “구현”이 아니라 “배선”</h3>
+    <p>외부 의존 0, 프로덕션 67,996줄 / 테스트 78,823줄(3,700개), 순환 의존 0. 프로덕션 <code>try!</code>/<code>as!</code>/<code>fatalError</code> 0건. 남은 것은 Policy 미배선·무효 골든 기준선·라이선스 판정 같은 운영 과제.</p>
+  </div>
+  <div class="v-card v-we">
+    <div class="v-tag">② wallpaper-source · RE 워크스페이스</div>
+    <h3>포맷 지식은 완성급, 행위 증명은 공백</h3>
+    <p>446씬·19,777청크 파싱에러 0건의 코퍼스 검증 포맷 계약. RTTI 제거(/GR-) 확인, 로딩 흐름 이름 수준 확립. 반면 TEX→DXGI·MDL 비트 필드·파티클 산식·JS 바인딩 표면은 미증명.</p>
+  </div>
+  <div class="v-card v-x">
+    <div class="v-tag">③ 통합 판정</div>
+    <h3>포맷 계약은 맞닿아 있고, 어긋남은 배선·증거 공백에 집중</h3>
+    <p>최대 미연결은 재생 정책(섬 모듈). 최대 신규 사실은 JSON 파서 3종 병존. 최대 리스크는 TEX/MDL에서 Waple이 WE 가설을 <b>앞서 구현</b>해 교차 검증 없이 굴러간다는 것.</p>
+  </div>
+</div>
+
+<!-- ================= SECTION 1 ================= -->
+<section id="s1">
+  <div class="sec-head"><span class="sec-no">01</span><h2>Waple — 구현 저장소</h2></div>
+  <p class="sec-sub">~/Documents/GitHub/Waple · SwiftPM 8타깃 · main = origin/main = <span class="mono">a5a3c0f9</span> (2026-08-25)</p>
+
+  <h3 class="block">구조와 규모</h3>
+  <ul class="facts">
+    <li><b>외부 디펜던시 제로</b> — Package.swift에 <code>.package</code> 선언 자체가 없음. Apple 프레임워크만 사용(<code>Package.swift:22-89</code>)</li>
+    <li><b>명확한 4단 DAG, 순환 0건</b> — Policy/Snapshot(L0) → Core(Foundation+simd만) → Library·Render → CompatCore → App/Compat(L3). 전수 grep에서 역방향 import 0건</li>
+    <li><b>WapleCore 29,564줄 + WapleRender 25,527줄 = 프로덕션의 81%</b>. 테스트는 7타깃 337파일, <code>func test</code> 3,700개(XCTest 100%)</li>
+    <li><b>WapleSaver는 빈 모듈이 아니라 SPM 밖 ObjC</b> — <code>WapleSaverView.m</code>(152줄)을 <code>package-app.sh</code>가 clang <code>-bundle</code>로 직접 컴파일(SPM은 .saver 번들 타깃 불가)</li>
+    <li><b>OggVorbis·TEX/DXT5 디코더·GLSLTranslator(2,573줄)·ParticleSimulator(2,298줄) 전부 자체 구현</b> — WapleCore에는 Foundation+simd import만 존재</li>
+  </ul>
+
+  <h3 class="block">지식 정본 문화 — 이 코드베이스의 가장 특이한 강점</h3>
+  <ul class="facts">
+    <li>wallpaper64.exe <b>디스어셈블 VA가 코드 주석에 수천 개 인용</b>. “오역보다 폴터” 원칙 — ShaderPreprocessor는 미지원 <code>#if</code>에서 조용한 오분기 대신 번역 실패를 택함</li>
+    <li><b>정정 이력이 툼스톤 주석으로 남음</b> — “종전 판정의 근거는 지금도 맞지만 결론을 뒤집는다” 패턴 반복(visibilityParent, spriteTrailStretch 철회 등)</li>
+    <li><b>109개 테스트 파일이 VA 리터럴을 단언</b>, 음성 대조(negative control)가 표준 절차 — 게이트가 진짜 걸러내는지 빨강 프레임으로 확인하는 문화</li>
+    <li>jsoncpp <b>타입태그 재현</b>(<code>isJSONBool</code> objCType 0x63, 관용폭 3단 사다리, 32비트 폭 축 wrapInt32/wrapUInt32)이 JSON 로딩의 공통 기반 (<code>JSONNumerics.swift:170-323</code>)</li>
+  </ul>
+
+  <h3 class="block">렌더러·앱 한눈에</h3>
+  <ul class="facts">
+    <li><b>MTKView 라이브 렌더 + 오프스크린 acc 합성</b> — draw()는 가림 게이트·dt 클램프(50ms) 후 z-order 인터리브 드로우, finalizeScene에서 HDR 블룸 또는 blit 프레젠트(<code>SceneRenderer.swift:2246-2422</code>)</li>
+    <li><b>GLSL→MSL 4단 번역 + 프로세스 전역 메모이즈</b>, EngineU 80-float 유니폼 버퍼(buffer(1)). mul(a,b)→(b*a) 행우선 전치 등 변환 규약 확정</li>
+    <li><b>결정성 계약 전역 적용</b> — 헤드리스 캡처는 벽시계·Math.random(mulberry32)·포인터·오디오·비디오를 전부 핀</li>
+    <li><b>앱은 Dock 없는 accessory 상주</b> — apply(folderURL:) → PresetResolver → MonitorMapping → RendererSwap 트랜잭션(전부 성공해야 교체, 실패 시 롤백)</li>
+  </ul>
+
+  <h3 class="block">주요 미완성 · 리스크</h3>
+  <ul class="facts">
+    <li><b>WaplePolicy = 섬 모듈(최대 미완성)</b> — WE 6축 재생정책+VRAM 히스테리시스를 순수 함수+74테스트까지 완비했는데 프로덕션 import가 0건. 앱은 자체 4사유 PauseGate로 별개 동작</li>
+    <li><b>골든 기준선 baseline-6f0bcf0 무효 선언</b> 상태, 코퍼스 골든 게이트(--compare)는 CI 미배선(<code>ciCallSites []</code>). 픽셀 회귀 자동 감지는 합성 5씬뿐</li>
+    <li><b>strict-concurrency 잔여 32건</b>(전부 WapleRender — SceneRenderer 25 + 프로토콜 격리 7). “보호된 오프메인 캡처 계약”이라 표기로는 못 없애는 설계 별건</li>
+    <li><b>captureSceneStill 잠재 경합</b> — capturePointerUV 미핀으로 캡처 인스턴스가 시차 모니터·미디어 폴러를 실제 시작(<code>SceneRenderer.swift:28-38</code>, BACKLOG 등재만)</li>
+    <li><b>라이선스 사람 판정 대기</b> — 동봉 WE 에셋 2,940파일/76MB 재배포 권리, 폰트 15종 중 11종 라이선스 근거 부재(NotoSans OFL 저작권 고지 누락)</li>
+    <li><b>문서-코드 충돌</b> — <code>docs/re/unimplemented-json-keys.md</code> §0 “갭 0개” vs 실제 파스 전용 필드 6개(schemeColor·transparentSorting·spritesheetRefreshSync·orthoAuto·noPadding·materialUserTextureKeepAspect)</li>
+    <li>루트 미추록 잔재 — <code>Ox</code>(0바이트)와 <code>.commandcode/taste/taste.md</code> — 커밋할지 ignore할지 미결정</li>
+  </ul>
+</section>
+
+<!-- ================= SECTION 2 ================= -->
+<section id="s2">
+  <div class="sec-head"><span class="sec-no">02</span><h2>Waple-wallpaper-source — RE 워크스페이스</h2></div>
+  <p class="sec-sub">~/Documents/GitHub/Waple-wallpaper-source · Ghidra 디컴파일 11,252함수 · Frida 로그 8세션 · 코퍼스 446씬</p>
+
+  <h3 class="block">확립된 것</h3>
+  <ul class="facts">
+    <li><b>엔트리는 순정 MSVC CRT</b> — WinMainCRTStartup thunk가 __security_init_cookie 후 __tmainCRTStartup 테일점프. 패커·VM·안티디버그 전혀 없음. CFG 꺼져 있어 계측 장벽 낮음</li>
+    <li><b>RTTI 제거(/GR-) 확인</b> — Complete Object Locator 0개, 132개 .?A 문자열은 고아 데이터. 클래스 표면은 lambda/std::_Binder 장식명으로만 복원(WallpaperManager·SceneWallpaper·VideoWallpaper·CEFWallpaper·AudioProcessor 등)</li>
+    <li><b>로딩 흐름 이름 수준 확립</b> — <code>WallpaperManager::Init</code> → <code>SceneWallpaper::LoadSceneAndProperties(char const*)</code> / VideoWallpaper / CEFWallpaper 분기</li>
+    <li><b>포맷 계약은 코퍼스 전수 검증</b> — 161 scene.pkg·19,777청크 파싱에러 0건. PKGV 헤더/인덱스 레이아웃, alloc_dim POT 패딩, MDLV0023 지배(423중 378)</li>
+    <li><b>핵심 함정 계약</b>: PKGV 접미 4자리=<b>버전이 아니라 시리얼</b>, scene.json version∈{1,3,4,5}=<b>진짜 기능 게이트</b>(HDR=v3+, wind=v4+), project.json version=<b>저자 저장 카운터</b>(0~113, 분기 금지), 벡터=<b>“x y z” 공백 문자열</b>(JSON 배열 아님)</li>
+    <li><b>셰이더 경로 완전 해명</b> — GLSL→HLSL shim(vec2→float2, mix→lerp…) 정적 내장 + d3dcompiler_47 JIT(SM4/SM5) + blobsSM40/*.dxs 폴백</li>
+    <li><b>런타임 실측</b> — D3D11CreateDevice는 프로세스당 정확히 1회 생성 후 벽지 전환에도 재사용. DXGI device-lost 복구 상태머신 문자열 확인. 스왑체인은 dxgi.dll이 d3d11 스캔 필터 밖이라 8세션 전부 관측 실패(구조적 사각지대)</li>
+    <li><b>설치 트리</b> — Web=모니터당 독립 CEF(Chromium <span class="mono">146.0.7680.179</span> 핀), Video=MF 디코드→videotex 텍스처를 씬 파이프라인이 그림, Application=sheep(Unity exe)+inject, UI=CEF 위 AngularJS(wpx.internal 스킴)</li>
+  </ul>
+
+  <div class="callout newfact">
+    <span class="co-label">이번 분석의 신규 판정 1 — JSON 파서 3종 병존 확정</span>
+    기존 <code>subsystems-identified.md</code>의 “RapidJSON·FFTS·D:\dev 소스경로는 조작” 주장을 직접 UTF-16LE 바이트검색으로 <b>반증</b> — <code>rc\json\include\rapidjson\internal\pow10.h</code> 13히트, <code>ffts_static.c</code> 19히트. rapidjson+jsoncpp+wuffs 병존과 FFTS 정적링크가 진실이며, 오류는 ASCII-only 검색(§0 함정 1의 실례). 로드 오케스트레이터 FUN_140065da0에 rapidjson 단언(json_value.cpp:1076)이 박혀 있음.
+  </div>
+  <div class="callout newfact">
+    <span class="co-label">이번 분석의 신규 판정 2 — MDL 디코더 앵커 확보</span>
+    <code>FUN_140261950</code>(RVA 0x260950, 8,056바이트)가 MDLS/MDLA/MDAT/MDMP/MDLE 5매직을 모두 참조하는 디코더 메인으로 특정 — stride 플래그×테이블(0x1404849b0/0x140484a20) 합산 구조까지 확인. evidence-index.tsv에서 유일한 format_magic 행. <b>아직 Waple MDL 파서 검증에는 소비되지 않음.</b>
+  </div>
+
+  <h3 class="block">증거 공백 (행위 축)</h3>
+  <ul class="facts">
+    <li><b>TEX</b> — format enum→DXGI 매핑(CreateTexture2D 포획 실패), per-mip [u32][LZ4 block] 가설, TEXB flags 0/2/4·TEXI field6/field7 의미</li>
+    <li><b>MDL</b> — vertex_format_lo 비트별 속성 매핑, 인덱스 폭(u16/u32), count_A/B 의미, puppet/bone 블록 레이아웃</li>
+    <li><b>파티클</b> — CP/mapsequence 위치 산식의 디컴파일 정독된 함수 없음(키 존재만 확정)</li>
+    <li><b>scenescript64.dll(27MB)</b> — Ghidra 체인 미투입. JS 바인딩 표면은 lambda TD 1개(CallbackCreateLayer)만 확인</li>
+    <li><b>방법론 유의점</b> — 문자열 검색은 듀얼 인코딩 원칙(UTF-16LE), Ghidra 재분석 시 <code>inject_rich_header.py</code> Rich헤더 주입 필수(e_lfanew 0x40→0x110, +208B 오프셋 환산 필요)</li>
+  </ul>
+</section>
+
+<!-- ================= SECTION 3 ================= -->
+<section id="s3">
+  <div class="sec-head"><span class="sec-no">03</span><h2>교차 대조 — 통합 판정</h2></div>
+  <p class="sec-sub">양쪽 16레인 결과를 기능 영역별로 “Waple 상태 × WE 증거 강도” 2축에 세운 결과</p>
+
+  <p class="lede"><span class="hl">포맷 계약 축(pkgv/scene/project/tex/mdl/glsl)은 WE 증명 ↔ Waple 구현이 맞닿아 있다.</span> 실제로 어긋나는 지점은 ‘구현 품질’이 아니라 <b>‘배선’</b>(재생 정책, application 유형)과 <b>‘WE 증거 공백’</b>(파티클 산식, script API, 라이팅 세부, 비디오 클록)이다. JSON 파서 3종 병존 확정은 WapleCore의 중복키 <code>[미해결]</code>을 부분적으로만 닫고, MDL stride 앵커는 아직 미소비 — TEX/MDL은 Waple이 WE 가설을 앞서 구현해 <b>교차 검증 없이 굴러가는 상태</b>이므로 최종 검증이 배포 리스크 관리의 핵심이다.</p>
+</section>
+
+<section id="matrix">
+  <h3 class="block">정렬 매트릭스 — 20개 기능 영역</h3>
+  <div class="table-scroll">
+  <table class="matrix">
+    <thead><tr>
+      <th style="width:19%">기능 영역</th><th style="width:11%">Waple 상태</th><th style="width:14%">WE 증거</th><th>판정 요지</th>
+    </tr></thead>
+    <tbody>
+      <tr><td class="feat">.pkgv(PKGV) 컨테이너 파서</td>
+        <td><span class="chip c-done"><i></i>구현됨</span></td>
+        <td class="ev e-proven">증명됨<span class="meter s3"><s></s><s></s><s></s></span></td>
+        <td class="verd">잘 맞는 영역. 단 접미 4자리는 시리얼(버전 아님)이라 분기 금지 — Waple magic regex의 와일드카드 처리 확인 필요 <span class="mono">(ScenePackage.swift:114-235 ↔ pkgv_parse.py:11-13)</span></td></tr>
+      <tr><td class="feat">project/scene.json 로딩·키 계약</td>
+        <td><span class="chip c-done"><i></i>구현됨</span></td>
+        <td class="ev e-proven">증명됨<span class="meter s3"><s></s><s></s><s></s></span></td>
+        <td class="verd">file 확장자 단독 결정자·type 정규화·version 비분기 함정 공유. scene version 게이트(HDR=v3+, wind=v4+)의 SceneDocument 반영 여부 확인 필요</td></tr>
+      <tr><td class="feat">JSON 파서·타입태그·중복키</td>
+        <td><span class="chip c-part"><i></i>부분구현</span></td>
+        <td class="ev e-proven">증명됨<span class="meter s3"><s></s><s></s><s></s></span></td>
+        <td class="verd"><b>rapidjson+jsoncpp+wuffs 3종 병존 신규 확정.</b> 단일 규약 단정이 위험하다는 WE 증거가 Waple 전처리 방침을 지지. 단 32비트 축(rapidjson semantic)과 isJSONBool(jsoncpp semantic) 혼합 재현은 게이트별 미검증</td></tr>
+      <tr><td class="feat">TEX 텍스처 포맷/디코더</td>
+        <td><span class="chip c-done"><i></i>구현됨</span></td>
+        <td class="ev e-strong">강한추정<span class="meter s2"><s></s><s></s><s></s></span></td>
+        <td class="verd">Waple lz4RGBA 구현이 WE의 per-mip LZ4 가설을 실증적으로 앞섬. format enum→DXGI 미확정 — 포맷 게이트{0,4,8,9} 최종 검증 불가. 어긋나면 특정 텍스처만 조용히 깨짐</td></tr>
+      <tr><td class="feat">MDL 메시/스켈레톤</td>
+        <td><span class="chip c-done"><i></i>구현됨</span></td>
+        <td class="ev e-strong">강한추정<span class="meter s2"><s></s><s></s><s></s></span></td>
+        <td class="verd">FUN_140261950 stride 앵커 확보했으나 비트 매핑·인덱스 폭 미확정. Wapl 수용 버전 4/14는 WE 코퍼스 표본 0 — 검증 불가 영역</td></tr>
+      <tr><td class="feat">GLSL 트랜슬레이터·유니폼</td>
+        <td><span class="chip c-done"><i></i>구현됨</span></td>
+        <td class="ev e-proven">증명됨<span class="meter s3"><s></s><s></s><s></s></span></td>
+        <td class="verd">GLSL→HLSL shim 정적 내장이 GLSL→MSL 설계를 직접 뒷받침(WE 총괄 결론: MSL 이식이 최고 레버리지). EngineU 80float ↔ g_* 유니폼 ~120종 대응은 강한추정 잔여</td></tr>
+      <tr><td class="feat">Forward+ 라이팅·볼류메트릭</td>
+        <td><span class="chip c-part"><i></i>부분구현</span></td>
+        <td class="ev e-strong">강한추정<span class="meter s2"><s></s><s></s><s></s></span></td>
+        <td class="verd">LIGHTS_POINT=&amp;0xF·SPOT=&gt;&gt;4&amp;0xF 비팩과 LightingV1 태그가 디컴파일로 증명 — 슬롯 예산 방향 정합. lightconfig 내부 스키마는 추정 단계라 2D 미배선·HDR CombineLighting 미이식을 닫을 증거 없음</td></tr>
+      <tr><td class="feat">파티클(mapsequence·CP)</td>
+        <td><span class="chip c-part"><i></i>부분구현</span></td>
+        <td class="ev e-strong">강한추정<span class="meter s2"><s></s><s></s><s></s></span></td>
+        <td class="verd">mapsequence*/maintaindistancetocontrolpoint 키군 실재 확정 vs Wapl case .mapSequence 무동작 = <b>실질 호환 갭 확정</b>. 엔진 위치 산식 미정독이라 보류 유지 정당 — 산식 증명이 선결</td></tr>
+      <tr><td class="feat">오디오(스펙트럼·재생)</td>
+        <td><span class="chip c-done"><i></i>구현됨</span></td>
+        <td class="ev e-proven">증명됨<span class="meter s3"><s></s><s></s><s></s></span></td>
+        <td class="verd">ffts 정적링크·g_AudioSpectrum16/32/64Left/Right 계약 확정, MAX 축약(maxss) 정합. FFT 길이 2^n 이탈(43.1Hz 밀림)은 문서화된 유일 오디오 이탈 — parity 회복 원하면 vDSP mixed-radix 전환 가능</td></tr>
+      <tr><td class="feat">타입 디스패치(scene/video/web/application)</td>
+        <td><span class="chip c-part"><i></i>부분구현</span></td>
+        <td class="ev e-proven">증명됨<span class="meter s3"><s></s><s></s><s></s></span></td>
+        <td class="verd">file 확장자 디스패치·비디오=씬 파이프라인 재사용(usertextures videotex)까지 방향 일치. 갭은 <b>application 유형</b> — sheep(Unity exe) 증명 vs Wapl 렌더러 3종에 경로 없음</td></tr>
+      <tr><td class="feat">재생 정책(pause/vram/focus)</td>
+        <td><span class="chip c-doc"><i></i>문서만</span></td>
+        <td class="ev e-proven">증명됨<span class="meter s3"><s></s><s></s><s></s></span></td>
+        <td class="verd"><b>최대 미연결.</b> playbackfocus~pausevram 키 계약 확정 + Wapl 순수함수·74테스트 완비 — 프로덕션 소비자 0건. “pausevram은 stop” 역어셈 발견은 WE 문자열과 충돌하지 않음. 남은 것은 배선뿐</td></tr>
+      <tr><td class="feat">멀티프로세스·IPC·외부 제어</td>
+        <td><span class="chip c-none"><i></i>미착수</span></td>
+        <td class="ev e-proven">증명됨<span class="meter s3"><s></s><s></s><s></s></span></td>
+        <td class="verd">구조적 차이 — WE 네임드파이프 IPC+모니터당 CEF+CLI <span class="mono">-control</span> 증명 vs Wapl 단일 프로세스 설계. 콘텐츠 호환엔 직접 타격 없음, 외부 제어 호환 목표 시 별도 설계</td></tr>
+      <tr><td class="feat">웹 브리지(zcompat·미디어 통합)</td>
+        <td><span class="chip c-part"><i></i>부분구현</span></td>
+        <td class="ev e-proven">증명됨<span class="meter s3"><s></s><s></s><s></s></span></td>
+        <td class="verd">커스텀 스킴 서빙 큰 틀 일치(WKWebView vs CEF 146 핀). WE MediaIntegration 데이터 계약의 Wapl 소비 여부 근거 없음 — MediaPoller(AppleScript)+SCStream으로 우회 중</td></tr>
+      <tr><td class="feat">텍스트/JS 스크립트 엔진</td>
+        <td><span class="chip c-part"><i></i>부분구현</span></td>
+        <td class="ev e-strong">강한추정<span class="meter s2"><s></s><s></s><s></s></span></td>
+        <td class="verd">text {value,script} 다형성·update(value) 계약 일치. 본 JS API 26종은 문자열 계약일 뿐 — TextScriptEngine API 커버(thisScene.createLayer GPU 미배선 포함) 실물 검증 불가</td></tr>
+      <tr><td class="feat">이펙트 체인(effect.json/passes/compose)</td>
+        <td><span class="chip c-done"><i></i>구현됨</span></td>
+        <td class="ev e-strong">강한추정<span class="meter s2"><s></s><s></s><s></s></span></td>
+        <td class="verd">effects[{passes[{constantshadervalues,textures}]}]·compose/conditions 계약 일치, Wapl 122건 전수 파스+3단 폴백(translated→손포팅→스킵). 1:1 라우팅 검증은 코퍼스 도달(fluidsimulation 1건) 의존</td></tr>
+      <tr><td class="feat">블렌드 모드(colorBlendMode 0-32)</td>
+        <td><span class="chip c-done"><i></i>구현됨</span></td>
+        <td class="ev e-strong">강한추정<span class="meter s2"><s></s><s></s><s></s></span></td>
+        <td class="verd">코퍼스 LUT 인덱스·빈출값(0·11·31) 확정 ↔ Wapl 33모드 전수 포트(3자 대조 |Δ|&lt;1e-9, UI Add=31·Subtract=20 Linear Burn 결함 이식). WE 원본 헤더 보유 대조라 실질 정합</td></tr>
+      <tr><td class="feat">카메라·패럴랙스·좌표 규약</td>
+        <td><span class="chip c-done"><i></i>구현됨</span></td>
+        <td class="ev e-strong">강한추정<span class="meter s2"><s></s><s></s><s></s></span></td>
+        <td class="verd">orthogonalprojection 코퍼스 161/161 — ortho가 사실상 기본, Wapl F721 ortho 하이브리드와 부합. shake/parallax 수식은 WE 증거 없어 자체 RenderDoc 골든 의존</td></tr>
+      <tr><td class="feat">유체 시뮬레이션</td>
+        <td><span class="chip c-part"><i></i>부분구현</span></td>
+        <td class="ev e-blank">공백<span class="meter s1"><s></s><s></s><s></s></span></td>
+        <td class="verd">WE 구현 증거 사실상 공백 — fit 종횡비 보존 정정(docs/re 판정)을 실물 검증 불가. FBO 예산 초과 시 매 프레임 초기화 소프트 페일은 Wapl 자체 한계</td></tr>
+      <tr><td class="feat">스냅샷/골든 검증 체계</td>
+        <td><span class="chip c-done"><i></i>구현됨</span></td>
+        <td class="ev e-blank">공백<span class="meter s1"><s></s><s></s><s></s></span></td>
+        <td class="verd">Wapl 고유 역량(WE 대응 개념 없음 — 정상). 단 baseline 무효·GT↔스냅샷 밴드 갭·--compare CI 미배선이 mapsequence 등 미배선 판정에 필요한 A/B 캡처 창구의 병목</td></tr>
+      <tr><td class="feat">워크샵(Steam) 통합·플레이리스트</td>
+        <td><span class="chip c-done"><i></i>구현됨</span></td>
+        <td class="ev e-strong">강한추정<span class="meter s2"><s></s><s></s><s></s></span></td>
+        <td class="verd">같은 기능 다른 메커니즘(Steam 내장 provider+CEF UI vs Web API+steamcmd CLI) — 호환 타격 낮음. transitionpool vector&lt;int&gt; 저작순서·ShuffleBag 소진형 계약은 WE 키 존재와 정합, 셔플 알고리즘 증명은 없음</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section id="contra">
+  <h3 class="block">모순 · 주의 12건</h3>
+  <ol class="contra">
+    <li><b class="topic">중복키 규약 [미해결] ↔ 파서 3종 병존</b>
+      <p>WE가 rapidjson+jsoncpp+wuffs를 함께 쓰는 것은 사실이고 로드 오케스트레이터에 rapidjson 단언이 박혀 프로젝트 로딩은 rapidjson 계열일 가능성이 강하다. 그러나 ‘어느 파일이 어느 파서를 거치는지’는 WE도 미분석 — 실물도 파일별로 중복키 결과가 달랐을 수 있어 Waple의 ‘전처리로 단일 규약 강제’ 방침이 유효. 단 Waple의 게이트별 실물 대응(asInt 32비트 축 vs objCType 0x63 혼합)은 여전히 미검증.</p></li>
+    <li><b class="topic">remapinitialvalue 유령 키(min/max)</b>
+      <p>Waple의 lea 수준 근거(구간 내 17개, min/max 0건)가 우세하지만 문자열 덤프의 최소길이 5자 필터 탓일 수 있어 순환 논증 위험 — min-length 2~3 재추출로 최종 확정 필요. 현재 nil 낙하 동작 자체는 양쪽 일치.</p></li>
+    <li><b class="topic">MDL 버전 집합·플래그 해석</b>
+      <p>Waple 7버전([4,14,16,17,19,21,23]) 수용 vs WE 코퍼스 관측 {16,17,19,21,23}. 표본 없는 4/14는 WE 증거로 검증 불가이고, Waple 파서의 플래그 해석은 FUN_140261950 stride 테이블 정독 전까지 교차 검증되지 않음.</p></li>
+    <li><b class="topic">mapsequence 미배선 ↔ WE 동작</b>
+      <p>‘키가 실재한다’는 WE 계약과 ‘Waple이 무동작’의 병존 = 실질 호환 갭 확정. 엔진의 실제 위치 산식은 디컴파일 미정독이라 WE 증거만으로 보류를 풀 수 없음 — 산식 증명이 선결 과제이며 배선 시 화면이 바뀌므로 골든 재베이스라인과 일정을 맞춰야 함.</p></li>
+    <li><b class="topic">TEX LZ4 가설 ↔ Waple 디코더 구현</b>
+      <p>Waple 구현이 WE 문서를 앞서지만 LZ4 레이아웃 확정 근거가 레인 결과에 인용되지 않음. TEXB flags(0/2/4)·TEXI field6/field7·TEXB0004 선행 필드 추가와 함께 재대조 필요 — 포맷 집합 {0,4,8,9}의 실물 DXGI 대응은 미증명.</p></li>
+    <li><b class="topic">'RapidJSON/FFTS 조작' 논쟁의 재판정</b>
+      <p>UTF-16LE 검색으로 반증 확정 — RapidJSON+jsoncpp 병존·FFTS 정적링크가 진실. WapleCore의 jsoncpp 타입태그 재현은 절반만 맞는 모델이었던 셈이며, 관용 사다리(strict⊂lenient⊂numeric)가 이 병존을 흡수하는 설계인지, 파일별 실물 파서 대응(xref 특정)이 다음 판정 조건.</p></li>
+    <li><b class="topic">“unimplemented-json-keys 갭 0개” vs 6필드 파스 전용</b>
+      <p>schemecolor가 ‘사실상 유일한 만능 프로퍼티’라는 코퍼스 관측과 대비되나, WE가 schemeColor를 렌더에 어떻게 주입하는지에 대한 행위 증거도 없음. 문서 정정 필요 — 6필드는 미배선 갭으로 유지.</p></li>
+    <li><b class="topic">version 필드 이중 의미 반영 여부</b>
+      <p>scene.json version은 진짜 스키마 게이트({1,3,4,5}) vs project.json version은 저자 저장 카운터. Waple이 project version을 안 쓴다는 점은 resolveMountSource 서술로 간접 정합이지만, <b>scene version 게이트 무시 시 v1~4 씬에서 HDR/wind 키 오소비 위험</b> — 코드 확인 필요.</p></li>
+    <li><b class="topic">PKGV 접미 시리얼을 버전으로 분기하지 않는지</b>
+      <p>regex가 고정 4자리를 요구하면 최근 코퍼스 시리얼에서 마운트 실패 발생. <b>즉시 확인 항목</b> — grep+테스트로 판정 가능.</p></li>
+    <li><b class="topic">오디오 FFT 2^n 이탈 ↔ WE ffts(mixed-radix)</b>
+      <p>ffts 사용은 직접 검증 확정 — Waple 이탈(43.1Hz 밴드 경계 밀림)은 ‘WE와 다르다’가 확정된 유일하게 문서화된 오디오 이탈. parity 회복을 원하면 vDSP mixed-radix 전환이 가능.</p></li>
+    <li><b class="topic">ArtworkColors 이탈 ↔ winrtutil64 IPC 증거 부재</b>
+      <p>양쪽 다 공백 — WE의 GetDominantColor 서술 자체가 Waple 측 RE 산술에 의존하고 바이너리 증거가 없어, 이탈의 실물 기준 재판정은 보류 상태가 정당.</p></li>
+    <li><b class="topic">씬 비디오 클록 미연결 단정 ↔ WE videotex 씬 재사용</b>
+      <p>WE는 비디오도 씬 파이프라인으로 그린다(videoplayer+videotex). Waple의 ‘WE는 씬 클록 미연결’ 단정에는 직접 증거가 양쪽 레인에 없음 — 이탈 근거 보강 필요.</p></li>
+  </ol>
+</section>
+
+<section id="actions">
+  <h3 class="block">다음 액션 — 우선순위 원장</h3>
+  <div class="actions">
+    <div class="action-row"><span class="a-no">01</span><span class="a-pri"><span class="pri hi">높음</span></span>
+      <div class="a-body"><b>WaplePolicy를 앱에 배선</b><span>PlaybackEvaluator(6축+pauseVRAM)를 AppDelegate PauseGate 앞에 연결, WE playback*/apprules 키(project.json general.properties) 파스와 짝짓기. 증거 장벽 없는 유일한 ‘최대 미연결’, 호환 체감 최대.</span></div></div>
+    <div class="action-row"><span class="a-no">02</span><span class="a-pri"><span class="pri hi">높음</span></span>
+      <div class="a-body"><b>JSON 파서 파일별 대응 특정</b><span>FUN_140065da0(월페이퍼 로드)·FUN_14004af80(rapidjson SAX) 주변 xref로 project/scene/effect.json이 rapidjson/jsoncpp/wuffs 중 무엇을 거치는지 확정 → AssetJSON.swift:40-53 [미해결] 종결.</span></div></div>
+    <div class="action-row"><span class="a-no">03</span><span class="a-pri"><span class="pri hi">높음</span></span>
+      <div class="a-body"><b>FUN_140261950(MDL 디코더) 정밀 정독 + live dump</b><span>stride 테이블(0x1404849b0/0x140484a20)·인덱스 폭 분기를 읽고 Interceptor.attach(base+0x260950)로 vertex_format 플래그 값을 덤프 → Waple Model3DFormat 7버전 해석(표본 없는 4/14 포함) 검증.</span></div></div>
+    <div class="action-row"><span class="a-no">04</span><span class="a-pri"><span class="pri hi">높음</span></span>
+      <div class="a-body"><b>TEX 미확정 필드 동적 포획 재개</b><span>resume point(identify_device_vtable.js에 args[1] 타입 캡처 추가, slot 8 명명) 실행 → CreateTexture2D 포획으로 format→DXGI 매핑·per-mip LZ4 확정 → TexDecoder 게이트{0,4,8,9}·lz4RGBA 레이아웃 재판정.</span></div></div>
+    <div class="action-row"><span class="a-no">05</span><span class="a-pri"><span class="pri hi">높음</span></span>
+      <div class="a-body"><b>짧은 키 재추출로 remapinitialvalue 종결</b><span>문자열 덤프를 min-length 2~3으로 재추출해 outputrangemin/max vs min/max 최종 판정 → ParticleSystem.swift:300-311 파스를 실물 키로 교체.</span></div></div>
+    <div class="action-row"><span class="a-no">06</span><span class="a-pri"><span class="pri md">중간</span></span>
+      <div class="a-body"><b>scene.json version 게이트·PKGV regex 코드 확인</b><span>v1/3/4/5 기능 게이트(HDR=v3+, wind/gravity=v4+)의 SceneDocument 반영 여부, ScenePackage magic regex가 접미 4자리를 와일드카드로 받는지 grep+테스트로 판정. 고정 4자리면 신규 코퍼스 마운트 실패.</span></div></div>
+    <div class="action-row"><span class="a-no">07</span><span class="a-pri"><span class="pri md">중간</span></span>
+      <div class="a-body"><b>mapsequence/CP 위치 산식의 디컴파일 증명</b><span>xref-index가 사실상 비어 있어 find+grep 수동 복원으로 CP 함수 정독 → MapSequenceBetweenSolver 오라클(27건) 대조 → A/B 캡처 후 case .mapSequence 배선. 골든 재베이스라인(baseline-6f0bcf0 무효)과 일정 맞춤.</span></div></div>
+    <div class="action-row"><span class="a-no">08</span><span class="a-pri"><span class="pri md">중간</span></span>
+      <div class="a-body"><b>docs/re/unimplemented-json-keys.md 정정</b><span>§0 ‘실질 갭 0개’를 6필드 미배선 반영으로 수정, §6 착지 좌표 드리프트(수백 줄) 재판정.</span></div></div>
+    <div class="action-row"><span class="a-no">09</span><span class="a-pri"><span class="pri md">중간</span></span>
+      <div class="a-body"><b>captureSceneStill capturePointerUV 미핀 결함 수정</b><span>골든 재베이스라인 작업과 묶어서 — 캡처 인스턴스가 시차 모니터·미디어 폴러를 시작하는 경로를 핀으로 닫아야 FAIL 귀속이 성립.</span></div></div>
+    <div class="action-row"><span class="a-no">10</span><span class="a-pri"><span class="pri md">중간</span></span>
+      <div class="a-body"><b>scenescript64.dll을 Ghidra 체인에 투입</b><span>Rich 헤더 주입 후 동일 파이프라인(DecompileAll→BuildEvidenceIndex) + V8 바인딩 후킹으로 script API 표면 확정 → spec/engine/script-api.json 보강. TextScriptEngine 커버 판정의 유일한 근거 경로.</span></div></div>
+    <div class="action-row"><span class="a-no">11</span><span class="a-pri"><span class="pri lo">낮음</span></span>
+      <div class="a-body"><b>winrtutil64 IPC·웹 MediaIntegration 소비처 조사</b><span>Process Monitor/네임드파이프 스니핑으로 GetDominantColor 경로·MediaIntegration 콜백 흐름 확인 → ArtworkColors·WebBridgeSignal 이탈 재판정.</span></div></div>
+    <div class="action-row"><span class="a-no">12</span><span class="a-pri"><span class="pri lo">낮음</span></span>
+      <div class="a-body"><b>dxgi/ETW 기반 프레젠트 경로 관측</b><span>IDXGISwapChain::Present·PresentMon 등으로 COM 힙 스캔 추측 제거 + device-lost 복구 상태머신 흐름 확정. Metal 직접 이식은 불가하지만 장기 출력 복구 설계 참고 + 기존 8세션의 구조적 사각지대 해소.</span></div></div>
+  </div>
+</section>
+
+<!-- ================= APPENDIX ================= -->
+<section id="appendix">
+  <div class="sec-head"><span class="sec-no">A</span><h2>부록 — 실행 개황</h2></div>
+  <p class="sec-sub">2026-08-25 세션 · ultracode 오케스트레이션 · 총 17 에이전트 전원 성공</p>
+
+  <div class="stats-grid">
+    <div class="stat"><div class="n">17</div><div class="l">에이전트 (8+8+1)</div></div>
+    <div class="stat"><div class="n">3,750,629</div><div class="l">서브에이전트 토큰</div></div>
+    <div class="stat"><div class="n">812</div><div class="l">도구 호출</div></div>
+    <div class="stat"><div class="n">2h18m</div><div class="l">누적 실행 시간</div></div>
+  </div>
+
+  <div class="table-scroll">
+  <table class="matrix run-stats">
+    <thead><tr><th>워크플로우</th><th>Run ID</th><th>에이전트</th><th>토큰</th><th>도구호출</th><th>소요</th></tr></thead>
+    <tbody>
+      <tr><td class="feat">waple-deep-audit</td><td class="mono">wf_b0cf331c</td><td>8</td><td class="mono">2,707,770</td><td>451</td><td class="mono">30m 01s</td></tr>
+      <tr><td class="feat">we-source-re-analysis</td><td class="mono">wf_b7f1eacb</td><td>8</td><td class="mono">813,786</td><td>326</td><td class="mono">56m 42s</td></tr>
+      <tr><td class="feat">cross-integration</td><td class="mono">wf_3d4923da</td><td>1</td><td class="mono">229,073</td><td>35</td><td class="mono">51m 14s</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 class="block">사전 준비 · 결과 원본 위치</h3>
+  <ul class="facts">
+    <li><b>도구 설치</b> — radare2 6.2.0(rabin2 포함, brew), pefile 2024.8.26(pip --user). Ghidra는 생략 — 디컴파일 산출물이 이미 52MB/11,255파일로 존재</li>
+    <li><b>결과 원문</b>(임시 경로 — 재부팅 시 소멸): <code>/private/tmp/claude-501/…/tasks/wl8hbajy0.output</code>(Waple), <code>wawov4ae0.output</code>(RE), <code>wslnq3qqm.output</code>(통합)</li>
+    <li><b>레인별 전문</b>은 각 워크플로우 journal에도 보존: <code>~/.claude/projects/-Users-yakisoba0728-Documents-GitHub-Waple/7f32dcff-…/subagents/workflows/&lt;runId&gt;/journal.jsonl</code></li>
+  </ul>
+</section>
+
+<footer>
+  이 문서는 2026-08-25 세션에서 생성된 분석 결과물입니다. 게시되지 않은 로컬 파일이며, 모든 인용 경로는 두 저장소 기준입니다.<br>
+  <span class="mono">generated by ox-alpha · Claude Code orchestration · fonts: IBM Plex Sans KR / IBM Plex Mono (Google Fonts)</span>
+</footer>
+
+</div>
+<script>
+(function(){
+  var root=document.documentElement;
+  try{
+    var saved=localStorage.getItem('waple-cross-theme');
+    if(saved==='dark'||saved==='light'){root.setAttribute('data-theme',saved);}
+  }catch(e){}
+  var btn=document.getElementById('themeToggle');
+  if(btn){
+    btn.addEventListener('click',function(){
+      var cur=root.getAttribute('data-theme');
+      var sysDark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var effective=cur||(sysDark?'dark':'light');
+      var next=effective==='dark'?'light':'dark';
+      root.setAttribute('data-theme',next);
+      try{localStorage.setItem('waple-cross-theme',next);}catch(e){}
+    });
+  }
+})();
+</script>
+</body>
+</html>
