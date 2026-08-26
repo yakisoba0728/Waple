@@ -157,6 +157,19 @@ public struct WallpaperProject: Equatable, Sendable {
     /// - `with(fileName: other.fileName)` — `String?` 이 옵셔널 승격으로 `.some(…)` 이 되어
     ///   **nil 이어도 그 nil 로 덮어쓴다**(재나열과 같은 결과. 이게 흔한 쓰임이다).
     /// - `with(fileName: nil)` — 리터럴 `nil` 은 `.none` 이므로 **안 바꿈**.
+    ///
+    /// ⚠️ **그래서 `??` 를 인자 자리에 직접 쓰면 안 된다.** `with(previewName: a ?? b)` 에서
+    /// 좌변 `a`(`String?`)가 `String??` 로 승격되며 `.some(a)` 가 되어 **항상 non-nil** 이 되고,
+    /// 우변 `b` 는 죽는다. 컴파일러가 경고는 준다 —
+    /// `left side of nil coalescing operator '??' has non-optional type 'String?',
+    /// so the right side is never used` — 그러나 **경고일 뿐이라 빌드는 선다.**
+    /// [2026-08-26] `PresetResolver.resolve` 에서 이 함정을 실제로 밟았고(세 필드), 앱 계층
+    /// 타입체크 경고로 잡았다. 타입을 명시한 지역 상수로 먼저 접은 뒤 넘겨라:
+    ///
+    /// ```swift
+    /// let previewName: String? = preset.previewName ?? target.previewName
+    /// return preset.with(previewName: previewName)
+    /// ```
     public func with(
         id: String? = nil,
         type: WallpaperType? = nil,
