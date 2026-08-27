@@ -60,17 +60,24 @@ public struct WallpaperProject: Equatable, Sendable {
     /// 같은 커밋의 `Tests/**` 참조는 `supportsAudioProcessing` 9건 · `playbackProperties` 0건이고,
     /// 그 9건은 전부 파서(`ProjectJSONParserTests`·`ProjectJSONInstallCorpusTests`)를 겨눈다.
     ///
-    /// 그래서 **Waple 은 WE 가 선언한 이 마스터 게이트를 아직 존중하지 않는다.** 실제 오디오
-    /// 기동은 `SceneRenderer.hasAudio` 가 쥐고 있고, 그 값은 **씬 내용 검사에서 유도**된다 —
+    /// 그래서 **Waple 은 WE 가 선언한 이 마스터 게이트를 존중하지 않는다**(아래 「처분」 —
+    /// 미완이 아니라 결정이다). 실제 오디오 기동은 `SceneRenderer.hasAudio` 가 쥐고 있고,
+    /// 그 값은 **씬 내용 검사에서 유도**된다 —
     /// 스크립트가 오디오를 참조하면 승격(`SceneRenderer.scriptWantsAudio(_:)`), 오디오 레이어·
     /// 이미터가 있으면 승격(`SceneRendererResources.swift` 의 `hasAudio = true` 세 자리).
     /// 프로젝트의 선언은 어느 경로에서도 읽지 않는다. 즉 `supportsaudioprocessing: false` 인
     /// 벽지도 스크립트가 오디오를 만지면 Waple 에서는 캡처가 돈다(원본이라면 안 돈다 —
     /// 위 0x140114d21 이 bit3 을 0 으로 고정한다).
     ///
-    /// 배선이 착지할 자리: 앱 계층 `PlaybackPolicyGate`(`Sources/Waple/AppLogic.swift`)가
-    /// 프로젝트 선언을 받는 단일 지점이고, 오디오 축은 거기서 `hasAudio` 승격의 **상위 게이트**로
-    /// 얹혀야 한다. 같은 파일의 「stage 2」 주석에 남은 배선 목록이 있다.
+    /// ## 처분 [2026-08-27] — **파싱은 유지, 소비는 하지 않는다(의도적)**
+    ///
+    /// 위 "소비처 0" 은 이제 미완이 아니라 **결정**이다. 근거 셋(WE 게이트가 두 항인데 Waple 은
+    /// `audioprocessing` 유저 프로퍼티가 없어 한 항밖에 못 준다 · 조용해질 벽지 수를 잴 교차표가
+    /// 없다 · 헤드리스 골든은 그 회귀를 구조적으로 못 본다)과 뒤집을 조건은
+    /// `ProjectJSONParser.parseSupportsAudioProcessing` 의 「처분」 문단에 적혀 있다 —
+    /// 여기서 되풀이하지 않는다(한 곳에서만 갱신되게).
+    ///
+    /// 계약을 지키는 오라클: `Tests/WapleRenderTests/AudioProcessingDeclarationTests.swift`.
     public private(set) var supportsAudioProcessing: Bool
 
     /// WE 재생정책 속성(project.json `general.properties.<키>.value`)의 **원문 문자열**.
