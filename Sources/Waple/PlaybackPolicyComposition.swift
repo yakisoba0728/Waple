@@ -1,4 +1,5 @@
 import Foundation
+import WapleCore
 import WaplePolicy
 
 // MARK: - 두 정지 경로의 합류 (stage 2c)
@@ -52,14 +53,30 @@ enum RenderPauseComposition {
                         policyWantsMute: verdict.muted)
     }
 
-    /// 렌더러 배열 전체분. 인덱스가 곧 모니터 인덱스다 — `AppDelegate.renderers` 가
-    /// `desktopController.screenViews` 와 같은 순서로 만들어지기 때문이고, 그 불변식이
-    /// 깨지면 여기 결정이 엉뚱한 화면에 간다. 호출부에 그 근거를 적어 둘 것.
+    /// 렌더러 배열 전체분(판정 하나를 공유). 인덱스가 곧 모니터 인덱스다 —
+    /// `AppDelegate.renderers` 가 `desktopController.screenViews` 와 같은 순서로 만들어지기
+    /// 때문이고, 그 불변식이 깨지면 여기 결정이 엉뚱한 화면에 간다.
     static func decideAll(globallyPaused: Bool,
                           verdict: PlaybackVerdict,
                           rendererCount: Int) -> [Decision] {
         (0..<max(0, rendererCount)).map {
             decide(globallyPaused: globallyPaused, verdict: verdict, monitorIndex: $0)
+        }
+    }
+
+    /// **화면마다 벽지가 다를 수 있다.** `AppDelegate` 는 `screenProjects` 로 화면별 프로젝트를
+    /// 받아 렌더러를 만든다 — 그래서 정책도 렌더러마다 다르게 나온다(벽지별 선언이 다르므로).
+    /// 판정 하나를 전 화면에 쓰면 A 화면 벽지의 선언이 B 화면을 멈추는 오적용이 된다.
+    ///
+    /// 전역 정책은 하나이고(사용자 설정), 조건도 하나다(시스템 상태). 갈리는 것은
+    /// **벽지가 선언한 덮어쓰기**뿐이라 여기서 프로젝트별로 접는다.
+    static func decideAll(globallyPaused: Bool,
+                          projects: [WallpaperProject],
+                          conditions: PlaybackConditions,
+                          global: PlaybackPolicy) -> [Decision] {
+        projects.enumerated().map { index, project in
+            let verdict = PlaybackPolicyResolver.verdict(for: project, conditions: conditions, global: global)
+            return decide(globallyPaused: globallyPaused, verdict: verdict, monitorIndex: index)
         }
     }
 }
