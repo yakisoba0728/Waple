@@ -183,11 +183,21 @@ public enum SnapshotPipeline {
             fputs("[snap] ⚠️ PNG 실제 크기(\(cg.width)x\(cg.height)) ≠ 요청 크기(\(width)x\(height)) — \(url.lastPathComponent), 강제 리스케일해 비교합니다\n", stderr)
         }
         var px = [UInt8](repeating: 0, count: width * height * 4)
-        guard let ctx = CGContext(data: &px, width: width, height: height, bitsPerComponent: 8,
-                                  bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        ctx.interpolationQuality = .none   // 1:1 이라 무관하나 결정성 위해 고정
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        // F840: `&px` 를 CGContext(data:) 에 넘기면 inout 로 만든 임시 포인터가 호출 밖으로
+        // 새어나간다(UB — 유효 수명이 생성 호출 뿐인데 컨텍스트가 draw 까지 붙잡는다).
+        // 형제(ArtworkColors.palette · TexDecoder.draw · TextRasterizer.render)와 동일 형태.
+        // [2026-08-27] 여기는 **골든 비교의 기준선 로더**다 — 조용히 어긋난 픽셀이 회귀 판정에
+        // 그대로 들어간다. F840 이 형제 넷을 고칠 때 빠져 있었다.
+        let ok = px.withUnsafeMutableBytes { ptr -> Bool in
+            guard let base = ptr.baseAddress,
+                  let ctx = CGContext(data: base, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            ctx.interpolationQuality = .none   // 1:1 이라 무관하나 결정성 위해 고정
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard ok else { return nil }
         return px
     }
 
