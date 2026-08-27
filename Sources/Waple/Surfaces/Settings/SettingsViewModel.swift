@@ -1,6 +1,7 @@
 import SwiftUI
 import WapleCore
 import WapleLibrary
+import WaplePolicy
 import WapleRender
 
 /// 설정 창 상태 미러 + 배선. 저장은 기존 전역 스토어를 직접 읽고 쓰되,
@@ -27,6 +28,12 @@ final class SettingsViewModel: ObservableObject {
     @Published var stillSync = false
     @Published var saverSelected = ScreenSaverController.isSelected
     @Published var baseAssetsPath = ""
+    /// WE 전역 재생정책(stage 3④). 저장은 `GlobalPlaybackSettings`(UserDefaults) 이고 여기는 미러다.
+    ///
+    /// **stage 2 는 이 키들을 쓰는 화면을 만들지 않았다** — 사용자가 정책을 바꿀 방법이 아예
+    /// 없었고, 그래서 WE 기본값(최대화·전체화면 = 일시정지, 절전 = 정지)이 **끌 수 없는**
+    /// 동작이었다. 이 화면이 그것을 끄거나 세게 만들 수 있게 한다.
+    @Published var playbackPolicy: PlaybackPolicy = .weDefault
     /// **이미 현지화된** 문구. 뷰는 `Text(String)`(비현지화 오버로드)로 표시하므로, 여기서
     /// 완성해 넘기지 않으면 영어 시스템에서도 한국어로 남는다(청사진 §5.0 권장 (a)).
     /// 이 방식을 고른 이유: 리터럴이 `NSLocalizedString(` 안에 남아 커버리지 오라클에 그대로 걸린다.
@@ -53,8 +60,14 @@ final class SettingsViewModel: ObservableObject {
     var onChooseBaseAssets: (() -> Void)?
     var onSetStillWallpaper: (() -> Void)?
     var onToggleSaver: (() -> Bool)?
+    /// 정책이 바뀌었다 — AppDelegate 가 **즉시** 재적용한다. 폴링이 ≤1초 뒤에 어차피 고치지만,
+    /// 설정을 바꾼 직후의 1초는 사용자가 "안 먹었다" 로 읽는 구간이다.
+    var onPlaybackPolicyChanged: (() -> Void)?
     var occlusionState: () -> (enabled: Bool, threshold: Double) = { (false, 0) }
     var stillSyncEnabled: () -> Bool = { false }
+    /// 화면이 둘 이상인가 — 축별 선택지에서 `pauseall` 을 보일지 결정한다(WE UI 빌더 `k(e,t,a)`
+    /// 의 첫 인자 `e = runtime.multimonitor`). 기본 false 는 프리뷰/테스트 안전값이다.
+    var multiMonitor: () -> Bool = { false }
 
     init(playlist: PlaylistStore) {
         self.playlist = playlist
@@ -73,7 +86,32 @@ final class SettingsViewModel: ObservableObject {
         stillSync = stillSyncEnabled()
         saverSelected = ScreenSaverController.isSelected
         baseAssetsPath = BaseAssetsSettings.baseAssetsDirectory?.path ?? Self.autoDetectedLabel
+        playbackPolicy = GlobalPlaybackSettings.current
         statusMessage = nil
+    }
+
+    // MARK: - WE 재생정책 (stage 3④)
+
+    /// 한 축의 액션을 바꾼다. 저장은 WE 의 키·값 문자열 그대로다(`GlobalPlaybackSettings`) —
+    /// 나중에 WE 설치본에서 가져오기를 붙일 때 매핑표가 필요 없게 하려는 것이다.
+    func setPlaybackAction(_ action: PlaybackAction, for trigger: PlaybackTrigger) {
+        GlobalPlaybackSettings.set(action, for: trigger)
+        playbackPolicy[trigger] = action
+        onPlaybackPolicyChanged?()
+    }
+
+    /// 전 축을 미설정으로 되돌린다 = **WE 기본값**. "끄기" 가 아니라는 것이 요점이다 —
+    /// 미설정이 곧 WE 기본값이라 되돌리면 최대화·전체화면 정지가 다시 켜진다.
+    func resetPlaybackPolicy() {
+        GlobalPlaybackSettings.reset()
+        playbackPolicy = GlobalPlaybackSettings.current
+        onPlaybackPolicyChanged?()
+    }
+
+    /// 이 축이 사용자에게 제시할 액션 목록. 정본은 `PlaybackTrigger.allowedActions(multiMonitor:)`
+    /// 이고(WE UI 빌더에서 옮긴 것) 여기서 다시 정하지 않는다.
+    func playbackOptions(for trigger: PlaybackTrigger) -> [PlaybackAction] {
+        trigger.allowedActions(multiMonitor: multiMonitor())
     }
 
     func setFit(_ mode: FitMode) {

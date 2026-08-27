@@ -1,6 +1,7 @@
 import XCTest
 @testable import Waple
 import WapleLibrary
+import WaplePolicy
 import WapleRender
 
 /// SettingsViewModel 배선 검증 — AppDelegate 주입 클로저 7종 + refresh() 스토어 재읽기.
@@ -253,5 +254,92 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertEqual(vm.saverSelected, ScreenSaverController.isSelected, "실제 시스템 saver 선택 상태 재조회")
         XCTAssertEqual(vm.baseAssetsPath,
                        BaseAssetsSettings.baseAssetsDirectory?.path ?? "(자동 탐지)")
+    }
+
+    // MARK: - WE 재생정책 (stage 3④)
+    //
+    // `GlobalPlaybackSettings` 는 `UserDefaults` 전역이라 `.standard` 를 그대로 쓰면 테스트가
+    // 개발자의 실제 설정을 바꾼다. `PlaybackPolicyRuntimeTests`(:19-29) 의 스위트 격리 관례를
+    // 그대로 쓰되, 여기서는 클래스 전체가 아니라 이 블록의 테스트만 필요하므로 헬퍼로 감싼다.
+    private func withIsolatedPlaybackDefaults(_ body: () -> Void) {
+        let suite = "waple.tests.\(ProcessInfo.processInfo.processIdentifier).\(UUID().uuidString)"
+        guard let store = UserDefaults(suiteName: suite) else {
+            return XCTFail("격리 스위트를 못 만들었다 — .standard 를 오염시키느니 실패시킨다")
+        }
+        GlobalPlaybackSettings.defaults = store
+        defer {
+            GlobalPlaybackSettings.defaults = .standard
+            store.removePersistentDomain(forName: suite)
+        }
+        body()
+    }
+
+    /// 축 하나를 바꾸면 **저장·미러·재적용** 셋이 같이 일어난다. 재적용이 빠지면 사용자는
+    /// 설정을 만진 뒤 최대 1초 동안 "안 먹었다" 를 본다(폴링이 그때 고친다).
+    func testSetPlaybackAction_persistsMirrorsAndFiresReapply() {
+        withIsolatedPlaybackDefaults {
+            let vm = makeVM(dir: tempDir())
+            var applied = 0
+            vm.onPlaybackPolicyChanged = { applied += 1 }
+
+            vm.setPlaybackAction(.pauseAll, for: .focus)
+
+            XCTAssertEqual(GlobalPlaybackSettings.current.focus, .pauseAll, "WE 키·값으로 영속")
+            XCTAssertEqual(vm.playbackPolicy.focus, .pauseAll, "@Published 미러 즉시 갱신")
+            XCTAssertEqual(applied, 1, "즉시 재적용 — 폴링을 기다리지 않는다")
+            XCTAssertEqual(GlobalPlaybackSettings.current.maximized, .pause,
+                           "손대지 않은 축은 WE 기본값 그대로")
+        }
+    }
+
+    /// **되돌리기는 "끄기" 가 아니다.** 미설정이 곧 WE 기본값이라, 되돌리면 최대화·전체화면
+    /// 정지가 다시 켜진다. 이걸 "전 축 run" 으로 착각한 구현은 사용자가 되돌리기를 누른 뒤
+    /// 정책이 통째로 사라지게 만든다.
+    func testResetPlaybackPolicy_returnsToWEDefaultsNotAllRun() {
+        withIsolatedPlaybackDefaults {
+            let vm = makeVM(dir: tempDir())
+            var applied = 0
+            vm.onPlaybackPolicyChanged = { applied += 1 }
+            vm.setPlaybackAction(.run, for: .maximized)
+            vm.setPlaybackAction(.run, for: .displaySleep)
+
+            vm.resetPlaybackPolicy()
+
+            XCTAssertEqual(vm.playbackPolicy, .weDefault)
+            XCTAssertNotEqual(vm.playbackPolicy, .allRun, "되돌리기는 정책을 끄는 것이 아니다")
+            XCTAssertEqual(GlobalPlaybackSettings.current, .weDefault)
+            XCTAssertEqual(applied, 3, "되돌리기도 재적용을 태운다")
+        }
+    }
+
+    /// 창을 열 때마다 스토어에서 다시 읽는다 — 다른 경로(가져오기·트레이)가 그 사이 바꿨을 수 있다.
+    func testRefresh_rereadsPlaybackPolicyFromStore() {
+        withIsolatedPlaybackDefaults {
+            let vm = makeVM(dir: tempDir())
+            XCTAssertEqual(vm.playbackPolicy, .weDefault)
+
+            GlobalPlaybackSettings.set(.mute, for: .audio)
+            vm.refresh()
+
+            XCTAssertEqual(vm.playbackPolicy.audio, .mute, "뷰모델 밖에서 바뀐 값을 다시 읽는다")
+        }
+    }
+
+    /// 축별 선택지는 **WE 의 UI 빌더 표** 그대로다(`k(e,t,a)` — 첫 인자가 축마다 갈린다).
+    /// 여기서 다시 정하지 않는다는 것이 요점이라, 뷰모델이 그 표를 우회하면 이 단언이 깨진다.
+    func testPlaybackOptions_followTheAxisTableNotAFlatList() {
+        let vm = makeVM(dir: tempDir())
+
+        vm.multiMonitor = { false }
+        XCTAssertEqual(vm.playbackOptions(for: .focus), [.run, .mute, .pause],
+                       "focus 는 stop 분기가 없다")
+        XCTAssertEqual(vm.playbackOptions(for: .displaySleep), [.run, .pause, .stop],
+                       "sleep 은 mute 를 제시하지 않는다")
+
+        vm.multiMonitor = { true }
+        XCTAssertEqual(vm.playbackOptions(for: .focus), [.run, .mute, .pause, .pauseAll],
+                       "창 상태 축만 멀티모니터에서 pauseall 을 얻는다")
+        XCTAssertEqual(vm.playbackOptions(for: .displaySleep), [.run, .pause, .stop],
+                       "sleep·battery·audio 는 모니터가 몇 대든 pauseall 이 없다")
     }
 }

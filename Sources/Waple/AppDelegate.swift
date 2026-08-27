@@ -58,6 +58,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         vm.onChooseBaseAssets = { [weak self] in self?.chooseBaseAssets() }
         vm.onSetStillWallpaper = { [weak self] in self?.setStillWallpaper() }
         vm.onToggleSaver = { [weak self] in self?.toggleScreenSaverCore() ?? false }
+        // stage 3④: 정책이 바뀌면 **즉시** 재적용한다. 폴링이 ≤1초 뒤에 어차피 고치지만,
+        // 설정을 만진 직후의 1초는 사용자가 "안 먹었다" 로 읽는 구간이다. 엣지 추적을
+        // 리셋하는 것이 요점 — 리셋하지 않으면 이미 적용한 상태를 기억해 아무것도 안 부른다.
+        vm.onPlaybackPolicyChanged = { [weak self] in
+            guard let self else { return }
+            self.policyPauseState.reset()
+            self.policyMuteState.reset()
+            self.applyPlaybackPolicy()
+        }
+        // WE UI 빌더의 `k(e,…)` 첫 인자 — 화면이 하나면 `pauseall` 을 제시하지 않는다.
+        // `NSScreen` 을 클로저 안에서 직접 읽지 않고 프로퍼티를 거치는 이유: 이 클로저들은
+        // 비격리 `SettingsViewModel` 에 저장되는데, 형제 클로저(`occlusionState`·`stillSyncEnabled`)
+        // 는 전부 `self` 의 메인 액터 상태만 만지는 모양이고 그 모양이 macOS CI 에서 초록이다.
+        // `AppDelegate.swift` 는 리눅스 타입체크 커버 밖(objc-interop)이라 새 모양을 여기서
+        // 시험할 수 없다 — 이미 통과가 확인된 모양을 따른다.
+        vm.multiMonitor = { [weak self] in self?.hasMultipleDisplays ?? false }
         vm.occlusionState = { [weak self] in
             guard let self else { return (false, 0) }
             return (self.pauseWhenOccluded, self.occlusionCoverageThreshold)
@@ -84,6 +100,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 합류 규칙은 `PlaybackPolicyComposition.swift` 에 있고 여기서는 적용만 한다.
     private var playbackPolicyTimer: Timer?
     private var policyPauseState = PerRendererPauseState()
+    /// 정책 음소거(stage 3①)의 엣지 추적. 음소거는 WE 에서 전역이라 렌더러별이 아니라 1비트다.
+    private var policyMuteState = AppliedFlag()
+    /// 화면이 둘 이상인가 — 설정 화면이 `pauseall` 선택지를 보일지 결정한다(stage 3④).
+    private var hasMultipleDisplays: Bool { NSScreen.screens.count > 1 }
     /// `renderers` 와 **같은 순서·같은 길이**인 화면별 프로젝트. 재생정책은 벽지별 선언을 보므로
     /// 화면마다 다른 벽지가 붙으면 판정도 화면마다 달라진다. 둘을 같은 자리에서 대입해 어긋나지
     /// 않게 한다 — 어긋나면 A 화면 벽지의 선언이 B 화면을 멈춘다.
@@ -579,6 +599,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 위 주석의 불변식 — `RendererSwap.apply` 가 `screenProjects` 순서대로 만들므로 같은 순서다.
             rendererProjects = screenProjects.map(\.project)
             policyPauseState.reset()   // 렌더러 세트가 바뀌었다 → 다음 틱이 전부 다시 적용
+            // 음소거도 같이 리셋한다. 새 렌더러는 `policyMuted == false` 로 태어나므로, 리셋하지
+            // 않으면 엣지 추적이 "이미 음소거 중" 이라고 기억한 채 아무것도 밀지 않아 정책
+            // 음소거가 배경 교체 한 번에 조용히 풀린다.
+            policyMuteState.reset()
             currentFolderURL = folderURL
             currentProjectId = project?.id
             activeVideoProjectIds = screenProjects
@@ -689,6 +713,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             renderers = []
             rendererProjects = []
             policyPauseState.reset()
+            policyMuteState.reset()   // 렌더러 세트가 비었다 — 정지와 같은 이유로 함께 리셋한다
             activeVideoProjectIds = []
         }
 
@@ -809,6 +834,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 인덱스로 짝지으면 엉뚱한 화면에 남의 정책이 간다 — 그럴 바엔 무동작이 옳다.
         guard !renderers.isEmpty, renderers.count == rendererProjects.count else {
             policyPauseState.reset()
+            policyMuteState.reset()
             return
         }
         let screens = NSScreen.screens
@@ -823,13 +849,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 디스플레이 슬립은 새 관측자가 필요 없는 유일한 축이다 — `PauseGate` 가 이미 쥐고 있다.
             displayAsleep: pauseGate.isActive(.displaySleep),
             onBattery: PowerSourceObserver.isOnBattery(),
-            // **오디오 축은 일부러 배선하지 않는다.** `SystemAudioObserver` 가 보는
-            // `kAudioDevicePropertyDeviceIsRunningSomewhere` 는 우리 소리도 1 로 치는데,
-            // "우리가 재생 중인가" 를 알 표면이 `WallpaperRenderer` 에 없다. 빼지 못한 채 켜면
-            // 오디오 반응 벽지가 스스로를 멈추는 되먹임이 된다(그 함수 주석). WE 기본값이
-            // `playbackaudio = run` 이라 **기본 상태에서는 차이가 없고**, 사용자가 그 축을 켜면
-            // 아무 일도 일어나지 않는다 — 조용히 틀리는 것보다 낫지만 격차인 것은 맞다.
-            audioPlaying: false)
+            // [2026-08-27 stage 3③] **오디오 축을 배선했다.** stage 2 는 여기를 `false` 로 두었다 —
+            // `kAudioDevicePropertyDeviceIsRunningSomewhere` 가 우리 소리도 1 로 치는데
+            // "우리가 재생 중인가" 를 알 표면이 없어서, 빼지 못한 채 켜면 오디오 반응 벽지가
+            // 스스로를 멈추는 되먹임이 됐다. stage 3① 이 만든 `isPlayingAudio` 가 그 뺄셈의
+            // 두 번째 인자를 채운다.
+            //
+            // **뺄셈이 WE 보다 거칠다.** WE 는 WASAPI 세션을 열거해 자기 세션만 빼므로 우리가
+            // 소리를 내는 동안에도 다른 앱을 볼 수 있다. CoreAudio 의 이 속성에는 그런 분해가
+            // 없어서, 우리가 소리를 내면 그 틱은 **다른 앱을 못 본다**(축이 안 켜진다).
+            // 틀리는 방향은 안전한 쪽이다 — 되먹임(스스로 멈춤)이 아니라 무동작이다.
+            audioPlaying: SystemAudioObserver.isOtherAppPlaying(
+                deviceRunningSomewhere: SystemAudioObserver.defaultOutputDeviceIsRunning(),
+                weArePlayingAudio: renderers.contains { $0.isPlayingAudio }))
 
         let decisions = RenderPauseComposition.decideAll(
             globallyPaused: pauseGate.isPaused,
@@ -840,6 +872,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for (index, paused) in policyPauseState.changes(decisions.map(\.paused)) {
             guard index < renderers.count else { continue }
             if paused { renderers[index].pause() } else { renderers[index].resume() }
+        }
+
+        // [2026-08-27 stage 3①] 음소거는 **전 렌더러에 같은 값**이다 — WE 에서 모니터별이
+        // 아니라 전역이기 때문이고(`PlaybackVerdict.muted` 주석), 화면마다 갈린 판정을 하나로
+        // 접는 규칙은 순수층(`wantsGlobalMute`)에 있다. 여기는 적용만 한다.
+        if let mute = policyMuteState.change(to: RenderPauseComposition.wantsGlobalMute(decisions)) {
+            renderers.forEach { $0.setPolicyMuted(mute) }
         }
     }
 

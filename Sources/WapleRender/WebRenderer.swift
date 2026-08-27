@@ -50,6 +50,12 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     private(set) var pausedByOcclusion = false
     private var effectivePauseApplied = false
     private var isEffectivelyPaused: Bool { pausedManually || pausedByOcclusion }
+    /// 재생정책 음소거(stage 3①). `<video>`/`<audio>` 의 `muted` 만 건드린다 —
+    /// 사용자 음량(`volume`)은 그대로 두므로 음소거를 풀면 원래 값이 돌아온다.
+    private var policyMuted = false
+    /// `.videoFallback` 로 마운트할 때 페이지에 심은 음량. 오디오 축이 "우리가 소리를 내는가" 를
+    /// 이 값으로 정확히 답한다(`.web` 은 알 수 없어 과대보고 — `isPlayingAudio` 주석).
+    private var mountedVolume: Float = 0
     private var userSelectedResourceOverrides: [String: String] = [:]
 
     // MARK: F840 — 페이지 유발 파일시스템 열거 상한
@@ -166,9 +172,10 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             guard let baseURL = URL(string: base) else { throw RendererError.assetMissing }
             // F576: 정상 경로(VideoRenderer)와 같은 배경별 음량을 폴터 <video> 에도 적용.
             // 감사 V06: 화면 맞춤(fitMode)도 정상 경로와 같은 설정을 object-fit 으로 전달.
+            mountedVolume = VideoSettings.volume(id: project.id)
             web.loadHTMLString(
                 VideoFallbackHTML.html(forVideoFile: fileName,
-                                       volume: VideoSettings.volume(id: project.id),
+                                       volume: mountedVolume,
                                        fitMode: SceneRenderSettings.fitMode),
                 baseURL: baseURL
             )
@@ -266,6 +273,90 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             }
     }
 
+    // MARK: - 재생정책 음량면 (stage 3①·③)
+
+    /// 페이지의 `<video>`/`<audio>` 를 전부 음소거하고, **나중에 생기는 것까지** 따라가게 한다.
+    ///
+    /// `volume` 이 아니라 `muted` 를 쓴다 — 사용자 음량은 페이지가 들고 있고(폴백 HTML 의
+    /// `volumeScript`, 웹 벽지의 자체 설정), 정책이 그 값을 덮으면 음소거를 풀 때 되돌릴 원본이
+    /// 없다. `muted` 는 그 위에 겹치는 별개 비트라 정확히 우리가 원하는 층이다.
+    ///
+    /// **음소거를 풀 때 `muted = false` 를 그냥 쓰면 안 된다.** 폴백 HTML 은 사용자 음량이 0 이면
+    /// `<video muted>` 로 심는데(그 파일의 `mutedAttr`), 정책 해제가 그 비트를 지우면 사용자가
+    /// **음소거해 둔 배경이 최대 음량으로 소리를 낸다**(`<video>` 의 `volume` 기본값은 1 이다).
+    /// 그래서 요소마다 정책 이전 값을 `__wapleWasMuted` 에 적어 두고 해제할 때 **그 값으로
+    /// 되돌린다** — 우리가 켠 음소거만 우리가 끈다. 정책이 켜져 있는 동안 생긴 요소도 같은
+    /// 규칙을 타므로(생성 시점의 저작 값이 기록된다) 해제가 손실 없이 되돌아간다.
+    ///
+    /// **`MutationObserver` 가 있어야 한다.** 웹 벽지는 `<video>` 를 스크립트로 만들어 붙이는
+    /// 것이 흔하고(폴백 HTML 조차 `onerror` 에서 `src` 를 재설정한다), 한 번 훑고 끝내면
+    /// 그 뒤에 생긴 요소가 정책을 무시한 채 소리를 낸다. 관찰자는 한 번만 설치하고
+    /// `window.__wapleMuted` 를 매번 읽으므로 최신 값이 따라온다.
+    ///
+    /// **못 덮는 것: Web Audio.** `AudioContext` 로 직접 합성하는 페이지는 `muted` 비트가 없어
+    /// 이 주입이 닿지 않는다(게인 노드를 끼워 넣어야 하는데 그건 페이지 그래프를 고쳐 쓰는
+    /// 일이다). `WebHardPauseJS` 는 `AudioContext` 를 **suspend** 해서 정지 축을 덮지만 음소거는
+    /// 정지가 아니라 그 수단을 빌려 올 수 없다. 이름 있는 격차로 남긴다.
+    static func muteJS(_ muted: Bool) -> String {
+        #"""
+        (function () {
+          window.__wapleMuted = \#(muted);
+          function applyTo(el) {
+            try {
+              if (window.__wapleMuted) {
+                if (el.__wapleWasMuted === undefined) { el.__wapleWasMuted = el.muted; }
+                el.muted = true;
+              } else if (el.__wapleWasMuted !== undefined) {
+                el.muted = el.__wapleWasMuted;
+                el.__wapleWasMuted = undefined;
+              }
+            } catch (e) {}
+          }
+          function applyAll() {
+            var els = document.querySelectorAll('video, audio');
+            for (var i = 0; i < els.length; i += 1) { applyTo(els[i]); }
+          }
+          applyAll();
+          if (!window.__wapleMuteObserver && window.MutationObserver && document.documentElement) {
+            window.__wapleMuteObserver = new window.MutationObserver(applyAll);
+            window.__wapleMuteObserver.observe(document.documentElement,
+                                               { childList: true, subtree: true });
+          }
+        })();
+        """#
+    }
+
+    private func setMutedJS(_ muted: Bool) {
+        webView?.evaluateJavaScript(Self.muteJS(muted)) { _, error in
+            if let error {
+                NSLog("%@", "[Waple] mute injection failed: \(error)")
+            }
+        }
+    }
+
+    /// 정책 음소거. 렌더 루프는 건드리지 않는다 — 음소거는 정지가 아니다(프로토콜 주석).
+    public func setPolicyMuted(_ muted: Bool) {
+        policyMuted = muted
+        setMutedJS(muted)
+    }
+
+    /// 오디오 축의 뺄셈 항.
+    ///
+    /// `.videoFallback` 은 **정확하다** — 페이지에 심은 음량이 0 이면 `<video muted>` 라 소리가
+    /// 날 수 없다. `VideoSettings.volume` 의 기본값이 0 이므로 흔한 경우가 정확한 쪽이다.
+    ///
+    /// `.web` 은 **모른다.** WKWebView 에 "지금 소리를 내는가" 를 묻는 공개 API 가 없고, JS 로
+    /// 물으면 비동기라 이 동기 프로퍼티에 담을 수 없다. 그래서 과대보고한다 — 그 결과는
+    /// "웹 벽지가 떠 있는 동안 오디오 축이 안 켜진다"(= stage 2 의 현행 동작)이고,
+    /// 과소보고했을 때의 결과인 되먹임(스스로를 멈춤)보다 낫다.
+    public var isPlayingAudio: Bool {
+        guard webView != nil, !isEffectivelyPaused, !policyMuted else { return false }
+        switch mode {
+        case .videoFallback: return mountedVolume > 0
+        case .web: return true
+        }
+    }
+
     private func synchronizeEffectivePause(forceJavaScript: Bool = false) {
         let effective = isEffectivelyPaused
         let changed = effectivePauseApplied != effective
@@ -325,6 +416,11 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard Self.isAllowedTopFrameURL(webView.url) else { return }
         synchronizeEffectivePause(forceJavaScript: isEffectivelyPaused)
+        // 문서가 교체되면 JS 월드가 통째로 사라진다 — `__wapleMuted` 도 `MutationObserver` 도
+        // 같이 없어지므로 여기서 다시 심는다(`synchronizeEffectivePause` 가 정지 상태를 다시
+        // 미는 것과 같은 이유). `policyMuted` 가 false 여도 부른다: 관찰자를 설치해 둬야 이
+        // 문서에서 나중에 켜는 음소거가 새로 생긴 요소까지 따라간다.
+        setMutedJS(policyMuted)
         // didFinish 는 모든 허용 main-frame 내비게이션마다 발생한다. WE 는 문서가 다시 로드될 때도
         // 저장된 사용자 속성을 다시 전달하므로 JSON 을 소비하지 않는다.
         guard let json = userPropertiesJSON else { return }
@@ -734,6 +830,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         effectivePauseApplied = false
         pausedManually = false
         pausedByOcclusion = false
+        mountedVolume = 0
+        // `policyMuted` 는 **남긴다** — 정책은 렌더러가 아니라 앱 전역의 상태다
+        // (`VideoRenderer.teardown` 의 같은 판단과 짝).
         hasAudioListener = false
         userPropertiesJSON = nil
         userPropertiesByKey = [:]

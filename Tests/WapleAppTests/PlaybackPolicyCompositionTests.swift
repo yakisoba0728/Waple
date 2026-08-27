@@ -46,16 +46,16 @@ final class PlaybackPolicyCompositionTests: XCTestCase {
         XCTAssertTrue(RenderPauseComposition.decide(globallyPaused: false, verdict: v, monitorIndex: 3).paused)
     }
 
-    /// **아직 못 하는 것을 못 한다고 센다.** `stop`·`muted` 는 `WallpaperRenderer` 에 표면이
-    /// 없어 적용하지 않는다 — `stop` 은 정지로 축소되고 `muted` 는 아무 일도 안 한다.
-    /// 그 격차를 결정이 이름으로 들고 있어야 배선할 때 셀 수 있다.
-    func testUnappliedPolicyDimensionsAreReportedNotSilentlyDropped() {
+    /// 두 차원이 결정에 **이름으로 남는다.** `policyWantsMute` 는 stage 3① 부터 실제로
+    /// 적용되고(`AppDelegate` 가 전 렌더러에 민다), `policyWantsStop` 은 의도적 축소를 센다.
+    /// 어느 쪽이든 판정이 결정으로 넘어오는 길에서 사라지면 안 된다.
+    func testPolicyDimensionsSurviveIntoTheDecision() {
         let d = RenderPauseComposition.decide(globallyPaused: false,
                                               verdict: verdict(stop: true, muted: true),
                                               monitorIndex: 0)
-        XCTAssertTrue(d.policyWantsStop, "stop 요구가 사라지면 격차를 셀 수 없다")
-        XCTAssertTrue(d.policyWantsMute)
-        XCTAssertTrue(d.paused, "지금은 정지로 축소된다 — WE 보다 약하되 무회귀")
+        XCTAssertTrue(d.policyWantsStop, "stop 요구가 사라지면 축소를 셀 수 없다")
+        XCTAssertTrue(d.policyWantsMute, "음소거 요구가 사라지면 적용할 것이 없어진다")
+        XCTAssertTrue(d.paused, "stop 은 정지로 축소된다 — 근거는 stopIsReducedToPause 블록")
     }
 
     /// 음소거만 요구하는 판정은 **아무것도 멈추지 않는다.** 음소거를 정지로 바꿔치면
@@ -79,6 +79,79 @@ final class PlaybackPolicyCompositionTests: XCTestCase {
         XCTAssertTrue(RenderPauseComposition.decideAll(globallyPaused: true,
                                                        verdict: .running,
                                                        rendererCount: 0).isEmpty)
+    }
+
+    // MARK: 전역 음소거 접기 (stage 3①)
+
+    /// **화면마다 벽지가 다르면 판정도 갈리는데 WE 의 음소거는 전역이다.** OR 로 접는다 —
+    /// AND 로 접으면 화면 하나가 `run` 이라는 이유로 나머지 전부의 음소거가 사라진다.
+    func testGlobalMuteIsOrAcrossMonitors() {
+        let asks = RenderPauseComposition.decide(globallyPaused: false,
+                                                 verdict: verdict(muted: true), monitorIndex: 0)
+        let quiet = RenderPauseComposition.decide(globallyPaused: false,
+                                                  verdict: .running, monitorIndex: 1)
+        XCTAssertTrue(RenderPauseComposition.wantsGlobalMute([asks, quiet]))
+        XCTAssertTrue(RenderPauseComposition.wantsGlobalMute([quiet, asks]), "순서에 의존하지 않는다")
+        XCTAssertFalse(RenderPauseComposition.wantsGlobalMute([quiet, quiet]))
+    }
+
+    /// 렌더러가 없으면 음소거할 것도 없다 — `AppDelegate` 가 빈 배열로 부르는 경로가 있다.
+    func testGlobalMuteOfNothingIsFalse() {
+        XCTAssertFalse(RenderPauseComposition.wantsGlobalMute([]))
+    }
+
+    /// **음소거는 정지를 부르지 않는다** — 접는 함수 쪽에서도 같은 계약이 서야 한다.
+    /// `testMuteAloneNeverPauses` 가 결정 하나를 보는 반면 여기는 배열 전체를 본다.
+    func testGlobalMuteDoesNotPauseAnything() {
+        let all = RenderPauseComposition.decideAll(globallyPaused: false,
+                                                    verdict: verdict(muted: true), rendererCount: 3)
+        XCTAssertTrue(RenderPauseComposition.wantsGlobalMute(all))
+        XCTAssertEqual(all.map(\.paused), [false, false, false])
+    }
+
+    // MARK: `stop` 을 정지로 접는다 — 그 근거 (stage 3②)
+
+    /// **왜 `stop` 을 해제·재마운트로 만들지 않았는가 — 그 판단의 근거를 오라클로 못 박는다.**
+    ///
+    /// WE 기본값은 `playbacksleep = stop` 이고 평가기는 절전 래치에서 실제로 `stop` 을 낸다.
+    /// 즉 진짜 해제를 넣으면 **디스플레이가 절전에 들 때마다** 전 화면이 해제되고 깨어날
+    /// 때마다 재마운트된다 — 하루에 수십 번, `mount` 가 `throws` 인 경로에서.
+    /// 이 단언이 깨지면(예: 기본값이 바뀌어 절전이 더는 stop 이 아니면) 그 판단의 전제가
+    /// 사라진 것이므로 `stopIsReducedToPause` 를 다시 검토해야 한다.
+    func testWEDefaultStopIsDrivenByDisplaySleep() {
+        let asleep = PlaybackEvaluator.evaluate(.weDefault, PlaybackConditions(displayAsleep: true))
+        XCTAssertTrue(asleep.stop, "WE 기본값 playbacksleep=stop — 절전마다 stop 이 뜬다")
+
+        XCTAssertFalse(PlaybackEvaluator.evaluate(.weDefault, PlaybackConditions()).stop,
+                       "깨어 있으면 stop 이 아니다")
+        // 창 상태 축의 WE 기본값은 `pause` 라 최대화·전체화면만으로는 stop 이 뜨지 않는다.
+        // 그래서 stop 의 지배적 발동원은 사용자가 아무것도 안 해도 도는 **절전**이다.
+        let covered = PlaybackEvaluator.evaluate(
+            .weDefault, PlaybackConditions(allMonitorsMask: 0b1, maximizedMask: 0b1, fullscreenMask: 0b1))
+        XCTAssertFalse(covered.stop)
+        XCTAssertTrue(covered.isPaused(monitorIndex: 0))
+    }
+
+    /// 축소는 **결론**이지 미결이 아니다 — 상수와 동작이 같은 말을 하는지 본다.
+    func testStopIsDeliberatelyReducedToPause() {
+        XCTAssertTrue(RenderPauseComposition.stopIsReducedToPause,
+                      "축소를 걷으려면 stopIsReducedToPause 블록의 실기 수치 둘을 먼저 재라")
+        let d = RenderPauseComposition.decide(globallyPaused: false,
+                                              verdict: verdict(stop: true), monitorIndex: 0)
+        XCTAssertTrue(d.paused, "축소되는 동안에도 화면은 반드시 멈춘다 — 무회귀 바닥")
+        XCTAssertTrue(d.policyWantsStop, "무엇을 축소했는지는 계속 셀 수 있어야 한다")
+    }
+
+    /// **정지 판정은 음소거를 요구하지 않는다.** WE 에서 stop 은 인스턴스 해제라 음소거가
+    /// 무의미하고, 평가기도 `muted: false` 를 낸다. 축소된 우리 쪽에서는 `pause()` 가 소리를
+    /// 멈추므로 결과가 같다 — 그 등가가 깨지면 절전 중에 소리만 남는다.
+    func testStopVerdictNeverRequestsMute() {
+        let v = PlaybackEvaluator.evaluate(.weDefault, PlaybackConditions(displayAsleep: true))
+        XCTAssertTrue(v.stop)
+        XCTAssertFalse(v.muted)
+        let all = RenderPauseComposition.decideAll(globallyPaused: false, verdict: v, rendererCount: 2)
+        XCTAssertEqual(all.map(\.paused), [true, true])
+        XCTAssertFalse(RenderPauseComposition.wantsGlobalMute(all))
     }
 
     // MARK: 엣지 추적
@@ -107,6 +180,34 @@ final class PlaybackPolicyCompositionTests: XCTestCase {
         _ = s.changes([true, true])
         let c = s.changes([true, true, true])
         XCTAssertEqual(c.count, 3, "수가 바뀌면 diff 하지 않는다")
+    }
+
+    // MARK: 전역 1비트 엣지 추적 (stage 3①)
+
+    /// **첫 호출은 무조건 적용한다** — `false` 로 시작하면 새 렌더러(정책을 모르는 상태)에
+    /// 아무것도 안 밀어서 음소거가 조용히 사라진다. 초기값이 `nil` 인 것이 그 계약이다.
+    func testAppliedFlagAppliesTheFirstValueEvenWhenFalse() {
+        var flag = AppliedFlag()
+        XCTAssertNil(flag.appliedValue, "아직 아무것도 적용하지 않았다")
+        XCTAssertEqual(flag.change(to: false), false, "첫 호출은 값과 무관하게 적용한다")
+        XCTAssertNil(flag.change(to: false), "같은 값이면 부를 필요가 없다")
+    }
+
+    func testAppliedFlagReportsOnlyEdges() {
+        var flag = AppliedFlag()
+        _ = flag.change(to: false)
+        XCTAssertEqual(flag.change(to: true), true)
+        XCTAssertNil(flag.change(to: true))
+        XCTAssertEqual(flag.change(to: false), false)
+    }
+
+    /// 렌더러 세트가 갈리면 리셋한다 — 새 렌더러는 정책을 모른 채 태어나므로 다시 밀어야 한다.
+    func testAppliedFlagResetForcesReapply() {
+        var flag = AppliedFlag()
+        _ = flag.change(to: true)
+        XCTAssertNil(flag.change(to: true))
+        flag.reset()
+        XCTAssertEqual(flag.change(to: true), true, "리셋 뒤에는 같은 값도 다시 적용한다")
     }
 
     func testResetForcesFullReapply() {
@@ -144,5 +245,19 @@ final class PlaybackPolicyCompositionTests: XCTestCase {
         let v = PlaybackEvaluator.evaluate(.allRun, conditions)
         let all = RenderPauseComposition.decideAll(globallyPaused: false, verdict: v, rendererCount: 2)
         XCTAssertEqual(all.map(\.paused), [false, false])
+        XCTAssertFalse(RenderPauseComposition.wantsGlobalMute(all))
+    }
+
+    /// **사용자가 `mute` 를 고르면 아무 화면도 멈추지 않고 소리만 꺼진다.** stage 3① 이
+    /// 배선한 축의 끝에서 끝까지 오라클 — 정책·평가기·합류·전역 접기가 전부 이 성질을 지켜야
+    /// 소리만 줄이려던 사용자의 벽지가 얼어붙지 않는다.
+    func testMuteAxisSilencesWithoutPausingEndToEnd() {
+        var policy = PlaybackPolicy.weDefault
+        policy.maximized = .mute
+        let conditions = PlaybackConditions(allMonitorsMask: 0b11, maximizedMask: 0b10)
+        let v = PlaybackEvaluator.evaluate(policy, conditions)
+        let all = RenderPauseComposition.decideAll(globallyPaused: false, verdict: v, rendererCount: 2)
+        XCTAssertEqual(all.map(\.paused), [false, false], "음소거 축은 아무것도 멈추지 않는다")
+        XCTAssertTrue(RenderPauseComposition.wantsGlobalMute(all), "그리고 전 화면이 음소거된다")
     }
 }
