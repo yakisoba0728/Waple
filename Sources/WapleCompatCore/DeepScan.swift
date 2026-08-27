@@ -806,14 +806,33 @@ public enum DeepScan {
             // 전부 타임아웃을 쓰는데 여기만 남아 있었다. 이 호출은 concurrentPerform 워커 안이라
             // 하나가 걸리면 그 워커 슬롯이 영구히 죽고, CLI 스캔 잡 전체가 끝나지 않는다.
             // 손상 mp4 의 AVAsset 로드는 실제로 반환하지 않을 수 있다 — 그게 이 스캐너의 입력이다.
-            if sem.wait(timeout: .now() + Self.assetLoadTimeoutSeconds) != .success {
-                playable.value = false   // 시간 초과 = 재생 불가로 집계(스캐너 판정과 같은 방향)
+            // [2026-08-27] 타임아웃 뒤에 **박스를 읽지 않는다.** 종전엔 `playable.value = false` 로
+            // 쓴 뒤 아래에서 다시 읽었는데, 그 시점에도 위 `Task` 는 살아 있어 같은 저장 프로퍼티에
+            // 동시에 쓴다 — 락이 없으므로 UB 이고 TSan 검출 대상이다. 박스의 `@unchecked Sendable`
+            // 근거("signal→wait 가 직렬화를 보장")는 **성공 경로에서만** 참이다.
+            //
+            // 형제 둘이 이미 반대로 짜여 있고 이유까지 적어 뒀다 —
+            //   SceneVideoLayer.swift:119  "타임아웃 시 값을 **읽지 않고**(박스는 락이 없어 늦게
+            //                               도착한 쓰기와 경합) 폴백으로 간다"
+            //   FFmpegConverter.swift:161  "타임아웃 시 박스를 읽지 않는다(락이 없어 …)"
+            // 여기만 그 규약을 깨고 있었다. 관측 결과도 갈렸다: Task 가 쓰기와 읽기 사이에 끝나면
+            // "타임아웃 선언 후 playable=true" 로 집계돼 videoNativePlayable 이 실행마다 흔들리고
+            // `--deep --strict` 의 종료 코드까지 비결정이 된다. 판정 방향(시간 초과 = 재생 불가)은
+            // 그대로 두고 읽기만 없앤다.
+            guard sem.wait(timeout: .now() + Self.assetLoadTimeoutSeconds) == .success else {
+                agg.sync {
+                    agg.videoTotal += 1
+                    agg.videoNativeUnplayable += 1
+                    agg.addSample2(&agg.videoFailSamples, "\(project.id)/\(file) (로드 타임아웃)")
+                }
+                return false
             }
+            let isPlayable = playable.value   // wait 성공 = signal 이 선행 — 여기서만 읽어도 안전하다
             agg.sync {
                 agg.videoTotal += 1
-                if playable.value { agg.videoNativePlayable += 1 } else { agg.videoNativeUnplayable += 1; agg.addSample2(&agg.videoFailSamples, "\(project.id)/\(file)") }
+                if isPlayable { agg.videoNativePlayable += 1 } else { agg.videoNativeUnplayable += 1; agg.addSample2(&agg.videoFailSamples, "\(project.id)/\(file)") }
             }
-            return playable.value
+            return isPlayable
         } else if VideoRenderer.unsupportedExtensions.contains(ext) {
             agg.sync { agg.videoTotal += 1; agg.videoConvertible += 1 }
             return true   // supported-in-principle via FFmpegConverter (availability reported separately)
