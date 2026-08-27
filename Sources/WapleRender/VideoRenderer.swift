@@ -48,6 +48,9 @@ public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
     private var occlusionObserver: NSObjectProtocol?
     private var pausedByOcclusion = false
     private var pausedManually = false
+    /// 재생정책 음소거(stage 3①). **사용자 음량과 별개의 층**이라 값을 덮어쓰지 않는다 —
+    /// 끄면 `VideoSettings.volume(id:)` 가 그대로 돌아온다.
+    private var policyMuted = false
     private var mountToken: UInt64 = 0
     private var attemptedPlaybackRecovery = false
     /// F550: 현재 장착된 소스가 ffmpeg 변환 결과물인지 — 결과물 자체의 재생 실패는 재변환하지 않는다.
@@ -187,7 +190,10 @@ public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
         // 배경별 음량/배속(기본: 음소거, 1배속). defaultRate 는 루프 재시작에도 유지된다.
         let volume = VideoSettings.volume(id: project.id)
         queue.volume = volume
-        queue.isMuted = volume <= 0
+        // stage 3①: 마운트도 정책 음소거를 거친다. 안 거치면 정책이 음소거를 요구하는 동안
+        // 배경을 바꾸거나 모니터를 착탈할 때마다 **새 렌더러가 소리부터 내고** 다음 정책
+        // 틱(≤1초)에 꺼진다 — 사용자에게는 1초짜리 소음이다.
+        queue.isMuted = Self.effectiveMute(volume: volume, policyMuted: policyMuted)
         queue.defaultRate = VideoSettings.rate(id: project.id)
 
         let layer = AVPlayerLayer(player: queue)
@@ -336,7 +342,7 @@ public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
         guard let player, let id = projectId else { return }
         let volume = VideoSettings.volume(id: id)
         player.volume = volume
-        player.isMuted = volume <= 0
+        player.isMuted = Self.effectiveMute(volume: volume, policyMuted: policyMuted)
         let rate = VideoSettings.rate(id: id)
         player.defaultRate = rate
         // defaultRate 는 다음 play() 부터 적용 — 재생 중이면 현재 rate 도 즉시 맞춘다.
@@ -344,11 +350,41 @@ public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
         if player.rate != 0 { player.rate = rate }
     }
 
+    // MARK: - 재생정책 음량면 (stage 3①·③)
+
+    /// 사용자 음량과 정책 음소거의 합성 — **순수**라 살아 있는 `AVPlayer` 없이 오라클을 쓸 수 있다.
+    ///
+    /// `volume <= 0` 을 따로 보는 이유: `AVPlayer.volume = 0` 만으로도 소리는 안 나지만,
+    /// `isMuted` 를 같이 세워야 "지금 소리가 나는가" 를 한 값으로 읽을 수 있다. 종전 두 자리
+    /// (`attachPlayer`·`applyLiveVideoSettings`)가 이 규칙을 각자 복사하고 있었고, 정책 음소거를
+    /// 얹으면서 그 복사가 셋이 되기 전에 한 자리로 모은다.
+    static func effectiveMute(volume: Float, policyMuted: Bool) -> Bool {
+        policyMuted || volume <= 0
+    }
+
+    /// 정책 음소거. 렌더 루프는 건드리지 않는다 — 음소거는 정지가 아니다(프로토콜 주석).
+    public func setPolicyMuted(_ muted: Bool) {
+        policyMuted = muted
+        guard let player, let id = projectId else { return }
+        player.isMuted = Self.effectiveMute(volume: VideoSettings.volume(id: id), policyMuted: muted)
+    }
+
+    /// 오디오 축의 뺄셈 항. 순간 상태(`rate`)가 아니라 **의도**를 답한다 — `rate` 는 루프
+    /// 이음매·seek 중에 0 을 스쳐서 1초 폴링이 그 틈을 "조용하다" 로 읽으면 정책이 진동한다.
+    public var isPlayingAudio: Bool {
+        guard player != nil, let id = projectId else { return false }
+        return !isEffectivelyPaused
+            && !Self.effectiveMute(volume: VideoSettings.volume(id: id), policyMuted: policyMuted)
+    }
+
     public func teardown() {
         mountToken &+= 1
         stopPlayback()
         container = nil
         projectId = nil
+        // `policyMuted` 는 **남긴다.** 정책은 렌더러가 아니라 앱 전역의 상태라, teardown 후
+        // 같은 인스턴스를 다시 mount 하는 경로(`SceneRenderer.mount` 와 같은 재사용 규약)에서
+        // 리셋하면 음소거가 조용히 풀린다. 호출부는 렌더러 세트가 바뀔 때 다시 밀어 넣는다.
     }
 
     private func stopPlayback() {
