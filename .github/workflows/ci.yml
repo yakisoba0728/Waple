@@ -525,8 +525,17 @@ jobs:
           # 두 번째 항목이 +11 인 것은 `1c94719` 가 **작업 중인 트리를 잡아 커밋했기 때문**이다
           # (같은 커밋이 죽은 `??` 도 함께 실어 CI 를 붉혔다 — `acab27c` 메시지 참조).
           # 마지막 오라클 하나가 그 뒤에 착지해 +1 로 따라왔다.
-          if [ "${EXECUTED:-0}" -lt 3723 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 3723 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
+          # [2026-08-27] 3723 → **3774** 래칫. run 33028115080 · 커밋 `e48bd3b`(브랜치 tip 자신,
+          # debug·release 두 잡 성공)에서 `executed=3774 skipped=64`. 정적 개수도 정확히 3,774 라
+          # **열두 번째로** 어긋나지 않았다.
+          #
+          # 증분 51의 출처(재생정책 stage 2 — 커밋별 실측):
+          #   S2a 전역면·병합·마스크        +24  PlaybackPolicyRuntimeTests 신설
+          #   S2b 관측자 6축                +12  PlaybackObserversTests 신설
+          #   S2c 합류·엣지 추적            +15  PlaybackPolicyCompositionTests 신설
+          #   배선·심 타입 정정              ±0  프로덕션 코드만
+          if [ "${EXECUTED:-0}" -lt 3774 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 3774 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
             exit 1
           fi
 
