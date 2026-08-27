@@ -1,6 +1,7 @@
 import XCTest
 @testable import Waple
 import WapleCore
+import WaplePolicy
 
 /// AppDelegate 에서 추출해 실제로 호출하는 순수 결정 로직(AppLogic) 검증.
 /// executable 타깃 Waple 을 @testable import 로 직접 테스트한다(내부 타입 접근).
@@ -622,5 +623,327 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(PropertyControl.kind(forType: "file"), .file)
         XCTAssertEqual(PropertyControl.kind(forType: "scenetexture"), .file)
         XCTAssertEqual(PropertyControl.kind(forType: "directory"), .directory)
+    }
+
+    // MARK: - 재구성 무손실 (일반 오라클, 2026-08-26)
+    //
+    // 배경: `PresetResolver.resolve` 가 프로젝트를 **필드 재나열**로 재구성하면서
+    // `supportsAudioProcessing`·`playbackProperties` 를 흘리고 있었다. 생성자의 뒤쪽 두 인자가
+    // 기본값을 갖고 있어 빼먹어도 컴파일이 통과했기 때문이다.
+    //
+    // **이 절의 세 테스트는 그 두 필드를 단언하지 않는다.** 오늘의 두 필드만 못 박으면 내일
+    // 추가되는 세 번째 필드가 똑같이 조용히 샌다 — 그게 이 결함의 성질이다. 대신 `Mirror` 로
+    // 저장 프로퍼티를 **열거해서** 부류 전체를 잡는다:
+    //
+    //  ① `testProbeCoversEveryStoredField` — 탐침이 모든 필드에 "기본값과 다른 값" 을 갖는지.
+    //     필드가 새로 생기면 **여기서 먼저 실패**하며 탐침을 고치라고 말한다(자가 유지).
+    //  ② `testWithChangesCarriesEveryFieldItWasNotToldToChange` — `with(...)` 자체의 무손실.
+    //  ③ `testPresetResolveNeverLeavesAFieldAtItsInitializerDefault` — 재구성의 무손실.
+    //
+    // ①이 있어야 ②③이 일반적이다. ①이 없으면 새 필드가 탐침에서 기본값인 채로 남아
+    // ②③이 그 필드를 못 보고 통과한다.
+
+    /// 모든 필드가 `init` 기본값·빈값과 **다른** 프로젝트. 위 세 테스트의 공통 탐침.
+    /// 딕셔너리 항목을 하나씩만 두는 것은 `String(describing:)` 비교가 순서에 흔들리지 않게 하기 위함.
+    private func populatedProject(seed: String, type: WallpaperType) -> WallpaperProject {
+        WallpaperProject(
+            id: "id-\(seed)",
+            type: type,
+            fileName: "\(seed).json",
+            previewName: "\(seed).jpg",
+            title: "제목 \(seed)",
+            tags: ["tag-\(seed)"],
+            contentRating: "Everyone-\(seed)",
+            workshopId: "ws-\(seed)",
+            dependency: "dep-\(seed)",
+            folderURL: URL(fileURLWithPath: "/lib/\(seed)", isDirectory: true),
+            presetOverrides: ["ov-\(seed)": .number(0.5)],
+            presetFolderURL: URL(fileURLWithPath: "/lib/\(seed)/preset", isDirectory: true),
+            supportsAudioProcessing: true,
+            playbackProperties: ["playbackfullscreen": "pause"]
+        )
+    }
+
+    /// 필수 인자에는 빈값을, 기본값 있는 인자에는 아무것도 주지 않은 프로젝트.
+    /// = **재나열이 필드를 흘렸을 때 그 자리에 남는 값**의 표본.
+    private func minimalProject() -> WallpaperProject {
+        WallpaperProject(id: "", type: .preset, fileName: nil, previewName: nil,
+                         title: "", tags: [], contentRating: nil, workshopId: nil,
+                         dependency: nil, folderURL: URL(fileURLWithPath: "/"))
+    }
+
+    /// 저장 프로퍼티를 이름 → 표현으로. `Mirror` 라서 **필드가 늘면 자동으로 따라온다**.
+    private func storedFields(_ project: WallpaperProject) -> [String: String] {
+        var out: [String: String] = [:]
+        for child in Mirror(reflecting: project).children {
+            guard let label = child.label else { continue }
+            out[label] = String(describing: child.value)
+        }
+        return out
+    }
+
+    func testProbeCoversEveryStoredField() {
+        let probe = storedFields(populatedProject(seed: "probe", type: .unknown("probe")))
+        let bare = storedFields(minimalProject())
+        XCTAssertFalse(probe.isEmpty, "Mirror 가 저장 프로퍼티를 하나도 못 봤다")
+        XCTAssertEqual(Set(probe.keys), Set(bare.keys))
+        for (label, value) in probe {
+            XCTAssertNotEqual(
+                value, bare[label],
+                """
+                탐침의 `\(label)` 이 기본값과 같다(\(value)). \
+                WallpaperProject 에 필드를 추가했다면 populatedProject 에 **기본값과 다른 값**을 \
+                넣어라 — 안 그러면 아래 두 무손실 테스트가 그 필드를 못 본다.
+                """)
+        }
+    }
+
+    func testWithChangesCarriesEveryFieldItWasNotToldToChange() {
+        let probe = populatedProject(seed: "probe", type: .unknown("probe"))
+
+        // 인자 없는 with() 는 항등. `==` 는 합성 Equatable 이라 필드가 늘어도 자동으로 덮는다.
+        XCTAssertEqual(probe.with(), probe, "with() 가 무언가를 흘렸다")
+
+        // 하나만 바꾸면 그 하나만 바뀐다.
+        let changed = probe.with(title: "다른 제목")
+        let before = storedFields(probe)
+        for (label, value) in storedFields(changed) {
+            if label == "title" {
+                XCTAssertEqual(value, "다른 제목")
+            } else {
+                XCTAssertEqual(value, before[label], "with(title:) 이 \(label) 까지 바꿨다")
+            }
+        }
+
+        // 이중 옵셔널 규약(WallpaperProject.with 주석): 리터럴 nil 은 "안 바꿈",
+        // String? 변수는 옵셔널 승격으로 "그 값으로 바꿈"(nil 이어도 nil 로 덮어쓴다).
+        XCTAssertEqual(probe.with(fileName: nil).fileName, probe.fileName,
+                       "리터럴 nil 은 '안 바꿈' 이어야 한다")
+        let absent: String? = nil
+        XCTAssertNil(probe.with(fileName: absent).fileName,
+                     "String? 변수는 nil 이어도 그 nil 로 덮어써야 한다")
+    }
+
+    func testPresetResolveNeverLeavesAFieldAtItsInitializerDefault() {
+        let preset = populatedProject(seed: "preset", type: .preset)
+        let target = populatedProject(seed: "target", type: .scene)
+        let resolved = PresetResolver.resolve(
+            project: preset,
+            originalFolder: preset.folderURL,
+            dependencyFolder: { _ in target.folderURL },
+            parse: { $0 == target.folderURL ? target : nil })
+        guard let resolved else { return XCTFail("프리셋이 해석되지 않았다") }
+
+        let bare = storedFields(minimalProject())
+        // resolve 는 필드를 **교차 대입**한다(presetFolderURL := project.folderURL). 그래서 같은
+        // 이름끼리 맞추는 대신 **두 입력이 가진 값들의 집합**에 속하는지를 본다.
+        // `Optional(...)` 껍질은 벗겨서 비교한다 — 같은 값이라도 받는 필드의 옵셔널 여부가
+        // 다르면 `String(describing:)` 표기가 갈리기 때문이다(`presetFolderURL`(URL?) 에 들어간
+        // `folderURL`(URL) 값이 실제로 그랬다. 이 벗기기 없이 짰다가 표준 오라클이 정상 코드에도
+        // 실패해서 발견했다).
+        var fromInputs = Set(storedFields(preset).values.map(Self.unwrappedDescription))
+        fromInputs.formUnion(storedFields(target).values.map(Self.unwrappedDescription))
+
+        for (label, value) in storedFields(resolved) {
+            XCTAssertNotEqual(
+                value, bare[label],
+                "재구성이 `\(label)` 을 흘렸다 — 생성자 기본값(\(value))이 그대로 남았다")
+            XCTAssertTrue(
+                fromInputs.contains(Self.unwrappedDescription(value)),
+                "`\(label)` 의 값(\(value))이 두 입력 어디에서도 오지 않았다")
+        }
+    }
+
+    /// `Optional(x)` → `x`. 그 밖은 그대로.
+    private static func unwrappedDescription(_ s: String) -> String {
+        guard s.hasPrefix("Optional("), s.hasSuffix(")") else { return s }
+        return String(s.dropFirst("Optional(".count).dropLast())
+    }
+
+    /// 위 일반 오라클이 실제로 무엇을 잡았는지 사람이 읽을 수 있게 남기는 회귀 못.
+    /// (일반 오라클이 실패하면 어느 필드인지 메시지로 알려 주지만, 이 두 필드는 실측 결함이라
+    ///  이름을 박아 둔다 — 다음 사람이 `git log` 없이도 무슨 일이 있었는지 알도록.)
+    func testPresetResolveKeepsAudioAndPlaybackDeclarations() {
+        let preset = populatedProject(seed: "preset", type: .preset)
+        let target = populatedProject(seed: "target", type: .scene)
+            .with(playbackProperties: ["playbackfocus": "mute", "playbacksleep": "stop"])
+        let resolved = PresetResolver.resolve(
+            project: preset,
+            originalFolder: preset.folderURL,
+            dependencyFolder: { _ in target.folderURL },
+            parse: { $0 == target.folderURL ? target : nil })
+
+        XCTAssertEqual(resolved?.supportsAudioProcessing, true,
+                       "오디오 지원 선언이 프리셋 해석에서 사라졌다")
+        // 프리셋이 선언한 축이 이기고, target 만 선언한 축은 그대로 실려 온다.
+        XCTAssertEqual(resolved?.playbackProperties,
+                       ["playbackfullscreen": "pause", "playbackfocus": "mute", "playbacksleep": "stop"])
+    }
+
+    /// [2026-08-26] `with(...)` 의 옵셔널 파라미터는 **이중 옵셔널**이라 `??` 를 인자 자리에
+    /// 직접 쓰면 좌변이 `.some(…)` 으로 승격돼 우변이 죽는다(컴파일러는 경고만 준다).
+    /// `resolve` 에서 실제로 그렇게 썼다가 앱 계층 타입체크 경고로 잡았고, 그때 죽은 것이
+    /// 바로 이 "프리셋이 비면 target 값" 폴백 세 개다. 기존 테스트들은 전부 프리셋 쪽에
+    /// 값이 **있는** 경우만 봐서 못 잡았다 — 그래서 없는 쪽을 여기서 못 박는다.
+    func testPresetResolveFallsBackToTargetWhenPresetLeavesFieldsEmpty() {
+        let preset = populatedProject(seed: "preset", type: .preset)
+            .with(previewName: String?.none, contentRating: String?.none, workshopId: String?.none)
+        let target = populatedProject(seed: "target", type: .scene)
+        let resolved = PresetResolver.resolve(
+            project: preset,
+            originalFolder: preset.folderURL,
+            dependencyFolder: { _ in target.folderURL },
+            parse: { $0 == target.folderURL ? target : nil })
+
+        XCTAssertEqual(resolved?.previewName, "target.jpg", "프리셋에 없으면 target 미리보기")
+        XCTAssertEqual(resolved?.contentRating, "Everyone-target")
+        XCTAssertEqual(resolved?.workshopId, "ws-target")
+    }
+
+    // MARK: - PlaybackPolicyGate (재생정책 stage 1, 2026-08-26)
+
+    private func project(playback: [String: String]) -> WallpaperProject {
+        WallpaperProject(id: "p", type: .scene, fileName: "scene.json", previewName: nil,
+                         title: "p", tags: [], contentRating: nil, workshopId: nil,
+                         dependency: nil, folderURL: URL(fileURLWithPath: "/lib/p"),
+                         playbackProperties: playback)
+    }
+
+    /// 모든 축이 발화할 수 있는 최악 조건 — 무회귀 단언을 여기에 건다.
+    private var hostileConditions: PlaybackConditions {
+        PlaybackConditions(
+            layout: .perMonitor,
+            allMonitorsMask: 0b11,
+            unfocusedMask: 0b11,
+            maximizedMask: 0b11,
+            fullscreenMask: 0b11,
+            audioPlaying: true,
+            displayAsleep: true,
+            onBattery: true)
+    }
+
+    func testPolicyGateIsACompleteNoOpWhenNothingIsDeclared() {
+        XCTAssertNil(PlaybackPolicyGate.declaredPolicy([:]), "선언 없음 → 정책 없음")
+        // [2026-08-26] 종전엔 `PlaybackPolicyGate.verdict` 가 선언 없음을 `.running` 으로 단축했다.
+        // 그 단축은 전역면이 없다는 전제 위에서만 옳았고, 그 전제는 깨졌다. 같은 계약을
+        // **전역 = 전 축 run** 으로 표현한다 — 정책이 어디에도 없으면 무동작이라는 뜻은 그대로다.
+        XCTAssertEqual(
+            PlaybackPolicyResolver.verdict(for: project(playback: [:]),
+                                           conditions: hostileConditions, global: .allRun),
+            .running,
+            "정책이 어디에도 없으면 어떤 조건에서도 무동작이어야 한다(무회귀 계약)")
+    }
+
+    func testPolicyGateTreatsEmptyStringAsAbsent() {
+        let empty = Dictionary(uniqueKeysWithValues: PlaybackTrigger.allCases.map { ($0.weConfigKey, "") })
+        XCTAssertNil(PlaybackPolicyGate.declaredPolicy(empty),
+                     "빈 문자열은 WE 의 '전역 설정 따름' 기본 주입이라 부재와 같다")
+        XCTAssertEqual(PlaybackPolicyResolver.verdict(for: project(playback: empty),
+                                                      conditions: hostileConditions, global: .allRun),
+                       .running)
+    }
+
+    /// 최상위 계약. 선언하지 않은 축은 `run` 이지 **WE 전역 기본값이 아니다.**
+    /// `PlaybackPolicy.init(weConfig:)` 를 그대로 쓰면 여기가 깨진다 —
+    /// 그쪽은 부재 키를 maximized=pause · fullscreen=pause · sleep=stop 으로 채운다.
+    func testPolicyGateUndeclaredAxisIsRunNotTheWEGlobalDefault() {
+        guard let policy = PlaybackPolicyGate.declaredPolicy(["playbackfocus": "mute"]) else {
+            return XCTFail("한 축이라도 선언되면 정책이 나와야 한다")
+        }
+        XCTAssertEqual(policy.focus, .mute, "선언한 축은 그대로")
+        for trigger in PlaybackTrigger.allCases where trigger != .focus {
+            XCTAssertEqual(policy[trigger], .run,
+                           "\(trigger.weConfigKey) 는 선언되지 않았으므로 run 이어야 한다 " +
+                           "(WE 전역 기본값 \(trigger.weDefault.weConfigValue) 가 새어 들어왔다)")
+        }
+        // 전역 기본값과 정말 다른지 — 위 루프가 통과해도 이 셋이 같으면 계약이 무의미하다.
+        XCTAssertNotEqual(PlaybackTrigger.maximized.weDefault, .run)
+        XCTAssertNotEqual(PlaybackTrigger.fullscreen.weDefault, .run)
+        XCTAssertNotEqual(PlaybackTrigger.displaySleep.weDefault, .run)
+    }
+
+    func testPolicyGateDeclaredAxisReachesTheEvaluator() {
+        // 전체화면 축만 pause 로 선언 → 전체화면인 화면만 정지(layout=perMonitor 이므로 부분 정지).
+        let verdict = PlaybackPolicyResolver.verdict(
+            for: project(playback: ["playbackfullscreen": "pause"]),
+            conditions: PlaybackConditions(allMonitorsMask: 0b11, fullscreenMask: 0b10),
+            global: .allRun)
+        XCTAssertFalse(verdict.stop)
+        XCTAssertFalse(verdict.muted)
+        XCTAssertFalse(verdict.isPaused(monitorIndex: 0))
+        XCTAssertTrue(verdict.isPaused(monitorIndex: 1))
+    }
+
+    func testPolicyGateUnrecognisedValueFallsToRun() {
+        // 매퍼 0x140141918: 미인식 문자열은 조용히 run. 오타가 '정책 없음' 이지 실패가 아니다.
+        let verdict = PlaybackPolicyResolver.verdict(
+            for: project(playback: ["playbackfullscreen": "paws"]),
+            conditions: hostileConditions, global: .allRun)
+        XCTAssertEqual(verdict, .running)
+    }
+
+    /// 프리셋 경유 마운트에서도 선언이 게이트까지 살아 도착하는가 — 결함 두 개가 만나는 자리다.
+    /// 재구성이 `playbackProperties` 를 흘리던 동안 이 경로는 배선이 착지하는 순간 발화할
+    /// 잠복 결함이었다(정책을 선언한 벽지가 프리셋을 거치면 조용히 정책 없음이 된다).
+    func testDeclaredPolicySurvivesPresetResolutionAllTheWayToTheGate() {
+        let presetFolder = URL(fileURLWithPath: "/lib/preset1", isDirectory: true)
+        let depFolder = URL(fileURLWithPath: "/lib/dep1", isDirectory: true)
+        let preset = WallpaperProject(
+            id: "preset1", type: .preset, fileName: nil, previewName: nil,
+            title: "Preset", tags: [], contentRating: nil, workshopId: nil,
+            dependency: "dep1", folderURL: presetFolder)
+        let dependency = WallpaperProject(
+            id: "dep1", type: .scene, fileName: "scene.json", previewName: nil,
+            title: "Dep", tags: [], contentRating: nil, workshopId: nil,
+            dependency: nil, folderURL: depFolder,
+            playbackProperties: ["playbackfullscreen": "pause"])
+
+        guard let resolved = PresetResolver.resolve(
+            project: preset,
+            originalFolder: presetFolder,
+            dependencyFolder: { $0 == "dep1" ? depFolder : nil },
+            parse: { $0 == depFolder ? dependency : nil }) else {
+            return XCTFail("프리셋이 해석되지 않았다")
+        }
+
+        let verdict = PlaybackPolicyResolver.verdict(
+            for: resolved,
+            conditions: PlaybackConditions(allMonitorsMask: 1, fullscreenMask: 1),
+            global: .allRun)
+        XCTAssertTrue(verdict.isPaused(monitorIndex: 0),
+                      "프리셋 해석을 거치면서 선언한 정책이 사라졌다")
+    }
+
+    // MARK: - 파서 ↔ WaplePolicy 키 감시 (ProjectJSONParser 주석이 약속한 '앱 측 테스트')
+
+    /// `ProjectJSONParser.parsePlaybackProperties` 는 여섯 키를 **비공개 리터럴**로 들고 있다
+    /// (WapleCore 는 WaplePolicy 를 import 할 수 없다 — Package.swift 의 경고).
+    /// 그 리터럴을 직접 읽을 수 없으므로 `PlaybackTrigger.allCases` 의 키를 전부 담은 json 을
+    /// 먹여 **수집 결과 집합**을 대조한다 — 어느 쪽이 키를 더하거나 이름을 바꿔도 양방향으로 걸린다.
+    /// 이 대조가 가능한 타깃은 `WapleAppTests` 뿐이다(WapleCore·WaplePolicy 를 동시에 보는 첫 타깃).
+    func testParserCollectsExactlyThePolicyKeysWaplePolicyDeclares() {
+        var properties: [String: Any] = [:]
+        for trigger in PlaybackTrigger.allCases {
+            properties[trigger.weConfigKey] = ["value": trigger.weDefault.weConfigValue]
+        }
+        let parsed = ProjectJSONParser.parse(
+            json: ["type": "scene", "file": "scene.json", "general": ["properties": properties]],
+            folderURL: URL(fileURLWithPath: "/lib/keys"))
+
+        XCTAssertEqual(Set(parsed.playbackProperties.keys),
+                       Set(PlaybackTrigger.allCases.map { $0.weConfigKey }),
+                       "파서의 여섯 키 리터럴과 PlaybackTrigger.allCases 가 어긋났다")
+        // 값도 원문 그대로여야 한다 — 게이트가 그 문자열을 액션으로 접는다.
+        for trigger in PlaybackTrigger.allCases {
+            XCTAssertEqual(parsed.playbackProperties[trigger.weConfigKey],
+                           trigger.weDefault.weConfigValue)
+        }
+        // 그리고 그 원문이 게이트를 통과해 같은 액션으로 돌아오는가(파서→모델→게이트 왕복).
+        guard let policy = PlaybackPolicyGate.declaredPolicy(parsed.playbackProperties) else {
+            return XCTFail("여섯 축을 전부 선언했는데 정책이 나오지 않았다")
+        }
+        for trigger in PlaybackTrigger.allCases {
+            XCTAssertEqual(policy[trigger], trigger.weDefault)
+        }
     }
 }

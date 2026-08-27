@@ -401,7 +401,7 @@ jobs:
           # **이 하한을 손대는 사람에게**: 이 값은 tip 의 실측치와 정확히 같게 박는 관례라
           # (아래 `94b0a34` 문단) 여유가 0 이다. 여러 작업이 동시에 `Tests/**` 를 고치는 중이면
           # **푸시 직전에 정적 개수를 다시 세서** 이 값 이상인지 확인해라 — 한 줄이면 된다:
-          #   grep -rE '^\s*(public |private |internal )?func test' Tests/ --include=*.swift | wc -l
+          #   grep -rE '^\s*(@\w+(\([^)]*\))?\s+|(private|fileprivate|internal|public|open|final|static|class|nonisolated|override|mutating)\s+)*func test' Tests/ --include=*.swift | wc -l
           # (참고: 이 커밋을 쓰던 시점의 워킹트리는 이미 3119 였다 — 다른 작업들이 20개를 더 얹었다.
           #  하한은 그 3119 가 아니라 **CI 가 실제로 잰 3099** 로 둔다. 안 재 본 숫자를 하한으로
           #  박으면 그게 곧 근거 없는 게이트다.)
@@ -466,7 +466,7 @@ jobs:
           # 신고하고 있었다. 하한 초과 실패를 볼 때는 `Test` 스텝의 실패부터 먼저 읽어야 한다.
           # [2026-08-20] 실측 갱신: executed **2459** / skipped 46 / 실패 0
           # (run 32398914480 기준 2452 → remapvalue 어휘 1건 + 관용 JSON 6건 추가로 2459). 같은 시점의 정적 개수
-          # (`grep -rE '^\s*(public |private |internal )?func test' Tests/ --include=*.swift | wc -l`)도
+          # (`grep -rE '^\s*(@\w+(\([^)]*\))?\s+|(private|fileprivate|internal|public|open|final|static|class|nonisolated|override|mutating)\s+)*func test' Tests/ --include=*.swift | wc -l`)도
           # 정확히 2459 다 — 두 세는 법이 어긋나지 않는다는 것을 실측으로 확인했다.
           #
           # **[2026-08-20] 근거가 하한보다 낡아 있었다.** 이 주석은 `2369`(커밋 c109ac1)를 인용하는데
@@ -510,8 +510,32 @@ jobs:
           # `executed` 가 **스킵을 포함**해 정적 개수와 같기 때문이다 — 플랫폼별 스킵 흔들림은
           # 이 수를 바꾸지 않는다(위 표에서 스킵 64/65 로 갈려도 executed 는 둘 다 3,686).
           # 그리고 "타깃이 통째로 빠지는" 양상은 이제 개수가 아니라 **아래 존재 게이트**가 잡는다.
-          if [ "${EXECUTED:-0}" -lt 3708 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 3708 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
+          # [2026-08-26] 하한을 3708 → **3723** 으로 래칫한다.
+          # (run 32991538355 · 커밋 `0e1a744` — **브랜치 tip 자신**, debug·release 두 잡 모두 성공.
+          #  debug 가 `executed=3723 skipped=63`. 정적 개수도 정확히 3,723 이라 두 세는 법이
+          #  **열한 번째로** 어긋나지 않았다 — 단, 그 "정적 개수" 는 `AGENTS.md` 의 **새 정본
+          #  레시피**로 센 값이다. 종전 레시피(`^\s*func test`)는 같은 트리에서 3,714 를 낸다.)
+          #
+          # 증분 15의 출처(커밋별 실측 — 추정 아님):
+          #   `7de1021` 3708  (AppLogicTests 58 · CapturePointerPinTests 4)
+          #   `ae7fa12` 3711  +3  캡처 핀 인스턴스화 — CapturePointerPinTests 4→7
+          #   `5a7831b` 3722  +11 프리셋 필드 드롭 — AppLogicTests 58→69
+          #   `2d7d002` 3723  +1  죽은 폴백 회귀 — AppLogicTests 69→70
+          #   `0e1a744` 3723  ±0  문서·스크립트만
+          # 두 번째 항목이 +11 인 것은 `5a7831b` 가 **작업 중인 트리를 잡아 커밋했기 때문**이다
+          # (같은 커밋이 죽은 `??` 도 함께 실어 CI 를 붉혔다 — `2d7d002` 메시지 참조).
+          # 마지막 오라클 하나가 그 뒤에 착지해 +1 로 따라왔다.
+          # [2026-08-27] 3723 → **3774** 래칫. run 33028115080 · 커밋 `e48bd3b`(브랜치 tip 자신,
+          # debug·release 두 잡 성공)에서 `executed=3774 skipped=64`. 정적 개수도 정확히 3,774 라
+          # **열두 번째로** 어긋나지 않았다.
+          #
+          # 증분 51의 출처(재생정책 stage 2 — 커밋별 실측):
+          #   S2a 전역면·병합·마스크        +24  PlaybackPolicyRuntimeTests 신설
+          #   S2b 관측자 6축                +12  PlaybackObserversTests 신설
+          #   S2c 합류·엣지 추적            +15  PlaybackPolicyCompositionTests 신설
+          #   배선·심 타입 정정              ±0  프로덕션 코드만
+          if [ "${EXECUTED:-0}" -lt 3774 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 3774 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
             exit 1
           fi
 

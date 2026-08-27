@@ -1,5 +1,6 @@
 import Foundation
 import WapleCore
+import WaplePolicy
 
 // AppDelegate 의 결정 로직을 순수 함수로 추출(테스트 가능). UI/부수효과 없음 —
 // 화면·스토어·파서·렌더러는 전부 클로저로 주입한다. AppDelegate 가 이 헬퍼들을 실제로 호출하므로
@@ -71,19 +72,50 @@ enum PresetResolver {
         for folder in candidates {
             let key = folder.standardizedFileURL.path
             guard seen.insert(key).inserted, let target = parse(folder), target.type != .preset else { continue }
-            return WallpaperProject(
-                id: project.id,
+            // [2026-08-26] 종전엔 `WallpaperProject(...)` 로 **필드를 다시 나열**해 재구성했고,
+            // 그 나열이 뒤쪽 두 필드를 통째로 흘렸다 — `supportsAudioProcessing`(false 로) ·
+            // `playbackProperties`([:] 로). 생성자에서 둘 다 기본값을 갖고 있어 **빼먹어도
+            // 컴파일이 통과**했기 때문이고, 그래서 프리셋 경유 마운트마다 100% 재현되는데도
+            // 아무 증상이 없었다(읽는 코드가 아직 없다). 선행 감사는 둘 중 하나만 잡았다.
+            //
+            // 재나열을 없앤다. `with(...)` 는 `var copy = self` 로 시작하므로 **여기서 이름을
+            // 대지 않은 필드는 앞으로 늘어날 것까지 그대로 실린다** — 흘릴 것이 없다.
+            // 근거·기각한 대안은 `WallpaperProject.with(...)` 주석에.
+            //
+            // 기준은 `project`(프리셋)다. 이 함수가 돌려주는 것은 "해석된 그 프리셋" 이고,
+            // 라이브러리 엔트리로서의 정체성(id·title·tags·presetOverrides)이 프리셋 쪽이다.
+            // 내용 쪽 필드만 target 으로 다시 가리킨다.
+            // ⚠️ `??` 를 `with(...)` 인자 자리에 **직접 쓰면 안 된다.** 옵셔널 필드의 파라미터가
+            //    이중 옵셔널이라 좌변 `String?` 이 `.some(…)` 으로 승격돼 **항상 non-nil** 이 되고,
+            //    우변(target 폴백)이 통째로 죽는다. 이 자리에서 실제로 그렇게 썼다가 실측으로
+            //    잡았다 — `warning: left side of nil coalescing operator '??' has non-optional
+            //    type 'String?', so the right side is never used`(AppLogic.swift:91–93).
+            //    경고일 뿐이라 빌드는 서고, "프리셋이 비면 target 값" 규약만 조용히 사라진다.
+            //    타입을 명시한 지역 상수로 **먼저 접은 뒤** 넘긴다.
+            let previewName: String? = project.previewName ?? target.previewName
+            let contentRating: String? = project.contentRating ?? target.contentRating
+            let workshopId: String? = project.workshopId ?? target.workshopId
+            return project.with(
                 type: target.type,
                 fileName: target.fileName,
-                previewName: project.previewName ?? target.previewName,
-                title: project.title,
-                tags: project.tags,
-                contentRating: project.contentRating ?? target.contentRating,
-                workshopId: project.workshopId ?? target.workshopId,
+                previewName: previewName,
+                contentRating: contentRating,
+                workshopId: workshopId,
                 dependency: safeDependency,
                 folderURL: target.folderURL,
-                presetOverrides: project.presetOverrides,
-                presetFolderURL: project.folderURL
+                presetFolderURL: project.folderURL,
+                // 아래 둘은 위 `??` 관례(프리셋이 있으면 프리셋, 없으면 target)를 타입이
+                // 허락하는 만큼 그대로 옮긴 것이다.
+                //  · Bool 은 "선언 안 함" 과 "false 로 선언함" 을 구분할 수 없으므로 OR 로 접는다 —
+                //    어느 쪽도 잃지 않는 유일한 접기다. 실무상 프리셋 project.json 에는 `general`
+                //    블록이 없어 거의 언제나 target 값이 그대로 남는다.
+                //  · 딕셔너리는 키 단위로 같은 관례가 성립한다(프리셋이 선언한 축이 이긴다).
+                // **프리셋과 target 이 같은 축을 서로 다르게 선언했을 때 WE 가 어느 쪽을 쓰는지는
+                // 아직 측정하지 못했다** — 여기 우선순위는 이 파일의 기존 `??` 관례를 따른 것이지
+                // 실물 근거가 아니다. `[미해결]`
+                supportsAudioProcessing: project.supportsAudioProcessing || target.supportsAudioProcessing,
+                playbackProperties: target.playbackProperties
+                    .merging(project.playbackProperties) { _, presetValue in presetValue }
             )
         }
         return nil
@@ -335,6 +367,123 @@ struct PauseGate {
     var isPaused: Bool { !reasons.isEmpty }
     func isActive(_ reason: Reason) -> Bool { reasons.contains(reason) }
 }
+
+// MARK: - WE 재생 정책 게이트 (stage 1 — 순수 판정까지만)
+
+/// 벽지가 `project.json` 에 **선언한** WE 재생정책(playbackfocus/maximized/fullscreen/
+/// audio/sleep/onbattery)을 하나의 판정으로 접는다.
+///
+/// `WapleCore` 가 걷어 온 원문 문자열(`WallpaperProject.playbackProperties`)과 `WaplePolicy` 의
+/// 평가기(`PlaybackEvaluator.evaluate`) 사이를 잇는 **유일한 자리**다. 두 모듈은 서로를 모른다 —
+/// `WapleCore` 는 리눅스 spec 레인 보호 때문에 `WaplePolicy` 를 import 할 수 없다
+/// (`Package.swift` 의 `WaplePolicy` 경고). 그래서 접합은 둘 다 볼 수 있는 앱 계층에서 한다.
+///
+/// ## 최상위 계약: **부재 = run**
+///
+/// 파서는 부재 키와 빈 문자열을 딕셔너리에 **넣지 않는다**(`ProjectJSONParser.parsePlaybackProperties`).
+/// "그러면 어떻게 되는가" 를 정하는 자리가 여기 한 곳이라는 것이 그 설계의 요점이다.
+///
+/// **`PlaybackPolicy.init(weConfig:)` 를 쓰면 안 된다.** 그쪽은 부재 키를 `trigger.weDefault`
+/// 로 채우는데(maximized `pause` · fullscreen `pause` · sleep `stop`), 그건 WE **전역 설정**의
+/// 기본값이지 **벽지별 선언**의 기본값이 아니다. 그대로 쓰면 아무것도 선언하지 않은 벽지가
+/// 남의 창 최대화만으로 멈춘다 — 무회귀 요구의 정반대다. 그래서 기준선을 전 축 `.run` 으로
+/// 깔고 **선언된 축만** 덮어쓴다.
+///
+/// ## 무회귀: 아무것도 선언하지 않은 벽지에서 이 게이트는 완전한 무동작이다
+///
+/// 한 축도 선언되지 않았으면 `declaredPolicy` 가 nil 이고, `verdict(...)` 는 평가기를
+/// **부르지도 않고** `.running` 을 낸다. 조건(`PlaybackConditions`)에 무엇이 들어 있든 결과가
+/// 같다는 뜻이라, 무회귀가 논증이 아니라 **구조**로 성립한다.
+///
+/// 그 단축이 삼키는 것도 정확히 적어 둔다: `PlaybackConditions` 의 `external*Request` ·
+/// `vramPressure` · `forcePauseAll` 은 벽지 선언과 무관한 **외부 요청**인데, 선언이 없으면
+/// 여기서 무시된다. 지금은 관측 가능한 차이가 없다 — **그 필드들에 값을 넣는 프로덕션 코드가
+/// 아직 하나도 없고**(stage 2), 수동·가림·슬립 정지는 이 파일의 `PauseGate` 가 따로 쥐고 있다.
+/// stage 2 에서 트레이/IPC 를 붙일 때 이 자리를 다시 판단해라.
+enum PlaybackPolicyGate {
+    /// 벽지가 **선언한 축만** 반영한 정책. 한 축도 선언하지 않았으면 nil.
+    ///
+    /// 빈 문자열을 여기서 한 번 더 거르는 것은 중복이 아니다. 파서가 이미 걸러 주지만
+    /// ("전역 설정 따름" 을 뜻하는 WE 의 `""` 기본 주입 — `WallpaperProject.playbackProperties`
+    /// 주석), **"부재 = run" 을 판정하는 단일 지점은 이 함수**라서 딕셔너리가 다른 경로로
+    /// 들어와도 계약이 유지돼야 한다.
+    ///
+    /// 미인식 문자열은 `PlaybackAction(weConfigValue:)` 규약대로 조용히 `.run` 이다
+    /// (매퍼 0x140141918). 즉 오타는 "정책 없음" 이지 실패가 아니다 — 실물이 그렇다.
+    static func declaredPolicy(_ properties: [String: String]) -> PlaybackPolicy? {
+        var policy = PlaybackPolicy(
+            focus: .run, maximized: .run, fullscreen: .run,
+            audio: .run, displaySleep: .run, battery: .run, pauseVRAM: false
+        )
+        var declaredAny = false
+        for trigger in PlaybackTrigger.allCases {
+            guard let raw = properties[trigger.weConfigKey], !raw.isEmpty else { continue }
+            policy[trigger] = PlaybackAction(weConfigValue: raw)
+            declaredAny = true
+        }
+        return declaredAny ? policy : nil
+    }
+
+    // [2026-08-26 승계] **여기 있던 `verdict(...)` 둘은 걷어냈다.**
+    //
+    // 그 둘은 벽지 선언만 보고 판정을 냈고, 선언이 없으면 평가기를 부르지 않고 `.running` 으로
+    // 단축했다. 그 단축은 "전역 정책면이 없다" 는 전제 위에서만 옳았는데 **그 전제가 깨졌다** —
+    // `PlaybackPolicyRuntime.swift` 가 전역면을 세웠다(근거: 코퍼스 191개 중 이 6키를 선언한
+    // `project.json` 이 0개이고, 정책은 WE 의 `config.json` `general/user` 에 산다).
+    //
+    // 판정을 내는 자리는 이제 `PlaybackPolicyResolver` **하나**다. 두 경로를 남겨 두면 둘 중
+    // 어느 쪽이 진짜인지가 호출부마다 갈린다.
+    //
+    // 이 층이 사라진 것은 아니다 — 위 `declaredPolicy` 는 여전히 "이 벽지가 **스스로** 무엇을
+    // 선언했는가" 라는 별개의 질문에 답한다. 종전 `verdict` 의 의미(선언 없는 축 = run)는
+    // 이제 `PlaybackPolicyResolver.effective(global: .allRun, declaring:)` 로 정확히 표현된다.
+}
+
+// MARK: - stage 2 — 남은 것 (플랫폼 관측자)
+//
+// [2026-08-26] 전역면·병합·창 파생 마스크는 `PlaybackPolicyRuntime.swift` 에 착지했다.
+// 아래 목록 중 남은 것은 **관측자 배선과 판정 적용**이다.
+//
+// [2026-08-26] 위 게이트는 **순수 판정까지만**이다. `PlaybackConditions` 를 실제 시스템
+// 상태로 채우는 관측자는 **하나도 쓰지 않았다** — 전부 macOS 전용 API 라 이 작업이 검증에
+// 쓴 리눅스 컨테이너에서는 컴파일조차 확인할 수 없고(타입체크 심에도 없다), 별개의 변경이다.
+// **검증 못 한 배선을 넣지 않는 것이 이 리포의 규칙이다.**
+//
+// 그래서 지금 상태는 이렇다: `PlaybackPolicyGate` 를 부르는 프로덕션 호출부가 없다.
+// 벽지가 선언한 정책은 파서 → 모델 → 게이트까지 **온전히 도달하지만**(그게 stage 1 이 산
+// 것이다), 그 판정을 렌더러에 먹이는 마지막 한 뼘이 비어 있다.
+//
+// 각 축이 무엇에 묶여야 하는지(이 자리에서 확인한 것만 적는다):
+//
+//  · `unfocusedMask`   ← `NSWorkspace.shared.frontmostApplication` +
+//                        `didActivateApplicationNotification`. 그 앱의 창이 **어느 화면**에
+//                        있는지까지 알아야 마스크가 되므로 창 열거가 함께 필요하다.
+//  · `maximizedMask`   ← `CGWindowListCopyWindowInfo` 의 창 프레임 vs `NSScreen.visibleFrame`.
+//  · `fullscreenMask`  ← 같은 열거, 비교 대상이 `NSScreen.frame`.
+//                        **이 리포에 이미 같은 API 를 쓰는 자리가 있다** —
+//                        `Sources/Waple/DesktopVisibilityMonitor.swift`(가림 판정)가
+//                        `CGWindowListCopyWindowInfo` → 순수 `WindowSnapshot` 배열 → static
+//                        판정 함수의 모양을 갖췄다. 두 마스크는 그 스냅샷의 파생으로 얹는 게 맞다.
+//  · `audioPlaying`    ← CoreAudio. 기본 출력 장치의
+//                        `kAudioDevicePropertyDeviceIsRunningSomewhere`(다른 프로세스가 장치를
+//                        물고 있는가). WE 는 WASAPI 세션 열거로 같은 것을 본다.
+//  · `displayAsleep`   ← **이미 있다.** `AppDelegate.displaySleepBegan/displaySleepEnded`
+//                        (`NSWorkspace.screensDidSleepNotification`)가 `PauseGate.Reason.displaySleep`
+//                        을 켜고 끈다. 그 불리언을 그대로 넘기면 된다 — 새 관측자가 필요 없는
+//                        유일한 축이다.
+//  · `onBattery`       ← IOKit `IOPSCopyPowerSourcesInfo` /
+//                        `IOPSGetProvidingPowerSourceType() == kIOPMBatteryPowerKey`.
+//  · `vramPressure`    ← `VRAMHysteresis`(WaplePolicy)에 표본을 먹여 얻는다. macOS 쪽 표본은
+//                        `MTLDevice.currentAllocatedSize` / `recommendedMaxWorkingSetSize` 이고,
+//                        WE 의 PDH 표본수·총량 범위 게이트는 그 모델이 이미 강제한다.
+//  · `external*Request` ← 트레이/IPC. 여기서 겹치는 문제가 하나 있다 — 수동 정지는 이 파일의
+//                        `PauseGate` 가 이미 쥐고 있다. 두 경로를 어떻게 합칠지가 stage 2 의
+//                        설계 결정이고, 위 게이트 주석의 단축(선언 없음 → 즉시 `.running`)을
+//                        그때 다시 봐야 한다.
+//
+// 판정을 렌더러에 먹이는 쪽도 아직 없다: `PlaybackVerdict.stop`(렌더러 해제) ·
+// `.muted`(전역 음소거) · `.pauseMask`(화면별 정지, `isPaused(monitorIndex:)`)를 `AppDelegate`
+// 의 `applyPause` 계열과 어떻게 합류시킬지가 남는다.
 
 /// 잠금화면 스틸(작업 2): `dscl . -read /Users/<user> GeneratedUID` 출력 파싱(순수).
 enum GeneratedUID {

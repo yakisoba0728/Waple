@@ -80,6 +80,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 데스크탑 가림 자동 일시정지(옵션, UserDefaults 영속, 기본 꺼짐 — 기존 동작 보존).
     private let visibilityMonitor = DesktopVisibilityMonitor()
     private var occlusionTimer: Timer?
+    /// 재생정책(stage 2c) — 조건 폴링 타이머와 렌더러별 마지막 적용 상태.
+    /// 합류 규칙은 `PlaybackPolicyComposition.swift` 에 있고 여기서는 적용만 한다.
+    private var playbackPolicyTimer: Timer?
+    private var policyPauseState = PerRendererPauseState()
+    /// `renderers` 와 **같은 순서·같은 길이**인 화면별 프로젝트. 재생정책은 벽지별 선언을 보므로
+    /// 화면마다 다른 벽지가 붙으면 판정도 화면마다 달라진다. 둘을 같은 자리에서 대입해 어긋나지
+    /// 않게 한다 — 어긋나면 A 화면 벽지의 선언이 B 화면을 멈춘다.
+    private var rendererProjects: [WallpaperProject] = []
     // 렌더 정지 사유(가림·수동·슬립)를 한 곳에서 합성 — 서로 덮어쓰지 않게. 합성 로직은 PauseGate(순수).
     private var pauseGate = PauseGate()
     // 상태바 아이콘 글리프(w5d-tray): 최근 apply 성공/실패. 다음 적용 성공까지 지속(refreshStatusIcon 참조).
@@ -293,6 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 가림 자동 일시정지 폴링 시작(꺼져 있으면 no-op).
         scheduleOcclusionTimer()
+        schedulePlaybackPolicyTimer()
 
         // 스모크 확인용: 실행 시 메인창 자동 오픈 + 첫 항목 포커스(인스펙터가 채워진 상태로
         // 캡처되도록 — 판정 게이트용). 해석은 전부 SmokeLaunch(순수 + 단위 테스트) 가 한다.
@@ -567,6 +576,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch result {
         case .success(let newRenderers):
             renderers = newRenderers
+            // 위 주석의 불변식 — `RendererSwap.apply` 가 `screenProjects` 순서대로 만들므로 같은 순서다.
+            rendererProjects = screenProjects.map(\.project)
+            policyPauseState.reset()   // 렌더러 세트가 바뀌었다 → 다음 틱이 전부 다시 적용
             currentFolderURL = folderURL
             currentProjectId = project?.id
             activeVideoProjectIds = screenProjects
@@ -675,6 +687,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !applyCurrentSelection() {
             renderers.forEach { $0.teardown() }
             renderers = []
+            rendererProjects = []
+            policyPauseState.reset()
             activeVideoProjectIds = []
         }
 
@@ -767,6 +781,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyPause(pauseGate.set(.occlusion, active: occluded))
     }
 
+    // MARK: - WE 재생정책 적용 (stage 2c)
+    //
+    // 판정은 전부 순수층이 한다(`PlaybackConditionsBuilder` → `PlaybackPolicyResolver` →
+    // `RenderPauseComposition`). 여기 있는 것은 **관측 I/O 와 렌더러 호출**뿐이다.
+    //
+    // 가림 타이머와 따로 도는 이유: 가림은 `pauseWhenOccluded` 가 꺼지면 아예 멈추는데
+    // 재생정책은 그 설정과 무관하게 살아야 한다. 대가는 `CGWindowListCopyWindowInfo` 를
+    // 초당 두 번 부르는 것이고(둘 다 1초 주기), 합칠 가치가 생기면 스냅샷 한 벌을 두
+    // 소비자에게 나눠 주는 쪽으로 묶어라 — 지금 묶지 않은 것은 가림 타이머의 수명 규칙을
+    // 건드리지 않기 위해서다.
+
+    private func schedulePlaybackPolicyTimer() {
+        playbackPolicyTimer?.invalidate()
+        // .common — 메뉴 트래킹 중에도 돈다(가림 타이머와 같은 이유).
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.applyPlaybackPolicy() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        playbackPolicyTimer = timer
+    }
+
+    /// 조건을 긁어 판정하고, **바뀐 렌더러만** pause/resume 한다.
+    private func applyPlaybackPolicy() {
+        // 렌더러가 없거나 프로젝트 배열과 어긋나면 아무것도 하지 않는다. 어긋난 상태에서
+        // 인덱스로 짝지으면 엉뚱한 화면에 남의 정책이 간다 — 그럴 바엔 무동작이 옳다.
+        guard !renderers.isEmpty, renderers.count == rendererProjects.count else {
+            policyPauseState.reset()
+            return
+        }
+        let screens = NSScreen.screens
+        let conditions = PlaybackConditionsBuilder.make(
+            windows: visibilityMonitor.currentSnapshots(),
+            // `Int(clamping:)` — pid_t(Int32) → Int 는 64비트에서 **확대**라 트랩이 불가능하다.
+            // 라벨을 다는 것은 `check_int_narrowing.py` 의 관례다(그 파일 머리말의 `Int(UInt8)` 처리와 같다).
+            frontmostProcessId: NSWorkspace.shared.frontmostApplication.map { Int(clamping: $0.processIdentifier) },
+            currentProcessId: Int(clamping: ProcessInfo.processInfo.processIdentifier),
+            screenFrames: screens.map(\.frame),
+            visibleFrames: screens.map(\.visibleFrame),
+            // 디스플레이 슬립은 새 관측자가 필요 없는 유일한 축이다 — `PauseGate` 가 이미 쥐고 있다.
+            displayAsleep: pauseGate.isActive(.displaySleep),
+            onBattery: PowerSourceObserver.isOnBattery(),
+            // **오디오 축은 일부러 배선하지 않는다.** `SystemAudioObserver` 가 보는
+            // `kAudioDevicePropertyDeviceIsRunningSomewhere` 는 우리 소리도 1 로 치는데,
+            // "우리가 재생 중인가" 를 알 표면이 `WallpaperRenderer` 에 없다. 빼지 못한 채 켜면
+            // 오디오 반응 벽지가 스스로를 멈추는 되먹임이 된다(그 함수 주석). WE 기본값이
+            // `playbackaudio = run` 이라 **기본 상태에서는 차이가 없고**, 사용자가 그 축을 켜면
+            // 아무 일도 일어나지 않는다 — 조용히 틀리는 것보다 낫지만 격차인 것은 맞다.
+            audioPlaying: false)
+
+        let decisions = RenderPauseComposition.decideAll(
+            globallyPaused: pauseGate.isPaused,
+            projects: rendererProjects,
+            conditions: conditions,
+            global: GlobalPlaybackSettings.current)
+
+        for (index, paused) in policyPauseState.changes(decisions.map(\.paused)) {
+            guard index < renderers.count else { continue }
+            if paused { renderers[index].pause() } else { renderers[index].resume() }
+        }
+    }
+
     // MARK: - 전역 일시정지 (메인창 하단 바)
 
     /// 하단 바 일시정지 토글 — 새 상태 반환. 가림·슬립 정지와 독립(하나라도 있으면 정지 유지).
@@ -790,6 +866,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         libraryVM.isPaused = pauseGate.isPaused
         refreshStatusIcon()
+        // [2026-08-26] **전역 resume 은 정책이 멈춰 둔 화면까지 되살린다.** 위 `forEach` 는
+        // 모니터를 구분하지 않기 때문이다. 다음 정책 틱(≤1초)이 고치긴 하지만 그 사이
+        // "멈춰 있어야 할 화면이 잠깐 도는" 눈에 보이는 글리치가 남는다. 그래서 여기서
+        // 정책을 **즉시 다시 적용**한다. 엣지 추적을 리셋하는 것이 요점이다 — 리셋하지 않으면
+        // 정책 상태가 "이미 멈춤" 이라고 기억하고 있어 아무것도 다시 부르지 않는다.
+        policyPauseState.reset()
+        applyPlaybackPolicy()
     }
 
     // MARK: - 상태바 아이콘 글리프·툴팁 (w5d-tray)
@@ -1052,19 +1135,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 이 함수는 여전히 `nonisolated` 이고 백그라운드 큐에서 돈다.
         guard size.width > 0, size.height > 0 else { return nil }
         let renderer = SceneRenderer()
-        // [2026-08-25] **포인터 핀** — SnapshotPipeline.captureFrame 이 골든 캡처마다
-        // pinRenderSettings(SnapshotPipeline.swift:315-316)로 하는 일을 앱 내부 스틸 경로에도
-        // 그대로 둔다. 핀이 없으면 아래 mount 가 시차 전역 모니터를 켜고(ParallaxController.start()
-        // 가 즉시 emit — 그 순간의 실제 커서가 g_PointerPosition 으로 구워진다,
-        // spec/golden/nondeterminism.json → oracle.nondet.rootCause) 미디어 폴러도 켠다
-        // (start() 의 첫 폴은 즉시 fire — MediaPoller.swift:40). 둘 다 메인에서 콜백을 배달하므로
-        // 백그라운드 큐가 이 인스턴스를 쓰는 동안 겹칠 수 있었다(SceneRenderer 클래스 선언 주석
-        // [2026-08-25 툼스톤] 문단 · BACKLOG 잠재 결함 "캡처 인스턴스가 라이브 모니터를 시작한다").
-        // 값 SIMD2(0.5, 0.5) = 마우스 미구동 중앙 규약(SnapshotPipeline.capturePointerUV:49).
-        // 복원은 defer LIFO 로 teardown **뒤**에 — 핀이 걸린 상태로 정리까지 끝내고 푼다.
-        let oldCapturePointer = SceneRenderer.capturePointerUV
-        SceneRenderer.capturePointerUV = SIMD2<Float>(0.5, 0.5)
-        defer { SceneRenderer.capturePointerUV = oldCapturePointer }
+        // [2026-08-25] **포인터 핀** — SnapshotPipeline.captureFrame 이 골든 캡처마다 하는 일을
+        // 앱 내부 스틸 경로에도 그대로 둔다. 핀이 없으면 아래 mount 가 시차 전역 모니터를 켜고
+        // (ParallaxController.start() 가 즉시 emit — 그 순간의 실제 커서가 g_PointerPosition 으로
+        // 구워진다, spec/golden/nondeterminism.json → oracle.nondet.rootCause) 미디어 폴러도 켜고
+        // (start() 의 첫 폴은 즉시 fire — MediaPoller.swift:40) 전역 클릭 모니터도 켠다.
+        // 셋 다 메인에서 콜백을 배달하므로 백그라운드 큐가 이 인스턴스를 쓰는 동안 겹칠 수 있었다
+        // (SceneRenderer 클래스 선언 주석 · BACKLOG "캡처 인스턴스가 라이브 모니터를 시작한다").
+        // 값 SIMD2(0.5, 0.5) = 마우스 미구동 중앙 규약(SnapshotPipeline.capturePointerUV:49 —
+        // 그 상수는 WapleCompatCore 라 앱 타깃에서 못 부른다. 리터럴 중복은 GT 하네스와 동형 관례다).
+        //
+        // [2026-08-26] ~~프로세스 전역 `SceneRenderer.capturePointerUV` 를 save/set/defer-restore 한다.
+        // 복원은 defer LIFO 로 teardown 뒤에 — 핀이 걸린 상태로 정리까지 끝내고 푼다.~~
+        // → **인스턴스 프로퍼티 한 줄 대입으로 바뀌었다.** 종전 전역 방식은 이 함수에서 특히 나빴다:
+        // 이 함수는 `nonisolated` 이고 백그라운드 큐에서 도는데(위 F486 문단), 같은 전역을
+        // `@MainActor` 인 `SceneRenderer.updateParallax` 가 읽어 **비원자 옵셔널의 교차 스레드 접근**이
+        // 됐다. 게다가 전역이라 캡처가 도는 수 초 동안 마운트되는 **라이브** 배경까지 "캡처 인스턴스"
+        // 로 오인돼 커서 반응 없이 태어났고(`desktopStillSync` 는 적용마다 3초 뒤 이 경로를 돈다),
+        // save/defer-restore 는 재진입 불가라 동시 캡처 2건이면 핀이 영구 잔존할 수 있었다.
+        // 이제 이 렌더러 인스턴스에만 쓰므로 복원할 전역 자체가 없다 — 그래서 defer 도 사라졌다.
+        // 캡처 동작은 종전과 동일하다(핀 값·핀 시점 그대로, 라이브 모니터 미기동).
+        renderer.capturePointerUV = SIMD2<Float>(0.5, 0.5)
         let container = DispatchQueue.main.sync {
             MainActor.assumeIsolated { NSView(frame: CGRect(origin: .zero, size: size)) }
         }

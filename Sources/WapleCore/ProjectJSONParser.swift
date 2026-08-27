@@ -101,9 +101,34 @@ public enum ProjectJSONParser {
 
     /// `general.supportsaudioprocessing` — 오디오 반응 지원 선언(bool).
     ///
-    /// 원본은 `CProject::SupportsAudioProcessing`(0x14010d100–0x14010d161) 한 함수로 읽고,
-    /// 그 결과가 오디오 파이프라인 전체의 마스터 게이트다(WallpaperProject.supportsAudioProcessing
-    /// 주석에 소비처 VA 를 적어 뒀다). 원본 절차를 그대로 옮긴다:
+    /// 원본은 `CProject::SupportsAudioProcessing`(0x14010d100–0x14010d161) 한 함수로 읽는다.
+    /// ~~그 결과가 오디오 파이프라인 전체의 마스터 게이트다(WallpaperProject.supportsAudioProcessing
+    /// 주석에 소비처 VA 를 적어 뒀다).~~
+    ///
+    /// **정정 [2026-08-26] — 두 주장 다 Waple 을 두고는 거짓이었다.** 실측:
+    ///
+    ///  - **소비처가 하나도 없다.** `7de1021` 기준, 이 파일과 `WallpaperProject.swift` 를 뺀
+    ///    `Sources/**` 에서 `grep -o "\.supportsAudioProcessing\b"` 가 **0건**,
+    ///    `playbackProperties` 도 **0건**이다. 같은 셈이 `id` 272 · `type` 99 · `title` 56 ·
+    ///    `fileName` 37 을 낸다 — 다른 타입의 동명 멤버까지 세는 **상한**이라 0 은 그만큼 확정적이다.
+    ///    `Tests/**` 참조는 각각 9건/0건이고, 그 9건도 전부 이 파서 자신을 겨눈다.
+    ///  - **그래서 "마스터 게이트" 는 Waple 의 사실이 아니다.** 오디오를 실제로 켜는 것은
+    ///    `SceneRenderer.hasAudio` 이고, 그 값은 **씬 내용 검사에서 유도**된다 —
+    ///    `SceneRenderer.scriptWantsAudio(_:)` 가 스크립트에서 오디오 참조를 보면 승격하고,
+    ///    `SceneRendererResources.swift` 의 `hasAudio = true` 세 자리가 오디오 레이어·이미터
+    ///    존재로 승격한다. 프로젝트의 선언은 어느 경로에서도 읽지 않는다. 즉 Waple 은 WE 가
+    ///    선언한 마스터 게이트를 아직 존중하지 않고, 이 파서는 **아무도 읽지 않는 값**에 대해
+    ///    jsoncpp 타입 엄격성을 충실히 재현하고 있다.
+    ///  - `WallpaperProject.supportsAudioProcessing` 주석의 VA 세 자리는 **WE 실물의** 소비처지
+    ///    Waple 의 소비처가 아니다. 그 RE 기록 자체는 유효하므로 그대로 둔다 — 틀린 것은 그것을
+    ///    Waple 의 배선인 양 가리킨 이 문장이었다.
+    ///
+    /// **배선이 착지할 자리**는 앱 계층의 `PlaybackPolicyGate`(`Sources/Waple/AppLogic.swift`)다.
+    /// 재생정책 여섯 축은 [2026-08-26] 로 거기까지 이었고(stage 1 — 순수 판정), 오디오 축은
+    /// `SceneRenderer.hasAudio` 승격의 **상위 게이트**로 얹혀야 한다. 아직 안 얹었다 —
+    /// 남은 목록은 그 파일의 「stage 2」 주석에 있다.
+    ///
+    /// 아래 절차 자체는 원본을 그대로 옮긴 것이고, 그 부분은 여전히 유효하다:
     ///
     ///     0x14010d104  add rcx, 0x10            ; project.json 루트
     ///     0x14010d116  call ...                 ; root["general"]
@@ -133,6 +158,14 @@ public enum ProjectJSONParser {
     /// 확정한다. WapleCore 는 WaplePolicy 를 import 할 수 없어(Package.swift 경고 — 리눅스
     /// `no such module 'simd'`) 이 모듈 안에서 리터럴로 두고, 양쪽의 일치는 앱 측 테스트가
     /// PlaybackTrigger.allCases 의 weConfigKey 와 대조해 감시한다.
+    ///
+    /// **[2026-08-26] 그 감시 테스트가 이제 실재한다** —
+    /// `AppLogicTests.testParserCollectsExactlyThePolicyKeysWaplePolicyDeclares`.
+    /// 이 문장은 쓰일 당시 예고였고, 쓸 수도 없었다: `WapleCore` 와 `WaplePolicy` 를 **동시에
+    /// 보는 테스트 타깃이 없었다.** `Package.swift` 에서 `WapleAppTests` 에 `WaplePolicy` 를
+    /// 더해 그 자리를 만들었다. 테스트는 이 여섯 리터럴을 직접 읽지 못하므로(비공개)
+    /// `PlaybackTrigger.allCases` 의 키 전부를 담은 json 을 먹여 **수집 결과 집합**을 대조한다 —
+    /// 어느 쪽이 키를 더하거나 이름을 바꿔도 양방향으로 걸린다.
     ///
     /// 수집 규칙:
     /// - **값이 비어 있거나(빈 문자열) 문자열이 아니면 부재로 본다.** WE 는 월페이퍼별 속성을 ""

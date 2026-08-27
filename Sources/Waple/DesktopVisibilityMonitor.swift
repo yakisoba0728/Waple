@@ -142,7 +142,12 @@ struct DesktopVisibilityMonitor {
     /// 온스크린 창 목록(데스크탑 요소 제외)을 스냅샷으로. bounds 는 Cocoa 로 플립해 담는다 —
     /// screenFrames(NSScreen.frame)와 같은 좌표계여야 교차·커버리지가 맞는다. threshold==0 경로는
     /// 면적/변 길이만 보므로 플립 무영향(무회귀).
-    private func currentSnapshots() -> [WindowSnapshot] {
+    ///
+    /// [2026-08-26] `private` → `internal`. 재생정책의 창 파생 세 축(focus·maximized·fullscreen)이
+    /// **같은 스냅샷**을 쓴다(`PlaybackConditionsBuilder`). 두 번째 리더를 만들면 같은
+    /// `CGWindowListCopyWindowInfo` 를 두 벌 유지하게 되고, 좌표 플립처럼 틀리기 쉬운 부분이
+    /// 갈라진다 — 이 리포가 반복해서 당한 그것이다. 노출 범위는 모듈 안으로만 넓힌다.
+    func currentSnapshots() -> [WindowSnapshot] {
         guard let list = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
         ) as? [[String: Any]] else { return [] }

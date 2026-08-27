@@ -75,8 +75,13 @@ final class Scene3DParticleTests: XCTestCase {
         let urls = renderer.captureFrames(width: 320, height: 200, times: [0.5, 2.0], toDir: outDir)
         XCTAssertEqual(urls.count, 2)
         for u in urls {
-            let size = (try? FileManager.default.attributesOfItem(atPath: u.path)[.size] as? Int) ?? 0
-            XCTAssertGreaterThan(size ?? 0, 100, "PNG too small: \(u.path)")
+            // [2026-08-26] 종전엔 `(try? … as? Int) ?? 0` 이었는데 그 `??` 는 좌변이 이미
+            // 비옵셔널로 접혀 **우변이 죽은 자리**였다(경고만 나고 빌드는 섰다). 여기서는
+            // 뒤의 `size ?? 0` 이 한 번 더 받아 단언이 정상 실패했으므로 무해했지만,
+            // 같은 관용구가 `2d7d002` 에서는 실제 회귀를 만들었다 — 복제되기 전에 지운다.
+            let attrs = try? FileManager.default.attributesOfItem(atPath: u.path)
+            let size = attrs?[.size] as? Int ?? 0
+            XCTAssertGreaterThan(size, 100, "PNG too small: \(u.path)")
         }
     }
 

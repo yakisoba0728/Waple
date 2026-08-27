@@ -46,6 +46,8 @@ public enum SnapshotPipeline {
 
     /// 캡처 포인터 핀 값(0..1 UV, 상단 원점) — 마우스 미구동 규약과 동일한 중앙.
     /// 변경 시 포인터 반응 씬(g_PointerPosition 소비) 베이스라인 재생성 필요.
+    /// [2026-08-26] 적용 지점은 `pinRenderSettings`(프로세스 전역)가 아니라 **캡처 렌더러 인스턴스**다 —
+    /// `captureFrame` 이 `SceneRenderer()` 생성 직후 `r.capturePointerUV` 에 대입한다(그 주석 참조).
     static let capturePointerUV = SIMD2<Float>(0.5, 0.5)
 
     /// 폴링 없이 항상 "정지" — 미디어 씬이 osascript 를 스폰하지 않게(결정적·TCC 무).
@@ -139,6 +141,12 @@ public enum SnapshotPipeline {
         }
         let r = SceneRenderer()
         r.nowPlayingProvider = StoppedNowPlaying()
+        // [2026-08-26] 포인터 핀은 **이 인스턴스에** 건다(종전엔 pinRenderSettings 가 프로세스 전역
+        // `SceneRenderer.capturePointerUV` 를 save/set/defer-restore 했다 — 그 전역이 라이브 렌더러까지
+        // 게이트해 버리고 백그라운드 캡처와 메인 액터 사이에 레이스를 만들었다. 근거와 4갈래 분석은
+        // `SceneRenderer` 클래스 선언의 [2026-08-26 정정] 문단). 핀 값·핀 시점(마운트 전)은 종전 그대로라
+        // 골든 픽셀은 불변이다 — 아래 `mount` 가 포인터·미디어·클릭 모니터를 셋 다 건너뛴다.
+        r.capturePointerUV = capturePointerUV
         // `NSView.init(frame:)` 은 SDK 가 메인 액터 전용으로 선언한 API 다. 이 CLI 는 파이프라인
         // 전체를 `main.swift` 최상위(= 메인 스레드)에서 **동기**로 실행한다 — 이 파일에도
         // ProfilePipeline 에도 디스패치가 하나도 없고, 병렬을 쓰는 것은 DeepScan 뿐이다.
@@ -299,7 +307,10 @@ public enum SnapshotPipeline {
         return failures.isEmpty ? 0 : 1
     }
 
-    // MARK: 공용 설정 핀(base-assets + fitMode) — GT 하니스와 동일 규약
+    // MARK: 공용 설정 핀(base-assets + fitMode + 스크립트 결정성) — GT 하니스와 동일 규약
+    //
+    // [2026-08-26] 여기 남은 넷은 전부 **프로세스 전역 설정**이다. 포인터 핀은 인스턴스 성질이라
+    // 아래 본문 주석의 근거로 `captureFrame` 쪽 인스턴스 대입으로 옮겼다.
 
     static func pinRenderSettings(root: String) -> () -> Void {
         let oldFit = SceneRenderSettings.fitMode
@@ -309,19 +320,32 @@ public enum SnapshotPipeline {
         TextScriptEngine.captureDateEpochMillis = captureEpochMillis
         let oldRandomSeed = TextScriptEngine.captureRandomSeed
         TextScriptEngine.captureRandomSeed = captureRandomSeed
-        // 포인터 핀(2026-08-02) — 이걸 안 하면 캡처 시점의 **실제 마우스 커서 위치**가
-        // g_PointerPosition 으로 들어가 픽셀에 구워진다(세션마다 29종이 달랐던 근본원인,
-        // spec/golden/nondeterminism.json → oracle.nondet.rootCause). 중앙 고정 = 마우스 미구동 규약.
-        let oldPointer = SceneRenderer.capturePointerUV
-        SceneRenderer.capturePointerUV = capturePointerUV
+        // [2026-08-26] ~~포인터 핀(2026-08-02) — 이걸 안 하면 캡처 시점의 **실제 마우스 커서 위치**가
+        // g_PointerPosition 으로 들어가 픽셀에 구워진다. 중앙 고정 = 마우스 미구동 규약.~~
+        // → **포인터 핀만 여기서 뺐다.** 이유는 이 함수가 핀하는 나머지와 성질이 다르기 때문이다:
+        // fitMode·base-assets·TextScriptEngine 2종은 **프로세스 전역 설정**이라 전역 핀이 맞지만,
+        // 포인터 핀이 게이트하는 것은 **렌더러 인스턴스 하나**의 라이브 모니터 설치 여부다.
+        // 전역으로 두면 캡처가 핀을 쥔 수 초 동안 마운트되는 **라이브** 씬까지 게이트되고
+        // (커서 반응이 다음 재마운트까지 사망), 백그라운드 캡처의 쓰기와 메인 액터의 읽기가
+        // 레이스를 이룬다. 이제 하네스가 만든 렌더러에 직접 대입한다(`captureFrame` 위 · 근거는
+        // `SceneRenderer` 클래스 선언의 [2026-08-26 정정] 문단). 핀 **값**은 위 `capturePointerUV` 상수 그대로다.
+        //
+        // 이 파일 밖 도달점이 하나 있었다 — `ProfilePipeline.runProfile` 은 이 함수를 부른 뒤
+        // `SceneRenderer()` 를 직접 만든다(ProfilePipeline.swift). 종전엔 그 인스턴스가 이 전역
+        // 핀을 공짜로 받았는데, 전역을 없애면 **그 파일이 전역 이름을 한 번도 안 쓰기 때문에
+        // 컴파일은 통과하고 핀만 조용히 사라진다.** 같은 커밋에서 생성 직후 명시 대입을 넣어 막았다.
+        //
+        // 그래서 규약을 여기 못 박는다: **`SceneRenderer` 를 직접 만드는 캡처 하네스는 생성 직후
+        // `r.capturePointerUV` 를 대입해야 한다.** 이 함수는 더 이상 그것을 대신해 주지 않는다 —
+        // 여기가 거는 것은 fitMode·base-assets·captureEpoch·randomSeed 넷뿐이다.
+        // 현재 도달점은 셋: `captureFrame`(아래) · `ProfilePipeline.runProfile` · `AppDelegate.captureSceneStill`.
         let assetsPath = ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"] ?? (root + "/assets")
         if FileManager.default.fileExists(atPath: assetsPath + "/shaders/common.h") {
             BaseAssetsSettings.baseAssetsDirectory = URL(fileURLWithPath: assetsPath, isDirectory: true)
         }
         return { SceneRenderSettings.fitMode = oldFit; BaseAssetsSettings.baseAssetsDirectory = oldBase
                  TextScriptEngine.captureDateEpochMillis = oldEpoch
-                 TextScriptEngine.captureRandomSeed = oldRandomSeed
-                 SceneRenderer.capturePointerUV = oldPointer }
+                 TextScriptEngine.captureRandomSeed = oldRandomSeed }
     }
 
     /// F145: 렌더 출력을 변형하는 WAPLE_* 디버그 게이트(mount/encode 시 ProcessInfo 에서 라이브로 읽힘 —

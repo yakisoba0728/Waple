@@ -233,6 +233,21 @@ public struct PlaybackPolicy: Equatable, Sendable {
         pauseVRAM: false
     )
 
+    /// **정책 없음** — 전 축 `run`. WE 에서 사용자가 전역 설정을 전부 "run" 으로 둔 상태와 같다.
+    ///
+    /// 이름을 붙여 두는 이유는 `weDefault` 와 같다: "정책이 하나도 없으면 어떻게 되는가" 를
+    /// 묻는 자리가 리터럴 나열에 기대면 정본과 대조할 수 없다. 앱 계층의 벽지별 선언 층
+    /// (`PlaybackPolicyGate`)이 "선언하지 않은 축 = run" 을 표현할 때 이 값을 전역 자리에 놓는다.
+    public static let allRun = PlaybackPolicy(
+        focus: .run,
+        maximized: .run,
+        fullscreen: .run,
+        audio: .run,
+        displaySleep: .run,
+        battery: .run,
+        pauseVRAM: false
+    )
+
     /// `config.json` 의 `general/user` 딕셔너리에서 읽는다. 없는 키는 WE 기본값,
     /// 인식 못 하는 문자열은 `.run`(매퍼 `0x140141918`).
     public init(weConfig: [String: String], pauseVRAM: Bool = false) {

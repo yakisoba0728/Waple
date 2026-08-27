@@ -25,20 +25,49 @@ final class WapleMTKView: MTKView {
 /// 로 감싼 콜백(시차·미디어)이 `self` 를 격리 경계 너머로 넘기고, 컴파일러는 위 문단을 읽을 수 없다.
 /// 같은 근거로 `VideoRenderer`·`WebRenderer`·`MediaPoller` 가 이미 `@unchecked` 를 쓰고 있다.
 ///
-/// [2026-08-25 툼스톤] ~~⚠️ 이 불변식이 완전하지 않은 자리가 하나 있다~~ → **해소.**
-/// 종전 기록: `AppDelegate.captureSceneStill` 은 `SnapshotPipeline`(:315-316)과 달리
-/// `SceneRenderer.capturePointerUV` 를 핀하지 않았고, 그 캡처 인스턴스는 `mount` 안에서
+/// [2026-08-25 툼스톤] ~~⚠️ 이 불변식이 완전하지 않은 자리가 하나 있다~~ → ~~**해소.**~~
+/// **→ [2026-08-26] 그 "해소" 는 사실이 아니었다. 아래 정정 문단을 읽어라.**
+/// 종전 기록: `AppDelegate.captureSceneStill` 은 `SnapshotPipeline` 의 캡처 경로와 달리
+/// 포인터 핀을 걸지 않았고, 그 캡처 인스턴스는 `mount` 안에서
 /// 시차 전역 모니터와(씬이 미디어 훅/아트워크를 쓰면) 미디어 폴러를 **실제로 시작했다** —
 /// 둘 다 메인에서 콜백을 배달하므로 백그라운드 큐가 그 인스턴스를 쓰는 동안 메인 콜백이
 /// 겹칠 수 있었다. "미디어 폴러가 5초 주기라 짧은 캡처 동안 안 불린다" 는 방어는 **첫 폴부터
 /// 틀렸다** — `MediaPoller.start()` 는 타이머 등록 직후 `t.fire()` 로 즉시 폴한다(MediaPoller.swift:40).
+/// 그 라운드가 고친 것은 둘이다: ① captureSceneStill 도 골든 경로와 같은 포인터 핀을 둔다
+/// ② 핀이 걸려 있으면 `startMediaPollingIfNeeded` 도 시작하지 않는다.
 ///
-/// 고친 방법은 BACKLOG("캡처 인스턴스가 라이브 모니터를 시작한다")가 예고한 두 갈래 전부다:
-/// ① captureSceneStill 도 골든 경로와 같은 포인터 핀을 둔다(`SIMD2(0.5, 0.5)` 중앙 = 마우스 미구동
-/// 규약) ② 핀이 걸려 있으면 `startMediaPollingIfNeeded` 도 시작하지 않는다(그 함수 머리 게이트 —
-/// `startPointerMonitor` 의 기존 내부 게이트와 같은 모양). 골든 픽셀 불변의 근거: CLI 캡처는 이미
-/// 핀 상태였고 파이프라인 전체가 메인 동기 실행이라(SnapshotPipeline.swift:142-146 주석) 종전에도
-/// 폴러 배달이 캡처 창 안에 들어온 적이 없다 — 폴러를 아예 안 켜는 것과 픽셀이 같다.
+/// [2026-08-26 정정] **위 툼스톤이 "해소" 라고 쓴 문단은 틀렸다 — 네 가지를 빠뜨렸다.**
+/// 종전 핀은 `nonisolated(unsafe) public static var capturePointerUV` 라는 **프로세스 전역**이었고,
+/// 그 doc 주석은 "마운트 전에 한 번 쓰고 그 뒤 캡처는 읽기만 하므로 동시에 바꾸는 경로가 없다" 고
+/// 계약을 적어 뒀다. **그 계약이 성립하지 않았다.**
+/// ① **데이터레이스** — `AppDelegate.captureSceneStill` 은 `nonisolated` 이고 백그라운드 큐에서
+///    돌면서(이 파일 :2002 문단이 요구하는 F486 계약) 그 전역을 쓰는데, 같은 값을 `@MainActor` 인
+///    `updateParallax`(:2232)가 읽는다. 비원자 `SIMD2<Float>?` 의 무동기 교차 접근이다.
+/// ② **라이브 오염** — 핀은 프로세스 전역인데 그것이 게이트하는 대상은 **인스턴스별**이다.
+///    캡처가 핀을 쥐고 있는 동안(무거운 씬은 수 초) 마운트되는 **라이브** 씬은 `!= nil` 을 보고
+///    자기 포인터 모니터를 조용히 건너뛴다 — 그 배경의 커서 반응이 다음 재마운트까지 죽는다.
+///    `desktopStillSync` 가 적용마다 3초 뒤 캡처를 돌리므로 드문 경로가 아니다.
+/// ③ **무게이트 클릭 모니터** — 게이트는 포인터·미디어폴러 둘뿐이었고
+///    `startClickMonitorIfNeeded`(:878)에는 없었다. 캡처 중에도 전역 클릭 모니터가 설치돼
+///    물리 클릭이 `g_PointerState.z` 임펄스로 캡처 프레임에 구워질 수 있었다
+///    (BACKLOG "캡처 경로 잔여 갭 2건" ①).
+/// ④ **핀 영구 잔존** — 전역의 save/set/defer-restore 는 재진입 불가다. 동시 캡처 2건의 복원이
+///    교차하면 핀이 안 풀린 채 남고, 그러면 ②가 프로세스 수명 내내 이어진다. 이건 이론상이 아니라
+///    **도달 가능**했다: `captureSceneStill` 로 들어가는 백그라운드 경로가 둘이고 서로 다른 큐다 —
+///    `setStillWallpaper`(메뉴, `.userInitiated` — AppDelegate:856)와 `syncDesktopStill`
+///    (적용 3초 뒤 자동, `.utility` — AppDelegate:1220). 둘 다 `generateStillImages` 를 거친다.
+///
+/// **고친 방법: 핀을 인스턴스 소유로 내렸다**(아래 `capturePointerUV` 저장 프로퍼티 선언과 그 주석).
+/// 하네스가 렌더러를 **직접 만들므로** 전역 대신 그 인스턴스에 쓰면 된다. 넷이 한꺼번에 사라진다 —
+/// 교차 스레드 전역이 없어지고(①), 다른 인스턴스에 영향이 없고(②), 복원할 전역이 없어 재진입
+/// 문제가 성립하지 않는다(④). ③은 같은 게이트를 클릭 모니터 머리에도 달아 막았다.
+/// 인스턴스 프로퍼티가 안전한 근거는 바로 위 `@unchecked Sendable` 문단이다 — 인스턴스는
+/// **한 스레드에서만** 쓰이고, 핀은 그 스레드가 `mount` 전에 한 번 쓴 뒤 읽기만 한다.
+///
+/// **골든 픽셀 불변**: 캡처 인스턴스는 종전과 똑같이 포인터 모니터·미디어 폴러를 건너뛰고,
+/// 핀 값도 `SIMD2(0.5, 0.5)`(마우스 미구동 중앙 규약) 그대로다. 유일한 동작 변화는 ③ —
+/// 캡처 중 클릭 모니터를 안 켜는 것이고, 이는 캡처에 도달하는 라이브 입력의 **순감**이다.
+/// 반대로 라이브 인스턴스가 남의 캡처에 오염되지 않게 된 것이 ②의 수정이다.
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, @unchecked Sendable {
     /// Metal `PBRMaterialUniforms`: exactly two float4 values (32 bytes).
     struct PBRMaterialUniforms {
@@ -847,10 +876,26 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     /// 전역 모니터가 관찰한다, ParallaxController 의 mouseMoved 와 동일 규약. 권한 불요).
     /// WE 규약: down 시 cursorDown+cursorClick(기존 e2e 검증 타이밍 유지), up 시 cursorUp.
     func startClickMonitorIfNeeded() {
+        // [2026-08-26] 캡처 핀 게이트 — `startMediaPollingIfNeeded`(:953)·`startPointerMonitor`(:2217)와
+        // 같은 모양이다. **여기에만 이 게이트가 없었다.** 2026-08-25 라운드가 포인터·미디어폴러
+        // 둘만 막고 이 셋째를 빠뜨렸고, 그래서 캡처 중에도 전역 클릭 모니터가 설치됐다 —
+        // 콜백은 창 가드(`pointerSceneCoords()`)보다 **먼저** `pointerButton.setDown` 을 실행하므로
+        // (`deliverGlobalMouse` 첫 줄) 캡처 도중의 물리 클릭이 `g_PointerState.z` 임펄스로
+        // 프레임에 구워질 수 있었다(BACKLOG "캡처 경로 잔여 갭 2건" ①).
+        // 캡처에서는 그게 한 프레임짜리가 아니다 — `.z` 를 임펄스로 되돌리는 프레임 꼬리
+        // `pointerButton.endFrame()` 은 리포 전체에서 `draw(in:)` 한 곳(:2375)에만 있고
+        // `captureFrames` 는 그 경로를 타지 않으므로, 한 번 눌린 상태가 그 캡처의 **모든** 프레임에
+        // `clickImpulse = 1` 로 남는다(`PointerButtonState.clickImpulse` — WapleCore/PointerHit.swift:280).
+        // 골든 픽셀 방향: 캡처에 도달하는 라이브 입력의 **순감**이다 — 안 켜면 임펄스가 0으로
+        // 고정되고(`PointerButtonState` 미주입 = 무클릭), 클릭이 없던 캡처는 종전과 동일하다.
+        guard capturePointerUV == nil else { return }
         guard clickMonitor == nil else { return }
         // F725: g_PointerState(cursorripple/fluidsim) 를 쓰는 셰이더가 있는 씬도 JS 훅 없이 클릭 상태를
         // 받아야 한다. 이벤트 배달 자체는 dispatchPointerEvent 가 hook 보유 엔진으로만 하므로, 전역
         // 모니터를 항상 설치핻도 무해하고 비용이 낮다(ParallaxController 의 mouseMoved 와 동일 규약).
+        // [2026-08-26 단서] 위 "항상" 은 이제 **라이브 인스턴스에 한정**된다 — 캡처 인스턴스는 머리
+        // 게이트에서 돌아선다. F725 의 근거(훅 없는 셰이더도 클릭 상태가 필요하다)는 라이브에서만
+        // 참이고, 캡처는 애초에 결정적이어야 하므로 그 요구가 없다.
         // [2026-08-25] `MainActor.assumeIsolated` — AppKit 전역 모니터 콜백은 **메인 스레드**에서
         // 배달된다(`ParallaxController.onOffset` 과 동일 규약). `startClickMonitorIfNeeded` 자체는
         // `mount` 가 오프메인에서 부를 수 있어 비격리로 남지만, **이 클로저가 실행되는 곳은 메인**이라
@@ -907,15 +952,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     /// 그렇지 않으면 buildPassBindings 가 슬롯을 기록해도 mediaArtworkTexture 가 영원히 nil.
     func startMediaPollingIfNeeded() {
         // [2026-08-25] 캡처 핀 게이트 — `startPointerMonitor`(아래)의 기존 내부 게이트와 같은 모양이다.
-        // 포인터 핀(`SceneRenderer.capturePointerUV`)이 걸려 있다는 것은 이 인스턴스가 캡처 하네스의
-        // 것이라는 뜻이고(SnapshotPipeline.pinRenderSettings:315-316 · AppDelegate.captureSceneStill),
+        // 포인터 핀(`capturePointerUV`)이 걸려 있다는 것은 이 인스턴스가 캡처 하네스의
+        // 것이라는 뜻이고(SnapshotPipeline.captureFrame · AppDelegate.captureSceneStill 이 생성 직후 대입),
         // 캡처는 라이브 입력을 켜지 않는다. "폴러는 5초 주기라 짧은 캡처 동안 안 불린다" 는 종전
         // 방어는 첫 폴에서 성립하지 않는다 — `start()` 가 타이머 등록 직후 `t.fire()` 로 즉시 폴하고
         // (MediaPoller.swift:40) 배달 4종은 메인에서 온다. 폴러가 켜진 인스턴스를 백그라운드 큐가
         // 쓰면 메인 콜백이 겹칠 수 있으므로(BACKLOG 잠재 결함 "캡처 인스턴스가 라이브 모니터를
         // 시작한다") 시작 자체를 막는다. 골든 픽셀 불변 — CLI 경로는 이미 핀 상태였고 파이프라인이
         // 메인 동기 실행이라 배달이 캡처 창에 들어온 적이 없다(위 클래스 선언 툼스톤 문단).
-        guard SceneRenderer.capturePointerUV == nil else { return }
+        // [2026-08-26] 전역 `SceneRenderer.capturePointerUV` → **인스턴스** 프로퍼티. 판정 자체는
+        // 종전과 같고(핀 유무), 달라진 것은 "누구의 핀인가" 다 — 이제 남의 캡처가 이 인스턴스의
+        // 폴러를 끄지 못한다(클래스 선언 [2026-08-26 정정] ②).
+        guard capturePointerUV == nil else { return }
         let mediaHooks: Set<String> = ["mediaPlaybackChanged", "mediaPropertiesChanged",
                                        "mediaThumbnailChanged", "mediaTimelineChanged", "mediaStatusChanged"]
         func effectsWantArtwork(_ effects: [EffectGPU]) -> Bool {
@@ -1109,13 +1157,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     /// 종전 `(0.5,0.5)` 는 미구동 씬에서 `cursorripple` 파문을 화면 한복판에 앉혔다.
     /// (캡처 골든은 `SnapshotPipeline.capturePointerUV` 가 따로 핀하므로 이 값과 무관 — §보고서 넘길 것)
     var pointerUV = SIMD2<Float>(0, 0)
-    /// 캡처 하네스용 포인터 핀 — 설정하면 mount 가 **마우스 모니터를 아예 켜지 않고** pointerUV 를
-    /// 이 값으로 고정한다(nil = 라이브 커서, 기존 동작).
-    /// [2026-08-25] 게이트 범위 확장 — 걸려 있으면 **미디어 폴러도 시작하지 않는다**
-    /// (startMediaPollingIfNeeded 머리 게이트, startPointerMonitor 내부 게이트와 같은 모양).
-    /// 핀 = "이 인스턴스는 캡처 하네스 것" 이라는 단일 표식이고 캡처는 어떤 라이브 모니터도
-    /// 켜지 않는다는 계약의 표식으로 쓰기 위함이다(BACKLOG "캡처 인스턴스가 라이브 모니터를
-    /// 시작한다" 해소 — AppDelegate.captureSceneStill 도 이 핀을 쓴다).
+    /// 캡처 하네스용 포인터 핀 — 설정하면 mount 가 **라이브 입력 모니터를 아예 켜지 않고** pointerUV 를
+    /// 이 값으로 고정한다(nil = 라이브 커서, 기존 동작). 하네스가 이 렌더러를 **직접 만들므로**
+    /// 생성 직후 · `mount` 전에 대입한다(SnapshotPipeline.captureFrame · AppDelegate.captureSceneStill).
+    /// `teardown()` 은 이 값을 지우지 않는다 — 씬 상태가 아니라 **하네스 설정**이고, `mount` 머리의
+    /// teardown 이 지워 버리면 마운트 직전에 건 핀이 곧바로 사라진다.
+    ///
+    /// 걸려 있으면 라이브 모니터 **셋 전부**를 시작하지 않는다 — 포인터(startPointerMonitor 내부
+    /// 게이트) · 미디어 폴러(startMediaPollingIfNeeded 머리 게이트, 2026-08-25) ·
+    /// 클릭(startClickMonitorIfNeeded 머리 게이트, 2026-08-26). 핀 = "이 인스턴스는 캡처 하네스 것"
+    /// 이라는 단일 표식이고, 캡처는 어떤 라이브 모니터도 켜지 않는다.
     ///
     /// 왜 필요한가(2026-08-02 실측, spec/golden/nondeterminism.json → oracle.nondet.rootCause):
     /// mount 가 `parallaxEnabled || hasEffects` 면 마우스 모니터를 켜고 그 콜백이 pointerUV 를
@@ -1124,11 +1175,26 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     /// 있었는지가 골든 픽셀에 구워졌다** — 전 코퍼스 170종 중 29종이 세션마다 다른 값을 냈고
     /// (커서가 제자리로 돌아오면 이전 값이 그대로 재현됐다) 셀프체크는 같은 프로세스라 못 봤다.
     /// pause() 는 monitor 를 멈추지만 이미 들어온 pointerUV 는 되돌리지 않는다 — 그래서 시작 자체를 막는다.
-    /// nonisolated(unsafe): TextScriptEngine 의 캡처 결정성 핀 3종과 같은 계약이다 —
-    /// SnapshotPipeline.pinRenderSettings 가 **마운트 전에 한 번 쓰고**(defer 로 복원) 그 뒤 캡처는
-    /// 읽기만 한다. 마우스 모니터를 아예 켜지 않는 것이 이 핀의 목적이라, 캡처 중 이 값을 바꾸는
-    /// 경로는 설계상 존재하지 않는다(존재하면 결정성 자체가 무너진다).
-    nonisolated(unsafe) public static var capturePointerUV: SIMD2<Float>?
+    ///
+    /// [2026-08-26] ~~`nonisolated(unsafe) public static var` — TextScriptEngine 의 캡처 결정성 핀
+    /// 3종과 같은 계약이다. SnapshotPipeline.pinRenderSettings 가 마운트 전에 한 번 쓰고(defer 로
+    /// 복원) 그 뒤 캡처는 읽기만 하므로, 캡처 중 이 값을 바꾸는 경로는 설계상 존재하지 않는다.~~
+    /// → **그 계약은 성립하지 않았다. 전역을 버리고 인스턴스 저장 프로퍼티로 내렸다.**
+    /// 종전 문장이 틀렸던 지점은 셋이다. ① "한 번 쓰고 읽기만" 이 **한 스레드 안에서** 참일 뿐이다 —
+    /// 쓰는 쪽 `AppDelegate.captureSceneStill` 은 백그라운드 큐이고 읽는 쪽 `updateParallax` 는
+    /// `@MainActor` 라, 비원자 옵셔널의 교차 스레드 접근이 그대로 남아 있었다. ② 이 핀이 게이트하는
+    /// 대상은 **인스턴스별**인데 전역이라, 캡처가 핀을 쥔 수 초 동안 마운트되는 **라이브** 씬이
+    /// 자기 모니터를 건너뛰었다(그 배경의 커서 반응이 다음 재마운트까지 사망). ③ 전역의
+    /// save/set/defer-restore 는 재진입 불가라 동시 캡처 2건의 복원이 교차하면 핀이 영구 잔존한다.
+    /// TextScriptEngine 의 3종과 "같은 계약" 이라는 유비도 틀렸다 — 그쪽이 핀하는 것은 JSContext 를
+    /// 만들 때 주입하는 **전역 치환**(`Date`·`Math.random`)이고 쓰는 곳도 CLI/GT 하네스뿐이라
+    /// (`SnapshotPipeline.pinRenderSettings` · `RealPackagesGroundTruthTests` — 앱 내부 캡처 경로는
+    /// 그 둘을 아예 안 건다) 프로세스 전역이 맞는 자리다. 이 핀은 처음부터 렌더러 하나의 성질이었고,
+    /// 앱 안에서 라이브 렌더러와 캡처 렌더러가 **같은 프로세스에 공존**한다는 점이 결정적으로 다르다.
+    /// 인스턴스 소유가 안전한 근거는 클래스 선언의 `@unchecked Sendable` 문단이다 — 인스턴스는
+    /// 한 스레드에서만 쓰이고, 그 스레드가 mount 전에 한 번 쓴 뒤 읽기만 한다.
+    /// (참고: `SnapshotPipeline.capturePointerUV` 는 이름이 같지만 **핀 값 상수** 0.5,0.5 다.)
+    public var capturePointerUV: SIMD2<Float>?
     /// 직전 draw 프레임의 포인터 UV(g_PointerPositionLast — cursorripple 이전 위치). draw 종료 시 이월.
     /// 기본값은 pointerUV 와 한 쌍이다 — 실물 ctor `0x14017c784` 도 같은 자리에서 qword 0 을 심는다.
     var pointerUVLast = SIMD2<Float>(0, 0)
@@ -2149,7 +2215,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     /// 기동 지점이 셋이라 한 곳만 막으면 샌다 — 실제로 mount 의 두 번째 게이트(cursorMove/호버 씬)로
     /// 새고 있었다. 근거: spec/golden/nondeterminism.json → oracle.nondet.rootCause.
     func startPointerMonitor() {
-        if let pinned = SceneRenderer.capturePointerUV {
+        // [2026-08-26] 전역 `SceneRenderer.capturePointerUV` → **인스턴스** 프로퍼티(선언부 정정 문단).
+        if let pinned = capturePointerUV {
             pointerUV = pinned
             pointerUVLast = pinned
             return
@@ -2164,7 +2231,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
 
     @MainActor func updateParallax(_ off: CGPoint) {
         // 이중 안전망: 핀이 걸린 상태에서 어떤 경로로든 라이브 오프셋이 들어오면 무시한다.
-        if let pinned = SceneRenderer.capturePointerUV {
+        // [2026-08-26] 인스턴스 핀을 읽는다 — 종전 전역 읽기가 이 `@MainActor` 자리에서
+        // 백그라운드 캡처의 쓰기와 레이스를 이뤘다(선언부 정정 ①).
+        if let pinned = capturePointerUV {
             pointerUV = pinned
             pointerUVLast = pinned
             return
