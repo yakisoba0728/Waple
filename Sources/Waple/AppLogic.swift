@@ -174,6 +174,20 @@ enum RendererSwap {
 }
 
 /// 재생목록 자동전환 스케줄링 결정.
+///
+/// **[2026-08-27] 이 열거의 절반은 더 이상 프로덕션에서 불리지 않는다.** 전진 판정·순서·시계가
+/// `WapleCore.PlaylistRuntime`(순수) → `PlaylistDriver`(소비자)로 옮겨 갔다:
+///
+/// | 여기 | 대체 |
+/// | --- | --- |
+/// | `shuffleNext` — 직전 1개만 회피 | `WapleCore.ShuffleBag` — 소진형이라 한 바퀴 안에 반복이 없다 |
+/// | `advance(from:count:next:apply:)` | `PlaylistDriver.advance(screenKey:now:apply:)` — 같은 "실패 후보 건너뛰기" 루프를 **화면별로** 돈다 |
+/// | `shouldAdvanceNow(isPaused:)` | `PlaylistSettings.accumulatesElapsed(isPaused:)` — 정지 중엔 전진만 막는 게 아니라 **시계가 선다** |
+/// | `intervalSeconds(minutes:)` | 없음 — 틱이 1초 고정이고 간격은 `delayMinutes` 로 판정에 들어간다 |
+///
+/// **지우지 않은 이유는 하나다**: 이 라운드에서 테스트를 줄일 수 없다(`ci.yml` 의 실행 하한은
+/// 그린 CI 실측으로만 움직인다). 제거는 그 하한을 다시 잴 수 있는 라운드의 일이다.
+/// `shouldRun` · `shouldScheduleTimer` · `canAdvance` 는 계속 쓰인다.
 enum PlaylistScheduling {
     /// 타이머를 돌려야 하는가 — 자동전환이 켜져 있고 목록이 비어있지 않을 때만.
     static func shouldRun(enabled: Bool, ids: [String]) -> Bool {

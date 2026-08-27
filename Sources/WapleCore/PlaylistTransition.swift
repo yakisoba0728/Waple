@@ -610,6 +610,29 @@ public struct PlaylistSettings: Equatable, Sendable {
         return out
     }
 
+    /// 이 틱이 `elapsed` 를 **실제로 누적하는가**.
+    ///
+    /// `shouldTimerAdvance(...)` 의 앞 세 관문과 같은 조건인데, 그 함수는 "넘어가는가" 만
+    /// 답하고 **누적 여부**는 답하지 않는다. 둘이 갈리는 이유는 디스어셈의 **순서**다 —
+    /// 세 관문이 전부 `addss` 앞에 있다:
+    ///
+    ///     0x140076d3b  test byte [rbx+0x74], 2   ; updateonpause  ─┐
+    ///     0x140076d4a  jbe 0x140076d92           ; mode ∈ {2,3}   ─┼ 셋 다 아래 addss 앞
+    ///     0x140076d54  ja  0x140076dad           ; delay < 0.01분 ─┘
+    ///     0x140076d59  addss xmm0, [rbx+0x7c]    ; ← elapsed += dt 는 여기서야 일어난다
+    ///
+    /// 곧 **정지 중(updateonpause 꺼짐)에는 시계가 멈춘다.** 재개 즉시 밀린 전환이 한꺼번에
+    /// 터지지 않는 이유가 이것이다. `never`(delay=0)와 `daytime`/`dayofweek` 도 같은 이유로
+    /// 경과시간이 0 에 머문다 — 그 모드를 쓰다 `timer` 로 되돌리면 시계는 처음부터다.
+    ///
+    /// 종전 모델은 이 순서를 담지 않아, 재구현이 "누적은 늘 하고 전진만 막는" 형태로 새기
+    /// 쉬웠다(그러면 한 시간 정지 뒤 재개하는 순간 즉시 전환된다).
+    public func accumulatesElapsed(isPaused: Bool) -> Bool {
+        if isPaused && !updateOnPause { return false }
+        guard mode.usesTimerTick else { return false }
+        return delayMinutes >= Self.minimumDelayMinutes
+    }
+
     /// 타이머 틱이 지금 다음 벽지로 넘어가야 하는가(0x140076d32–0x140076d8e).
     ///
     /// 여섯 관문이 전부 통과해야 한다. `isPaused` 관문이 Waple 과 갈리는 자리다 —
