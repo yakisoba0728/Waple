@@ -47,7 +47,7 @@ public struct WallpaperProject: Equatable, Sendable {
     ///
     /// ## [2026-08-26] 위 VA 세 자리는 **WE 실물의** 소비처다 — Waple 에는 소비처가 아직 없다
     ///
-    /// 셈법을 적어 둔다(`61b581f` 기준). `Sources/**` 에서 이 파일과 `ProjectJSONParser.swift`
+    /// 셈법을 적어 둔다(`7de1021` 기준). `Sources/**` 에서 이 파일과 `ProjectJSONParser.swift`
     /// 를 뺀 뒤 `grep -o "\.<필드>\b"` 로 센 것이다. **일부러 과다 계상하는 셈**이다 —
     /// 다른 타입의 동명 멤버(`.id`·`.type` 은 도처에 있다)까지 세므로 상한이고, 그래서
     /// 결과가 0 이면 더 강한 증거다:
@@ -143,7 +143,7 @@ public struct WallpaperProject: Equatable, Sendable {
     ///
     /// **기각한 대안: `init` 의 기본값 두 개를 지워 모든 호출부에 명시를 강제하는 것.**
     /// 컴파일 에러로 막아 준다는 점에서 더 강하지만, 생성 지점이 **소스 3 · 테스트 100** 이다
-    /// (`61b581f` 실측 — `grep -rn "WallpaperProject(" Sources/ Tests/`). 그중 91건이
+    /// (`7de1021` 실측 — `grep -rn "WallpaperProject(" Sources/ Tests/`). 그중 91건이
     /// `Tests/WapleRenderTests/**`, 소스 3 중 둘은 여기(`ProjectJSONParser.swift:84`)와
     /// `Sources/WapleRender/VideoRenderer.swift:296` 로 이 수선의 소유 밖이다.
     /// 게다가 그쪽은 **재나열을 강제**하므로 "필드가 늘면 100군데를 고친다"가 영구 비용으로 남는다.

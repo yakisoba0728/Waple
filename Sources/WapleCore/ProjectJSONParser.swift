@@ -107,7 +107,7 @@ public enum ProjectJSONParser {
     ///
     /// **정정 [2026-08-26] — 두 주장 다 Waple 을 두고는 거짓이었다.** 실측:
     ///
-    ///  - **소비처가 하나도 없다.** `61b581f` 기준, 이 파일과 `WallpaperProject.swift` 를 뺀
+    ///  - **소비처가 하나도 없다.** `7de1021` 기준, 이 파일과 `WallpaperProject.swift` 를 뺀
     ///    `Sources/**` 에서 `grep -o "\.supportsAudioProcessing\b"` 가 **0건**,
     ///    `playbackProperties` 도 **0건**이다. 같은 셈이 `id` 272 · `type` 99 · `title` 56 ·
     ///    `fileName` 37 을 낸다 — 다른 타입의 동명 멤버까지 세는 **상한**이라 0 은 그만큼 확정적이다.
