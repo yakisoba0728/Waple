@@ -189,6 +189,10 @@ final class PlaylistDriverTests: XCTestCase {
         let first = makeDriver(in: dir)
         sync(first, minutes: 60, ids: ["a", "b"], screens: ["display-1"])
         var now = Date(timeIntervalSince1970: 5_000_000)
+        // 첫 틱은 기준점을 세우느라 0을 기여한다 — `PlaylistDriver.tick` 의 `lastTick ?? now`
+        // 이고, 관측 이전의 시간은 알 수 없으니 그것이 옳다. 기준 틱을 먼저 놓아야 루프
+        // 횟수와 경과초가 그대로 맞는다(안 놓으면 N틱이 (N-1)×5 초가 된다).
+        _ = first.tick(now: now, isPaused: false)
         for _ in 0..<6 {
             now = now.addingTimeInterval(5)
             _ = first.tick(now: now, isPaused: false)
@@ -214,6 +218,10 @@ final class PlaylistDriverTests: XCTestCase {
         let seed = makeDriver(in: dir)
         sync(seed, minutes: 60, ids: ["a", "b"], screens: ["display-1"])
         var now = Date(timeIntervalSince1970: 6_000_000)
+        // 첫 틱은 기준점을 세우느라 0을 기여한다 — `PlaylistDriver.tick` 의 `lastTick ?? now`
+        // 이고, 관측 이전의 시간은 알 수 없으니 그것이 옳다. 기준 틱을 먼저 놓아야 루프
+        // 횟수와 경과초가 그대로 맞는다(안 놓으면 N틱이 (N-1)×5 초가 된다).
+        _ = seed.tick(now: now, isPaused: false)
         for _ in 0..<10 {
             now = now.addingTimeInterval(5)
             _ = seed.tick(now: now, isPaused: false)
@@ -233,6 +241,10 @@ final class PlaylistDriverTests: XCTestCase {
         let driver = makeDriver(in: dir)
         sync(driver, minutes: 60, ids: ["a", "b"], screens: ["S"], current: "a")
         var now = Date(timeIntervalSince1970: 7_000_000)
+        // 첫 틱은 기준점을 세우느라 0을 기여한다 — `PlaylistDriver.tick` 의 `lastTick ?? now`
+        // 이고, 관측 이전의 시간은 알 수 없으니 그것이 옳다. 기준 틱을 먼저 놓아야 루프
+        // 횟수와 경과초가 그대로 맞는다(안 놓으면 N틱이 (N-1)×5 초가 된다).
+        _ = driver.tick(now: now, isPaused: false)
         for _ in 0..<10 {
             now = now.addingTimeInterval(5)
             _ = driver.tick(now: now, isPaused: false)
@@ -247,6 +259,10 @@ final class PlaylistDriverTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let driver = makeDriver(in: dir)
         var now = Date(timeIntervalSince1970: 8_000_000)
+        sync(driver, minutes: 60, ids: ["a", "b"], screens: ["S"], current: "a")
+        // 위 ①과 같은 이유의 기준 틱. 이 테스트가 보는 것은 **루프 안의 sync 가 시계를 되돌리지
+        // 않는가** 이므로, 기준점 수립을 루프 밖으로 빼야 그 단언이 흐려지지 않는다.
+        _ = driver.tick(now: now, isPaused: false)
         for _ in 0..<10 {
             sync(driver, minutes: 60, ids: ["a", "b"], screens: ["S"], current: "a")
             now = now.addingTimeInterval(5)
