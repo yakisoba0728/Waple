@@ -18,8 +18,15 @@ public typealias AudioObjectPropertySelector = UInt32
 public typealias AudioObjectPropertyScope = UInt32
 public typealias AudioObjectPropertyElement = UInt32
 
-/// 실제: `public let kAudioObjectSystemObject: AudioObjectID = 1`
-public let kAudioObjectSystemObject: AudioObjectID = 1
+/// 실제: **`Int32` 다** — `AudioObjectID`(UInt32)가 아니다.
+///
+/// [2026-08-27 정정] 처음에 `AudioObjectID` 로 적었고, 그 탓에 호출부가 리눅스에서는 통과하고
+/// **macOS CI 의 Build (sources) 에서 죽었다**(`cannot convert value of type 'Int32' to expected
+/// argument type 'AudioObjectID'`, run 33025975054). 이 심의 다른 모든 상수는 값이 가짜여도
+/// 되지만 **타입은 실물과 같아야 한다** — 타입이 곧 이 하네스가 검증하는 전부이기 때문이다.
+/// 값을 옮겨 적지 않는 규율(아래 셀렉터들)과 타입을 정확히 옮기는 규율은 서로 다른 것이고,
+/// 여기서 뒤를 어겼다.
+public let kAudioObjectSystemObject: Int32 = 1
 
 /// 실제: 네 글자 코드(FourCC)를 UInt32 로 접은 값. 여기서는 **이름만 맞으면 되므로**
 /// 실제 상수값을 옮기지 않는다 — 값이 쓰이는 곳이 없고, 옮겨 적으면 틀렸을 때

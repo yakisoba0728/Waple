@@ -72,7 +72,11 @@ enum SystemAudioObserver {
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
-        guard AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nil, &size, &deviceID) == 0,
+        // `kAudioObjectSystemObject` 는 `Int32` 라 `AudioObjectID`(UInt32)로 접어야 한다.
+        // 값이 1 인 컴파일 타임 상수라 변환이 안전하고, `AudioObjectID(` 는 좁힘 센서스의
+        // 패턴(`U?Int…(`)에 걸리지 않는다.
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
+                                         &addr, 0, nil, &size, &deviceID) == 0,
               deviceID != 0 else { return false }
 
         var running: UInt32 = 0
