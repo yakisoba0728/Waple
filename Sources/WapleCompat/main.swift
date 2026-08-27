@@ -153,6 +153,29 @@ struct WapleCompatCLI {
             rootURL: URL(fileURLWithPath: NSString(string: rootPath).expandingTildeInPath, isDirectory: true)
         )
 
+        // [2026-08-27] 7개 모드 중 **이 기본 스캔만** 0건 가드가 없었다. 형제 여섯은 전부 있다:
+        // --deep(:142) · --capture(SnapshotPipeline:215) · --compare(SnapshotCompare:142) ·
+        // --inventory(ProfilePipeline:86) · --vis-blast(:136) · --profile(:241).
+        //
+        // `scan` 은 **컨테이너를 못 읽을 때만** throw 한다. 읽히는데 0건이면 그냥
+        // `totalProjects: 0` 리포트를 돌려주므로(WallpaperCompatibilityAnalyzer.swift 참조)
+        // 아래 `--strict` 게이트는 `blockedProjects > 0` 이 거짓이라 **exit 0** 을 낸다.
+        //
+        // 그 경로가 AGENTS.md 「코퍼스」 절이 실측으로 기록한 함정 그 자체다 — 심링크 코퍼스는
+        // `.isDirectoryKey` 필터에 걸려 `totalProjects=0` 이 된다. 오타 난 루트도 같다.
+        // 즉 종전에는 "아무것도 안 봤다" 가 `--strict` 를 쓰는 게이트에 **통과로 읽혔다.**
+        // 회귀(1)와 구분되도록 환경 오류(2)로 낸다 — golden-gate.sh 와 같은 구분이다.
+        guard report.summary.totalProjects > 0 else {
+            FileHandle.standardError.write(Data("""
+                [compat] ⚠️ 프로젝트 0개 — 아무것도 검사하지 않았다(무회귀 아님).
+                  root: \(rootPath)
+                  · 루트 경로 오타인가?
+                  · 심링크로 만든 축소 코퍼스인가? `.isDirectoryKey` 필터가 걸러낸다(APFS 클론 cp -Rc 를 써라).
+
+                """.utf8))
+            Foundation.exit(2)
+        }
+
         if outputJSON {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
