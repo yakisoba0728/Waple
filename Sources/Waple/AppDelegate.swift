@@ -80,6 +80,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 데스크탑 가림 자동 일시정지(옵션, UserDefaults 영속, 기본 꺼짐 — 기존 동작 보존).
     private let visibilityMonitor = DesktopVisibilityMonitor()
     private var occlusionTimer: Timer?
+    /// 재생정책(stage 2c) — 조건 폴링 타이머와 렌더러별 마지막 적용 상태.
+    /// 합류 규칙은 `PlaybackPolicyComposition.swift` 에 있고 여기서는 적용만 한다.
+    private var playbackPolicyTimer: Timer?
+    private var policyPauseState = PerRendererPauseState()
+    /// `renderers` 와 **같은 순서·같은 길이**인 화면별 프로젝트. 재생정책은 벽지별 선언을 보므로
+    /// 화면마다 다른 벽지가 붙으면 판정도 화면마다 달라진다. 둘을 같은 자리에서 대입해 어긋나지
+    /// 않게 한다 — 어긋나면 A 화면 벽지의 선언이 B 화면을 멈춘다.
+    private var rendererProjects: [WallpaperProject] = []
     // 렌더 정지 사유(가림·수동·슬립)를 한 곳에서 합성 — 서로 덮어쓰지 않게. 합성 로직은 PauseGate(순수).
     private var pauseGate = PauseGate()
     // 상태바 아이콘 글리프(w5d-tray): 최근 apply 성공/실패. 다음 적용 성공까지 지속(refreshStatusIcon 참조).
@@ -293,6 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 가림 자동 일시정지 폴링 시작(꺼져 있으면 no-op).
         scheduleOcclusionTimer()
+        schedulePlaybackPolicyTimer()
 
         // 스모크 확인용: 실행 시 메인창 자동 오픈 + 첫 항목 포커스(인스펙터가 채워진 상태로
         // 캡처되도록 — 판정 게이트용). 해석은 전부 SmokeLaunch(순수 + 단위 테스트) 가 한다.
@@ -567,6 +576,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch result {
         case .success(let newRenderers):
             renderers = newRenderers
+            // 위 주석의 불변식 — `RendererSwap.apply` 가 `screenProjects` 순서대로 만들므로 같은 순서다.
+            rendererProjects = screenProjects.map(\.project)
+            policyPauseState.reset()   // 렌더러 세트가 바뀌었다 → 다음 틱이 전부 다시 적용
             currentFolderURL = folderURL
             currentProjectId = project?.id
             activeVideoProjectIds = screenProjects
@@ -675,6 +687,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !applyCurrentSelection() {
             renderers.forEach { $0.teardown() }
             renderers = []
+            rendererProjects = []
+            policyPauseState.reset()
             activeVideoProjectIds = []
         }
 
@@ -767,6 +781,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyPause(pauseGate.set(.occlusion, active: occluded))
     }
 
+    // MARK: - WE 재생정책 적용 (stage 2c)
+    //
+    // 판정은 전부 순수층이 한다(`PlaybackConditionsBuilder` → `PlaybackPolicyResolver` →
+    // `RenderPauseComposition`). 여기 있는 것은 **관측 I/O 와 렌더러 호출**뿐이다.
+    //
+    // 가림 타이머와 따로 도는 이유: 가림은 `pauseWhenOccluded` 가 꺼지면 아예 멈추는데
+    // 재생정책은 그 설정과 무관하게 살아야 한다. 대가는 `CGWindowListCopyWindowInfo` 를
+    // 초당 두 번 부르는 것이고(둘 다 1초 주기), 합칠 가치가 생기면 스냅샷 한 벌을 두
+    // 소비자에게 나눠 주는 쪽으로 묶어라 — 지금 묶지 않은 것은 가림 타이머의 수명 규칙을
+    // 건드리지 않기 위해서다.
+
+    private func schedulePlaybackPolicyTimer() {
+        playbackPolicyTimer?.invalidate()
+        // .common — 메뉴 트래킹 중에도 돈다(가림 타이머와 같은 이유).
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.applyPlaybackPolicy() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        playbackPolicyTimer = timer
+    }
+
+    /// 조건을 긁어 판정하고, **바뀐 렌더러만** pause/resume 한다.
+    private func applyPlaybackPolicy() {
+        // 렌더러가 없거나 프로젝트 배열과 어긋나면 아무것도 하지 않는다. 어긋난 상태에서
+        // 인덱스로 짝지으면 엉뚱한 화면에 남의 정책이 간다 — 그럴 바엔 무동작이 옳다.
+        guard !renderers.isEmpty, renderers.count == rendererProjects.count else {
+            policyPauseState.reset()
+            return
+        }
+        let screens = NSScreen.screens
+        let conditions = PlaybackConditionsBuilder.make(
+            windows: visibilityMonitor.currentSnapshots(),
+            // `Int(clamping:)` — pid_t(Int32) → Int 는 64비트에서 **확대**라 트랩이 불가능하다.
+            // 라벨을 다는 것은 `check_int_narrowing.py` 의 관례다(그 파일 머리말의 `Int(UInt8)` 처리와 같다).
+            frontmostProcessId: NSWorkspace.shared.frontmostApplication.map { Int(clamping: $0.processIdentifier) },
+            currentProcessId: Int(clamping: ProcessInfo.processInfo.processIdentifier),
+            screenFrames: screens.map(\.frame),
+            visibleFrames: screens.map(\.visibleFrame),
+            // 디스플레이 슬립은 새 관측자가 필요 없는 유일한 축이다 — `PauseGate` 가 이미 쥐고 있다.
+            displayAsleep: pauseGate.isActive(.displaySleep),
+            onBattery: PowerSourceObserver.isOnBattery(),
+            // **오디오 축은 일부러 배선하지 않는다.** `SystemAudioObserver` 가 보는
+            // `kAudioDevicePropertyDeviceIsRunningSomewhere` 는 우리 소리도 1 로 치는데,
+            // "우리가 재생 중인가" 를 알 표면이 `WallpaperRenderer` 에 없다. 빼지 못한 채 켜면
+            // 오디오 반응 벽지가 스스로를 멈추는 되먹임이 된다(그 함수 주석). WE 기본값이
+            // `playbackaudio = run` 이라 **기본 상태에서는 차이가 없고**, 사용자가 그 축을 켜면
+            // 아무 일도 일어나지 않는다 — 조용히 틀리는 것보다 낫지만 격차인 것은 맞다.
+            audioPlaying: false)
+
+        let decisions = RenderPauseComposition.decideAll(
+            globallyPaused: pauseGate.isPaused,
+            projects: rendererProjects,
+            conditions: conditions,
+            global: GlobalPlaybackSettings.current)
+
+        for (index, paused) in policyPauseState.changes(decisions.map(\.paused)) {
+            guard index < renderers.count else { continue }
+            if paused { renderers[index].pause() } else { renderers[index].resume() }
+        }
+    }
+
     // MARK: - 전역 일시정지 (메인창 하단 바)
 
     /// 하단 바 일시정지 토글 — 새 상태 반환. 가림·슬립 정지와 독립(하나라도 있으면 정지 유지).
@@ -790,6 +866,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         libraryVM.isPaused = pauseGate.isPaused
         refreshStatusIcon()
+        // [2026-08-26] **전역 resume 은 정책이 멈춰 둔 화면까지 되살린다.** 위 `forEach` 는
+        // 모니터를 구분하지 않기 때문이다. 다음 정책 틱(≤1초)이 고치긴 하지만 그 사이
+        // "멈춰 있어야 할 화면이 잠깐 도는" 눈에 보이는 글리치가 남는다. 그래서 여기서
+        // 정책을 **즉시 다시 적용**한다. 엣지 추적을 리셋하는 것이 요점이다 — 리셋하지 않으면
+        // 정책 상태가 "이미 멈춤" 이라고 기억하고 있어 아무것도 다시 부르지 않는다.
+        policyPauseState.reset()
+        applyPlaybackPolicy()
     }
 
     // MARK: - 상태바 아이콘 글리프·툴팁 (w5d-tray)
