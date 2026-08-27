@@ -799,8 +799,13 @@ advanceOnVideoEnd = (mode == timer && videosequence) || (playintro && introShowi
 
 Waple 쪽 구현: `WapleCore.PlaylistSettings.shouldAdvanceOnVideoEnd(introShowing:)`
 (계약 잠금 3건 — `Tests/WapleCoreTests/PlaylistTransitionTests.swift`).
-아직 **호출부가 없다** — `SceneVideoLayer.endObserver` / `VideoRenderer` 의 종료 통지를
-재생목록 전진에 잇는 것은 §8.2 의 갭 #6 이 그대로 남아 있다.
+
+**[2026-08-27]** 관문은 화면별 상태와 함께 `PlaylistRuntime.shouldAdvanceOnVideoEnd(screenKey:)`
+로 올라왔지만 **여전히 호출부가 없다**: `SceneVideoLayer.endObserver` / `VideoRenderer` 의 종료
+이벤트가 재생목록으로 이어지지 않는다(§8.2 갭 #6). 소비자 없는 표면을 앱 계층에 미리 만들지
+않았다 — `PlaylistDriver` 에는 이 함수가 없고, 통지가 생기는 라운드에 같이 붙인다.
+그래서 `PlaylistSettingsBridge` 는 `videosequence` 를 **끈 채로 고정한다** — 켜면 타이머가
+동영상에서 전진을 보류하는데 받을 쪽이 없어 동영상 배경이 영원히 안 넘어간다.
 
 ---
 
@@ -851,14 +856,19 @@ ba 02 83 6a                       u32 = 1786970810  → 유닉스 시각 (2026-0
 | 파일 | 내용 |
 | --- | --- |
 | `Sources/WapleLibrary/PlaylistStore.swift:5–24` | `Model { enabled, intervalMinutes=30, ids:[String], shuffle=false }`, `playlist.json` 영속 |
-| `Sources/Waple/AppLogic.swift:145–208` | `enum PlaylistScheduling` — `shouldScheduleTimer` / `intervalSeconds` / `shuffleNext` / `canAdvance` / `shouldAdvanceNow` / `advance` |
-| `Sources/Waple/AppDelegate.swift:684–720` | `schedulePlaylistTimer()` / `advancePlaylist()` |
+| `Sources/Waple/AppLogic.swift` | `enum PlaylistScheduling` — 남은 소비자는 `shouldRun` / `shouldScheduleTimer` / `canAdvance` 셋뿐이다. 나머지 넷(`intervalSeconds` · `shuffleNext` · `shouldAdvanceNow` · `advance`)은 **[2026-08-27] 대체됐다**(그 열거의 독스트링에 대조표) |
+| `Sources/Waple/AppDelegate.swift` | `schedulePlaylistTimer()`(1초 틱) / `tickPlaylist()` / `advancePlaylist()` / `playlistScreenKeys(includingAssigned:)` / `effectiveAssignment(for:)` |
 | `Sources/Waple/Shell/NowPlayingBar.swift:291–297` | 간격 슬라이더(1…240분), 셔플 토글 |
 | `Sources/Waple/Surfaces/Settings/SettingsViewModel.swift:70–112` | 설정창 바인딩 |
 | `Sources/WapleRender/Resources/WEAssets/shaders/HLSL/dx11playlisttransition.*` | **전환 셰이더 3개가 이미 동봉돼 있다**(HLSL 원문) |
 | `spec/engine/shaders.json:82–179` | 세 셰이더의 해시·함수·콤보·`gRefs` 정본 |
 | `Sources/WapleCore/PlaylistTransition.swift` | **[2026-08-21 신규]** 순수 코어 — 전환 27+3종·선형 타이밍·셔플백·풀 추첨·모드/순서 열거. `import Foundation` 만 쓰므로 리눅스에서 실제로 돈다 |
-| `Tests/WapleCoreTests/PlaylistTransitionTests.swift` | 위의 계약 잠금 54건(왕복·경계·불변식) |
+| `Tests/WapleCoreTests/PlaylistTransitionTests.swift` | 위의 계약 잠금 64건(왕복·경계·불변식) |
+| `Sources/WapleCore/PlaylistRuntime.swift` | **[2026-08-27 신규]** 순수 조각들을 한 결정으로 엮는 층 — 화면별 경과시간·모드/순서 디스패치·인트로 래치. `PlaylistTransition.swift` 의 소비자가 처음 생긴 자리다 |
+| `Sources/WapleCore/PlaylistStateTime.swift` | **[2026-08-27 신규]** §7 의 `PLPV0005` 코덱(읽기·쓰기). 실측 95바이트와 **바이트 동일**을 테스트로 잠갔다 |
+| `Sources/WapleLibrary/PlaylistStateTimeStore.swift` | **[2026-08-27 신규]** 그 코덱의 영속(`playliststatetime.bin`, 우리 베이스 디렉터리) |
+| `Sources/Waple/PlaylistDriver.swift` | **[2026-08-27 신규]** 앱 측 소비자 + `PlaylistStore` ↔ `playlist.settings` 번역(`PlaylistSettingsBridge`) |
+| `Tests/WapleCoreTests/PlaylistRuntimeTests.swift` · `PlaylistStateTimeTests.swift` · `Tests/WapleAppTests/PlaylistDriverTests.swift` · `PlaylistWiringTests.swift` | **[2026-08-27 신규]** 위 넷의 계약 잠금 62건 (코어 40 · 앱 22) |
 
 ### 8.2 없는 것
 
@@ -866,19 +876,19 @@ ba 02 83 6a                       u32 = 1786970810  → 유닉스 시각 (2026-0
 | --- | --- | --- | --- |
 | 1 | **전환 효과 27종 + 오버레이 파이프라인** | 전무 — 벽지 교체가 즉시 컷 | 신규 `Sources/WapleRender/PlaylistTransitionRenderer.swift`. 훅은 `Sources/Waple/AppDelegate.swift:490` `apply(folderURL:)` — 새 렌더러를 만들기 직전에 기존 렌더러 프레임을 캡처 |
 | 2 | `transition` / `transitionpool` / `transitiontime` 스키마 | 없음 | `Sources/WapleLibrary/PlaylistStore.swift` `Model` |
-| 3 | 모드 5종(`logon`/`daytime`/`dayofweek`/`never`) | `enabled: Bool` 하나 = timer 전용 | `Sources/Waple/AppLogic.swift` `PlaylistScheduling` 에 모드 디스패치 추가 |
-| 4 | 항목별 `daytimeend` / `preset` | `ids: [String]` 평문 배열 | `PlaylistStore.Model.ids` → 구조체 배열로 승격 |
-| 5 | **셔플백**(소진 전 무반복) | `shuffleNext` 는 "직전 1개만 회피"(`AppLogic.swift:171–177`) — 3곡짜리 목록에서 A,B,A,B 가 가능 | **구현됨**: `WapleCore.ShuffleBag`. `AppLogic.swift:171–177` 을 그 위임으로 바꾸면 된다 — 대조는 §8.4 |
+| 3 | 모드 5종(`logon`/`daytime`/`dayofweek`/`never`) | **[2026-08-27] 절반 닫힘** — 디스패치는 `PlaylistRuntime` 에 다섯 모드 전부 있고 테스트로 잠겼다. 저장·UI 는 여전히 `enabled: Bool` 하나라 실제로 도달하는 값은 `timer`/`never` 둘뿐이다 | `PlaylistStore.Model` 에 `mode` 를 더하고 UI 를 붙인다. `daytime` 은 #4 가 먼저다 |
+| 4 | 항목별 `daytimeend` / `preset` | `ids: [String]` 평문 배열. `PlaylistRuntime` 은 `[PlaylistItem]` 을 받으므로 스키마만 올리면 된다 | `PlaylistStore.Model.ids` → 구조체 배열로 승격(마이그레이션 필요) |
+| ~~5~~ | ~~**셔플백**(소진 전 무반복)~~ | **[2026-08-27] 닫힘** — 프로덕션 셔플이 `WapleCore.ShuffleBag` 이다(화면별로 하나씩). 종전 `shuffleNext` 는 남아 있지만 아무도 안 부른다 — 대조는 §8.4 | — |
 | 6 | `videosequence`(동영상 끝나면 전환) | 없음 | `Sources/WapleRender` 의 `VideoRenderer` 종료 콜백 → `advancePlaylist()` |
-| 7 | `updateonpause` **옵션** | `shouldAdvanceNow(isPaused:)`(`AppLogic.swift:188`) 이 정지 중엔 항상 false — WE 의 `updateonpause=false` 에 **고정** | `AppLogic.swift:188` 을 설정값으로 |
+| 7 | `updateonpause` **옵션** | 판정은 `PlaylistSettings.accumulatesElapsed(isPaused:)` 로 옮겼고 값은 여전히 `false` 고정(UI 없음). **동작은 더 정확해졌다** — 종전엔 전진만 막고 시계는 돌았는데, 이제 시계가 선다 | `PlaylistStore.Model` 에 키를 더하고 UI 를 붙인다 |
 | 8 | `beginfirst` / `playintro` | 없음 | `PlaylistScheduling` |
-| 9 | **모니터별 재생목록** | 전역 1개. `MonitorAssignmentStore` 는 있지만 재생목록과 안 엮임 | `PlaylistStore` 를 모니터 키로 분할 |
-| 10 | **경과시간 영속** | `Timer` 라 앱 재시작마다 0 부터 | `AppDelegate.swift:684` — 누적 초를 `playlist.json` 에 |
+| 9 | **모니터별 재생목록** | **[2026-08-27] 상태는 화면별이 됐다** — 경과시간·셔플백·커서가 화면 키마다 하나씩이고(WE 의 모니터 노드와 같은 모양) 화면별로 다른 배경이 걸린다. 남은 것은 **목록 자체**의 분할이다(지금은 한 목록을 화면별로 각자 걷는다). 부 화면의 현재 배경은 메모리에만 산다 — 재시작하면 전역 선택으로 돌아간다 | `PlaylistStore` 를 모니터 키로 분할 + 부 화면 현재 배경 영속(WE 의 `bin/playliststate.bin` 이 그 자리인데 실물을 못 봤다, §10) |
+| ~~10~~ | ~~**경과시간 영속**~~ | **[2026-08-27] 닫힘** — `playliststatetime.bin` 을 **WE 와 같은 바이트로** 읽고 쓴다(§7). 60초 주기 + 전진 시 + 종료 시 저장 | — |
 | 11 | 이름 붙인 재생목록 모음(`playlists`) | 없음 | `PlaylistStore` |
 | 12 | 수동 전환 설정(`browsetransition`) | 없음 | #1 과 동일 스키마 재사용(WE 도 파서를 공유한다 — `0x14006cdfd`) |
-| 13 | `delay` 를 실수 분으로 (WE 하한 0.01분 = 0.6초) | `Int` 분, 하한 1분 | `PlaylistStore.intervalMinutes` + `AppLogic.swift:162–165` |
-| 14 | **프레임 델타 5초 상한** (`0x140076c56  minss xmm6, 5.0f`) | 없음 — Waple 은 `Timer` 라 절전에서 깨면 지연분이 한 번에 온다 | `WapleCore.PlaylistSettings.maxTickDeltaSeconds` / `clampedTickDelta(_:)` 를 만들어 뒀다. `AppDelegate.schedulePlaylistTimer()` 가 누적 초를 직접 굴리게 될 때 그 함수를 통과시키면 된다 |
-| 15 | **인트로 벽지가 걸려 있으면 동영상 타이머 전진 보류** (`0x140076d87  cmp byte [rbx+0xe2], 0`) | 없음 | `WapleCore.PlaylistSettings.shouldTimerAdvance(...,introShowing:)` 에 관문을 넣었다. `[+0xe2]` 에 해당하는 상태(=인트로 벽지가 지금 걸려 있음)를 `AppDelegate` 가 갖게 되면 넘기면 된다 |
+| 13 | `delay` 를 실수 분으로 (WE 하한 0.01분 = 0.6초) | `Int` 분, 하한 1분. 판정은 이미 `Float` 분이라(`PlaylistSettings.delayMinutes`) 스토어·UI 만 남았다 | `PlaylistStore.intervalMinutes` |
+| ~~14~~ | ~~**프레임 델타 5초 상한**~~ (`0x140076c56  minss xmm6, 5.0f`) | **[2026-08-27] 닫힘** — 1초 틱이 `Date()` 차분을 `clampedTickDelta(_:)` 로 통과시킨다. 절전에서 깬 한 번의 큰 델타가 5초로 잘린다 | — |
+| 15 | **인트로 벽지가 걸려 있으면 동영상 타이머 전진 보류** (`0x140076d87  cmp byte [rbx+0xe2], 0`) | 상태(`PlaylistScreenScheduler.introShowing`)와 관문 배선은 생겼다. `beginfirst`/`playintro` 에 UI 가 없어 래치가 실제로 서는 경로가 아직 없다(#8) | #8 과 같은 라운드 |
 
 ### 8.3 포팅에서 먼저 걸릴 것
 

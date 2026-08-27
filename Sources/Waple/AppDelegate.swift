@@ -47,6 +47,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let favoritesStore = FavoritesStore(baseDirectory: LibraryStore.defaultBaseDirectory())
     private let folderStore = FolderStore(baseDirectory: LibraryStore.defaultBaseDirectory())
     private var playlistTimer: Timer?
+    /// 화면별 재생목록 상태(경과시간·셔플백·커서)와 그 영속(`playliststatetime.bin`).
+    /// **판단은 전부 `PlaylistDriver` 안이다** — 이 파일은 리눅스 타입체크 제외라(`APP_EXCLUDED`)
+    /// 여기 쓴 로직은 macOS CI 가 처음 본다. 여기 남는 것은 호출과 마운트뿐이다.
+    private let playlistDriver = PlaylistDriver(
+        stateTime: PlaylistStateTimeStore(baseDirectory: LibraryStore.defaultBaseDirectory()))
+    /// 주 화면이 아닌 화면에 재생목록이 돌린 배경(엔트리 id). **메모리에만 산다** —
+    /// `monitors.json`(사용자가 못박은 할당)을 재생목록이 덮어쓰면 그 설정이 무의미해진다.
+    /// 그래서 `effectiveAssignment(for:)` 에서 사용자 할당이 **먼저**다.
+    private var playlistScreenOverrides: [String: String] = [:]
     private lazy var libraryVM = LibraryViewModel(store: store, playlist: playlistStore, monitors: monitorStore,
                                                   favorites: favoritesStore, folders: folderStore)
     private lazy var settingsVM: SettingsViewModel = {
@@ -504,6 +513,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// 화면에 실제로 걸릴 엔트리 id. 사용자가 `monitors.json` 으로 못박은 할당이 **먼저**이고,
+    /// 없을 때만 재생목록이 그 화면에 돌린 배경을 쓴다. 재생목록은 애초에 못박히지 않은 화면만
+    /// 굴리므로(`playlistScreenKeys()`) 두 규칙은 같은 말이다 — 어긋날 자리가 없게 둔다.
+    private func effectiveAssignment(for screenKey: String) -> String? {
+        monitorStore.assignment(for: screenKey) ?? playlistScreenOverrides[screenKey]
+    }
+
     /// 라이브러리 엔트리 id → 배경 폴더 URL(없거나 해석 실패 → nil). MonitorMapping 주입용.
     private func folderForEntry(_ id: String) -> URL? {
         guard let entry = store.entries.first(where: { $0.id == id }) else { return nil }
@@ -572,7 +588,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             assignedFolder: { key in
                 MonitorMapping.assignedFolder(
                     screenKey: key,
-                    assignment: { self.monitorStore.assignment(for: $0) },
+                    assignment: { self.effectiveAssignment(for: $0) },
                     folderForEntry: { self.folderForEntry($0) })
             },
             parse: { self.projectForMount(folderURL: $0) }
@@ -628,7 +644,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // pushRecent/RecentWallpapers.push 자체가 제거).
                 // F480: 이 분기는 global == nil 이라 마운트된 프로젝트는 전부 화면 할당에서 왔다 —
                 // 파서 id 대신 할당 스토어의 엔트리 id 를 그대로 push(접미 유일화 정합).
-                screenProjects.forEach { pushRecent(monitorStore.assignment(for: $0.screenKey)) }
+                screenProjects.forEach { pushRecent(effectiveAssignment(for: $0.screenKey)) }
             }
             baseAssetsWarningGate.presentIfNeeded(
                 after: result,
@@ -724,43 +740,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 재생목록 타이머 재구성. 비활성/빈 목록 → 정지(스케줄 조건은 추출 로직).
+    /// 재생목록 틱 재구성.
+    ///
+    /// **간격 타이머에서 1초 틱으로 바뀌었다.** WE 는 매 프레임 경과시간을 누적하고(§6.1) 그
+    /// 시계를 자기가 들고 있다 — 그래야 ① 정지 중엔 시계가 멈추고 ② 절전에서 깨어난 한 번의
+    /// 큰 델타가 5초로 잘리고 ③ 재부팅 너머로 이어진다. 종전처럼 "간격만큼 뒤에 한 번 깨는"
+    /// 타이머는 그 셋 중 어느 것도 표현할 수 없다(운영체제가 타이머를 언제 깨웠는지가 곧
+    /// 정책이 된다). 판정은 전부 `PlaylistDriver` → `WapleCore.PlaylistRuntime` 이 한다.
+    ///
+    /// F483 의 "후보 1개면 타이머를 걸지 않는다" 가드는 그대로다 — 매 간격 같은 배경을
+    /// 리마운트하는 것을 막는 규칙이고, 시계가 바뀌어도 이유가 그대로다.
     private func schedulePlaylistTimer() {
         playlistTimer?.invalidate()
         playlistTimer = nil
-        // F483: 후보가 1개뿐이면 타이머를 걸지 않는다 — 매 간격 같은 배경 리마운트만 발생한다
-        // (수동 버튼/트레이의 canAdvance 가드와 대칭).
         guard PlaylistScheduling.shouldScheduleTimer(enabled: playlistStore.enabled, ids: playlistStore.ids) else { return }
-        let interval = PlaylistScheduling.intervalSeconds(minutes: playlistStore.intervalMinutes)
         // F840: .common 모드 — scheduledTimer 는 .default 에만 등록돼 메뉴 트래킹·라이브 리사이즈
         // 동안 멈춘다(트레이 메뉴를 열어 둔 채로 자동 전환 시각이 지나가면 그 회차가 통째로 밀렸다).
-        // 두 함수 아래 scheduleOcclusionTimer 가 같은 이유로 이미 .common 을 쓴다 — 규약을 맞춘다.
+        // 아래 scheduleOcclusionTimer 가 같은 이유로 이미 .common 을 쓴다 — 규약을 맞춘다.
         // Timer 블록은 @Sendable 이지만 바로 아래에서 RunLoop.main 에만 등록되므로 실행은 메인이다.
-        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, PlaylistScheduling.shouldAdvanceNow(isPaused: self.pauseGate.isPaused) else { return }
-                self.advancePlaylist()
-            }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.tickPlaylist() }   // RunLoop.main 등록 — 실행은 메인
         }
         RunLoop.main.add(timer, forMode: .common)
         playlistTimer = timer
     }
 
-    private func advancePlaylist() {
-        // 후보를 순서대로 시도하고 실제 적용에 성공하는 첫 배경으로 전진(삭제/폴더 이동 등 실패 후보는 건너뜀).
-        // w5d-playback: shuffle 이 켜져 있으면 순차 순환 대신 직전 곡 회피 무작위 선곡으로 분기.
-        _ = PlaylistScheduling.advance(
-            from: store.selectedId,
-            count: playlistStore.ids.count,
-            next: { current in
-                self.playlistStore.shuffle
-                    ? PlaylistScheduling.shuffleNext(current: current, ids: self.playlistStore.ids)
-                    : self.playlistStore.next(after: current)
-            },
-            apply: { id in
+    /// 재생목록이 굴리는 화면 키. 첫 원소가 **주 화면**이고 그 화면만 전역 선택
+    /// (`store.selectedId`)을 옮긴다 — 라이브러리 강조·하단 바 "현재:"·최근 목록·스틸 동기화가
+    /// 전부 그 값을 본다. 나머지 화면은 `playlistScreenOverrides` 로 각자 돈다.
+    ///
+    /// 사용자가 `monitors.json` 으로 못박은 화면은 제외한다. 그 화면은 사용자가 배경을 고정한
+    /// 것이고, 재생목록이 덮으면 그 설정이 무의미해진다.
+    ///
+    /// - Parameter includingAssigned: 수동 "다음 배경" 은 사용자가 지금 누른 것이라 고정 화면도
+    ///   포함해 전역 선택을 옮긴다(그 화면 자체는 고정 배경 그대로다). 자동 틱은 반대다.
+    private func playlistScreenKeys(includingAssigned: Bool = false) -> [String] {
+        let keys = desktopController.screenViews.map { $0.screenKey }
+        return includingAssigned ? keys : keys.filter { monitorStore.assignment(for: $0) == nil }
+    }
+
+    /// 스토어·화면 목록을 드라이버에 다시 먹인다. 싸고 멱등이라 매 틱 부른다.
+    private func syncPlaylistDriver(screenKeys: [String]) {
+        playlistDriver.sync(enabled: playlistStore.enabled,
+                            intervalMinutes: playlistStore.intervalMinutes,
+                            shuffle: playlistStore.shuffle,
+                            ids: playlistStore.ids,
+                            screenKeys: screenKeys,
+                            currentEntryId: store.selectedId)
+    }
+
+    /// 1초 틱. 판정은 드라이버가 하고 여기서는 **마운트만** 한다.
+    private func tickPlaylist() {
+        let keys = playlistScreenKeys()
+        syncPlaylistDriver(screenKeys: keys)
+        guard let primary = keys.first else { return }
+        let now = Date()
+        let wants = playlistDriver.tick(now: now, isPaused: pauseGate.isPaused)
+        guard !wants.isEmpty else { return }
+
+        // 부 화면부터 정한다. 주 화면 적용은 곧바로 전체 리마운트를 태우므로, 그 전에
+        // 오버라이드가 자리에 있어야 한 틱에 두 화면이 바뀔 때 마운트가 두 번 일어나지 않는다.
+        var overridesChanged = false
+        for key in wants where key != primary {
+            let applied = playlistDriver.advance(screenKey: key, now: now) { id in
+                guard let entry = self.store.entries.first(where: { $0.id == id }) else { return false }
+                return self.store.resolveFolderURL(for: entry) != nil
+            }
+            guard let applied else { continue }
+            playlistScreenOverrides[key] = applied
+            overridesChanged = true
+        }
+
+        var primaryApplied = false
+        if wants.contains(primary) {
+            let applied = playlistDriver.advance(screenKey: primary, now: now) { id in
                 guard let entry = self.store.entries.first(where: { $0.id == id }) else { return false }
                 return self.libraryVM.apply(entry)
-            })
+            }
+            primaryApplied = applied != nil
+        }
+        // 주 화면이 안 바뀌었으면 부 화면 오버라이드를 화면에 반영할 재적용이 따로 필요하다.
+        if overridesChanged && !primaryApplied { _ = applyCurrentSelection() }
+    }
+
+    /// 수동 "다음 배경"(하단 바 forward · 트레이). 자동 틱과 **같은 셔플백/커서**를 쓴다 —
+    /// 안 그러면 손으로 넘긴 것과 저절로 넘어간 것이 서로 다른 순서를 걷는다.
+    /// 후보가 마운트에 실패하면 다음 후보로 넘어간다(한 바퀴 한도) — 삭제된 엔트리 하나가
+    /// 재생목록을 영구 정지시키던 결함의 방어이고, 그 루프는 드라이버 안에 있다.
+    private func advancePlaylist() {
+        var keys = playlistScreenKeys()
+        // 전 화면이 고정돼 있으면 재생목록이 굴리는 화면이 하나도 없다. 그래도 수동 "다음 배경"
+        // 은 사용자가 지금 누른 것이라 전역 선택은 옮긴다(고정 화면 자체는 그대로 남는다).
+        if keys.isEmpty { keys = playlistScreenKeys(includingAssigned: true) }
+        syncPlaylistDriver(screenKeys: keys)
+        guard let primary = keys.first else { return }
+        playlistDriver.advance(screenKey: primary, now: Date()) { id in
+            guard let entry = self.store.entries.first(where: { $0.id == id }) else { return false }
+            return self.libraryVM.apply(entry)
+        }
     }
 
     // MARK: - 데스크탑 가림 자동 일시정지 (작업 2)
@@ -1095,7 +1173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             assignedFolder: { key in
                 MonitorMapping.assignedFolder(
                     screenKey: key,
-                    assignment: { self.monitorStore.assignment(for: $0) },
+                    assignment: { self.effectiveAssignment(for: $0) },
                     folderForEntry: { self.folderForEntry($0) })
             },
             parse: { self.projectForMount(folderURL: $0) }
@@ -1498,6 +1576,10 @@ extension AppDelegate {
     /// 은 사용자의 명시적 1회 액션이라(:616 독스트링) 종료와 함께 되돌리면 그 의도와 모순된다.
     /// (백업 자체는 F042 오염 방지용으로 수동 경로도 남긴다 — 복원 여부만 여기서 가드.)
     public func applicationWillTerminate(_ notification: Notification) {
+        // 재생목록 경과시간을 마지막으로 한 번 쓴다. 틱 안의 주기 저장(60초)만 있으면 종료
+        // 직전 1분치를 잃는다. **아래 guard 보다 앞이어야 한다** — 그 guard 는 정적 배경 복원
+        // 조건이지 이 저장과 무관하다.
+        playlistDriver.persist()
         guard StillDesktopSync.shouldRestoreOnTerminate(syncEnabled: desktopStillSync) else { return }
         restoreDesktopOriginals()
     }
