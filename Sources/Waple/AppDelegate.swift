@@ -47,6 +47,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let favoritesStore = FavoritesStore(baseDirectory: LibraryStore.defaultBaseDirectory())
     private let folderStore = FolderStore(baseDirectory: LibraryStore.defaultBaseDirectory())
     private var playlistTimer: Timer?
+    /// 화면별 재생목록 상태(경과시간·셔플백·커서)와 그 영속(`playliststatetime.bin`).
+    /// **판단은 전부 `PlaylistDriver` 안이다** — 이 파일은 리눅스 타입체크 제외라(`APP_EXCLUDED`)
+    /// 여기 쓴 로직은 macOS CI 가 처음 본다. 여기 남는 것은 호출과 마운트뿐이다.
+    private let playlistDriver = PlaylistDriver(
+        stateTime: PlaylistStateTimeStore(baseDirectory: LibraryStore.defaultBaseDirectory()))
+    /// 주 화면이 아닌 화면에 재생목록이 돌린 배경(엔트리 id). **메모리에만 산다** —
+    /// `monitors.json`(사용자가 못박은 할당)을 재생목록이 덮어쓰면 그 설정이 무의미해진다.
+    /// 그래서 `effectiveAssignment(for:)` 에서 사용자 할당이 **먼저**다.
+    private var playlistScreenOverrides: [String: String] = [:]
     private lazy var libraryVM = LibraryViewModel(store: store, playlist: playlistStore, monitors: monitorStore,
                                                   favorites: favoritesStore, folders: folderStore)
     private lazy var settingsVM: SettingsViewModel = {
@@ -58,6 +67,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         vm.onChooseBaseAssets = { [weak self] in self?.chooseBaseAssets() }
         vm.onSetStillWallpaper = { [weak self] in self?.setStillWallpaper() }
         vm.onToggleSaver = { [weak self] in self?.toggleScreenSaverCore() ?? false }
+        // stage 3④: 정책이 바뀌면 **즉시** 재적용한다. 폴링이 ≤1초 뒤에 어차피 고치지만,
+        // 설정을 만진 직후의 1초는 사용자가 "안 먹었다" 로 읽는 구간이다. 엣지 추적을
+        // 리셋하는 것이 요점 — 리셋하지 않으면 이미 적용한 상태를 기억해 아무것도 안 부른다.
+        vm.onPlaybackPolicyChanged = { [weak self] in
+            guard let self else { return }
+            self.policyPauseState.reset()
+            self.policyMuteState.reset()
+            self.applyPlaybackPolicy()
+        }
+        // WE UI 빌더의 `k(e,…)` 첫 인자 — 화면이 하나면 `pauseall` 을 제시하지 않는다.
+        // `NSScreen` 을 클로저 안에서 직접 읽지 않고 프로퍼티를 거치는 이유: 이 클로저들은
+        // 비격리 `SettingsViewModel` 에 저장되는데, 형제 클로저(`occlusionState`·`stillSyncEnabled`)
+        // 는 전부 `self` 의 메인 액터 상태만 만지는 모양이고 그 모양이 macOS CI 에서 초록이다.
+        // `AppDelegate.swift` 는 리눅스 타입체크 커버 밖(objc-interop)이라 새 모양을 여기서
+        // 시험할 수 없다 — 이미 통과가 확인된 모양을 따른다.
+        vm.multiMonitor = { [weak self] in self?.hasMultipleDisplays ?? false }
         vm.occlusionState = { [weak self] in
             guard let self else { return (false, 0) }
             return (self.pauseWhenOccluded, self.occlusionCoverageThreshold)
@@ -84,6 +109,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 합류 규칙은 `PlaybackPolicyComposition.swift` 에 있고 여기서는 적용만 한다.
     private var playbackPolicyTimer: Timer?
     private var policyPauseState = PerRendererPauseState()
+    /// 정책 음소거(stage 3①)의 엣지 추적. 음소거는 WE 에서 전역이라 렌더러별이 아니라 1비트다.
+    private var policyMuteState = AppliedFlag()
+    /// 화면이 둘 이상인가 — 설정 화면이 `pauseall` 선택지를 보일지 결정한다(stage 3④).
+    private var hasMultipleDisplays: Bool { NSScreen.screens.count > 1 }
     /// `renderers` 와 **같은 순서·같은 길이**인 화면별 프로젝트. 재생정책은 벽지별 선언을 보므로
     /// 화면마다 다른 벽지가 붙으면 판정도 화면마다 달라진다. 둘을 같은 자리에서 대입해 어긋나지
     /// 않게 한다 — 어긋나면 A 화면 벽지의 선언이 B 화면을 멈춘다.
@@ -484,6 +513,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// 화면에 실제로 걸릴 엔트리 id. 사용자가 `monitors.json` 으로 못박은 할당이 **먼저**이고,
+    /// 없을 때만 재생목록이 그 화면에 돌린 배경을 쓴다. 재생목록은 애초에 못박히지 않은 화면만
+    /// 굴리므로(`playlistScreenKeys()`) 두 규칙은 같은 말이다 — 어긋날 자리가 없게 둔다.
+    private func effectiveAssignment(for screenKey: String) -> String? {
+        monitorStore.assignment(for: screenKey) ?? playlistScreenOverrides[screenKey]
+    }
+
     /// 라이브러리 엔트리 id → 배경 폴더 URL(없거나 해석 실패 → nil). MonitorMapping 주입용.
     private func folderForEntry(_ id: String) -> URL? {
         guard let entry = store.entries.first(where: { $0.id == id }) else { return nil }
@@ -552,7 +588,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             assignedFolder: { key in
                 MonitorMapping.assignedFolder(
                     screenKey: key,
-                    assignment: { self.monitorStore.assignment(for: $0) },
+                    assignment: { self.effectiveAssignment(for: $0) },
                     folderForEntry: { self.folderForEntry($0) })
             },
             parse: { self.projectForMount(folderURL: $0) }
@@ -579,6 +615,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 위 주석의 불변식 — `RendererSwap.apply` 가 `screenProjects` 순서대로 만들므로 같은 순서다.
             rendererProjects = screenProjects.map(\.project)
             policyPauseState.reset()   // 렌더러 세트가 바뀌었다 → 다음 틱이 전부 다시 적용
+            // 음소거도 같이 리셋한다. 새 렌더러는 `policyMuted == false` 로 태어나므로, 리셋하지
+            // 않으면 엣지 추적이 "이미 음소거 중" 이라고 기억한 채 아무것도 밀지 않아 정책
+            // 음소거가 배경 교체 한 번에 조용히 풀린다.
+            policyMuteState.reset()
             currentFolderURL = folderURL
             currentProjectId = project?.id
             activeVideoProjectIds = screenProjects
@@ -604,7 +644,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // pushRecent/RecentWallpapers.push 자체가 제거).
                 // F480: 이 분기는 global == nil 이라 마운트된 프로젝트는 전부 화면 할당에서 왔다 —
                 // 파서 id 대신 할당 스토어의 엔트리 id 를 그대로 push(접미 유일화 정합).
-                screenProjects.forEach { pushRecent(monitorStore.assignment(for: $0.screenKey)) }
+                screenProjects.forEach { pushRecent(effectiveAssignment(for: $0.screenKey)) }
             }
             baseAssetsWarningGate.presentIfNeeded(
                 after: result,
@@ -689,6 +729,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             renderers = []
             rendererProjects = []
             policyPauseState.reset()
+            policyMuteState.reset()   // 렌더러 세트가 비었다 — 정지와 같은 이유로 함께 리셋한다
             activeVideoProjectIds = []
         }
 
@@ -699,43 +740,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 재생목록 타이머 재구성. 비활성/빈 목록 → 정지(스케줄 조건은 추출 로직).
+    /// 재생목록 틱 재구성.
+    ///
+    /// **간격 타이머에서 1초 틱으로 바뀌었다.** WE 는 매 프레임 경과시간을 누적하고(§6.1) 그
+    /// 시계를 자기가 들고 있다 — 그래야 ① 정지 중엔 시계가 멈추고 ② 절전에서 깨어난 한 번의
+    /// 큰 델타가 5초로 잘리고 ③ 재부팅 너머로 이어진다. 종전처럼 "간격만큼 뒤에 한 번 깨는"
+    /// 타이머는 그 셋 중 어느 것도 표현할 수 없다(운영체제가 타이머를 언제 깨웠는지가 곧
+    /// 정책이 된다). 판정은 전부 `PlaylistDriver` → `WapleCore.PlaylistRuntime` 이 한다.
+    ///
+    /// F483 의 "후보 1개면 타이머를 걸지 않는다" 가드는 그대로다 — 매 간격 같은 배경을
+    /// 리마운트하는 것을 막는 규칙이고, 시계가 바뀌어도 이유가 그대로다.
     private func schedulePlaylistTimer() {
         playlistTimer?.invalidate()
         playlistTimer = nil
-        // F483: 후보가 1개뿐이면 타이머를 걸지 않는다 — 매 간격 같은 배경 리마운트만 발생한다
-        // (수동 버튼/트레이의 canAdvance 가드와 대칭).
         guard PlaylistScheduling.shouldScheduleTimer(enabled: playlistStore.enabled, ids: playlistStore.ids) else { return }
-        let interval = PlaylistScheduling.intervalSeconds(minutes: playlistStore.intervalMinutes)
         // F840: .common 모드 — scheduledTimer 는 .default 에만 등록돼 메뉴 트래킹·라이브 리사이즈
         // 동안 멈춘다(트레이 메뉴를 열어 둔 채로 자동 전환 시각이 지나가면 그 회차가 통째로 밀렸다).
-        // 두 함수 아래 scheduleOcclusionTimer 가 같은 이유로 이미 .common 을 쓴다 — 규약을 맞춘다.
+        // 아래 scheduleOcclusionTimer 가 같은 이유로 이미 .common 을 쓴다 — 규약을 맞춘다.
         // Timer 블록은 @Sendable 이지만 바로 아래에서 RunLoop.main 에만 등록되므로 실행은 메인이다.
-        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, PlaylistScheduling.shouldAdvanceNow(isPaused: self.pauseGate.isPaused) else { return }
-                self.advancePlaylist()
-            }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.tickPlaylist() }   // RunLoop.main 등록 — 실행은 메인
         }
         RunLoop.main.add(timer, forMode: .common)
         playlistTimer = timer
     }
 
-    private func advancePlaylist() {
-        // 후보를 순서대로 시도하고 실제 적용에 성공하는 첫 배경으로 전진(삭제/폴더 이동 등 실패 후보는 건너뜀).
-        // w5d-playback: shuffle 이 켜져 있으면 순차 순환 대신 직전 곡 회피 무작위 선곡으로 분기.
-        _ = PlaylistScheduling.advance(
-            from: store.selectedId,
-            count: playlistStore.ids.count,
-            next: { current in
-                self.playlistStore.shuffle
-                    ? PlaylistScheduling.shuffleNext(current: current, ids: self.playlistStore.ids)
-                    : self.playlistStore.next(after: current)
-            },
-            apply: { id in
+    /// 재생목록이 굴리는 화면 키. 첫 원소가 **주 화면**이고 그 화면만 전역 선택
+    /// (`store.selectedId`)을 옮긴다 — 라이브러리 강조·하단 바 "현재:"·최근 목록·스틸 동기화가
+    /// 전부 그 값을 본다. 나머지 화면은 `playlistScreenOverrides` 로 각자 돈다.
+    ///
+    /// 사용자가 `monitors.json` 으로 못박은 화면은 제외한다. 그 화면은 사용자가 배경을 고정한
+    /// 것이고, 재생목록이 덮으면 그 설정이 무의미해진다.
+    ///
+    /// - Parameter includingAssigned: 수동 "다음 배경" 은 사용자가 지금 누른 것이라 고정 화면도
+    ///   포함해 전역 선택을 옮긴다(그 화면 자체는 고정 배경 그대로다). 자동 틱은 반대다.
+    private func playlistScreenKeys(includingAssigned: Bool = false) -> [String] {
+        let keys = desktopController.screenViews.map { $0.screenKey }
+        return includingAssigned ? keys : keys.filter { monitorStore.assignment(for: $0) == nil }
+    }
+
+    /// 스토어·화면 목록을 드라이버에 다시 먹인다. 싸고 멱등이라 매 틱 부른다.
+    private func syncPlaylistDriver(screenKeys: [String]) {
+        playlistDriver.sync(enabled: playlistStore.enabled,
+                            intervalMinutes: playlistStore.intervalMinutes,
+                            shuffle: playlistStore.shuffle,
+                            ids: playlistStore.ids,
+                            screenKeys: screenKeys,
+                            currentEntryId: store.selectedId)
+    }
+
+    /// 1초 틱. 판정은 드라이버가 하고 여기서는 **마운트만** 한다.
+    private func tickPlaylist() {
+        let keys = playlistScreenKeys()
+        syncPlaylistDriver(screenKeys: keys)
+        guard let primary = keys.first else { return }
+        let now = Date()
+        let wants = playlistDriver.tick(now: now, isPaused: pauseGate.isPaused)
+        guard !wants.isEmpty else { return }
+
+        // 부 화면부터 정한다. 주 화면 적용은 곧바로 전체 리마운트를 태우므로, 그 전에
+        // 오버라이드가 자리에 있어야 한 틱에 두 화면이 바뀔 때 마운트가 두 번 일어나지 않는다.
+        var overridesChanged = false
+        for key in wants where key != primary {
+            let applied = playlistDriver.advance(screenKey: key, now: now) { id in
+                guard let entry = self.store.entries.first(where: { $0.id == id }) else { return false }
+                return self.store.resolveFolderURL(for: entry) != nil
+            }
+            guard let applied else { continue }
+            playlistScreenOverrides[key] = applied
+            overridesChanged = true
+        }
+
+        var primaryApplied = false
+        if wants.contains(primary) {
+            let applied = playlistDriver.advance(screenKey: primary, now: now) { id in
                 guard let entry = self.store.entries.first(where: { $0.id == id }) else { return false }
                 return self.libraryVM.apply(entry)
-            })
+            }
+            primaryApplied = applied != nil
+        }
+        // 주 화면이 안 바뀌었으면 부 화면 오버라이드를 화면에 반영할 재적용이 따로 필요하다.
+        if overridesChanged && !primaryApplied { _ = applyCurrentSelection() }
+    }
+
+    /// 수동 "다음 배경"(하단 바 forward · 트레이). 자동 틱과 **같은 셔플백/커서**를 쓴다 —
+    /// 안 그러면 손으로 넘긴 것과 저절로 넘어간 것이 서로 다른 순서를 걷는다.
+    /// 후보가 마운트에 실패하면 다음 후보로 넘어간다(한 바퀴 한도) — 삭제된 엔트리 하나가
+    /// 재생목록을 영구 정지시키던 결함의 방어이고, 그 루프는 드라이버 안에 있다.
+    private func advancePlaylist() {
+        var keys = playlistScreenKeys()
+        // 전 화면이 고정돼 있으면 재생목록이 굴리는 화면이 하나도 없다. 그래도 수동 "다음 배경"
+        // 은 사용자가 지금 누른 것이라 전역 선택은 옮긴다(고정 화면 자체는 그대로 남는다).
+        if keys.isEmpty { keys = playlistScreenKeys(includingAssigned: true) }
+        syncPlaylistDriver(screenKeys: keys)
+        guard let primary = keys.first else { return }
+        playlistDriver.advance(screenKey: primary, now: Date()) { id in
+            guard let entry = self.store.entries.first(where: { $0.id == id }) else { return false }
+            return self.libraryVM.apply(entry)
+        }
     }
 
     // MARK: - 데스크탑 가림 자동 일시정지 (작업 2)
@@ -809,6 +912,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 인덱스로 짝지으면 엉뚱한 화면에 남의 정책이 간다 — 그럴 바엔 무동작이 옳다.
         guard !renderers.isEmpty, renderers.count == rendererProjects.count else {
             policyPauseState.reset()
+            policyMuteState.reset()
             return
         }
         let screens = NSScreen.screens
@@ -823,13 +927,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 디스플레이 슬립은 새 관측자가 필요 없는 유일한 축이다 — `PauseGate` 가 이미 쥐고 있다.
             displayAsleep: pauseGate.isActive(.displaySleep),
             onBattery: PowerSourceObserver.isOnBattery(),
-            // **오디오 축은 일부러 배선하지 않는다.** `SystemAudioObserver` 가 보는
-            // `kAudioDevicePropertyDeviceIsRunningSomewhere` 는 우리 소리도 1 로 치는데,
-            // "우리가 재생 중인가" 를 알 표면이 `WallpaperRenderer` 에 없다. 빼지 못한 채 켜면
-            // 오디오 반응 벽지가 스스로를 멈추는 되먹임이 된다(그 함수 주석). WE 기본값이
-            // `playbackaudio = run` 이라 **기본 상태에서는 차이가 없고**, 사용자가 그 축을 켜면
-            // 아무 일도 일어나지 않는다 — 조용히 틀리는 것보다 낫지만 격차인 것은 맞다.
-            audioPlaying: false)
+            // [2026-08-27 stage 3③] **오디오 축을 배선했다.** stage 2 는 여기를 `false` 로 두었다 —
+            // `kAudioDevicePropertyDeviceIsRunningSomewhere` 가 우리 소리도 1 로 치는데
+            // "우리가 재생 중인가" 를 알 표면이 없어서, 빼지 못한 채 켜면 오디오 반응 벽지가
+            // 스스로를 멈추는 되먹임이 됐다. stage 3① 이 만든 `isPlayingAudio` 가 그 뺄셈의
+            // 두 번째 인자를 채운다.
+            //
+            // **뺄셈이 WE 보다 거칠다.** WE 는 WASAPI 세션을 열거해 자기 세션만 빼므로 우리가
+            // 소리를 내는 동안에도 다른 앱을 볼 수 있다. CoreAudio 의 이 속성에는 그런 분해가
+            // 없어서, 우리가 소리를 내면 그 틱은 **다른 앱을 못 본다**(축이 안 켜진다).
+            // 틀리는 방향은 안전한 쪽이다 — 되먹임(스스로 멈춤)이 아니라 무동작이다.
+            audioPlaying: SystemAudioObserver.isOtherAppPlaying(
+                deviceRunningSomewhere: SystemAudioObserver.defaultOutputDeviceIsRunning(),
+                weArePlayingAudio: renderers.contains { $0.isPlayingAudio }))
 
         let decisions = RenderPauseComposition.decideAll(
             globallyPaused: pauseGate.isPaused,
@@ -840,6 +950,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for (index, paused) in policyPauseState.changes(decisions.map(\.paused)) {
             guard index < renderers.count else { continue }
             if paused { renderers[index].pause() } else { renderers[index].resume() }
+        }
+
+        // [2026-08-27 stage 3①] 음소거는 **전 렌더러에 같은 값**이다 — WE 에서 모니터별이
+        // 아니라 전역이기 때문이고(`PlaybackVerdict.muted` 주석), 화면마다 갈린 판정을 하나로
+        // 접는 규칙은 순수층(`wantsGlobalMute`)에 있다. 여기는 적용만 한다.
+        if let mute = policyMuteState.change(to: RenderPauseComposition.wantsGlobalMute(decisions)) {
+            renderers.forEach { $0.setPolicyMuted(mute) }
         }
     }
 
@@ -1056,7 +1173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             assignedFolder: { key in
                 MonitorMapping.assignedFolder(
                     screenKey: key,
-                    assignment: { self.monitorStore.assignment(for: $0) },
+                    assignment: { self.effectiveAssignment(for: $0) },
                     folderForEntry: { self.folderForEntry($0) })
             },
             parse: { self.projectForMount(folderURL: $0) }
@@ -1165,6 +1282,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
         defer { renderer.teardown() }
+        // [2026-08-27] **골든 하네스와 같은 정지 시퀀스**(BACKLOG "캡처 경로 잔여 갭" ②).
+        // `SnapshotPipeline.captureFrame`(:157-158)·`ProfilePipeline.runProfile`(:304)는 마운트
+        // 직후 이 둘을 부른다. 세 캡처 하네스 중 **여기만** 안 불렀다.
+        //
+        // **실측 정정 — 백로그가 적은 증상은 현행 코드에서 도달 불가다.** "그 순간의 스펙트럼이
+        // 스틸 픽셀에 구워져 같은 씬이 매번 다른 이미지를 낸다" 는 서술은 과대평가였다. 근거 사슬:
+        //  ① `SceneRenderer.currentSpectrum` 의 선언 초기값이 `.silent` 다(SceneRenderer.swift:1385).
+        //  ② `setSpectrum*` 밖에서 그 값을 쓰는 자리는 `SystemAudioSpectrumProvider.onFrame`
+        //     두 줄뿐이다(SceneRenderer.swift:2170·:2178).
+        //  ③ 그 공급자는 `mount` 의 `if hasAudio, container.window != nil`(:2151) 안에서만
+        //     만들어진다 — 위에서 만든 컨테이너는 어떤 창에도 안 들어가는 오프스크린 `NSView` 라
+        //     `window` 가 항상 nil 이고, 따라서 이 인스턴스에는 스펙트럼 공급원이 아예 없다.
+        //  ④ 이 인스턴스에 `setSpectrum*` 를 부르는 코드도 없다.
+        // 즉 스틸은 이미 무음 스펙트럼으로 찍히고 있었다. 대칭으로, 골든 하네스의 그 두 줄도
+        // **프레시 헤드리스 인스턴스에서는 no-op** 이다 — 그쪽이 먼저 쓰였고 `window != nil`
+        // 게이트는 나중에 생겼다(F833·E1⑦).
+        //
+        // 그래도 맞춘다. 실효 게이트가 "창 유무" **하나뿐**인데 세 하네스가 서로 다른 모양으로
+        // 그 사실에 기대고 있으면, 그 게이트가 흔들리는 날 여기 하나만 조용히 라이브 값을 굽는다.
+        // 계약을 지키는 오라클은 `CaptureAudioDeterminismTests` 에 있다(이 함수가 앱 타깃 private
+        // 라 렌더러 수준에서 잡는다 — `CapturePointerPinTests:120` 과 같은 구조적 한계다).
+        //
+        // 남는 차이 하나: 골든 하네스는 `nowPlayingProvider = StoppedNowPlaying()` 도 건다.
+        // 여기서는 불필요하다 — 위 포인터 핀이 `startMediaPollingIfNeeded`(:953) 머리에서
+        // 폴러 자체를 막으므로 이 인스턴스는 프로바이더를 한 번도 조회하지 않는다.
+        renderer.pause()               // 라이브 입력(오디오 캡처·시차) 정지 → 결정성
+        renderer.setSpectrum(.silent)  // 오디오-반응 효과를 무신호로 고정
         guard let captured = renderer.captureFrames(width: Int(size.width * scale), height: Int(size.height * scale),
                                                     times: [1.0], toDir: dir).first else { return nil }
         let fm = FileManager.default
@@ -1432,6 +1576,10 @@ extension AppDelegate {
     /// 은 사용자의 명시적 1회 액션이라(:616 독스트링) 종료와 함께 되돌리면 그 의도와 모순된다.
     /// (백업 자체는 F042 오염 방지용으로 수동 경로도 남긴다 — 복원 여부만 여기서 가드.)
     public func applicationWillTerminate(_ notification: Notification) {
+        // 재생목록 경과시간을 마지막으로 한 번 쓴다. 틱 안의 주기 저장(60초)만 있으면 종료
+        // 직전 1분치를 잃는다. **아래 guard 보다 앞이어야 한다** — 그 guard 는 정적 배경 복원
+        // 조건이지 이 저장과 무관하다.
+        playlistDriver.persist()
         guard StillDesktopSync.shouldRestoreOnTerminate(syncEnabled: desktopStillSync) else { return }
         restoreDesktopOriginals()
     }

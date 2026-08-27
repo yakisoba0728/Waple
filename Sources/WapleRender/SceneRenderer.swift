@@ -1047,6 +1047,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     var videoLayersLive = false
     /// 씬 sound 레이어 재생기(라이브 mount 한정 — 헤드리스에선 미생성). pause/resume/teardown 에 연동.
     var sceneAudio: SceneAudioPlayer?
+    /// 재생정책 음소거(stage 3①). `sceneAudio` 는 mount 마다 새로 만들어지므로 여기 남겨 두고
+    /// 생성 직후 다시 먹인다 — 안 그러면 배경을 바꾸는 순간 음소거가 조용히 풀린다.
+    var policyMuted = false
     var mtkView: MTKView?
     var device: MTLDevice?
     var queue: MTLCommandQueue?
@@ -2109,6 +2112,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         // 같은 사운드가 마운트 시차만큼 어긋나 N중 재생(에코) — 프라이머리(메뉴 바) 화멻만 재생.
         if Self.isPrimaryScreenWindow(container.window), !doc.sounds.isEmpty {
             let audio = SceneAudioPlayer()
+            // stage 3①: **start 보다 먼저** 먹인다. 나중에 먹이면 첫 곡이 소리부터 내고 꺼진다.
+            audio.setMuted(policyMuted)
             // F214: volume 프로퍼티 스크립트(오디오/페이드 구동, 실측 12건) — 엔진은 씬 공유 컨텍스트에서
             // 생성(makeScriptEngine, top-level 사이드이펙트 즉시 실행). tick(time:) 이 draw 루프에서 재평가.
             audio.start(sounds: doc.sounds, package: package,
@@ -2731,6 +2736,25 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         if parallaxEnabled || hasEffects || hasCursorMoveHook || !hoverTargets.isEmpty { startPointerMonitor() }
         sceneAudio?.resume()
     }
+
+    // MARK: - 재생정책 음량면 (stage 3①·③)
+
+    /// 정책 음소거. 렌더 루프는 건드리지 않는다 — 음소거는 정지가 아니다(프로토콜 주석).
+    ///
+    /// 씬 비디오 레이어(`layers[].video`)는 손대지 않는다: `SceneVideoLayer` 가 마운트에서
+    /// `isMuted = true` 를 무조건 세운다(그 파일 :181 "스코프 밖: 비디오 오디오 트랙") —
+    /// 이미 항상 무음이라 음소거할 것이 없다.
+    public func setPolicyMuted(_ muted: Bool) {
+        policyMuted = muted
+        sceneAudio?.setMuted(muted)
+    }
+
+    /// 오디오 축의 뺄셈 항. 헤드리스(캡처)에는 `sceneAudio` 자체가 없으므로 false 다.
+    public var isPlayingAudio: Bool {
+        guard !policyMuted, scenePausedAt == nil, let sceneAudio else { return false }
+        return sceneAudio.hasAudibleOutput
+    }
+
     /// GPU 텍스처 풀·캐시 **일괄** 해제. teardown 과 mount 양쪽에서 부른다.
     ///
     /// 이 목록은 종전 teardown 의 긴 대입 나열 속에 손으로 유지돼 있었고, 그래서 같은 종류의 누락이

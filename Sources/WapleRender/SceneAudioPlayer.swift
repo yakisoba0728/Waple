@@ -32,6 +32,9 @@ public final class SceneAudioPlayer {
     /// 이름 주소(name-addressable) 트리거 레지스트리: 씬 스크립트의 `getLayer(name).play()/stop()/isPlaying()/.volume`
     /// 대상. 이름 있는 사운드만 등록(playlists 배열의 같은 객체 참조 — pause/resume/teardown 이 함께 커버).
     private var named: [String: Playlist] = [:]
+    /// 재생정책 음소거(stage 3①). **`start` 보다 먼저 세울 수 있어야 한다** — 나중에 세우면
+    /// 첫 곡이 소리부터 내고 꺼진다(마운트 직후의 1초짜리 소음).
+    private var muted = false
 
     public init() {}
 
@@ -56,7 +59,8 @@ public final class SceneAudioPlayer {
             let engine = snd.volumeScript != nil ? volumeEngine(snd) : nil
             let pl = Playlist(entries: entries, mode: snd.playbackMode, package: package,
                               authorVolume: snd.volume, settingVolume: settingVolume,
-                              minTime: snd.minTime, maxTime: snd.maxTime, volumeEngine: engine)
+                              minTime: snd.minTime, maxTime: snd.maxTime, volumeEngine: engine,
+                              muted: muted)
             // F561(주석 정정): 자동재생 실패(전 후보 디코드 불가)면 named 여도 미등록 — pkg 데이터는 정적이라
             // 트리거 시 재시도해도 같은 디코드 실패(결정적)라 등록이 무의미하다(실질 영향 없음). startsilent 은 애초에 자동재생 안 함.
             if !snd.startSilent {
@@ -86,6 +90,20 @@ public final class SceneAudioPlayer {
     public func pause() { playlists.forEach { $0.pause() } }
     public func resume() { playlists.forEach { $0.resume() } }
     public func teardown() { playlists.forEach { $0.stop() }; playlists.removeAll(); named.removeAll() }
+
+    /// 재생정책 음소거(stage 3①). **정지가 아니다** — 트랜스포트는 그대로 돌고 출력만 0 이 된다.
+    /// 오서 볼륨·설정 볼륨을 덮어쓰지 않으므로 풀면 원래 음량이 그대로 돌아온다.
+    public func setMuted(_ on: Bool) {
+        muted = on
+        playlists.forEach { $0.setMuted(on) }
+    }
+
+    /// 소리를 낼 수 있는 재생목록이 하나라도 있는가 — 오디오 축의 뺄셈 항이 읽는다.
+    ///
+    /// `isPlaying`(순간 상태)이 아니라 `hasPlayer`(플레이어가 붙어 있다)를 보는 이유:
+    /// `AVAudioPlayer.isPlaying` 은 곡 사이 gap·정지 중에 false 라, 1초 폴링이 그 틈을
+    /// "우리는 조용하다" 로 읽으면 오디오 축이 1Hz 로 진동한다.
+    public var hasAudibleOutput: Bool { playlists.contains { $0.hasPlayer && $0.outputVolume > 0 } }
 
     /// 하나라도 재생 중인지(통합테스트 검증용).
     public var isPlaying: Bool { playlists.contains { $0.isPlaying } }
@@ -170,18 +188,27 @@ nonisolated final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Se
     /// F214: volume 프로퍼티 스크립트 엔진(sound.volumeScript 있을 때만 비-nil). tick(time:) 이 매 프레임
     /// update(authorVolume) → 새 authorVolume 으로 재평가.
     private let volumeEngine: TextScriptEngine?
+    /// 재생정책 음소거(stage 3①). 볼륨 값이 아니라 **출력 게이트**다 — 아래 `outputVolume` 만
+    /// 거치고 `authorVolume`/`settingVolume` 은 손대지 않으므로 해제가 손실 없이 되돌린다.
+    private var muted: Bool
 
     init(entries: [String], mode: String, package: ScenePackage,
          authorVolume: Float, settingVolume: Float, minTime: Float, maxTime: Float,
-         volumeEngine: TextScriptEngine? = nil) {
+         volumeEngine: TextScriptEngine? = nil, muted: Bool = false) {
         self.entries = entries; self.mode = mode; self.package = package
         self.authorVolume = authorVolume; self.settingVolume = settingVolume
         self.minTime = minTime; self.maxTime = maxTime
         self.volumeEngine = volumeEngine
+        self.muted = muted
     }
 
     /// 최종 출력 볼륨(오서 × 설정, 클램프). play(at:) 마다 적용 → 다음 곡에도 스크립트가 세팅한 볼륨이 지속.
     private var effectiveVolume: Float { SceneAudioPlayer.effectiveVolume(author: authorVolume, setting: settingVolume) }
+    /// 플레이어에 실제로 먹이는 값 — 정책 음소거가 서면 0. **여기 한 자리만 거치게 한다**:
+    /// 종전에는 `play(at:)` 과 `setVolume(_:)` 두 곳이 각각 `effectiveVolume` 을 대입했고,
+    /// 음소거를 얹으면서 그 복사가 셋이 되면 새 곡만 소리가 새는 부류가 생긴다.
+    var outputVolume: Float { muted ? 0 : effectiveVolume }
+    func setMuted(_ on: Bool) { muted = on; player?.volume = outputVolume }
 
     /// volume 스크립트 재평가(오디오/페이드 구동 — 실측 12건). update() 가 스칼라를 반환하지 않거나
     /// 예외면 authorVolume 유지(현상 유지 — 다른 프로퍼티 스크립트 소비처와 동일 규약).
@@ -194,7 +221,7 @@ nonisolated final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Se
     }
     /// 스크립트가 읽어가는 볼륨(오서 관점). 세팅 배수는 감춘다(주크박스 페이드 로직이 세팅한 값을 그대로 회수).
     var scriptVolume: Float { authorVolume }
-    func setVolume(_ v: Float) { authorVolume = v; player?.volume = effectiveVolume }
+    func setVolume(_ v: Float) { authorVolume = v; player?.volume = outputVolume }
 
     /// 트리거 재생: 정지/일시정지 플래그 리셋 후 처음부터 재시작(재트리거 = 재시작).
     func trigger() {
@@ -233,7 +260,7 @@ nonisolated final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Se
             let p = try AVAudioPlayer(data: data)
             // 단곡 loop 는 네이티브 무한루프(심리스, delegate 불요). 그 외는 delegate 로 다음 곡 결정.
             if mode == "loop" && entries.count == 1 { p.numberOfLoops = -1 } else { p.delegate = self }
-            p.volume = effectiveVolume
+            p.volume = outputVolume
             p.prepareToPlay()
             p.play()
             player = p

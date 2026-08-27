@@ -117,16 +117,51 @@ public enum ProjectJSONParser {
     ///    `SceneRenderer.scriptWantsAudio(_:)` 가 스크립트에서 오디오 참조를 보면 승격하고,
     ///    `SceneRendererResources.swift` 의 `hasAudio = true` 세 자리가 오디오 레이어·이미터
     ///    존재로 승격한다. 프로젝트의 선언은 어느 경로에서도 읽지 않는다. 즉 Waple 은 WE 가
-    ///    선언한 마스터 게이트를 아직 존중하지 않고, 이 파서는 **아무도 읽지 않는 값**에 대해
-    ///    jsoncpp 타입 엄격성을 충실히 재현하고 있다.
+    ///    선언한 마스터 게이트를 존중하지 않고, 이 파서는 **아무도 읽지 않는 값**에 대해
+    ///    jsoncpp 타입 엄격성을 충실히 재현하고 있다(그 상태를 유지하기로 했다 — 아래 「처분」).
     ///  - `WallpaperProject.supportsAudioProcessing` 주석의 VA 세 자리는 **WE 실물의** 소비처지
     ///    Waple 의 소비처가 아니다. 그 RE 기록 자체는 유효하므로 그대로 둔다 — 틀린 것은 그것을
     ///    Waple 의 배선인 양 가리킨 이 문장이었다.
     ///
-    /// **배선이 착지할 자리**는 앱 계층의 `PlaybackPolicyGate`(`Sources/Waple/AppLogic.swift`)다.
-    /// 재생정책 여섯 축은 [2026-08-26] 로 거기까지 이었고(stage 1 — 순수 판정), 오디오 축은
-    /// `SceneRenderer.hasAudio` 승격의 **상위 게이트**로 얹혀야 한다. 아직 안 얹었다 —
-    /// 남은 목록은 그 파일의 「stage 2」 주석에 있다.
+    /// ## 처분 [2026-08-27] — **파싱은 유지, 소비는 하지 않는다(의도적)**
+    ///
+    /// 선택지는 둘이었다: ⓐ WE 처럼 실제 게이트로 배선한다 · ⓑ "의도적 미사용" 으로 재분류한다.
+    /// **ⓑ** 를 골랐다. RE 기록이 틀려서가 아니다 — 아래 근거는 전부 "이 코드베이스에서 ⓐ 를
+    /// 지금 하면 무슨 일이 나는가" 쪽이고, 원본 절차의 RE 기록은 그대로 유효하다.
+    ///
+    ///  1. **WE 의 게이트는 두 항인데 Waple 은 한 항밖에 못 준다.** 실물이 접는 식은
+    ///     `SupportsAudioProcessing() && wproperties.audioprocessing.value` 이고
+    ///     (`FUN_14006e0c0` — 0x14006e11a·0x14006e352: 살아 있는 벽지 전체를 이 식으로 OR 접어
+    ///     WASAPI 루프백 캡처를 켜고/끈다), 그 둘째 항인 `audioprocessing` 유저 프로퍼티는
+    ///     **엔진이 합성 주입**한다(0x14010c650 → 0x14010c70c — 선언이 true 일 때만, 기본값 true).
+    ///     Waple 에는 그 프로퍼티가 없다(`WallpaperProperties` 전수 0건, 설정 UI 에도 없다).
+    ///     선언만 배선하면 사용자가 되돌릴 손잡이 없이 꺼지는 반쪽 이식이 된다.
+    ///  2. **블라스트 반경을 잴 수 없다.** Waple 에서 오디오를 실제로 켜는 것은
+    ///     `SceneRenderer.hasAudio` 이고 승격원이 넷이다(스크립트 스캔 1 · 이펙트 2 · 이미터 1).
+    ///     선언을 그 상위 게이트로 얹으면 "선언 안 한 오디오 씬" 이 전부 조용해지는데, 그 교집합의
+    ///     크기를 이 리포에서 잴 방법이 없다 — 실물 코퍼스가 없고(F400), 남은 집계는 서로 다른
+    ///     모집단이다: 설치본 191 중 선언 **3건**(`ProjectJSONInstallCorpusTests`
+    ///     `testSupportsAudioProcessingReach` — audiophile·corsair_o_tron·demon_core) ·
+    ///     워크샵 446 폴더 중 키 보유 **141건**(짝 저장소 `corpus_scan/project-json-schema.md:47`) ·
+    ///     씬 코퍼스의 `AUDIOPROCESSING` 콤보 **140회**(`spec/corpus/scene-schema.json`) ·
+    ///     이미터 `audioprocessingmode` **13씬**(`ParticleAudioTests` 머리말).
+    ///     **씬 × 선언 교차표가 없다.**
+    ///  3. **이 리포의 어떤 게이트도 그 회귀를 못 본다.** 골든 캡처는 헤드리스라 오디오 공급자가
+    ///     아예 안 뜨고 스펙트럼이 `.silent` 로 고정된다(`CaptureAudioDeterminismTests` 가 못 박는다)
+    ///     — 즉 오디오 기동을 통째로 꺼도 **골든 픽셀 diff 는 0** 이다. 회귀를 볼 수 있는 사람은
+    ///     소리를 틀어 놓고 실기에서 보는 사람뿐이고, 실패 방식은 "반응이 조용히 사라진다" 는
+    ///     무증상형이다.
+    ///
+    /// 그래서 값은 계속 파싱하되(아래 절차·타입 엄격성은 실물 그대로다) **아무도 읽지 않는다는
+    /// 사실 자체를 계약으로 둔다.** 그 계약을 지키는 오라클은
+    /// `Tests/WapleRenderTests/AudioProcessingDeclarationTests.swift` 다 — 선언이 true 든 false 든
+    /// `SceneRenderer.hasAudio` 승격이 같음을 못 박는다. ⓐ 로 뒤집으려면 그 테스트가 먼저 빨개지므로
+    /// 조용히 뒤집히지 않는다.
+    ///
+    /// **뒤집을 조건(전부 필요)**: ① `audioprocessing` 유저 프로퍼티를 합성 주입해 설정 UI 에 얹고
+    /// ② 씬 × 선언 교차표를 실물 코퍼스에서 재서 조용해질 벽지 수를 알고 ③ 실기에서 오디오 반응
+    /// 벽지로 전/후를 눈으로 대조한다. 착지 자리는 종전 서술대로 앱 계층
+    /// `PlaybackPolicyGate`(`Sources/Waple/AppLogic.swift`)의 「stage 2」 목록이다.
     ///
     /// 아래 절차 자체는 원본을 그대로 옮긴 것이고, 그 부분은 여전히 유효하다:
     ///

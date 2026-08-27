@@ -105,6 +105,71 @@ final class SceneAudioPlayerTests: XCTestCase {
         XCTAssertFalse(player.isPlaying)
     }
 
+    // ── 재생정책 음소거 (stage 3①) ─────────────────────────────────────────
+    //
+    // 여기서 지키는 계약은 하나다: **음소거는 트랜스포트를 멈추지 않는다.** 소리만 줄이려던
+    // 사용자의 벽지가 얼어붙는 것이 이 축의 유일한 오작동 방식이라, 구현이 `pause()` 로
+    // 대신 처리하는 순간 이 파일이 빨개져야 한다.
+
+    /// 음소거는 출력만 0으로 만들고 재생은 그대로 둔다. 그리고 **풀면 그대로 돌아온다** —
+    /// 오서 볼륨·설정 볼륨을 덮어쓰지 않는다는 뜻이고, 덮어쓰면 여기서 복원이 실패한다.
+    func testMuteSilencesOutputWithoutStoppingPlayback() throws {
+        try skipUnlessAudioOutputCanPlay()
+        let pkg = ScenePackage.assemble([(name: "sounds/t.wav", data: Self.silentWAV())])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/t.wav"])], package: pkg, settingVolume: 1)
+        XCTAssertTrue(player.hasAudibleOutput)
+
+        player.setMuted(true)
+        XCTAssertFalse(player.hasAudibleOutput, "음소거 중에는 소리를 낼 수 없다고 답해야 한다")
+        XCTAssertTrue(player.isPlaying, "음소거는 정지가 아니다 — 트랜스포트는 계속 돈다")
+
+        player.setMuted(false)
+        XCTAssertTrue(player.hasAudibleOutput, "풀면 원래 음량이 손실 없이 돌아온다")
+        player.teardown()
+    }
+
+    /// **`start` 보다 먼저 세울 수 있어야 한다.** 나중에 세우면 첫 곡이 소리부터 내고 꺼진다 —
+    /// 정책이 음소거를 요구하는 동안 배경을 바꾸면 사용자에게는 1초짜리 소음이 된다.
+    func testMuteSetBeforeStartAppliesToTheFirstTrack() throws {
+        try skipUnlessAudioOutputCanPlay()
+        let pkg = ScenePackage.assemble([(name: "sounds/t.wav", data: Self.silentWAV())])
+        let player = SceneAudioPlayer()
+        player.setMuted(true)
+        player.start(sounds: [sound(["sounds/t.wav"])], package: pkg, settingVolume: 1)
+        XCTAssertEqual(player.playerCount, 1, "재생은 시작된다")
+        XCTAssertFalse(player.hasAudibleOutput, "첫 곡부터 음소거다")
+        player.teardown()
+    }
+
+    /// 사용자가 음량 0(기본값)으로 둔 배경은 음소거를 풀어도 소리를 내지 않는다 —
+    /// 정책 음소거 해제가 소리를 켜는 스위치가 되면 바탕화면이 예고 없이 소리 낸다.
+    func testUserVolumeZeroIsNeverAudibleEvenWhenPolicyReleasesMute() throws {
+        try skipUnlessAudioOutputCanPlay()
+        let pkg = ScenePackage.assemble([(name: "sounds/t.wav", data: Self.silentWAV())])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/t.wav"])], package: pkg, settingVolume: 0)
+        XCTAssertFalse(player.hasAudibleOutput)
+        player.setMuted(false)
+        XCTAssertFalse(player.hasAudibleOutput)
+        player.teardown()
+    }
+
+    /// **`hasAudibleOutput` 은 순간 상태가 아니라 의도를 답한다.** 오디오 축의 뺄셈 항이 이
+    /// 값을 1초마다 읽는데, `isPlaying`(곡 사이 gap·정지 중 false)을 그대로 쓰면 그 틈이
+    /// "우리는 조용하다" 로 읽혀 정책이 1Hz 로 진동한다. 정지 중에도 값이 유지돼야 한다.
+    func testAudibleOutputDoesNotFlickerWhilePaused() throws {
+        try skipUnlessAudioOutputCanPlay()
+        let pkg = ScenePackage.assemble([(name: "sounds/t.wav", data: Self.silentWAV())])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/t.wav"])], package: pkg, settingVolume: 1)
+        player.pause()
+        XCTAssertFalse(player.isPlaying, "정지 중에는 실재생이 아니다")
+        XCTAssertTrue(player.hasAudibleOutput, "그래도 '소리를 낼 수 있는 상태' 는 유지된다")
+        player.teardown()
+        XCTAssertFalse(player.hasAudibleOutput, "해제하면 낼 소리가 없다")
+    }
+
     /// startsilent=true(확정: 트리거 대기) → 시작 시 자동재생 없음.
     func testStartSilentSoundsDoNotAutoPlay() {
         let pkg = ScenePackage.assemble([(name: "sounds/t.wav", data: Self.silentWAV())])

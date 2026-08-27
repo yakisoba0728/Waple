@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import WaplePolicy
 import WapleRender
 
 /// 설정 창 — 트레이에 흩어져 있던 설정을 grouped Form 으로 통합(SP5′).
@@ -50,6 +51,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             playbackSection
+            playbackPolicySection
             playlistSection
             videoSection
             systemSection
@@ -81,6 +83,62 @@ struct SettingsView: View {
         } footer: {
             Text("프레임 상한은 장면(씬) 배경에만 적용됩니다 — 동영상·웹 배경은 자체 페이싱을 씁니다.")
                 .font(Typography.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - WE 재생정책 (stage 3④)
+
+    /// 여섯 축의 자동 정지 규칙. **stage 2 가 만든 정책 엔진의 첫 조작면이다** —
+    /// 그전까지 `GlobalPlaybackSettings` 는 UserDefaults 키만 있고 그것을 쓰는 화면이 없어서
+    /// WE 기본값이 사용자가 끌 수 없는 동작이었다.
+    ///
+    /// 축별 선택지는 `PlaybackTrigger.allowedActions(multiMonitor:)` 가 정한다 — WE 의 UI
+    /// 빌더에서 그대로 옮긴 표라 여기서 다시 정하지 않는다(축마다 `mute`/`stop`/`pauseall`
+    /// 허용 여부가 다르다).
+    private var playbackPolicySection: some View {
+        Section {
+            ForEach(PlaybackTrigger.allCases, id: \.self) { trigger in
+                Picker(selection: Binding(get: { vm.playbackPolicy[trigger] },
+                                          set: { vm.setPlaybackAction($0, for: trigger) })) {
+                    ForEach(vm.playbackOptions(for: trigger), id: \.self) {
+                        Self.playbackActionLabel($0).tag($0)
+                    }
+                } label: {
+                    Self.playbackTriggerLabel(trigger)
+                }
+            }
+            Button("Wallpaper Engine 기본값으로 되돌리기") { vm.resetPlaybackPolicy() }
+        } header: {
+            Text("자동 정지 규칙")
+        } footer: {
+            // **축소를 화면에서 말한다.** `중지` 는 저장 값도 동작 의미도 WE 와 같게 두되
+            // (`RenderPauseComposition.stopIsReducedToPause`), 지금 메모리를 놓지 않는다는
+            // 사실을 숨기지 않는다 — 조용히 다르게 동작하는 것이 이 리포가 막으려는 실패다.
+            // 리터럴 하나로 둔다 — `"a" + "b"` 는 `Text(String)`(비현지화 오버로드)로 해석돼
+            // 영어 시스템에서도 한국어로 남고 커버리지 오라클도 뒤쪽 조각을 못 본다(§5.0).
+            Text("‘중지’ 는 현재 일시정지와 같게 동작합니다 — 화면은 멈추지만 메모리는 유지됩니다. ‘음소거’ 는 배경 자체의 소리만 끕니다(웹 배경이 Web Audio 로 직접 합성하는 소리는 제외).")
+                .font(Typography.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private static func playbackTriggerLabel(_ trigger: PlaybackTrigger) -> Text {
+        switch trigger {
+        case .focus: return Text("다른 앱이 활성화될 때")
+        case .maximized: return Text("다른 앱이 최대화될 때")
+        case .fullscreen: return Text("다른 앱이 전체화면일 때")
+        case .audio: return Text("다른 앱이 소리를 낼 때")
+        case .displaySleep: return Text("디스플레이 절전 중")
+        case .battery: return Text("배터리로 구동 중")
+        }
+    }
+
+    private static func playbackActionLabel(_ action: PlaybackAction) -> Text {
+        switch action {
+        case .run: return Text("계속 재생")
+        case .mute: return Text("음소거")
+        case .pause: return Text("해당 화면 일시정지")
+        case .pauseAll: return Text("모든 화면 일시정지")
+        case .stop: return Text("중지")
         }
     }
 
