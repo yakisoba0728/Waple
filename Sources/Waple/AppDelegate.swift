@@ -1204,6 +1204,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
         defer { renderer.teardown() }
+        // [2026-08-27] **골든 하네스와 같은 정지 시퀀스**(BACKLOG "캡처 경로 잔여 갭" ②).
+        // `SnapshotPipeline.captureFrame`(:157-158)·`ProfilePipeline.runProfile`(:304)는 마운트
+        // 직후 이 둘을 부른다. 세 캡처 하네스 중 **여기만** 안 불렀다.
+        //
+        // **실측 정정 — 백로그가 적은 증상은 현행 코드에서 도달 불가다.** "그 순간의 스펙트럼이
+        // 스틸 픽셀에 구워져 같은 씬이 매번 다른 이미지를 낸다" 는 서술은 과대평가였다. 근거 사슬:
+        //  ① `SceneRenderer.currentSpectrum` 의 선언 초기값이 `.silent` 다(SceneRenderer.swift:1385).
+        //  ② `setSpectrum*` 밖에서 그 값을 쓰는 자리는 `SystemAudioSpectrumProvider.onFrame`
+        //     두 줄뿐이다(SceneRenderer.swift:2170·:2178).
+        //  ③ 그 공급자는 `mount` 의 `if hasAudio, container.window != nil`(:2151) 안에서만
+        //     만들어진다 — 위에서 만든 컨테이너는 어떤 창에도 안 들어가는 오프스크린 `NSView` 라
+        //     `window` 가 항상 nil 이고, 따라서 이 인스턴스에는 스펙트럼 공급원이 아예 없다.
+        //  ④ 이 인스턴스에 `setSpectrum*` 를 부르는 코드도 없다.
+        // 즉 스틸은 이미 무음 스펙트럼으로 찍히고 있었다. 대칭으로, 골든 하네스의 그 두 줄도
+        // **프레시 헤드리스 인스턴스에서는 no-op** 이다 — 그쪽이 먼저 쓰였고 `window != nil`
+        // 게이트는 나중에 생겼다(F833·E1⑦).
+        //
+        // 그래도 맞춘다. 실효 게이트가 "창 유무" **하나뿐**인데 세 하네스가 서로 다른 모양으로
+        // 그 사실에 기대고 있으면, 그 게이트가 흔들리는 날 여기 하나만 조용히 라이브 값을 굽는다.
+        // 계약을 지키는 오라클은 `CaptureAudioDeterminismTests` 에 있다(이 함수가 앱 타깃 private
+        // 라 렌더러 수준에서 잡는다 — `CapturePointerPinTests:120` 과 같은 구조적 한계다).
+        //
+        // 남는 차이 하나: 골든 하네스는 `nowPlayingProvider = StoppedNowPlaying()` 도 건다.
+        // 여기서는 불필요하다 — 위 포인터 핀이 `startMediaPollingIfNeeded`(:953) 머리에서
+        // 폴러 자체를 막으므로 이 인스턴스는 프로바이더를 한 번도 조회하지 않는다.
+        renderer.pause()               // 라이브 입력(오디오 캡처·시차) 정지 → 결정성
+        renderer.setSpectrum(.silent)  // 오디오-반응 효과를 무신호로 고정
         guard let captured = renderer.captureFrames(width: Int(size.width * scale), height: Int(size.height * scale),
                                                     times: [1.0], toDir: dir).first else { return nil }
         let fm = FileManager.default
