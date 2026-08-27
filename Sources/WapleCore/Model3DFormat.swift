@@ -6,9 +6,23 @@ import Foundation
 /// 부동소수 벡터와 아무 상관이 없는 정수 판정이라 여기로 분리한다 — 이 파일 하나는 Foundation
 /// 만으로 서고, 표 자체를 격리해 단위 테스트할 수 있다.
 ///
-/// 게이트 상수는 전부 wallpaper64.exe 의 MDL 디코더 `0x140261880`(원본 주소. Ghidra 산출물의
-/// `FUN_140261950` 은 rich header 주입본이라 +0xD0 밀려 있다 — `spec/engine/decompilation-provenance.json`)
-/// 을 직접 디스어셈블해 확인했다. 리더 프리미티브도 같이 확인했다:
+/// 게이트 상수는 전부 wallpaper64.exe 의 MDL 디코더 `0x140261880`(원본 주소)을 직접
+/// 디스어셈블해 확인했다.
+///
+/// > **[2026-08-27] 여기 있던 "Ghidra 산출물의 `FUN_140261950` 은 rich header 주입본이라 +0xD0
+/// > 밀려 있다" 는 더 이상 무조건 참이 아니다.** 짝 저장소가 주입기의 FileAlignment 위반을 고쳐
+/// > (스텁을 0x200 배수로 패딩하고 `PointerToRawData` 를 함께 옮긴다) 코퍼스를 재생성했고, 그
+/// > 결과 **모든 섹션 RVA 가 원본과 동일해져 시프트가 0 이 됐다.** 재생성본은 참 VA 로 이름이
+/// > 붙어 그 함수는 `FUN_140261880` 이다(`.pdata` 1차 함수 6,824건 전건이 보정 없이 일치).
+/// >
+/// > **옛 인용을 −0xD0 으로 되읽는 것은 지금도 옳다** — 그 인용들은 손상 코퍼스에서 나왔다.
+/// > 틀린 것은 무조건문이고, 인용이 어느 세대의 코퍼스에서 왔는지를 구분해야 한다.
+/// > ⚠️ `spec/engine/decompilation-provenance.json` 의 `decomp.richHeaderShift`(**확정**)와
+/// > `scripts/re/va_citations.py:58` 의 `GHIDRA_SHIFT = 0xD0` 은 아직 이 사실을 반영하지 않았고,
+/// > 그 문서의 코퍼스 의존 필드(`decompiledFunctionCount` 11205 → 실측 7467 등)도 함께 낡았다.
+/// > **생성기를 고쳐야 하는 별건이라 이 커밋에서는 손대지 않는다.**
+///
+/// 리더 프리미티브도 같이 확인했다:
 /// `0x14009c560`=readU32(커서 +4), `0x14009c590`=readFloat(+4), `0x1402616e0`=readU8(+1),
 /// `0x14009c5c0`=readBlob(u32 size + bytes).
 ///

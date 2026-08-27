@@ -13,13 +13,13 @@ Wallpaper Engine 을 macOS 에 재구현한 프로젝트다. 사용자용 소개
 ```
 WapleCore ←── WapleLibrary ──┐
     ↑                        ├──→ Waple (앱 실행 타깃)
-    └──── WapleRender ───────┘
+    └──── WapleRender ───────┤
+    │                        │
+    │                   WaplePolicy   ← 자신은 의존 0. 아래 경고
     │
     └──── WapleRender ──→ WapleCompatCore ──→ WapleCompat (CLI)
                               ↑
                         WapleSnapshot
-
-WaplePolicy   (의존 없음 · 앱 타깃과 WapleAppTests 가 의존 — 리눅스 spec 레인 전용. 아래 경고)
 WapleSaver    (SwiftPM 밖 — package-app.sh 가 직접 컴파일)
 ```
 
@@ -28,7 +28,7 @@ WapleSaver    (SwiftPM 밖 — package-app.sh 가 직접 컴파일)
 | `WapleCore` | 순수 파서·시뮬레이터. **AppKit/Metal 없음** — 그래서 테스트가 쉽다 | 없음 |
 | `WapleRender` | Metal 렌더러, 셰이더, 텍스처 디코드, 오디오·비디오·웹 | Core |
 | `WapleLibrary` | 라이브러리 스캔·임포트·영속화 | Core |
-| `Waple` | 메뉴바 앱 + SwiftUI 메인 윈도우 | Core, Library, Render |
+| `Waple` | 메뉴바 앱 + SwiftUI 메인 윈도우 | Core, Library, Render, **Policy** |
 | `WapleCompatCore` | 호환성 스캔·스냅샷 캡처/비교 **라이브러리** | Core, Render, Snapshot |
 | `WapleCompat` | 위의 CLI 진입점(`main.swift` 만) | **CompatCore**, Core, Render |
 | `WapleSnapshot` | 스냅샷 매니페스트·diff. Foundation 전용 | 없음 |
@@ -39,6 +39,11 @@ WapleSaver    (SwiftPM 밖 — package-app.sh 가 직접 컴파일)
 `Package.swift` 는 `swift-tools-version:5.9` 지만 이건 매니페스트 API 버전일 뿐이고,
 실제 빌드는 Swift 6.3+ 이다.
 
+> **[2026-08-27] 그 정정이 표의 절반만 고쳤다.** `WaplePolicy` 행은 "`Waple`·`WapleAppTests` 가
+> 이 모듈에 의존한다" 로 **들어오는** 의존을 기록했는데, 정작 `Waple` 행의 **나가는** 의존에는
+> `Policy` 가 빠진 채였고 ASCII 지도에도 화살표가 없었다(`Package.swift:59` 는 네 개를 적는다).
+> 같은 표를 같은 이유로 두 번 고치게 됐다 — 의존을 한 방향으로만 적으면 반대쪽이 빈다.
+>
 > **[2026-08-25] 위 표에 `WapleCompatCore`·`WaplePolicy` 가 빠져 있었고 `WapleCompat` 의 의존이
 > 틀려 있었다.** 이 문서는 "코드 만지기 전 필독" 으로 지정돼 있는데, 지도에 없는 타깃은
 > 그 타깃의 계약도 안 보인다는 뜻이다. 특히 `WaplePolicy` 가 그렇다:
@@ -541,8 +546,14 @@ WE 호환을 위한 의도적 전수 처리다. 인식하지 못한 토큰을 �
 ## 정본(spec/)
 
 WE 동작에 대한 사실은 코드 주석이 아니라 [spec/](spec/) 에 둔다. 이전에 역공학
-산출물(`analysis/`)이 통째로 사라져 근거가 주석에만 남은 적이 있다 — 지금 코드가
-인용하는 `analysis/decompiled/all/...` 은 리포에 없다.
+산출물(`analysis/`)이 통째로 사라져 근거가 주석에만 남은 적이 있다.
+
+> **[2026-08-27]** 종전 여기 붙어 있던 "지금 코드가 인용하는 `analysis/decompiled/all/...` 은
+> 리포에 없다" 는 이제 정확하지 않다. 짝 저장소가 코퍼스를 재생성했고 **부채의 성격이 바뀌었다** —
+> 산출물이 없는 게 아니라 재생성이 주소 공간을 바꿨는데 인용이 안 따라온 것이다
+> (`Model3D.swift:110`·`ProjectJSONParser.swift:208` 이 rich header 주입본 시절 이름
+> `FUN_140261950` 을 가리킨다. 참 VA 는 `FUN_140261880`). 현황은 [spec/README.md](spec/README.md)
+> 의 같은 절이 정본이다 — **여기 두 번 적어서 또 썩었다.**
 
 - 모든 항목에 **근거가 필수**다. 없으면 `scripts/spec/validate.py` 가 거부한다.
 - 상태는 `확정`(직접 측정 + 재현 스크립트) / `보고`(정찰, 미재현) / `추정` 셋뿐이고,
