@@ -355,6 +355,12 @@ build_module simd            "$SHIM/simd.swift" "$SHIM/simd-extra.swift" || exit
 build_module Combine         "$SHIM/combine.swift"            || exit 1
 build_module Security        "$SHIM/security.swift"           || exit 1
 build_module ServiceManagement "$SHIM/servicemanagement.swift" || exit 1
+# [2026-08-26] `IOKit`·`CoreAudio` — `Sources/Waple/PlaybackObservers.swift` 의 재생정책
+# 관측자 두 축(onBattery · audioPlaying) 전용. 둘 다 값이 전부 가짜라 **동작은 검증하지
+# 않는다**(각 심 머리말 참조) — 이 둘을 둔 목적은 그 코드가 리눅스 게이트에서 **타입체크는
+# 받게** 하는 것이다. 심이 없으면 그 파일이 통째로 커버 밖으로 나간다.
+build_module IOKit           "$SHIM/iokit.swift"              || exit 1
+build_module CoreAudio       "$SHIM/coreaudio.swift"          || exit 1
 build_module SwiftUI         "$SHIM/swiftui.swift"            || exit 1
 # `Darwin` 은 `Sources/WapleCompatCore/ProfilePipeline.swift` 의 mach VM 질의 전용이다.
 # WapleRender 는 안 쓰지만 심 빌드는 싸므로(0.2초) 항상 만들어 둔다 — `--compat` 에서만 쓰인다.

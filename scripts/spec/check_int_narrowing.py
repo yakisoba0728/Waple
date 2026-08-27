@@ -93,7 +93,24 @@ PINS = [
 # `safeFloatToInt` 를 태우지 않은 이유: 이 자리는 파티클 루프 안에서 파티클×옥타브만큼 돌아
 # Optional 언랩 한 겹이 그대로 비용이고, 가드가 이미 함수 경계에 있어 이중이 된다.
 # 나머지 새 좁힘 20건은 전부 `Int(UInt8)`(확대라 트랩 불가)이라 `clamping:` 라벨을 달아 뺐다.
-CENSUS_BASELINE = 345
+# [2026-08-26] 345 → 347. **두 커밋이 5자리를 늘렸는데 앞 커밋은 여유로 흡수돼 조용히 지나갔다.**
+# 실측: `cde09ac` 342 → S2a(전역 재생정책면) 345 → S2b(관측자) 348. 기준선이 345 라
+# S2a 는 `census > BASELINE` 을 아슬아슬하게 통과했고 — 여유가 정확히 0 이 됐다 — S2b 가
+# 넘겼다. 이 블록은 **다섯 자리 전부**를 적는다(앞 셋이 문서 없이 들어간 것을 여기서 갚는다).
+#
+# S2a — `PlaybackPolicyRuntime.PlaybackMasks` 의 비트 시프트 3자리(`1 << UInt32(i)` ×2 ·
+# `1 << UInt32(n)`). 셋 다 **같은 줄에 상한 가드가 있다**: 앞 둘은 `i < 32` 로 걸러진 뒤에만
+# 시프트하고, 셋째는 `n = max(0, min(count, 32))` 로 접힌 값이다. 마스크가 `UInt32` 라 32 가
+# 상한인 것이 타입에서 오고, 33번째 화면을 무시한다는 계약은 `PlaybackObserversTests` 의
+# `testScreensBeyondBitWidthDoNotOverflow` 가 지킨다. `clamping:` 을 달지 않은 이유는
+# 그 라벨이 **값을 자르는** 의미인데 여기서는 자르는 게 아니라 **넣지 않는** 것이기 때문이다.
+#
+# S2b — `PlaybackObservers.defaultOutputDeviceIsRunning()` 의 `UInt32(MemoryLayout<…>.size)`
+# 2자리. CoreAudio 의 `ioDataSize` 가 `UInt32` 라서 필요한 변환이고, 인자는 **컴파일 타임
+# 상수 4**다(`AudioDeviceID` = `UInt32`). 런타임 입력이 아니므로 좁힘이라기보다 상수 표기다.
+# 같은 커밋에서 `UInt32(0)`·`AudioDeviceID(0)` 두 자리는 타입 표기(`var x: UInt32 = 0`)로
+# 바꿔 아예 없앴다 — 게이트를 피하려는 것이 아니라 그쪽이 실제로 더 나은 스위프트다.
+CENSUS_BASELINE = 347
 
 
 def swift_files():
