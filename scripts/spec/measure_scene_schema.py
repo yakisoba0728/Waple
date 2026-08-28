@@ -68,6 +68,18 @@ GENERAL_READ_IN_PARSE = {"orthogonalprojection", "clearcolor", "ambientcolor", "
                          "cameraparallaxmouseinfluence", "cameraparallaxdelay", "quality"}
 GENERAL_READ_IN_CAMERA = {"orthogonalprojection", "fov", "nearz", "farz"}
 
+# **[2026-08-28] `general` 을 읽는 파일이 SceneDocument.swift 하나가 아니다.**
+# 종전엔 그 파일만 훑어서 다른 파일이 파스하는 키가 전부 "미파싱" 으로 오분류됐다 — 실제로
+# `waple.unparsedGeneralKeys` 에 열거된 16키 중 **15키가 이미 파스되고 있었고** 진짜 미파싱은
+# `camerapreview` 하나뿐이었다. 특히 fog 계열 12키는 `Scene3DLighting.swift` 가 전건 읽는다.
+#
+# 여기서는 `general["..."]` **형태의 첨자만** 뽑는다. 다른 이름의 지역변수에 general 을 담아
+# 읽는 코드는 여전히 놓친다 — 그 한계는 정본 항목의 `method` 에 적는다.
+GENERAL_CONSUMER_FILES = (
+    os.path.join(REPO, "Sources", "WapleRender", "Scene3DLighting.swift"),
+)
+GENERAL_SUBSCRIPT_RE = re.compile(r'general\s*\[\s*"([^"\\\n]+)"\s*\]')
+
 # 값이 "x y [z]" 벡터 문자열인 키(수치 도메인은 성분으로 잰다)
 VECTOR_KEYS = {"origin", "angles", "scale", "size", "parallaxDepth", "color",
                "outlinecolor", "backgroundcolor", "spacing", "originb"}
@@ -211,14 +223,28 @@ def swift_function_keys(path=SCENE_SWIFT):
     return per, whole
 
 
+def general_keys_in_other_files():
+    """`SceneDocument.swift` **밖**에서 `general["…"]` 로 읽는 키. 근거는 GENERAL_CONSUMER_FILES 주석."""
+    out = set()
+    for p in GENERAL_CONSUMER_FILES:
+        if not os.path.isfile(p):
+            continue
+        with open(p, encoding="utf-8") as fh:
+            out |= set(GENERAL_SUBSCRIPT_RE.findall(COMMENT_RE.sub("", fh.read())))
+    return out
+
+
 # ── 본 측정 ───────────────────────────────────────────────────────────────
 
 def main():
     per_func, whole_file = swift_function_keys()
     parse_keys = per_func.get("parse", set())
     # applyGeneralSettings 는 general[...] 만 읽으므로 그 함수의 리터럴 전체가 general 키다.
+    # [2026-08-28] 여기에 **다른 파일의 general 소비처**를 더한다 — 그것을 안 더해서 fog 12키가
+    # 통째로 미파싱으로 오분류됐다(GENERAL_CONSUMER_FILES 주석 참조).
     general_keys_waple = (per_func.get("applyGeneralSettings", set())
-                          | GENERAL_READ_IN_PARSE | GENERAL_READ_IN_CAMERA)
+                          | GENERAL_READ_IN_PARSE | GENERAL_READ_IN_CAMERA
+                          | general_keys_in_other_files())
 
     pops = collections.Counter()
     errors = collections.Counter()
@@ -569,6 +595,10 @@ def main():
         | set(eff_pass_keys) | set(anim_keys) | set(cam_keys)
     nscenes = sum(pops.values())
     corpus_ev = specfmt.ev("corpus", "워크샵 코퍼스 scene.json 전수 %d씬" % nscenes)
+    # `waple.unparsedGeneralKeys` 전용 — 같은 ref 에 **모집단 라벨**만 더한다. 공용 corpus_ev 에
+    # 붙이면 모집단 서술이 다른 16개 항목에 같은 라벨이 실린다.
+    gen_corpus_ev = specfmt.ev("corpus", "워크샵 코퍼스 scene.json 전수 %d씬" % nscenes, None,
+                               "워크샵 요약 %d씬의 general 키 전수" % nscenes)
     script_ev = specfmt.ev("script", "scripts/spec/measure_scene_schema.py")
     src_ev = specfmt.ev("file", "Sources/WapleCore/SceneDocument.swift",
                         "함수 경계로 잘라 타입별 파스 함수의 JSON 키 리터럴만 대조")
@@ -690,9 +720,29 @@ def main():
         }, "확정", [corpus_ev, script_ev, src_ev]),
 
         specfmt.entry("waple.unparsedGeneralKeys", {
+            "method": "모집단은 **워크샵 요약 162씬**의 `general` 키 전수. '파싱됨' 쪽 집합은 "
+                      "① `SceneDocument.applyGeneralSettings` 본문의 JSON 키 리터럴 "
+                      "② parse()/parseCamera 에서 손으로 추린 general 접근"
+                      "(GENERAL_READ_IN_PARSE / GENERAL_READ_IN_CAMERA) "
+                      "③ **다른 파일의 `general[\"…\"]` 첨자**(GENERAL_CONSUMER_FILES) 의 합집합이다. "
+                      "**한계**: ③ 은 첨자 형태만 잡는다 — general 을 다른 이름의 지역변수에 담아 읽는 "
+                      "코드는 여전히 놓치고, 그런 키는 여기 '미파싱' 으로 잘못 실린다. "
+                      "이 목록이 비지 않았다면 소스를 직접 확인하고 나서 믿어라.",
             "keys": gen_unparsed,
+            "correction2026_08_28": "종전 이 목록은 16키였는데 **15키가 이미 파스되고 있었다** — "
+                                    "진짜 미파싱은 `camerapreview` 하나뿐이다. 원인은 위 ③ 의 부재다: "
+                                    "`fogdistance*`/`fogheight*` 12키는 "
+                                    "`Sources/WapleRender/Scene3DLighting.swift` 가 전건 읽고, "
+                                    "`transparentsorting`·`spritesheetrefreshsync`·`lightconfig` 는 "
+                                    "`Sources/WapleCore/SceneDocument.swift` 의 applyGeneralSettings "
+                                    "안에서 읽는다(그 셋은 소스가 바뀐 뒤 정본이 따라가지 않은 것이다). "
+                                    "'미파싱' 은 구현에 일을 시키는 목록이라, 낡으면 있지도 않은 갭을 "
+                                    "쫓게 만든다.",
             "wapleParsedButNeverAuthored": waple_general_absent,
-        }, "확정", [corpus_ev, script_ev, src_ev]),
+        }, "확정", [gen_corpus_ev, script_ev, src_ev,
+                    specfmt.ev("file", "Sources/WapleRender/Scene3DLighting.swift:717-731",
+                               "general.fogdistance*/fogheight* 12키 전건 파스 — "
+                               "종전 '미파싱' 오분류의 반증")]),
 
         specfmt.entry("waple.valueShapeMismatch", {
             "method": "Waple 이 스칼라 Float 로 읽는 키에 코퍼스가 공백 구분 벡터 문자열을 넣는 경우. "
@@ -743,9 +793,16 @@ def main():
              "measured": "SceneParticle 에 id 필드가 없어 buildParentTransformMap 에 등록되지 않는다. "
                          "자식·부모 모두 disablepropagation=false/미저작이라 자기배제도 아니다",
              "expect": "그 자식들이 저작 로컬 좌표 그대로 남는다(부모 파티클 위치가 원점에서 멀수록 어긋난다)"},
-            {"what": "text.brightness 미파싱(568 오브젝트)",
-             "measured": "float 스칼라. SceneTextLayer 에 brightness 필드 자체가 없다",
-             "expect": "밝기 배수를 준 텍스트가 기본 밝기로 그려진다"},
+            {"what": "text.brightness 미파싱(568 오브젝트) — **HDR 씬 한정**",
+             "measured": "float 스칼라. SceneTextLayer 에 brightness 필드 자체가 없다. "
+                         "**다만 WE 도 LDR 씬에서는 이 배수를 곱하지 않는다** — 게이트가 "
+                         "`test dword [rax+0x118],0x2000`(씬 HDR 비트 13)이고, 꺼져 있으면 배수는 "
+                         "1.0 으로 고정된다. 그래서 갭은 `general.hdr:true` 인 씬에서만 발현한다.",
+             "expect": "[2026-08-28] 종전엔 '밝기 배수를 준 텍스트가 기본 밝기로 그려진다' 를 "
+                       "**무조건문**으로 적었다. 그것은 과장이다 — **LDR 씬에서는 Waple 이 정답이고 "
+                       "갭이 아니다.** 실제 갭은 HDR 씬뿐이고 그 모집단은 작다: 설치본 고유 HDR "
+                       "**3씬**(spec/engine/tonemapping.json engine.tonemap.finalPixelExpression.hdrScenes), "
+                       "워크샵 요약 162씬 중 **16씬**. 그 안의 text.brightness 저작만 화면에 닿는다."},
             {"what": "light.visible 스크립트 유실(5건)",
              "measured": "SceneLight3D 에 visible 필드가 없고 parseLight 의 스크립트 캡처는 "
                          "color/intensity/radius/origin/angles 뿐. 정적 false 1건은 게이트가 드롭",
@@ -765,12 +822,38 @@ def main():
         ],
         "notGaps": [
             {"what": "general.quality", "why": "Waple 이 파싱하지만 코퍼스 162씬 중 0건이 저작 — 게이트가 죽어 있다"},
-            {"what": "scene.version(1/3/4/5, 159씬)", "why": "Waple 이 아예 읽지 않는다. 4세대 스키마를 한 파서로 "
-                                                             "처리 중이며 지금까지는 문제가 관측되지 않았다"},
-            {"what": "general.camerapreview(162)/lightconfig(11)/transparentsorting(3)/fog*(2)",
-             "why": "에디터 메타 또는 미구현 기능. 렌더 소비처가 없다"},
+            {"what": "scene.version(1/3/4/5, 159씬)",
+             "why": "[2026-08-28] 종전 '**Waple 이 아예 읽지 않는다**' 는 거짓이다 — "
+                    "`Sources/WapleCore/SceneDocument.swift:1775` 의 "
+                    "`let schemaVersion = numericInt(scene[\"version\"])` 가 읽고, 그 값이 바로 다음 "
+                    "줄 `versionGatedGeneral(scene[\"general\"], schemaVersion:)` 의 게이트로 들어간다"
+                    "(불리언은 수로 세지 않는 엄격 판이라 `{\"version\":true}` 는 누락과 같이 다룬다). "
+                    "**갭이 아닌 이유는 '안 읽어서' 가 아니라 '읽고 게이트에 쓰는데 지금까지 어긋난 "
+                    "관측이 없어서' 다.**"},
+            {"what": "general.camerapreview(162)",
+             "why": "에디터 메타. 렌더 소비처가 없다 — general 키 중 **유일하게 실제로 미파싱**인 것이고"
+                    "(waple.unparsedGeneralKeys), 그래도 갭이 아니다."},
+            {"what": "general.lightconfig(11)",
+             "why": "[2026-08-28] 종전 '**렌더 소비처가 없다**' 는 거짓이다 — "
+                    "`SceneDocument.applyGeneralSettings` 가 `SceneLightConfig.parse` 로 읽고, "
+                    "`Sources/WapleRender/SceneRenderer3D.swift:245` 가 `scene3DLightConfig` 에 담아 "
+                    "같은 파일 `:1595` 와 "
+                    "`Sources/WapleRender/SceneRendererFrameEncoder.swift:971` 이 라이트 슬롯 예산으로 "
+                    "**소비한다**. 갭이 아닌 이유는 '소비처가 없어서' 가 아니라 "
+                    "'이미 구현돼 있어서' 다."},
+            {"what": "general.transparentsorting(3) / spritesheetrefreshsync(1) / fog*(2)",
+             "why": "전부 파스된다 — 앞의 둘은 "
+                    "`Sources/WapleCore/SceneDocument.swift:4049-4050`, fog 12키는 "
+                    "`Sources/WapleRender/Scene3DLighting.swift:717-731`. "
+                    "종전 정본이 이들을 '미구현 기능' 으로 묶은 것은 "
+                    "waple.unparsedGeneralKeys 의 오분류를 그대로 물려받은 것이다."},
         ],
-    }, "보고", [corpus_ev, src_ev]))
+    }, "보고", [corpus_ev, src_ev,
+                specfmt.ev("file", "Sources/WapleCore/SceneDocument.swift:1775",
+                           "numericInt(scene[\"version\"]) — '아예 읽지 않는다' 의 반증"),
+                specfmt.ev("file", "Sources/WapleRender/SceneRenderer3D.swift:1595",
+                           "scene3DLightConfig 소비 (배선은 :245) — "
+                           "짝 소비처 SceneRendererFrameEncoder.swift:971")]))
 
     specfmt.dump(specfmt.doc("scripts/spec/measure_scene_schema.py", entries), OUT)
 

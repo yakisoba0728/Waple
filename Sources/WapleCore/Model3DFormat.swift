@@ -17,10 +17,16 @@ import Foundation
 /// >
 /// > **옛 인용을 −0xD0 으로 되읽는 것은 지금도 옳다** — 그 인용들은 손상 코퍼스에서 나왔다.
 /// > 틀린 것은 무조건문이고, 인용이 어느 세대의 코퍼스에서 왔는지를 구분해야 한다.
-/// > ⚠️ `spec/engine/decompilation-provenance.json` 의 `decomp.richHeaderShift`(**확정**)와
-/// > `scripts/re/va_citations.py:58` 의 `GHIDRA_SHIFT = 0xD0` 은 아직 이 사실을 반영하지 않았고,
-/// > 그 문서의 코퍼스 의존 필드(`decompiledFunctionCount` 11205 → 실측 7467 등)도 함께 낡았다.
-/// > **생성기를 고쳐야 하는 별건이라 이 커밋에서는 손대지 않는다.**
+/// > **[2026-08-28 · 해소] 정본이 따라왔다.** `spec/engine/decompilation-provenance.json` 의
+/// > `decomp.richHeaderShift` 는 이제 전칭이 아니라 **개별 인용 7건 한정**으로 좁혀져 있고
+/// > (그중 3건이 실제로 테스트 기대값에 쓰인다 — 항목의 `usedInTests`), 거짓 근거였던
+/// > `e_lfanew 0x40→0x110(208B)` 은 실측(`wallpaper64_rich.exe` 의 `e_lfanew` = **0x240**, +512B)
+/// > 으로 교체됐다. `decompiledFunctionCount` 도 11205 → **7748** 로 고쳐졌다
+/// > (`analysis/decompiled/manifest.json` 의 `total` 및 `.c` 파일 실물과 일치. 여기 적혀 있던
+/// > "실측 7467" 은 세는 법이 달랐던 값이라 함께 폐기한다).
+/// > `scripts/re/va_citations.py` 의 `GHIDRA_SHIFT` 는 그대로 두는 것이 맞다 — 그건 일괄 변환이
+/// > 아니라 **경계가 아닌 VA 를 만났을 때만 `va-0xD0` 도 경계인지 보는 진단용 폴백**이고, 좁혀진
+/// > 7건을 설명하는 데 여전히 쓰인다.
 ///
 /// 리더 프리미티브도 같이 확인했다:
 /// `0x14009c560`=readU32(커서 +4), `0x14009c590`=readFloat(+4), `0x1402616e0`=readU8(+1),

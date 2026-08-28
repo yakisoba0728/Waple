@@ -16,6 +16,14 @@ STATUSES = ("확정", "보고", "추정")
 # 확정 항목이 반드시 하나 이상 가져야 하는 근거 종류 — 재현 가능한 것들
 REPRODUCIBLE_KINDS = ("corpus", "binary", "asset", "shader", "script", "file")
 
+# evidence.kind 의 **전체 열거**. `spec/schema.json` 의 `evidence.kind` 와 같아야 한다.
+#
+# **[2026-08-28] 이 열거가 코드에 없어서 강제되지 않았다.** `validate.py` 는 `kind` 가 비었는지만
+# 보고 값은 안 봤고, 그 틈으로 열거 밖의 `note` 가 2건 통과하고 있었다(script-api 의
+# `script.dts.unbacked`, uniform-feed 의 `engine.uniformFeed.unknowns` — 둘 다 참조가 아니라
+# 방법의 한계를 적은 산문이라 `doc` 이 맞다). 열거는 문서에만 적혀 있으면 열거가 아니다.
+EVIDENCE_KINDS = ("corpus", "binary", "asset", "shader", "script", "file", "recon", "doc")
+
 
 def entry(id, value, status, evidence):
     if status not in STATUSES:
@@ -25,10 +33,23 @@ def entry(id, value, status, evidence):
     return {"id": id, "value": value, "status": status, "evidence": list(evidence)}
 
 
-def ev(kind, ref, note=None):
+def ev(kind, ref, note=None, population=None):
+    """근거 하나.
+
+    `population` 은 **선택**이다 — 값이 도수(개수·비율)일 때 "무엇을 세었는가" 를 적는다.
+    [2026-08-28] 이 필드를 넣는 이유: 정본이 반복해서 당한 병이 "수치만 있고 모집단이 없다" 이고
+    (동봉+설치본을 같이 세어 172 씬을 두 번 센 `corpusScenes: 358` 이 대표 사례),
+    도수 옆에 모집단 이름이 없으면 두 문서의 같은 이름 도수를 섞어 산술하게 된다.
+    **기존 항목에 소급 강제하지 않는다** — 강제하면 전건이 실패한다. 채워 넣을 자리를 여는
+    선택 필드다.
+    """
+    if kind not in EVIDENCE_KINDS:
+        raise ValueError(f"알 수 없는 evidence kind: {kind!r} (가능: {EVIDENCE_KINDS})")
     e = {"kind": kind, "ref": ref}
     if note:
         e["note"] = note
+    if population:
+        e["population"] = population
     return e
 
 

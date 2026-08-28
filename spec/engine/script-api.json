@@ -1084,8 +1084,9 @@
      "ref": "scenescript64.dll · wallpaper64.exe ASCII+UTF-16LE 전수 검색"
     },
     {
-     "kind": "note",
-     "ref": "부재 증거라 약하다. 런타임 조립 이름이면 문자열로 안 잡힌다. 실행 검증(스크립트에서 typeof renderContext) 전까지 보고 유지"
+     "kind": "doc",
+     "ref": "부재 증거라 약하다. 런타임 조립 이름이면 문자열로 안 잡힌다. 실행 검증(스크립트에서 typeof renderContext) 전까지 보고 유지",
+     "note": "[2026-08-28] kind 를 열거 밖의 'note' 에서 'doc' 으로 고쳤다 — 이 ref 는 참조가 아니라 방법의 한계를 적은 산문이다"
     }
    ]
   },

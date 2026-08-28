@@ -141,8 +141,23 @@ def validate_doc(d, path):
             if not isinstance(x, dict):
                 errs.append(f"{where}: evidence[{j}] 가 객체가 아니다")
                 continue
+            # **[2026-08-28] 종전엔 `kind` 가 비었는지만 봤다.** 스키마가 열거를 적어 두었는데도
+            # 검사기가 화이트리스트를 안 걸어서, 열거 밖의 `note` 가 2건 조용히 통과했다
+            # (script.dts.unbacked · engine.uniformFeed.unknowns — 둘 다 참조가 아니라 방법의
+            # 한계를 적은 산문이었다). 열거는 강제되지 않으면 열거가 아니고, `확정` 등급 판정이
+            # `REPRODUCIBLE_KINDS` 포함 여부로 갈리므로 오탈자 하나가 등급을 조용히 바꾼다.
             if not x.get("kind"):
                 errs.append(f"{where}: evidence[{j}] 에 kind 가 없다")
+            elif x["kind"] not in specfmt.EVIDENCE_KINDS:
+                errs.append(f"{where}: evidence[{j}] 의 kind 가 {x['kind']!r} — "
+                            f"{specfmt.EVIDENCE_KINDS} 중 하나여야 한다")
+            # `population` 은 선택 필드다(모집단 이름). 있으면 비어 있지 않은 문자열이어야 한다 —
+            # **없다고 실패시키지 않는다.** 소급 강제하면 전건이 실패하고, 그러면 아무도 채우지
+            # 않는다. 도수를 담은 항목부터 자발적으로 붙이게 여는 자리다.
+            pop = x.get("population")
+            if pop is not None and not (isinstance(pop, str) and pop.strip()):
+                errs.append(f"{where}: evidence[{j}] 의 population 이 비어 있거나 문자열이 아니다 — "
+                            f"{pop!r} (모집단 이름을 적거나 필드를 빼라)")
             if not x.get("ref"):
                 errs.append(f"{where}: evidence[{j}] 에 ref 가 없다")
             else:

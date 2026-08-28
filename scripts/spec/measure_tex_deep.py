@@ -820,13 +820,26 @@ def build(m):
          "0x20": "비디오 텍스처(mp4 페이로드). 코퍼스 38개, 전부 TEXB0003",
          "0x40": "3D 슬라이스(volume). 헤더에 i32 texDepth 가 추가된다. slice3d:true 로 재현",
          "0x80000": "alphachannelpriority — 차분 측정 확정(코퍼스 82개)",
-         "0x100000/0x200000/0x400000/0x800000": "미상 — 코퍼스 30개, 전부 *_mask_*.tex",
+         "0x100000/0x200000/0x400000/0x800000": "**채널 i 생존 플래그**(`0x100000 << i`, i = 0..3). "
+                                                "[2026-08-28] 종전 '미상' 은 닫혔다 — "
+                                                "`docs/re/shader-combos.md:224-231` 이 방출부를 짚는다: "
+                                                "DECL 이 슬롯 주석의 `components` 배열을 "
+                                                "`0x140086de0`(`0x14016d634`)로 잡고 원소마다 `combo` 를 "
+                                                "`0x14016d72c` 로 읽은 뒤, 방출부 `0x14016c8d9` 가 "
+                                                "**텍스처 플래그의 비트 `0x100000 << i`** 를 보고 채널 i 가 "
+                                                "살아 있을 때만 `#define <components[i].combo> 1` 한다. "
+                                                "동봉 8건 전건이 `PBRMASKS` 의 METALLIC_MAP / ROUGHNESS_MAP / "
+                                                "REFLECTION_MAP / EMISSIVE_MAP 이다. 코퍼스 도수 30개가 전부 "
+                                                "`*_mask_*.tex` 인 것이 이 해석과 정확히 맞는다.",
          "observedBitCounts": corpus["flagbits"],
          "observedValues": corpus["flags"]},
         "확정",
         [ev("binary", "resourcecompiler64.exe -tex 차분 컴파일(.tex-json 키 1개씩 토글)",
             json.dumps(cli.get("texJsonKeyToFlagBit", {}), ensure_ascii=False)),
          ev("binary", "wallpaper64.exe FUN_14015e580 — 프레임 수 < 2 이면 flags |= 8"),
+         ev("doc", "docs/re/shader-combos.md:224-231",
+            "0x100000 << i = 채널 i 생존 플래그. 방출부 0x14016c8d9 가 이 비트를 보고 "
+            "components[i].combo 를 #define 한다 — 종전 '미상' 을 닫는 근거"),
          ev("corpus", f"{corpus['total']}개 전수 비트 도수"),
          ev("script", S)]))
 

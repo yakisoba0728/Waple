@@ -12,9 +12,10 @@
   "evidence": "근거 배열. 비면 안 된다"
  },
  "evidence": {
-  "kind": "corpus | binary | asset | shader | script | file | recon | doc",
+  "kind": "corpus | binary | asset | shader | script | file | recon | doc — **열거 밖의 값은 오류다**(validate.py 가 화이트리스트로 강제한다. [2026-08-28] 종전엔 '비었는지' 만 봐서 열거 밖의 `note` 2건이 통과했다)",
   "ref": "구체적 참조 — 경로, 주소, 수치, 명령",
-  "note": "선택. 부연"
+  "note": "선택. 부연",
+  "population": "선택. **값이 도수(개수·비율)일 때 무엇을 세었는지** 적는다 — 예 '설치본 assets/ + projects/ 186씬(이름 글롭 {scene,gifscene}.json)' · '워크샵 요약 162씬' · 'workshopcache 446'. [2026-08-28] 추가. 기존 항목에 **소급 강제하지 않는다**(선택 필드다) — 도수를 담은 항목부터 채워 넣어라. 이 필드가 없어서 두 트리를 겹쳐 센 도수가 정본에 그대로 실렸다(동봉 172 + 설치본 186 = 358 씬)"
  },
  "statusRules": {
   "확정": "직접 측정했고 generatedBy 스크립트로 재현된다. evidence 에 corpus/binary/asset/shader/script/file 중 하나가 반드시 있어야 한다. 이 항목만 테스트를 생성한다",
