@@ -225,10 +225,41 @@ u16  = {m.group()[:-2].decode('utf-16-le'): m.start()
   1. 길이 2 (`id` 451건, `up` 168건, `p0`–`p3`) — 정규식 하한에 걸림.
   2. 대문자 포함 (`REFRACT`, `VERTICAL`, `CUTOUT`, `parallaxDepth`, `colorBlendMode`,
      `droplistOptions` …) — 콤보명·스크립트 프로퍼티라 키 정규식 대상 아님.
-  3. **바이너리에 아예 없음** — `nonpoweroftwo`(232건), `nomip`(123건), `camerapreview`(168건),
-     `spritesheetsequences`(52건), `gizmos`, `particlesrc`, `locktransforms`, `replacementkey`,
-     `alphachannelpriority` 등. 전수 검색으로 ASCII/UTF-16 어느 쪽에도 없음을 확인했다.
+  3. **런타임 엔진(`wallpaper64.exe`)에 없음** — `nonpoweroftwo`(232건), `nomip`(123건),
+     `camerapreview`(168건), `spritesheetsequences`(52건), `gizmos`, `particlesrc`,
+     `locktransforms`, `replacementkey`, `alphachannelpriority`.
+     이 **9키는 `wallpaper64.exe` 에서 ASCII/UTF-16 어느 쪽에도 전건 0**이다.
      `.tex` 컴파일러·에디터 툴 쪽 어휘라 런타임 exe 에 들어오지 않는다.
+
+> **[2026-08-28 정정 · 모집단 라벨] 결론은 그대로 맞고, 라벨 한 줄이 틀렸었다.**
+>
+> 종전 문구는 *"전수 검색으로 ASCII/UTF-16 어느 쪽에도 없음을 확인했다"* 였다. **호스트를
+> 밝히지 않아 "WE 제품 어디에도 없다" 로 읽힌다 — 그건 거짓이다.** WE 는 4+ 호스트 제품이고,
+> 9키 중 **8키가 다른 호스트에는 실재한다**:
+>
+> | 키 | `wallpaper64.exe`(런타임) | `wallpaperui.exe`(에디터) | `resourcecompiler64.exe`(툴체인) |
+> | --- | :---: | :---: | :---: |
+> | `nonpoweroftwo` | 0 | **있다** | 0 |
+> | `nomip` | 0 | **있다** | **있다** |
+> | `camerapreview` | 0 | **있다** | 0 |
+> | `locktransforms` | 0 | **있다** | 0 |
+> | `replacementkey` | 0 | **있다** | 0 |
+> | `gizmos` | 0 | **있다** | 0 |
+> | `spritesheetsequences` | 0 | 0 | **있다** |
+> | `alphachannelpriority` | 0 | 0 | **있다** |
+> | `particlesrc` | 0 | 0 | 0 |
+>
+> `wallpaperui.exe` **6키** · `resourcecompiler64.exe` **3키**(`nomip` 은 양쪽).
+> **`particlesrc` 만 10호스트 전건 0** 이다 — 이 9키 중 유일하게 "WE 어디에도 없다" 가
+> 참인 키다.
+>
+> **이 절의 결론은 흔들리지 않는다.** 여기가 재는 것은 "런타임 엔진이 이 키를 읽는가" 이고
+> 답은 여전히 **아니다**. 오히려 다른 호스트에 있다는 사실이 바로 아래 문장
+> ("`.tex` 컴파일러·에디터 툴 쪽 어휘") 의 **직접 증거**다 — 종전에는 추정이었던 것이
+> 이제 호스트별 실측으로 뒷받침된다.
+>
+> ⇒ 규약: **부재 주장에는 반드시 호스트를 붙인다.** "바이너리에 없다" 는 이 리포에서
+> 금지 문구로 취급하라 — 어느 exe 인지 없으면 검증할 수 없는 주장이다.
 
 ## 3. 오탐 제거
 

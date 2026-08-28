@@ -185,8 +185,20 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
 
     private func respondFile(_ task: WKURLSchemeTask, id: ObjectIdentifier, requestURL: URL?,
                              rangeHeader: String?, fileURL: URL, requestPath: String) {
-        guard let handle = try? FileHandle(forReadingFrom: fileURL),
-              let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else {
+        // [2026-08-28] `.isRegularFileKey` 게이트를 추가한다 — 종전엔 정규파일 검사가 없었다.
+        //
+        // WE 는 서빙 경로에서 같은 검사를 두 번 한다(`webwallpaper64.exe` 의 거부 문자열
+        // `0x14011cebb "Deny request: '%s' is not a regular file.\n"`, 심링크 거부는
+        // `0x14011ce4b`). 여기엔 크기 검사밖에 없어서 FIFO 같은 비정규 노드가 요청되면
+        // `FileHandle(forReadingFrom:)` 이 열리고 읽기에서 블록한다.
+        //
+        // 형제 규약이 이미 둘 있다 — `WebRenderer.swift:657` 이 `.isRegularFileKey` 와
+        // `.isSymbolicLinkKey` 를 **함께** 요청하고, `ZipImporter.swift:22-25` 가
+        // "심링크 미추종(fileExists 는 링크를 따라간다)" 을 명시한다. 그 형태에 맞춘다.
+        guard let rv = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+              rv.isRegularFile == true,
+              let size = rv.fileSize,
+              let handle = try? FileHandle(forReadingFrom: fileURL) else {
             DispatchQueue.main.async {
                 guard self.isTaskLive(id) else { return }
                 self.respond(task, url: requestURL, status: 404, mime: "text/plain", data: Data())

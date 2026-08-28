@@ -85,8 +85,8 @@
 정수값·범위 검사, 그 외 거짓). 따라서 **`"default": 1.5` → 0**, **`"default": "1"` → 0**,
 **`"default": true` → 0**, **키 부재 → 0** 이다.
 
-나머지 키(`material`·`type`·`options`·`require`)를 읽는 코드는 `wallpaper64.exe` 에 없다.
-근거는 두 겹이다 — (a) DECL 안의 `Json::Value::find` 호출은 **7개뿐**이고 그 키가
+나머지 키(`material`·`type`·`options`·`require`)를 **DECL 이** 읽는 코드는 `wallpaper64.exe` 에
+없다. 근거는 두 겹이다 — (a) DECL 안의 `Json::Value::find` 호출은 **7개뿐**이고 그 키가
 `material`·`default`·`combo`·`combo`·`formatcombo`·`combo`·`default` 다(§7.1 이 앞 다섯
 개를 쓴다), (b) **문자열 자체가 없다**:
 
@@ -94,6 +94,12 @@
 |---|---|
 | `combos` `usershadervalues` `constantshadervalues` `usertextures` `keepaspect` `usertexturereference` `formatcombo` `components` `material` `conversion` `combo` | 있다 |
 | `options` `imageblending` `audioprocessingoptions` `range` `label` `group` `hidden` `linked` `nobindings` `nonremovable` `paintdefaultcolor` `painttexturescale` `requireany` `attachmentproject` `attachmentangles` | **런타임 소비처 없음**(§9 배제한 가설 참조) |
+
+> **[2026-08-28 스코프 명시] 위 (b) 표에 `require` 는 일부러 없다** — `require` **문자열은
+> `wallpaper64.exe` 에 있다**(`0x14048d0d0`, LEA `0x14016c0ec`). 다만 그것을 쓰는 것은 DECL 이
+> 아니라 **전처리 지시문 디스패처**(`#require`, 인식 9종 중 하나)다. 이 절의 주장은
+> "`[COMBO]` JSON 키로서의 `require` 를 DECL 이 안 읽는다" 이지 "문자열이 없다" 가 아니다.
+> `requireany` 만 문자열 0건이다. 두 문법의 대조표는 §4.4 의 정정 블록에 있다.
 
 ### 1.3 설치본 전수
 
@@ -577,9 +583,37 @@ watercaustics · cursorripple · clouds · waterripple · reflection …). 런�
 
 ### 4.4 셰이더 주석의 `require`/`requireany` 도 다른 문법이다
 
-`{콤보:정수}` AND 딕셔너리(+`requireany:true` 면 OR). §1.2 대로 두 문자열 모두
-`wallpaper64.exe` 에 없다 — **에디터 전용 UI 게이트**다. 자산 도달: `require` 45
+`{콤보:정수}` AND 딕셔너리(+`requireany:true` 면 OR). ~~§1.2 대로 두 문자열 모두
+`wallpaper64.exe` 에 없다~~ — **에디터 전용 UI 게이트**다. 자산 도달: `require` 45
 (COMBO 줄 25 + 유니폼 주석 20), `requireany` 8.
+
+> **[2026-08-28 정정] 위 취소선은 절반만 맞다 — `require` 문자열은 `wallpaper64.exe` 에 실재한다.**
+>
+> | 문자열 | `wallpaper64.exe` | 근거 |
+> | --- | --- | --- |
+> | `require` | **있다** `0x14048d0d0` | live LEA `0x14016c0ec`(바이트 `48 8d 15 dd 0f 32 00`). 런타임 코퍼스에서 이 리터럴 참조는 **정확히 1건** — `FUN_14016b0e0`(지시문 디스패처)의 `memcmp(…, 7)` |
+> | `requireany` | **없다**(0건) | 종전 서술 그대로 유효 |
+>
+> **왜 갈리나 — 이름이 같은 두 문법이다.** 섞으면 안 된다:
+>
+> | | `[COMBO]` JSON 키 `require` | 전처리 지시문 `#require` |
+> | --- | --- | --- |
+> | 어디 | `[COMBO]` 주석 줄의 JSON 딕셔너리 | 셰이더 본문의 `#require` 줄 |
+> | 런타임이 읽나 | **아니다** — DECL 의 `Json::Value::find` 7개에 없다(§1.2) | **읽는다** — 지시문 디스패처가 인식하는 **9종 중 하나** |
+> | 주소 | — | `0x14016c0ec` |
+>
+> 즉 §1.2 의 "DECL 이 `[COMBO]` 의 `require` 키를 안 읽는다" 는 **참**이고, 이 절이 그것을
+> "문자열 자체가 바이너리에 없다" 로 옮겨 적은 것이 **거짓**이다. 바이너리에 있는 이유는
+> 같은 이름의 **다른 소비자**(전처리기)가 있기 때문이다.
+>
+> `Sources/WapleCore/ShaderPreprocessor.swift:6-15` 가 이 9종을 이미 정확히 열거하고 있다 —
+> `define`(`0x14016b8e3`) · `ifdef`(`0x14016bd26`) · `ifndef`(`0x14016bde0`) ·
+> `else`(`0x14016be73`) · `endif`(`0x14016bf30`) · `if`(`0x14016bf9e`) ·
+> `elif`(`0x14016c00b`) · **`require`(`0x14016c0ec`)** · `undef`(`0x14016c201`).
+> 문서가 코드보다 낡아 있었다.
+>
+> **"에디터 전용 UI 게이트" 라는 결론은 `[COMBO]` JSON 키 쪽에 한해 유지**된다.
+> `#require` 지시문의 런타임 소비 전문은 §G1 참조.
 
 ### 4.5 또 다른 조건식 — 프로퍼티 UI (혼동 주의)
 

@@ -386,7 +386,7 @@ public struct ScenePackage {
         guard fm.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else { return nil }
         guard let walker = fm.enumerator(
             at: root,
-            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else { return nil }
 
@@ -395,10 +395,23 @@ public struct ScenePackage {
         let maxEntries = 65_536
         for case let url as URL in walker {
             if entries.count >= maxEntries { break }
-            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+            // [2026-08-28] `.isSymbolicLinkKey` 를 실제로 검사한다 — **위 Note 가 주장하던 것이
+            // 코드에 없었다.** 종전엔 `isRegularFile == true` 와 아래 어휘 접두 비교만 있었는데,
+            // 둘 다 심링크를 걸러내지 못한다: Darwin 의 `isRegularFile` 은 링크를 따라간 대상의
+            // 종류를 주므로 "파일을 가리키는 링크" 는 `true` 이고, `standardizedFileURL` 은
+            // `..` 만 정리하는 **어휘** 정규화라 링크를 해소하지 않는다. 즉 `root/x -> /etc/passwd`
+            // 는 접두 비교를 통과해 엔트리로 들어왔다.
+            //
+            // 같은 리포가 이미 그 함정을 적어 뒀다 — `ZipImporter.swift:22-25`
+            // "심링크 미추종(**fileExists 는 링크를 따라간다**)" 이 같은 이유로 이 키를 명시
+            // 요청하고, `WebRenderer.swift:657` 도 `.isRegularFileKey` 와 함께 요청한다.
+            guard let values = try? url.resourceValues(
+                    forKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey]),
+                  values.isSymbolicLink != true,
                   values.isRegularFile == true else { continue }
             let components = url.standardizedFileURL.pathComponents
             // 표준화 후에도 루트 접두가 유지되는 경로만 채택 — 링크를 타고 밖으로 나간 항목 배제.
+            // (이건 어휘 비교라 심링크를 못 잡는다 — 위 게이트가 그 몫이다. 둘 다 남긴다.)
             guard components.count > rootComponents.count,
                   Array(components.prefix(rootComponents.count)) == rootComponents else { continue }
             let relative = components.dropFirst(rootComponents.count).joined(separator: "/")

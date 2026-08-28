@@ -46,7 +46,9 @@ final class SceneRenderSettingsTests: XCTestCase {
     }
 
     func testFitModeRoundtripsAndFallsBack() {
-        XCTAssertEqual(SceneRenderSettings.fitMode, .fit, "미설정 키는 .fit 폴백")
+        // [2026-08-28] `.fit` → `.fill`. WE 의 `alignment` 기본값은 0 = Cover 다
+        // (`docs/re/media-playback.md:684,708`). 종전 기대값은 근거 없는 letterbox 였다.
+        XCTAssertEqual(SceneRenderSettings.fitMode, .fill, "미설정 키는 WE 기본 Cover(.fill) 폴백")
         for mode in FitMode.allCases {
             SceneRenderSettings.fitMode = mode
             XCTAssertEqual(SceneRenderSettings.fitMode, mode)

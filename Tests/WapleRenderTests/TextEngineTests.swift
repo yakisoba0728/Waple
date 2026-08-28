@@ -423,11 +423,15 @@ final class TextEngineTests: XCTestCase {
         """, scene: scene))
         XCTAssertEqual(e.evaluate(current: ""), "0,0,0,-1")  // 주입 전: 버퍼 0, 콜백 미발화
         var l = [Float](repeating: 0, count: 64)
-        l[0] = 0.25; l[1] = 0.75; l[2] = 0.25; l[3] = 0.75   // left16[0]=0.5, left32[0]=0.5
+        // [2026-08-28] 밴드 축약이 평균→MAX 로 바뀌었다(실물 `maxss` @0x1401128e0·0x140112b6f).
+        // 이 입력은 평균과 MAX 가 갈리도록 고른 것이라 기대값이 함께 움직인다:
+        // left32[0]=max(.25,.75)=0.75, left16[0]=max(.25,.75,.25,.75)=0.75.
+        // 좌우 average 규약은 그대로라 cb(=right64[0]=0.5)는 불변.
+        l[0] = 0.25; l[1] = 0.75; l[2] = 0.25; l[3] = 0.75   // left16[0]=0.75, left32[0]=0.75
         var r = [Float](repeating: 0, count: 64)
         r[0] = 0.5
         scene.setAudio(left64: l, right64: r)
-        XCTAssertEqual(e.evaluate(current: ""), "0.5,0.75,0.5,0.5")
+        XCTAssertEqual(e.evaluate(current: ""), "0.75,0.75,0.75,0.5")
     }
 
     /// 감사 W-B6 회귀: for 조건의 문자열 리터럴 속 8자리 숫자(`table["16094592"]`)는
