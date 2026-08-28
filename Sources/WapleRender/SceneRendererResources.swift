@@ -1430,13 +1430,24 @@ extension SceneRenderer {
               cg.width > 0, cg.height > 0 else { return nil }
         let width = cg.width, height = cg.height
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        guard let ctx = CGContext(
-            data: &pixels, width: width, height: height,
-            bitsPerComponent: 8, bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        // F840: `&pixels` 를 CGContext(data:) 에 넘기면 inout 로 만든 임시 포인터가 호출 밖으로
+        // 새어나간다(UB — 그 포인터의 유효 수명은 CGContext 생성 호출 뿐인데 컨텍스트가 draw 까지
+        // 붙잡는다). 형제 경로(ArtworkColors.palette · TexDecoder.draw · TextRasterizer.render)와
+        // 동일하게 컨텍스트 생성·드로잉을 withUnsafeMutableBytes 안에서 끝낸다.
+        // [2026-08-27] F840 이 형제 넷을 고칠 때 이 자리와 bitmapRGBAFile · SnapshotPipeline.pngToRGBA
+        // 셋이 빠져 있었다. 로직은 손대지 않은 순수 형태 이식이다.
+        let ok = pixels.withUnsafeMutableBytes { ptr -> Bool in
+            guard let base = ptr.baseAddress,
+                  let ctx = CGContext(
+                      data: base, width: width, height: height,
+                      bitsPerComponent: 8, bytesPerRow: width * 4,
+                      space: CGColorSpaceCreateDeviceRGB(),
+                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  ) else { return false }
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard ok else { return nil }
         return makeTexture(Data(pixels), width, height, device)
     }
 
@@ -2421,16 +2432,22 @@ extension SceneRenderer {
         let width = cg.width
         let height = cg.height
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        guard let ctx = CGContext(
-            data: &pixels,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        // F840 — 위 decodeArtworkTexture 와 같은 이식. inout 포인터를 컨텍스트에 넘기지 않는다.
+        let ok = pixels.withUnsafeMutableBytes { ptr -> Bool in
+            guard let base = ptr.baseAddress,
+                  let ctx = CGContext(
+                      data: base,
+                      width: width,
+                      height: height,
+                      bitsPerComponent: 8,
+                      bytesPerRow: width * 4,
+                      space: CGColorSpaceCreateDeviceRGB(),
+                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  ) else { return false }
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard ok else { return nil }
         return (Data(pixels), width, height)
     }
 

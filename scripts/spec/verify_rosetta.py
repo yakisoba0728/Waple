@@ -403,9 +403,32 @@ def find_pairs(root=None):
     return sorted(pairs)
 
 
+# 이 저장소가 아는 로제타석 쌍의 개수. 이 아래로 떨어지면 "무회귀" 가 아니라
+# **입력을 못 찾은 것**이다 — WE_ROOT 오지정 · 설치본 없음 · 레이아웃 변경.
+#
+# [2026-08-27] 하한이 없어서 빈 디렉터리를 가리켜도 rc=0 이었다:
+#   $ WE_ROOT=<빈 디렉터리> python3 scripts/spec/verify_rosetta.py
+#   로제타석 0 쌍 발견 / 대조 0 / 스킵 0 / 불일치 0        RC=0
+# spec/README.md 와 AGENTS.md 가 검증 명령으로 안내하는 도구인데 경로 오지정과 무회귀가
+# 종료코드로 구분되지 않았다. 이 리포가 반복해서 당한 실패 양식이고(measure_binaries 32→0
+# rc=0 · specfmt.py:52-61), 형제 게이트는 전부 하한을 둔다(check_canon_entry_refs
+# MIN_SCANNED=40 · check_effect_texture_resolution MIN_REFS=3). 여기만 없었다.
+# 이 docstring 이 "16쌍 전부 대조한다" 고 적고 정본도 16을 근거로 싣는데 그 16이 코드에
+# 없었다 — 이제 있다.
+MIN_PAIRS = 16
+
+
 def main():
     pairs = find_pairs()
     print(f"로제타석 {len(pairs)} 쌍 발견\n")
+    if len(pairs) < MIN_PAIRS:
+        print(
+            f"[환경 오류] 쌍이 {len(pairs)} 개다 — 기대 하한 {MIN_PAIRS}.\n"
+            f"  탐색 루트: {os.path.join(WE, 'projects', 'defaultprojects')}\n"
+            "  WE 설치본 경로(WE_ROOT)를 확인해라. 이건 '불일치 없음' 이 아니라 '안 봤다' 다.",
+            file=sys.stderr,
+        )
+        return 2
     checked = skipped = failed = 0
     for objp, mdlp in pairs:
         rel = os.path.relpath(objp, WE)

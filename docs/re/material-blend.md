@@ -456,9 +456,9 @@ Waple 이 `blending` 을 읽는 자리는 전부 **`== "additive"` 단일 비교
 
 | 자리 | 코드 |
 | --- | --- |
-| 2D 레이어 | `Sources/WapleRender/SceneRendererResources.swift:488` `blendAdditive: layer.blendMode == "additive"` |
+| 2D 레이어 | `Sources/WapleRender/SceneRendererResources.swift:552` `blendAdditive: layer.blendMode == "additive"` [줄번호 재측정 2026-08-28, 종전 `:488`] |
 | 2D 커스텀 셰이더 레이어 | `SceneRendererResources.swift:1617` `let additive = layer.blendMode == "additive"` |
-| 3D 메시 | `Sources/WapleRender/SceneRenderer3D.swift:781-782` `additive = blend == "additive"` |
+| 3D 메시 | `Sources/WapleRender/SceneRenderer3D.swift:806` `additive = blend == "additive"` [줄번호 재측정 2026-08-28, 종전 `:781-782`] |
 | 파티클 | `Sources/WapleCore/ParticleSystem.swift:768` `(p0["blending"] as? String) == "additive" ? .additive : .translucent` |
 
 | # | 항목 | WE(실측) | Waple | 동봉 도달 | 등급 |
@@ -694,7 +694,7 @@ additive 0.912·1.043)을 근거로 프리멀티 오버를 **의도적으로** �
 **B8 의 정확한 패치안**(소유 밖 — `SceneRendererFrameEncoder.swift` / `SceneRenderer.swift` 는 U):
 `encodeDrawPlan`(`:861` `case .layer where layers[item.idx].colorBlendMode != 0`)의 매치 조건을
 `!= 0 && != 31` 로 좁히고, `GPULayer.blendAdditive` 를 `layer.colorBlendMode == 31 || 머티리얼
-additive` 로 계산하면(`SceneRendererResources.swift:488`) 31 은 기존 additive 파이프라인으로
+additive` 로 계산하면(`SceneRendererResources.swift:552`) 31 은 기존 additive 파이프라인으로
 떨어진다. **스냅샷 blit 1회와 풀 텍스처 1장이 레이어마다 사라진다.**
 텍스트 쪽(`:845` `case .text where … colorBlendMode != 0`)도 대칭으로 처리해야 한다.
 단, `f_main`/additive 파이프라인은 **프리멀티 출력**(`c.rgb*tint.rgb*a`)이고 WE 는 straight+

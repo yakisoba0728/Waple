@@ -658,6 +658,14 @@ public func setSpectrumBands(_ out: AudioSpectrumProcessor.Output) {
 > 에 있고(`0x181655170–0x18165580f`), **아무것도 접지 않는다**. 스크립트가 보는 `left/right` 는
 > 소비단이 `maxss` 로 접어 둔 값 그대로이고 셋째 배열의 이름은 `average`(= mono 사분면)다.
 > 즉 위 `avg(...)` 4줄은 **MAX 여야 한다**. 정정안 전체는 §8.5(a).
+>
+> **[2026-08-28 · 착지]** 고쳤다 — `TextScriptEngine.swift` 의 `avg(...)` 가 `foldMax(...)` 로
+> 바뀌었고 네 호출부 전부 MAX 로 접는다. 좌우 합성(`spectrum`·`average64/32/16`)은 밴드 축약이
+> 아니라 `AudioBuffers.average` 규약이라 평균 그대로 뒀다. 동반: `TextEngineTests.swift:431`
+> 기대값이 `"0.5,0.75,0.5,0.5"` → `"0.75,0.75,0.75,0.5"`.
+> (`WapleCore` 쪽 `AudioSpectrumProcessor` 는 처음부터 MAX 였다 —
+> `AudioSpectrumProcessorTests.swift:278` 이 그 회귀를 지키는 테스트를 이미 갖고 있다. JS 심만
+> 혼자 평균이었던 것이고, 이제 두 경로가 같은 규약이다.)
 
 **(c) `Sources/WapleRender/SceneRendererResources.swift` 의 `audioParams(for:)`**(2026-08-21 기준 2015-2035) — `audioParams` 의 폴백이
 `pulse.vert` 의 선언 기본값만 담고 있다. **`shake.vert` 는 `audiobounds` 기본값이 다르다**:

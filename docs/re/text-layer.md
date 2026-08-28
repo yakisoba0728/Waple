@@ -223,8 +223,40 @@ TwemojiMozilla.ttf
 
 **실효 래스터 픽셀 크기 = clamp(pointsize, 1, 256) × 300/72 = pointsize × 25/6 ≈ 4.1667×.**
 `lib.sceneScript.d.ts:1606` 의 "Size of the font in points for 300 DPI" 가 문자 그대로 사실이다.
-동봉 실측으로도 맞는다: `previewclock` 은 `pointsize 24` 에 에디터가 기록한 `size "379 117"` —
-117 / (24 × 25/6) = 1.17 ≈ RobotoMono 의 em 당 줄높이.
+~~동봉 실측으로도 맞는다: `previewclock` 은 `pointsize 24` 에 에디터가 기록한 `size "379 117"` —
+117 / (24 × 25/6) = 1.17 ≈ RobotoMono 의 em 당 줄높이.~~
+
+> **[2026-08-28 정정] 위 취소선의 "≈ RobotoMono 의 em 당 줄높이" 는 거짓이다.**
+>
+> `RobotoMono-Regular.ttf` 의 em 당 줄높이는 **1.31885** 다. 1.17 이 아니다.
+> 폰트 테이블을 직접 파싱한 실측(동봉본):
+>
+> | 항목 | 값 |
+> | --- | --- |
+> | `head.unitsPerEm` | **2048** |
+> | `hhea.ascender` / `descender` / `lineGap` | **2146** / **−555** / **0** |
+> | `hhea` 줄높이 `(asc − desc + gap)/upem` | **1.31885** |
+> | `OS/2` typo `(typoAsc − typoDesc + typoGap)/upem` | **1.31885** |
+> | `OS/2` win `(winAsc + winDesc)/upem` | **1.31885** |
+> | `head` bbox `(yMax − yMin)/upem` | **1.31885** |
+>
+> **네 메트릭이 전부 같은 값**을 준다 — 어느 관례를 골라도 1.17 은 안 나온다.
+> 참고 대조(같은 방법, 동봉 폰트): `Monofur-PK7og.ttf` **1.00167**(네 메트릭 동일) ·
+> `Segment7Standard.otf` `hhea` **1.09**.
+>
+> **산술 자체는 맞다.** `24 × 25/6 = 100` px 이고 `117 / 100 = 1.17` 이다. 틀린 것은 그
+> **1.17 을 RobotoMono 의 줄높이라고 부른 동정(identification)** 이다. RobotoMono 줄높이라면
+> 기록값이 `117` 이 아니라 **`131.885`** 여야 했다.
+>
+> ⇒ **이 문단의 "동봉 실측으로도 맞는다" 는 교차확인은 성립하지 않는다.** 다만 그 위의
+> 결론(`pointsize × 25/6`)은 **역어셈블만으로 이미 확정**이다 — `0x1401ad1dc mov r9d, 0x12c`
+> (=300) · `0x1401ad1e5` · `0x1401ad1d4 mulss xmm0, 64.0` · `FT_Set_Char_Size`. 근거가 하나
+> 줄었을 뿐 결론은 그대로다.
+>
+> 남는 것: **에디터가 기록한 `117` 이 무엇인가.** 줄높이(131.885)도, `hhea` 어센더 단독
+> (2146/2048 × 100 = 104.8)도 아니다. 잉크 bbox 일 수도, 에디터 고유 박스일 수도 있다.
+> `size` 필드는 파스·보존 전용이고 런타임 래스터 크기에 영향이 없으므로 급하지 않다.
+> **[미해결]**
 
 Waple 의 `weRenderDPI = 300`(`TextRasterizer.swift:17`)은 이로써 **바이너리 근거가 생겼다**
 (종전엔 d.ts 주석만 근거였다).

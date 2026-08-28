@@ -293,7 +293,7 @@ def main():
         # "cstring materialPath" 1개로 적었다. 둘 다 틀렸다 — 표본(glow.mdl)이
         # skinCount=1·meshCount=1 이라 세 해석이 전부 같은 바이트를 낳는 표본이었다.
         # spec/formats/mdl-deep.json format.mdl.header / .stringLoopIsPerMesh 가
-        # 디컴파일(FUN_140261950) + 코퍼스 451개로 확정했다. 여기는 요약만 남기고
+        # 디컴파일(FUN_140261880) + 코퍼스 451개로 확정했다. 여기는 요약만 남기고
         # 정본은 mdl-deep.json 이다(중복 사실을 두 곳에서 유지하지 않는다).
         specfmt.entry("format.mdl.v0004Layout", {
             "canonicalIn": "spec/formats/mdl-deep.json (format.mdl.header, "

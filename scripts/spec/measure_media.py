@@ -591,6 +591,13 @@ def main():
                                   "(export·import·GUID·명령바이트)")
     corpus_ev = specfmt.ev("corpus", f"워크샵 코퍼스 video {vid['projects']}종 + "
                                      f"scene.pkg {emb['scenePkgs']}개 ISO BMFF 직접 파싱")
+    # `corpus.sceneEmbeddedMp4` 전용 — 같은 ref 에 **모집단 라벨**만 더한다. 공용 corpus_ev 에
+    # 붙이면 모집단이 다른 8개 항목에 같은 라벨이 실린다(그게 이 리포가 도수로 당한 사고다).
+    emb_corpus_ev = specfmt.ev(
+        "corpus", f"워크샵 코퍼스 video {vid['projects']}종 + "
+                  f"scene.pkg {emb['scenePkgs']}개 ISO BMFF 직접 파싱", None,
+        f"설치본 scene.pkg {emb['scenePkgs']}개(gifscene.pkg 제외 — 그래서 "
+        f"inventory.json 의 162 와 다르다)")
     script_ev = specfmt.ev("script", "scripts/spec/measure_media.py")
 
     def anchor_ev(*vas):
@@ -1032,6 +1039,17 @@ def main():
                       "그래서 scenePkgs 가 spec/corpus/inventory.json 의 162 와 다르다.",
             "scenePkgs": emb["scenePkgs"],
             "pkgsWithEmbeddedMp4": emb["pkgsWithMp4"],
+            "pkgsWithEmbeddedMp4Note": "⚠️ **이 24 는 하한이다. 집합의 크기가 아니다.** "
+                                       "[2026-08-28] 하한이라는 성격이 위 `caveat` 안에만 묻혀 있어서 "
+                                       "값 옆에서는 보이지 않았다 — 그래서 값 옆으로 옮긴다. "
+                                       "빠지는 것 둘: ① LZ4 로 압축된 .tex mip 페이로드 안의 비디오는 "
+                                       "평문 `ftyp` 가 없어 이 스캔에 안 잡힌다 ② `gifscene.pkg` 는 "
+                                       "아예 스캔하지 않는다(그래서 모집단이 161 이고 "
+                                       "spec/corpus/inventory.json 의 162 와 다르다). "
+                                       "**금지: '골든 170 중 비디오 24종 = 이 24' 같은 동일성 근거로 "
+                                       "쓰지 마라.** 모집단(설치본 scene.pkg 161)도 다르고 이쪽은 "
+                                       "하한이라, 두 수가 우연히 같아도 같은 집합이라는 뜻이 아니다. "
+                                       "두 집합을 잇고 싶으면 씬 id 로 교집합을 실제로 떠라.",
             "embeddedMp4Count": emb["embeddedMp4"],
             "ftypBrand": as_dict(emb["brand"]),
             "videoSampleEntry": as_dict(emb["videoCodec"]),
@@ -1040,7 +1058,7 @@ def main():
             "primariesTransferMatrix": as_dict(emb["colrTriplet"]),
             "resolution": as_dict(emb["resolution"]),
             "fps": as_dict(emb["fps"]),
-        }, "확정", [corpus_ev, script_ev]),
+        }, "확정", [emb_corpus_ev, script_ev]),
 
         # ---- 9. 해석(1차 근거가 헤더/문서인 것) — 보고
         specfmt.entry("engine.media.enumInterpretation", {

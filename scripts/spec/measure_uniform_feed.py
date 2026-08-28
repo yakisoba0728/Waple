@@ -812,7 +812,9 @@ def main():
                              " 한 번도 디컴파일 안 했다)와 그 인자인 머티리얼 오브젝트"
                              " +0x3190 / +0x3198 / +0x31a0 / +0x31a8.",
         },
-        "추정", [src_script, specfmt.ev("note", "미해결 항목 목록 — 후속 조사 진입점")]))
+        "추정", [src_script, specfmt.ev("doc", "미해결 항목 목록 — 후속 조사 진입점",
+                                   "[2026-08-28] kind 를 열거 밖의 'note' 에서 'doc' 으로 고쳤다 — "
+                                   "이 ref 는 참조가 아니라 후속 작업 안내 산문이다")]))
 
     watch = ["g_TexelSize", "g_TexelSizeHalf", "g_Texture0Resolution", "g_Texture1Resolution",
              "g_Texture0Texel", "g_Texture1Texel", "g_RenderVar0", "g_RenderVar1",

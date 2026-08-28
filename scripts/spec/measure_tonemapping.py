@@ -372,10 +372,26 @@ def material_runtime_reach(data, mats):
 # ---------------------------------------------------------------- 씬 코퍼스
 
 def corpus_reach():
-    """동봉 + 설치본 씬 전수의 `general.hdr` × `general.bloom` 분포."""
-    # (루트, 결과에 붙일 접두) — 동봉본은 리포 상대, 설치본은 `WE_ROOT/` 상대로 적는다.
-    # 머신마다 다른 절대 경로를 정본에 넣지 않으면서 어느 트리의 씬인지는 남긴다.
-    roots = ((WEASSETS, REPO, ""), (WE_ROOT, WE_ROOT, "WE_ROOT/"))
+    """**설치본 단일 모집단** 씬 전수의 `general.hdr` × `general.bloom` 분포.
+
+    모집단: `WE_ROOT` 아래 이름 글롭 `{scene,gifscene}.json` = **186 씬**
+    (설치본 `assets/` + `projects/`).
+
+    **[2026-08-28] 종전엔 동봉 `WEAssets/` 와 설치본 `WE_ROOT/` 를 둘 다 훑어 358 을 냈다.
+    그것은 이중계수다** — 동봉 트리는 설치본 `assets/` 를 그대로 복사한 것이라(이 파일이
+    셰이더에 대해 이미 "동봉 137파일 = 설치본 assets/shaders 와 전건 동일" 이라고 적고 있다)
+    172 씬을 두 번 셌다. 358 = 172(동봉) + 186(설치본). 도수를 두 배 가까이 부풀리면서
+    `hdrScenes` 에는 `previewthunderbolt` 가 동봉·설치 두 경로로 실려 고유 HDR 씬이 3인데
+    4로 보였다.
+
+    고쳐서 **설치본 하나만** 훑는다. 도수를 적을 때는 반드시 이 모집단 이름을 붙인다.
+    참고: 같은 트리를 **구조 기준**(`objects` + `general|camera` 키를 가진 json)으로 세면
+    190 이고 분포는 {180, 7, 3, 0} 이다 — 기준이 다르면 수가 다르다는 사실 자체를
+    `spec/engine/scene-objects.json` 의 `scene.corpus.objectIDCensus` 가 담는다.
+    """
+    # (루트, 상대경로 기준, 결과에 붙일 접두). 접두를 남기는 이유는 머신마다 다른 절대
+    # 경로를 정본에 넣지 않으면서 어느 트리의 씬인지는 남기기 위해서다.
+    roots = ((WE_ROOT, WE_ROOT, "WE_ROOT/"),)
     files = []
     for r, base, prefix in roots:
         for dp, _dn, fn in os.walk(r):
@@ -461,7 +477,13 @@ def build(data, sections, files):
     bin_ev = specfmt.ev("binary",
                         "wallpaper64.exe (imagebase 0x140000000) — 이미지 전수 바이트 스캔"
                         "(f32 비트패턴 · ASCII/UTF-16LE 문자열 · 점프표)")
-    corpus_ev = specfmt.ev("corpus", "동봉 172 + 설치본 186 = 358 씬의 general.hdr / general.bloom")
+    # [2026-08-28] 종전 ref 는 "동봉 172 + 설치본 186 = 358" 이었다 — 두 트리가 같은 집합이라
+    # 그 덧셈 자체가 이중계수다. 모집단을 설치본 하나로 못 박는다.
+    corpus_ev = specfmt.ev("corpus", "설치본 assets/ + projects/ 186 씬(이름 글롭 "
+                                     "{scene,gifscene}.json)의 general.hdr / general.bloom",
+                           "단일 모집단이다. 동봉 WEAssets/ 는 설치본 assets/ 의 사본이라 "
+                           "같이 세면 172 씬이 두 번 들어간다",
+                           "설치본 assets/ + projects/ — 이름 글롭 {scene,gifscene}.json 186씬")
     script_ev = specfmt.ev("script", "scripts/spec/measure_tonemapping.py")
     ldr_math_ev = specfmt.ev("file", "Sources/WapleCore/LDRBloomMath.swift")
     hdr_math_ev = specfmt.ev("file", "Sources/WapleCore/HDRBloomMath.swift")
@@ -614,6 +636,14 @@ def build(data, sections, files):
             "hdrBoostRampIsNotAToneCurve": "combine_hdr.frag:31 의 smoothstep(1,5,luma) 는 톤 곡선이 "
                                            "아니라 **HDR10 헤드룸 배수 램프**다. DISPLAYHDR 콤보 안에만 "
                                            "있고 SDR 경로에는 실리지 않는다.",
+            "corpusPopulation": "**설치본 assets/ + projects/**, 이름 글롭 `{scene,gifscene}.json`. "
+                                "[2026-08-28] 종전 358 은 이중계수였다 — 동봉 "
+                                "`Sources/WapleRender/Resources/WEAssets/` 는 설치본 `assets/` 의 "
+                                "사본이라 172 씬을 두 번 셌다(358 = 172 + 186). 단일 모집단으로 "
+                                "다시 세면 **186** 이고 분포도 그만큼 줄어든다"
+                                "({348,6,4,0} → {178,5,3,0}; 산술 확인 348 = 178+170 · 6 = 5+1 · "
+                                "4 = 3+1). 같은 트리를 **구조 기준**(`objects` + `general|camera`)으로 "
+                                "세면 190 / {180,7,3,0} 이다 — 기준이 다르면 수가 다르다.",
             "corpusScenes": n_scenes,
             "corpusReach": {
                 "LDR + bloom off": combo[(False, False)],
@@ -622,9 +652,11 @@ def build(data, sections, files):
                 "HDR + bloom off": combo[(True, False)],
             },
             "hdrScenes": hdr_scenes,
-            "reachReading": "감마 논쟁(`lin()` 이식 여부)이 화면에 닿는 표본은 358 중 `hdr:true` "
-                            "쪽뿐이고, `hdr:true && !bloom` 은 코퍼스에 **0건**이라 "
-                            "`passthroughsrgb` 경로는 동봉·설치본 어느 씬으로도 재현되지 않는다.",
+            "hdrScenesNote": "고유 HDR 씬은 **3개**다. 종전 4개는 `previewthunderbolt` 를 동봉 경로와 "
+                             "설치 경로로 두 번 실은 것이다 — 이중계수의 같은 뿌리.",
+            "reachReading": "감마 논쟁(`lin()` 이식 여부)이 화면에 닿는 표본은 **설치본 186 씬** 중 "
+                            "`hdr:true` 쪽 3건뿐이고, `hdr:true && !bloom` 은 코퍼스에 **0건**이라 "
+                            "`passthroughsrgb` 경로는 설치본 어느 씬으로도 재현되지 않는다.",
             "crossRef": "spec/engine/shaders.json shaders.composite · "
                         "spec/engine/render-pass.json engine.renderPass.order",
         }, "확정", [shader_ev, corpus_ev, script_ev]),
@@ -722,7 +754,10 @@ def build(data, sections, files):
             "authoringDefaults": {
                 "bloomstrength": "2.0 — Scene::Scene 즉시값 `0x1401870ac` (0x40000000)",
                 "bloomthreshold": "0.6499999761581421 — `0x1401870b7` (0x3f266666)",
-                "bloomtint": "(1,1,1) — 358 씬 중 저작 154건이 전건 \"1.00000 1.00000 1.00000\"",
+                "bloomtint": "(1,1,1) — **설치본 186 씬**(이름 글롭 {scene,gifscene}.json) 중 "
+                             "저작 **77건**이 전건 \"1.00000 1.00000 1.00000\". "
+                             "[2026-08-28] 종전 \"358 중 154\" 는 이중계수였다 — 동봉 77 + 설치 77 을 "
+                             "더한 것이고 두 트리는 같은 집합이다.",
             },
             "wapleProbes": probes,
             "crossRef": "spec/engine/uniform-feed.json engine.uniformFeed.g_TexelSize.convention "
@@ -800,7 +835,10 @@ def main():
     if len(files) < 130:
         raise SystemExit("동봉 셰이더가 %d개뿐이다 — WEAssets 가 온전하지 않다" % len(files))
     n_scenes, _combo, _hdr = corpus_reach()
-    if n_scenes < 300:
+    # [2026-08-28] 하한을 300 → 180 으로 내렸다. 종전 300 은 **이중계수된 358** 을 전제한
+    # 값이라, 이중계수를 걷어내면 정상 실행이 이 관문에 막힌다. 단일 모집단(설치본 이름
+    # 글롭)의 정상값은 186 이다.
+    if n_scenes < 180:
         raise SystemExit(
             "씬 코퍼스가 %d개뿐이다 — 도달 수치를 확정으로 쓸 수 없다. "
             "WE_ROOT 가 설치본 루트(projects/ 포함)를 가리키는지 확인해라." % n_scenes)

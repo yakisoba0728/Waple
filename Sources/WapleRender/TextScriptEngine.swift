@@ -1747,11 +1747,21 @@ public final class TextScriptEngine {
     // 스크립트가 보관한 audioBuffer/g_AudioSpectrum* 별칭이 살아 있어야 한다. waveform 은 데이터원 없음(0 유지).
     var __audioCallbacks = [];
     function __setAudioData(l, r) {
-        function avg(src, dst, group) {
+        // [2026-08-28] 밴드 축약이 평균이 아니라 **MAX** 다. 실물이 `maxss` 를 쓴다 —
+        // 64→32 는 `0x1401128e0 f30f5f048b maxss`, 32→16 은 `0x140112b6f maxss`
+        // (`docs/re/audio-capture.md:609` 가 같은 바이트를 싣고 `:660` 이 "위 avg(...) 4줄은
+        // MAX 여야 한다" 고 이미 적어 뒀다). 평균은 피크를 뭉개서 비트가 약해 보인다.
+        //
+        // 좌우 합성(`spectrum`·`average64/32/16`)은 그대로 **평균**이다 — 그건 밴드 축약이
+        // 아니라 WE `AudioBuffers.average` 규약(H4)이라 다른 연산이다.
+        function foldMax(src, dst, group) {
             for (var i = 0; i < dst.length; i += 1) {
-                var s = 0;
-                for (var j = 0; j < group; j += 1) { s += src[i * group + j]; }
-                dst[i] = s / group;
+                var m = src[i * group];
+                for (var j = 1; j < group; j += 1) {
+                    var v = src[i * group + j];
+                    if (v > m) { m = v; }
+                }
+                dst[i] = m;
             }
         }
         for (var i = 0; i < 64; i += 1) {
@@ -1760,10 +1770,10 @@ public final class TextScriptEngine {
             __audioBuffer.left64[i] = lv; __audioBuffer.right64[i] = rv;
             __audioBuffer.spectrum[i] = (lv + rv) / 2;
         }
-        avg(__audioBuffer.left64, __audioBuffer.left32, 2);
-        avg(__audioBuffer.right64, __audioBuffer.right32, 2);
-        avg(__audioBuffer.left64, __audioBuffer.left16, 4);
-        avg(__audioBuffer.right64, __audioBuffer.right16, 4);
+        foldMax(__audioBuffer.left64, __audioBuffer.left32, 2);
+        foldMax(__audioBuffer.right64, __audioBuffer.right32, 2);
+        foldMax(__audioBuffer.left64, __audioBuffer.left16, 4);
+        foldMax(__audioBuffer.right64, __audioBuffer.right16, 4);
         // H4: WE AudioBuffers.average = 좌우 평균(res 별). registerAudioBuffers 반환 버퍼가 이 배열을 별칭 참조.
         for (var m = 0; m < 64; m += 1) { __audioBuffer.average64[m] = (__audioBuffer.left64[m] + __audioBuffer.right64[m]) / 2; }
         for (var m = 0; m < 32; m += 1) { __audioBuffer.average32[m] = (__audioBuffer.left32[m] + __audioBuffer.right32[m]) / 2; }

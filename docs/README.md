@@ -48,6 +48,41 @@ WE 엔진 이식 프로그램의 차터·스펙·계획은 [superpowers/](superp
 | 입력·웹·스크립트 | [pointer-interaction.md](re/pointer-interaction.md) · [web-wallpaper-bridge.md](re/web-wallpaper-bridge.md) · [scene-script-api.md](re/scene-script-api.md) |
 | 도구 | [compatibility-analyzer.md](re/compatibility-analyzer.md) |
 
+### 규약 — `파일:줄` 인용은 **드리프트한다** (2026-08-28 선언)
+
+`docs/re/**` 의 `SomeFile.swift:123` 꼴 인용은 **작성 시점의 값**이다. 소스가 바뀌면 문서는
+따라가지 않는다. 이건 방치가 아니라 구조적 성질이다 — 인용이 수백 곳이고, 그것을 자동으로
+갱신하는 게이트는 없다.
+
+**얼마나 낡았나(2026-08-28 표본 조사): 두 독립 측정이 76~95% 드리프트로 수렴했다.**
+대표 3건(이번에 실제 값으로 고쳤다):
+
+| 문서 | 인용 | 실제 |
+| --- | --- | --- |
+| `re/material-blend.md` | `SceneRendererResources.swift:488` | **552** |
+| `re/material-blend.md` | `SceneRenderer3D.swift:781` | **806** |
+| `re/bundled-key-coverage.md` | `SceneDocument.swift:981` | **4052** |
+
+`re/unimplemented-json-keys.md` 는 아예 본문에서 *"그 줄번호는 당시 값이다"* 라고 스스로 인정한다.
+
+> **따라가는 법: 줄번호로 가지 마라. 인용문이 함께 적어 둔 식별자·문자열로 `grep` 해라.**
+>
+> ```
+> # 나쁨 — 엉뚱한 줄을 읽는다
+> sed -n '488p' Sources/WapleRender/SceneRendererResources.swift
+>
+> # 좋음 — 인용이 함께 적은 코드 조각으로 찾는다
+> grep -n 'blendAdditive: layer.blendMode == "additive"' Sources/WapleRender/SceneRendererResources.swift
+> ```
+>
+> 그래서 **인용할 때는 줄번호만 적지 말고 식별자나 코드 조각을 같이 적어라.** 줄번호는
+> 썩지만 식별자는 안 썩는다. 이미 그렇게 적힌 인용(`SceneDocument.materialUserTextureKeepAspect
+> 선언부` 같은 심볼 인용)이 이 리포에서 가장 오래 살아남은 형태다.
+
+**줄번호 전수 갱신은 하지 않는다.** 한 번 고쳐도 다음 커밋에 다시 썩고, 그 작업이 문서의
+사실관계를 개선하지도 않는다. 대신 위 규약으로 **읽는 쪽이 안전하게 따라가게** 한다.
+바이너리 VA 인용(`0x1401…`)은 이 문제가 없다 — WE 2.8.42 는 고정 아티팩트다.
+
 ## 이력 — [history/](history/)
 
 개발 당시의 계획서·설계서·감사 리포트 **71개**다. 참조 문서가 아니라 **기록**이다.

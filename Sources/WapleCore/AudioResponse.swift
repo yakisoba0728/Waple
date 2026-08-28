@@ -217,10 +217,11 @@ private func audioAnnString(_ s: String, _ key: String) -> String? {
 
 /// 어노테이션 `{"key":숫자}` 또는 `{"key":"a b"}`/`{"key":"a, b"}` 의 성분들.
 ///
-/// **`GLSLTranslator.jsonFloats` 와 갈리는 자리가 하나 있다** — 저쪽은 문자열을 `split(separator: " ")`
-/// 로만 쪼개서 `"0.0, 1.0"` 이 `["0.0,", "1.0"]` → `Float("0.0,") == nil` → `[1.0]` 한 성분이 된다.
-/// 여기서는 쉼표도 구분자로 본다. (오디오 다섯 키는 전부 공백 구분이라 이 경로가 오디오에서
-/// 발동하지는 않는다 — 파서를 일반 규약으로 맞춰 두는 것이고, 저쪽 정정안은 보고서로 넘긴다.)
+/// **[2026-08-28 해소] `GLSLTranslator.jsonFloats` 와 갈리던 자리가 닫혔다.** 저쪽은 문자열을
+/// `split(separator: " ")` 로만 쪼개서 `"0.0, 1.0"` 이 `["0.0,", "1.0"]` → `Float("0.0,") == nil`
+/// → `[1.0]` 한 성분이 됐다. 설치본 도달 3파일 5건이 확인돼 저쪽도 쉼표를 구분자에 넣었다
+/// (`GLSLTranslator.swift:2555`). 이제 두 파서가 같은 규약이다.
+/// (오디오 다섯 키는 전부 공백 구분이라 이 경로가 오디오에서 발동한 적은 없다.)
 private func audioAnnFloats(_ s: String, _ key: String) -> [Float]? {
     guard let r = s.range(of: "\"\(key)\"") else { return nil }
     let rest = s[r.upperBound...]

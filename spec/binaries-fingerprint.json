@@ -82,17 +82,21 @@
   {
    "id": "binary.fingerprints.why",
    "value": {
-    "reason": "spec 정본이 WE 바이너리를 273회 인용하는데 지문은 wallpaper64.exe 하나뿐이었다. 근거가 사는 분석 리포가 삭제되면 나머지 7종은 확정 등급인데 대조 수단이 사라진다.",
+    "reason": "spec 정본이 WE 바이너리를 341회 인용하는데 지문은 wallpaper64.exe 하나뿐이었다. 근거가 사는 분석 리포가 삭제되면 나머지 7종은 확정 등급인데 대조 수단이 사라진다.",
     "citations": {
-     "wallpaper64.exe": 189,
+     "wallpaper64.exe": 246,
      "scenescript64.dll": 31,
-     "mediaextensions64.dll": 14,
-     "wallpaperui.exe": 13,
+     "mediaextensions64.dll": 18,
+     "wallpaperui.exe": 18,
      "resourcecompiler64.exe": 12,
      "webwallpaper64.exe": 6,
-     "resourceutil64.dll": 4,
+     "resourceutil64.dll": 6,
      "cloneextensions64.dll": 4
     },
+    "citationsPopulation": "**spec/ 정본 전체**(= validate.py 의 is_canon_path — 캡처 산출물 golden/snapshot/ 과 형식 문서 schema.json 제외). 이 문서 자신도 포함된다(자기 evidence 2건이 wallpaper64.exe 를 언급한다).",
+    "citationsUnit": "**evidence 객체 1개 = 1**. 한 객체가 두 바이너리를 언급하면 양쪽에 각 1 이므로 종별 합(341)은 '걸린 객체 수'보다 크다. 일치는 `ref` + `note` 를 이어붙인 문자열에 파일명이 **낱말 경계로** 나타나는지로 본다 — `webwallpaper64.exe` 가 `wallpaper64.exe` 를 부분문자열로 포함하므로 경계가 없으면 4 과다 계수된다(246 → 251).",
+    "citationsWasHardcoded": "[2026-08-28] 종전 이 도수는 생성기 안의 `CITATIONS = {...}` 하드코딩 리터럴이었다. statusRules.확정 이 요구하는 'generatedBy 스크립트로 재현된다' 를 만족하지 못했고 실제로 8종 중 4종이 낡아 있었다 — wallpaper64 189 · mediaextensions 14 · wallpaperui 13 · resourceutil 4. 지금은 count_citations() 가 매 실행 실제로 센다.",
+    "citationsIsAFunctionOfSpec": "**이 도수는 spec/ 전체의 함수다.** 정본 어디든 evidence 를 더하거나 빼면 여기 수치가 바뀐다 — 하드코딩을 걷어낸 대가이고, 그게 옳다. 정본을 고친 커밋에서는 이 생성기를 같이 돌려라. 실제로 이 감사 한 번에 339 → 341 로 움직였다(render-state 의 D3D11CreateDevice 호출부 근거 2건 추가).",
     "validatorBlindSpot": "validate.py 의 근거 실재 검사는 리포 밖 경로를 제외한다(머신마다 다르므로 정당한 설계) — 그래서 이 부류를 자동으로는 못 잡는다.",
     "notCommitted": "바이너리 자체는 커밋하지 않는다(독점 소프트웨어). 지문만 남긴다."
    },
@@ -102,6 +106,12 @@
      "kind": "binary",
      "ref": "WE 2.8.42 설치본(wallpaper64.exe + bin/)",
      "note": "sha256 · fileBytes · PE TimeDateStamp · .pdata 함수 수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_we_binaries_fingerprint.py",
+     "note": "citations 는 이 스크립트가 spec/ 정본을 훑어 매 실행 다시 센다 — 종전의 하드코딩 리터럴이 아니다",
+     "population": "spec/ 정본 전체(validate.py 의 is_canon_path 기준)의 evidence 객체 — 1,203개 중 바이너리명이 낱말 경계로 나타나는 것을 종별로 센다"
     }
    ]
   }

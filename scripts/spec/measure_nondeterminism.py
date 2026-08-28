@@ -238,11 +238,22 @@ def main():
                             "**네 위치 전부 같은 해시**(수정 전에는 위치마다 달랐다). "
                             "유닛 회귀는 CapturePointerPinTests — 핀 분기를 지우면 pointerUV 가 "
                             "실제 커서값(1.0, 0.0)으로 바뀌며 깨지는 것까지 확인했다(음성 대조).",
-                "rebaselined": "현행 골든을 다시 떴다 — spec/golden/snapshot/baseline-f3a17da "
-                               "(release, 170/0/0, 셀프체크 비결정 0종). 설치 게이트가 전 코퍼스 "
-                               "2회 캡처 **사이에 커서를 옮겨서** 비트동일을 요구하는데 상이 0종이었다 "
-                               "(같은 대조가 수정 전에는 28~29종). 스위트 실증: GT 170/170 "
-                               "mounted·captured·구조소실 0, GT 제외 2,142개 통과.",
+                "rebaselined": "현행 골든을 다시 떴다 (release, 170/0/0, 셀프체크 비결정 0종). "
+                               "설치 게이트가 전 코퍼스 2회 캡처 **사이에 커서를 옮겨서** 비트동일을 "
+                               "요구하는데 상이 0종이었다 (같은 대조가 수정 전에는 28~29종). "
+                               "스위트 실증: GT 170/170 mounted·captured·구조소실 0, "
+                               "GT 제외 2,142개 통과. "
+                               "**[2026-08-28] 이 문장이 인용하던 "
+                               "`spec/golden/snapshot/baseline-f3a17da` 는 HEAD 에 없다** — "
+                               "삭제 사고가 아니라 정책이다"
+                               "(`spec/golden/snapshot/README.md`: 낡은 기준선은 커밋 이력에만 남긴다). "
+                               "없는 디렉터리를 가리키는 인용은 따라갈 수 없으므로 **실재하는 것으로 "
+                               "옮긴다**: 지금 트리에 있는 기준선은 `baseline-6f0bcf0` · "
+                               "`baseline-81098bb` · `nondet-2026-08-01` 이고, **판정에 쓰이는 현행은 "
+                               "`baseline-6f0bcf0`** 이다"
+                               "(`Tests/WapleRenderTests/GoldenBaselineOracleTests.swift` 의 "
+                               "`GoldenBaseline.currentLabel`). 위 170/0/0 수치는 그때의 재베이스라인 "
+                               "기록이지 현행 기준선의 수치가 아니다 — 둘을 같은 것으로 읽지 마라.",
             },
             "captureCaveat": "다중 시각 마운트의 t=6 프레임은 t=6 단독 캡처와 다르다"
                              "(캡처 루프가 프레임 간 스크립트/파티클 연속성을 유지 — 실측). "
@@ -256,7 +267,10 @@ def main():
                     specfmt.ev("file", "Sources/WapleRender/SceneRendererFrameEncoder.swift:53",
                                "pointerUV → 이펙트 유니폼 g_PointerPosition"),
                     specfmt.ev("file", "Sources/WapleCompatCore/SnapshotPipeline.swift:249-264",
-                               "핀 목록에 포인터가 없다")]),
+                               "핀 목록에 포인터가 없다"),
+                    specfmt.ev("file", "Tests/WapleRenderTests/GoldenBaselineOracleTests.swift:29",
+                               "GoldenBaseline.currentLabel = \"baseline-6f0bcf0\" — "
+                               "판정이 실제로 쓰는 현행 기준선")]),
 
         # 2026-08-16: 포인터 핀 이후에도 남은 잔여분. 위 항목들과 달리 이 값은 nondet-2026-08-01
         # 캡처 세트에서 나오지 않는다 — 아래 수치는 probe-scene-repeat.sh(+ 일회성 렌더 계측)의

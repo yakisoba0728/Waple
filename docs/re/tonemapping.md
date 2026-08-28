@@ -328,6 +328,22 @@ gl_FragColor = vec4(pow(albedo, 1/2.2), 1.0);
 같은 함정을 파일 이름에서도 조심해야 한다 — 명명 규약은 **`passthrough<입력공간>`** 이다:
 `passthroughsrgb` = sRGB 입력을 읽어 선형 출력, `passthroughlinear` = 선형 입력을 읽어 sRGB 출력.
 
+> **[2026-08-28 · 같은 함정에 정본이 걸려 있다 — `docs/re/` 밖]** 위 규약을 이 문서는 옳게
+> 적었는데, **`spec/assets/material-schema.json` 의 사람용 라벨 2건이 뒤집혀 있다**:
+>
+> | 머티리얼 | 실제 셰이더 → 실제 방향 | 정본의 라벨 | 판정 |
+> | --- | --- | --- | --- |
+> | `combine_srgb` | `passthroughsrgb` → `lin()` = **sRGB→linear 디코드** | "sRGB 통과 합성" | **역전** |
+> | `backbufferpassthrough` | `passthroughlinear` → `_srgb()` = **linear→sRGB 인코드** | "백버퍼 통과(선형 감마)" | **역전** |
+>
+> 셰이더 원문으로 즉시 확인된다(`passthroughsrgb.frag:15` 의 `lin()` · `passthroughlinear.frag:14`
+> 의 `_srgb()` — 이 문서 §2.3 (2)·(4)). 두 라벨 다 **이름에서 방향을 유추**한 것이고, 그것이
+> 바로 위 문단이 경고한 사고 원인이다.
+>
+> **이 문서의 서술은 고칠 것이 없다** — `docs/re/` 안에 이 라벨을 옮겨 적은 문장은 없다
+> (전수 확인 2026-08-28). 정정 대상은 `spec/` 쪽이고 이 커밋의 범위 밖이다.
+> 여기 남기는 이유는 다음 사람이 정본 라벨을 읽고 이 문서와 어긋난다고 생각하지 않게 하려는 것이다.
+
 > **[2026-08-21] 이 정정은 반영됐다.** `scene-postprocessing.md` §4 의 그 행을 지우고, 방향 판정이
 > 상수로 이뤄진다는 것과 이 머티리얼이 **런타임 미로드**라는 것(§2.4)을 같이 적었다. 두 문서가
 > 갈린 채 오래 살아 있었다 — 정본 `spec/engine/tonemapping.json`
@@ -716,8 +732,47 @@ albedo = 4탭(v_TexCoord ± g_RenderVar0.xy / .zy / .xw / .zw)
 0x1401826ef  if (!al && !cl)  [composite+0x3188] = 0     ; ccsimple 패스 자체를 만들지 않는다
 0x140182969  else  콤보 = { "COL": 1, "LUT": cl }        ; 문자열 "COL"=0x14048e2e4 · "LUT"=0x14048e2e0
 ```
-**`"HDR"` 콤보 문자열은 바이너리에 없다** — `ccsimple.frag:30-33` 의 `#if HDR` 오버브라이트 보정
-(`lutColor = lut(albedo) * (1 + dot(max(0, albedo−1), 1))`)은 **wallpaper64.exe 에서 컴파일되지 않는다.**
+~~**`"HDR"` 콤보 문자열은 바이너리에 없다** — `ccsimple.frag:30-33` 의 `#if HDR` 오버브라이트 보정
+(`lutColor = lut(albedo) * (1 + dot(max(0, albedo−1), 1))`)은 **wallpaper64.exe 에서 컴파일되지 않는다.**~~
+
+> **[2026-08-28 정정] 위 취소선 문장의 전제가 거짓이다 — `"HDR"` 문자열은 실재하고 참조도 있다.**
+>
+> `wallpaper64.exe` `0x14048ee84 = "HDR\0"` 이고, **참조가 정확히 1개** 있다:
+>
+> ```
+> 0x1401a6721  test  dword [rax+0x118], 0x2000     ; 씬 HDR 비트
+> 0x1401a672b  je    +0x85                          ; 꺼져 있으면 통째로 건너뜀
+> 0x1401a6731  mov   eax, [rip+0x2e874d]            ; DWORD @0x14048ee84 = 'HDR\0'
+> 0x1401a674c  movzx eax, byte [rip+0x2e8733]       ; @0x14048ee86 = 'R'
+> 0x1401a6757  mov   [rsp+0x40], 3                  ; std::string 길이 = 3
+> 0x1401a676e  call  0x1401a4440                    ; define 맵 insert
+> 0x1401a6773  mov   dword [rax], 1                 ; 값 = 1
+> ```
+>
+> **왜 종전 스캔이 놓쳤나:** `"HDR"` 은 3글자라 `std::string` **SSO 로 인라인**된다. 그래서
+> 문자열 적재가 `lea rdx, [rip+…]` 가 아니라 **`mov dword` + `movzx byte`** 두 조각으로
+> 쪼개져 나온다(`'HDR\0'` 4바이트 + 뒤따르는 `'R'` 1바이트). **`lea` 전용 xref 스캐너에는
+> 원리적으로 안 잡힌다.** → 짧은 문자열(≤15자)의 부재 주장은 `lea` xref 만으로 하면 안 된다.
+> `mov r32, [rip+disp]` / `movzx r32, byte [rip+disp]` 도 함께 훑어야 한다.
+>
+> **⚠️ 이 절의 결론은 근거가 사라졌다 — [미해결] 로 강등한다.**
+> "`#if HDR` 이 `ccsimple` 패스에서 컴파일되지 않는다" 는 **여전히 참일 수 있지만, 위 문장을
+> 근거로는 더 이상 말할 수 없다.** 문자열이 없어서가 아니라, 그 define 이 이 패스까지
+> 오느냐가 따로 확인되어야 하기 때문이다.
+>
+> `FUN_1401a5c40` 은 `ccsimple` 전용이 아니라 **범용 define 맵 빌더**다 — 같은 함수가
+> `SCENE_ORTHO` · `LIGHTS_COOKIE` · `REVERSEDEPTH` 와 **나란히** `HDR` 을 같은 맵에 넣는다.
+>
+> **갈리는 조건(이것 하나로 결정된다):**
+> 그 맵(`FUN_1401a5c40` 의 `param_3`)이 `[composite+0x3188]` 의 `ccsimple` 머티리얼 컴파일에
+> **전달되는가.**
+> - 전달된다 → 씬 HDR 비트가 켜진 벽지에서 `#if HDR` 팔이 **살아 있다**. 그러면 Waple 의
+>   `ccsimple` 대응 패스(§9 의 W-25)는 오버브라이트 보정까지 재현해야 한다.
+> - 전달되지 않는다(이 맵은 씬 지오메트리 셰이더 전용이고 포스트 패스는 §6.2 의
+>   `{COL, LUT}` 맵을 따로 쓴다) → 종전 결론이 **다른 근거로** 되살아난다.
+>
+> 확인 방법: `0x140182969` 가 만드는 콤보 맵과 `FUN_1401a5c40` 이 채우는 맵이 **같은 객체인지**
+> 추적. 다른 객체면 후자다. **[미해결 H — `#if HDR` 도달 여부]**
 
 ### 6.3 유니폼 패킹 (`0x140182d85`–`0x140182ea3`)
 
@@ -1008,6 +1063,7 @@ Waple 에는 `ccsimple` 대응 패스가 없다. **다만 씬 키가 아니라 �
 | **E** | `wec_sa` vs `wec_sat` | UI 가 쓰는 실제 키 | `wallpaperui.exe` 문자열 스캔 |
 | **F** | `0x1a` 뎁스 포맷 enum | `[rt+0x58]` 플래그의 소비처 | `0x1400d2d0f` 가 세우는 바이트를 읽는 자리를 역추적 |
 | **G** | `combine_hdr.frag` `LINEAR` 콤보 | 로드되지 않는 이유 | 에디터 실행 파일(`wallpaperui.exe`)에 문자열이 있는지 |
+| **H** | `ccsimple.frag` `#if HDR` 팔이 도달하는가 **[2026-08-28 신규 · §6.2 결론 강등]** | `FUN_1401a5c40`(`HDR`·`SCENE_ORTHO`·`LIGHTS_COOKIE`·`REVERSEDEPTH` 를 넣는 범용 define 맵 빌더)의 `param_3` 맵이 `[composite+0x3188]` ccsimple 머티리얼 컴파일에 전달되는지 | `0x140182969` 의 `{COL,LUT}` 맵과 `FUN_1401a5c40` 의 `param_3` 이 **같은 객체인지** 추적. 다르면 종전 결론이 다른 근거로 성립, 같으면 `#if HDR` 이 살아 있다 |
 
 **이 문서가 확정으로 적지 않은 것을 다시 못 박는다**: §2.6 의 "WE 화면에 실제로 감마 디코드가
 보이는가" 는 **확정하지 못했다**. 확정한 것은 (1) 셰이더 평문에 그 식이 있다, (2) 그 머티리얼이

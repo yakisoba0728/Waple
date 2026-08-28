@@ -594,7 +594,63 @@ var right = audioData.slice(halfWayThough, audioData.length);
 
 ## 11. 파일 접근 API — WE 의 범위와 Waple 의 봉쇄
 
-### 11.1 WE 는 봉쇄하지 않는다 (확정)
+### 11.1 WE 의 봉쇄 — 디렉터리 감시 진입점에는 없고, CEF 리소스 핸들러에는 있다
+
+> **[2026-08-28 정정] 이 절의 종전 제목은 "WE 는 봉쇄하지 않는다 (확정)" 이었고 그것은 거짓이다.**
+> `webwallpaper64.exe` 에 **CEF 리소스 요청 핸들러가 실재하고, 그것이 프로젝트 디렉터리 봉쇄를
+> 한다.** 아래 §11.1a 가 실측이다. 종전 결론은 §11.1b 에 적은 표본 오류에서 나왔다.
+> 아래 본문(랜덤 파일 추출 · 디렉터리 감시 진입점)의 서술 자체는 **그 함수 스코프 안에서는
+> 그대로 참**이므로 지우지 않는다 — 틀린 것은 그 스코프를 제품 전체로 일반화한 제목이다.
+
+#### 11.1a WE 의 CEF 리소스 요청 봉쇄 (확정 2026-08-28)
+
+`webwallpaper64.exe` 는 CEF 리소스 요청 핸들러를 vtable `0x14011de50` 로 구현한다
+(핸들러 진입 `0x140016950`, 슬롯 `+0x58` → `0x140013280`).
+`.pdata` 조각 **6개**가 `0x140016950`–`0x1400180f1` 를 덮는다 — 즉 이 범위는
+컴파일러가 인식하는 실제 함수 본문이지 데이터가 아니다.
+
+**거부 로그 문자열 3종**(전부 이 핸들러 범위에서만 참조된다):
+
+| VA | 문자열 | 무엇을 막는가 |
+| --- | --- | --- |
+| `0x14011ce4b` | `"Deny request: '%s' is a symlink or not a file (%S).\n"` | 심링크 · 비정규 파일 |
+| `0x14011ce83` | `"Deny request: '%s' is not inside project directory %s.\n"` | **프로젝트 디렉터리 밖** |
+| `0x14011cebb` | `"Deny request: '%s' is not a regular file.\n"` | 디렉터리 · 디바이스 등 |
+
+**UTF-16 차단목록**(ASCII 스트링 덤프에는 안 잡힌다):
+
+| VA | 값 |
+| --- | --- |
+| `0x14011cdf8` | `coinhive.com` |
+| `0x14011ce18` | `arc.io/widget` |
+| `0x14011cde8` | `file:` |
+
+**심링크는 명시적으로 거부한다.** `0x140017100 mov r8d, 6` → `0x140017111 call 0x1400346d0`
+이고, 그 안에서 `0x140034724 bt ecx, 0xa` + `0x14003472f cmp eax, 0xa000000c`
+(= reparse tag `IO_REPARSE_TAG_SYMLINK`)로 판정한다. `r8d = 6` 은
+`attributes | reparseTag` 이고 **`followSymlinks` 비트가 없다** — 즉 `stat()` 이 아니라
+`symlink_status()` 의미다. 심링크를 따라가 본 뒤 판정하는 게 아니라, 심링크라는 사실
+자체로 거부한다.
+
+파일/디렉터리 판정은 두 헬퍼가 한다:
+
+| VA | 내부 Win32 |
+| --- | --- |
+| `0x140051e90` | `GetFileAttributesExW` · `FindFirstFileW` · `GetFileInformationByHandleEx` |
+| `0x140051e50` | `GetFinalPathNameByHandleW`(IAT `0x140104308`) — 정규화 후 루트 대조 |
+
+⇒ WE 의 웹 벽지 호스트는 **경로 정규화 → 프로젝트 디렉터리 포함 검사 → 심링크/정규파일
+검사**를 순서대로 한다. Waple 의 `WallpaperPathSecurity` 와 **같은 부류의 방어**다.
+
+#### 11.1b 왜 종전에 놓쳤나 — 표본이 반례를 담을 수 없었다
+
+종전 근거는 *"`webwallpaper64.exe` 임포트 테이블에 scheme/resource 계열이 0건"* 이었다.
+그 근거는 **이 반례를 원리적으로 담을 수 없는 표본**이다: CEF 의 콜백(리소스 요청 핸들러,
+스킴 핸들러)은 **앱이 자기 vtable 로 구현해 CEF 에 넘기는 구조**이므로, 그 구현은
+호스트 바이너리 안의 함수 포인터 테이블로만 존재하고 **임포트 테이블에는 절대 나타나지
+않는다.** "임포트에 없다" 로는 "핸들러가 없다" 를 증명할 수 없다.
+→ 앞으로 CEF 계열 부재 주장은 **`.rdata` vtable + `.pdata` 범위 + 로그 문자열**로
+확인해야 한다. 임포트 0건은 부재의 근거가 아니다.
 
 `wallpaperRequestRandomFileForProperty(name, cb)`(등록 0x140013f04, 핸들러 0x14001592f)는
 프로세스 메시지 `RequestRandomFile`(0x140015e48)을 보낸다. 받는 쪽
@@ -620,10 +676,28 @@ FindFirstChangeNotificationW(path, TRUE, 0x13)   0x140009988 → 실패 시 로�
 ```
 
 `bWatchSubtree = 1`(재귀), 필터 `0x13` = FILE_NAME | DIR_NAME | LAST_WRITE.
-**프로젝트 폴더 봉쇄 검사가 한 줄도 없다.** 경로는 사용자가 WE UI 에서 고른 값이고 WE 는 그것을
-전적으로 신뢰한다.
+**이 디렉터리 감시 진입점 함수(`0x1400098a0`–`0x140009ae9`) 스코프 안에는 프로젝트 폴더 봉쇄
+검사가 한 줄도 없다.** 경로는 사용자가 WE UI 에서 고른 값이고 이 함수는 그것을 전적으로 신뢰한다.
 
-### 11.2 Waple 의 봉쇄 (WE 에 대응물 없음)
+> **[2026-08-28 스코프 명시]** 위 문장은 **이 함수 안에서만** 참이다. 제품 전체로는 거짓이다 —
+> 리소스 요청 경로에는 §11.1a 의 프로젝트 디렉터리 봉쇄가 있다. 감시(watch)와 서빙(serve)은
+> 다른 경로이고, WE 는 **서빙 쪽에만** 봉쇄를 걸었다.
+
+### 11.2 Waple 의 봉쇄 (WE 에도 대응물이 있다)
+
+> **[2026-08-28 정정] 이 절의 종전 제목은 "WE 에 대응물 없음" 이었고 그것은 거짓이다.**
+> `webwallpaper64.exe` 의 CEF 리소스 요청 핸들러(§11.1a)가 대응물이다. 대응 관계는 다음과 같다:
+>
+> | Waple | WE(`webwallpaper64.exe`) |
+> | --- | --- |
+> | `containedFileURL(rel, root:)` 의 루트 포함 검사 | `"Deny request: '%s' is not inside project directory %s.\n"` (`0x14011ce83`) |
+> | `isRegularFile(url, containedIn:)` 의 realpath 재대조 | `GetFinalPathNameByHandleW`(`0x140051e50`) + `"is not a regular file"` (`0x14011cebb`) |
+> | 심링크 조상 거부(§11.3) | `symlink_status()` 의미의 reparse-tag 검사(`0x140034724` · `0x14003472f`) + `"is a symlink or not a file"` (`0x14011ce4b`) |
+> | (대응물 없음 — Waple 쪽에 없다) | 도메인 차단목록 `coinhive.com` · `arc.io/widget` · `file:` (`0x14011cdf8`·`0x14011ce18`·`0x14011cde8`) |
+>
+> 아래 표의 **Waple 쪽 규칙 서술은 그대로 유효**하다. 틀린 것은 "WE 에는 이런 게 없다" 는
+> 대조 주장뿐이다. 폭주 한도(동시 워크 · 엔트리 수 · 브리지 문자열 길이)는 WE 쪽에서
+> 대응물을 확인하지 못했다 — **[미해결]**.
 
 | 자리 | 규칙 |
 | --- | --- |
@@ -696,8 +770,24 @@ containedFileURL("link/missing.txt") -> root/link/missing.txt      ✘ /outside/
 ### 12.1 WE — 커스텀 스킴이 없고, 웹 보안이 꺼져 있다 (확정)
 
 - **스킴 핸들러 팩토리를 등록하지 않는다.** `webwallpaper64.exe` 의 CEF C API 임포트
-  52개 중 스킴/리소스 관련은 **하나도 없고**(`cef_register_scheme_handler_factory` 0건),
+  **49개**(전부 `cef_` 접두) 중 스킴/리소스 관련은 **하나도 없고**
+  (`cef_register_scheme_handler_factory` 0건),
   브라우저 생성은 `cef_browser_host_create_browser` 하나다(URL 관련은 `cef_uriencode`/`cef_uridecode` 뿐).
+
+> **[2026-08-28 정정 · 수치와 호스트]** 종전에 "52개" 로 적었다. `webwallpaper64.exe` 실측은
+> **49개**다. 52 는 **`wallpaperui.exe` 의 libcef 임포트 수**와 정확히 일치하므로,
+> 종전 수치는 **호스트를 혼동해 옮겨 적은 것**으로 보인다. WE 는 4+ 호스트 제품이니
+> CEF 관련 수치는 **어느 exe 의 임포트인지를 반드시 붙여** 적을 것.
+>
+> ⚠️ 또 하나의 혼동원: `webwallpaper64.exe` 안의 **`cef_*` 문자열은 54종**이다.
+> 임포트 수(49) · 문자열 종수(54) · 다른 호스트의 임포트 수(52)는 **서로 다른 세 값**이다.
+> 셋을 섞어 인용하지 말 것.
+>
+> ⚠️ 그리고 이 항목의 결론("스킴 핸들러 팩토리를 등록하지 않는다")은 임포트 0건을 근거로
+> 삼는데, §11.1b 에서 적었듯 **CEF 콜백은 임포트에 나타나지 않는다.** 스킴 팩토리 등록은
+> `cef_register_scheme_handler_factory` 라는 **C API 함수 호출**이므로 임포트로 잡히는 것이
+> 맞아 이 결론 자체는 유지되지만, **리소스 요청 핸들러는 등록이 아니라 vtable 이라
+> 이 근거로 부재를 말할 수 없다** — 실제로 있었다(§11.1a).
 - 로드 URL 은 URL 해석 함수 0x14000bd80–0x14000d978 이 만든다. `":/"`(0x14011ab88) 또는
   `":\"`(0x14011ab90)가 **없으면**(=스킴도 드라이브 문자도 없으면) 0x14000c0c2 에서
   UTF-16 리터럴 `"http://"`(0x14011ab98)를 앞에 붙인다. 있으면 그대로 쓴다 —
@@ -744,7 +834,7 @@ containedFileURL("link/missing.txt") -> root/link/missing.txt      ✘ /outside/
 `--disable-web-security` 에 해당하는 것을 켜야 하는데 WKWebView 에는 그 스위치가 없고,
 있어도 켜지 않는 것이 맞다.
 
-**미해결**: `file:` 오리진에서 도는 실물 벽지가 `fetch('file:///…')` 로 패키지 밖을 읽는
+**[미해결]**: `file:` 오리진에서 도는 실물 벽지가 `fetch('file:///…')` 로 패키지 밖을 읽는
 사례가 있는지는 코퍼스가 2건뿐이라 표본이 없다(두 건 다 상대 경로만 쓴다).
 
 ---

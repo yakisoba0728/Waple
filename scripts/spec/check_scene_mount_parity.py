@@ -52,6 +52,31 @@ RENDERER = ROOT / "Sources/WapleRender/SceneRenderer.swift"
 DEEPSCAN = ROOT / "Sources/WapleCompatCore/DeepScan.swift"
 # [2026-08-21 클러스터 BE] 캡처 파이프라인도 같은 코퍼스 열거를 쓴다 — 종전엔 게이트 시야 밖이었다.
 SNAPSHOT = ROOT / "Sources/WapleCompatCore/SnapshotPipeline.swift"
+# [2026-08-27] ProfilePipeline 도 시야 밖이었고, 그 사이 `runProfile` 만 마운트 선택자를
+# 하드코딩한 채 남아 있었다 — `fileExists("scene.pkg") ? "scene.pkg" : "gifscene.pkg"`.
+# 설치본 씬이 188/188 언팩이라 그 모드는 대상 코퍼스에서 **전건 exit 2** 였는데, 같은 파일
+# 머리의 정정문이 "마운트 선택자를 같은 함수로 맞췄다" 고 선언하고 있어 더 안 보였다.
+# 위 세 파일과 달리 이 계층은 `sceneCandidates` 꼬리를 갖지 않으므로(마운트를 `mountPackage` →
+# `ScenePackage.resolveMountSource` 에 위임한다) 꼬리 대조가 아니라 **결함 서명 자체**를 잡는다.
+PROFILE = ROOT / "Sources/WapleCompatCore/ProfilePipeline.swift"
+
+# 마운트 선택을 `ScenePackage` 밖에서 직접 하는 서명: 두 pkg 이름을 삼항으로 고르는 것.
+# `ScenePackage.swift` 자신은 그 선택의 정본이므로 제외한다.
+_PKG_TERNARY = re.compile(
+    r'\?\s*"(?:gif)?scene\.pkg"\s*:\s*"(?:gif)?scene\.pkg"'
+)
+
+
+def check_no_hardcoded_mount_selector(*texts: str) -> int:
+    """마운트 이름을 삼항으로 고르는 자리를 잡는다. 정본은 ScenePackage.resolveMountSource 하나다."""
+    hits = 0
+    for t in texts:
+        for m in _PKG_TERNARY.finditer(t):
+            fail("마운트 선택자를 ScenePackage 밖에서 직접 고르고 있다: "
+                 f"{m.group(0)} — mountPackage()/resolveMountSource() 로 위임해라. "
+                 "설치본 씬은 전건 언팩이라 이 형태는 그 코퍼스에서 100% 실패한다.")
+        hits += 1
+    return hits
 WEASSETS = ROOT / "Sources/WapleRender/Resources/WEAssets"
 
 # 동봉 WEAssets 실측(2026-08-20): 씬 프로젝트 170개 · 전건 언팩 · `.pkg` 0개 · 전건 `scene.json`.
@@ -188,6 +213,14 @@ def main() -> None:
                          SNAPSHOT.read_text(encoding="utf-8"))
     print(f"[scene-mount-parity] ① 후보 꼬리 일치 {tail}")
 
+    scanned = check_no_hardcoded_mount_selector(
+        DEEPSCAN.read_text(encoding="utf-8"),
+        SNAPSHOT.read_text(encoding="utf-8"),
+        PROFILE.read_text(encoding="utf-8"),
+        RENDERER.read_text(encoding="utf-8"),
+    )
+    print(f"[scene-mount-parity] ② 마운트 선택자 직접 지정 0건 (검사 {scanned}파일)")
+
     scenes, packed, present = survey_bundled(WEASSETS)
     if scenes < MIN_BUNDLED_SCENE_PROJECTS:
         fail(f"동봉 씬 프로젝트가 {scenes}개로 하한 {MIN_BUNDLED_SCENE_PROJECTS} 미만이다 — 측정 대상이 사라졌다")
@@ -232,6 +265,18 @@ def selftest() -> None:
     # 정상 조합은 통과해야 한다
     check_sources(_GOOD_DOC, _GOOD_ANA, _GOOD_REN, _GOOD_DS, _GOOD_SNAP)
     print("    양성대조 OK: 정상 조합 통과")
+
+    # ② 마운트 선택자 — 위임형은 통과, 삼항 직접 선택은 잡힌다.
+    check_no_hardcoded_mount_selector('guard let mpkg = mountPackage(folder) else { return 2 }\n')
+    print("    양성대조 OK: mountPackage 위임 통과")
+    _expect_fail(
+        "runProfile 이 pkg 이름을 삼항으로 되고름",
+        lambda: check_no_hardcoded_mount_selector(
+            'let pkgName = fm.fileExists(atPath: p) ? "scene.pkg" : "gifscene.pkg"\n'))
+    _expect_fail(
+        "삼항 순서를 뒤집어도 잡힌다",
+        lambda: check_no_hardcoded_mount_selector(
+            'let n = hasGif ? "gifscene.pkg" : "scene.pkg"\n'))
 
     _expect_fail("스캐너 후보가 하드코딩으로 되돌아감",
                  lambda: check_sources(_GOOD_DOC,

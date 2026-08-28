@@ -945,13 +945,25 @@ def main():
                        "FORMAT_ETC1_RGB8": 3, "FORMAT_DXT5": 4, "FORMAT_ETC2_RGBA8": 5,
                        "FORMAT_DXT3": 6, "FORMAT_DXT1": 7, "FORMAT_RG88": 8, "FORMAT_R8": 9,
                        "FORMAT_RG1616F": 10, "FORMAT_R16F": 11, "FORMAT_BC7": 12},
-           "DecompressNormal": "블록압축(3..7 또는 12): normal.yx = normal.yw·2 - (0.965, 1.0). "
+           "DecompressNormal": "블록압축(3..7 또는 12): `normal.yx = normal.yw·2 - (0.965, 1.0)`. "
                                "RG88: normal.xy = normal.rg·2 - 1. "
                                "그 외: normal.xy = normal.wy·2 - 1. "
                                "z = sqrt(saturate(1 - x² - y²)). "
-                               "**0.965 비대칭 상수가 x 쪽에만 걸린다**",
-           "DecompressNormalWithMask": "먼저 normal.xw = normal.wx 스왑 후 같은 식. "
-                                       "RG88 은 normal.gr 순서",
+                               "**0.965 는 y 성분에 걸린다** — 대입 좌변 스위즐이 `.yx` 라 "
+                               "y ← normal.y·2 − 0.965, x ← normal.w·2 − 1.0 이다.",
+           "DecompressNormalWithMask": "블록압축 분기는 `normal.xw = normal.wx` 스왑 **뒤** "
+                                       "`normal.xy = normal.xy·2 - (0.965, 1.0)`. "
+                                       "**여기서는 0.965 가 x 성분에 걸린다** — 좌변이 `.xy` 라 "
+                                       "x ← ·2 − 0.965, y ← ·2 − 1.0 이다. RG88 은 normal.gr 순서.",
+           "asymmetricConstantChannelDiffers": "**두 헬퍼가 서로 다른 채널에 비대칭 상수를 건다** — "
+                                               "DecompressNormal 은 **y**, DecompressNormalWithMask 는 "
+                                               "**x**. [2026-08-28] 종전 정본은 '0.965 비대칭 상수가 "
+                                               "x 쪽에만 걸린다' 는 한 문장으로 두 헬퍼를 함께 덮었고, "
+                                               "그 문장은 **스스로 인용한 GLSL 이 반증**한다"
+                                               "(`normal.yx = normal.yw·2 - vec2(0.965, 1.0)` 의 좌변은 "
+                                               "`.yx` 다). 반대로 '전부 y' 로 고치면 WithMask 가 새로 "
+                                               "틀리므로 헬퍼별로 쪼개 적는다. 이식할 때 한 문장으로 "
+                                               "뭉뚱그리면 둘 중 하나는 반드시 어긋난다.",
            "ComputeMaterialSpecularPower": "(1.01 - roughness) · mix(400, 250, metallic)",
            "ComputeMaterialSpecularStrength": "(0.5 + metallic·0.5) · (1 - roughness·0.9)",
            "ComputeLight": "attn = saturate((radius - dist)/radius); "

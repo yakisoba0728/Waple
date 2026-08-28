@@ -440,7 +440,7 @@ GIF·비디오 월페이퍼 경로라 눈에 띄는 자리다.
 
 | 키 | 스키마 | 도달 | 상태 | 값 예시 | 엔진 근거 | 붙일 자리 |
 | --- | --- | ---: | --- | --- | --- | --- |
-| `general.lightconfig` | scene | 2 | ~~언급만~~ → **해소(2026-08-22)** — 리더 SceneDocument.swift `out.lightConfig = SceneLightConfig…` | `{"point":1,"pointshadow":1}` | 문자열 `0x14048e4e0`, SSO 적재 `0x1401876a2` → 함수 **`0x140186c90`** | `SceneDocument.swift:981` 부근 `general` 파스 / `Scene3DLighting.swift` |
+| `general.lightconfig` | scene | 2 | ~~언급만~~ → **해소(2026-08-22)** — 리더 SceneDocument.swift `out.lightConfig = SceneLightConfig…` | `{"point":1,"pointshadow":1}` | 문자열 `0x14048e4e0`, SSO 적재 `0x1401876a2` → 함수 **`0x140186c90`** | `SceneDocument.swift:4052` `out.lightConfig = SceneLightConfig.parse(general["lightconfig"])` [줄번호 재측정 2026-08-28, 종전 `:981`] / `Scene3DLighting.swift` |
 | `general.transparentsorting` | scene | 2 | ~~언급만~~ → **해소(2026-08-22)** — 리더 SceneDocument.swift `out.transparentSorting` | `true` | `0x14019acc4`·`0x14019ad44` → **`0x140199780`** | `SceneDocument` `general` 파스 → 반투명 정렬 규약 |
 | `general.spritesheetrefreshsync` | scene | 2 | ~~언급만~~ → **해소(2026-08-22)** — 리더 SceneDocument.swift `out.spritesheetRefreshSync` | `true` | `0x140187656` → **`0x140186c90`** (`lightconfig` 와 같은 함수) | 스프라이트시트 갱신 동기 — `SceneRenderer` |
 | `emitter[].cone` | particle | 2 | ~~언급만~~ → **해소(2026-08-22)** — 리더 ParticleSystem.swift `emitterCone.append(…)` | `0` | `0x1401b94ae`(`0x1401b9100`) · `0x1401c6146`(`0x1401c5490`) | 동봉 2건은 값이 `0` 이라 무해하지만 워크샵 자산은 다를 수 있다 |

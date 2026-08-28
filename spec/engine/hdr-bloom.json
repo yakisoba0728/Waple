@@ -197,7 +197,7 @@
     },
     "orderingConstraint": "W1·W2 는 결과를 넓히고 N1·N2 는 좁힌다. 일부만 고치면 더 나빠지므로 한 번에 갈아야 했다 — 실제로 그렇게 했다.",
     "abResult": {
-     "baseline": "spec/golden/snapshot/baseline-f3a17da (교체 직전)",
+     "baseline": "spec/golden/snapshot/baseline-f3a17da (교체 직전). **[2026-08-28] 이 라벨은 HEAD 에 없다** — 삭제 사고가 아니라 정책이다(`spec/golden/snapshot/README.md`: 낡은 기준선은 커밋 이력에만 남긴다). 여기서는 **당시 A/B 의 대조군**이라 현행 기준선으로 바꿔 적으면 거짓이 된다 — 라벨은 그대로 두고 '지금 트리에 없다' 는 사실만 붙인다. 현행 판정 기준선은 `baseline-6f0bcf0` 이고(`GoldenBaseline.currentLabel`), 아래 수치는 그것과 무관하다.",
      "changedScenes": 9,
      "lumaRatioRange": "0.95 ~ 1.10",
      "maxMeanAbsDiff": 2.84,

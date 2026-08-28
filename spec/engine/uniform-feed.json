@@ -763,8 +763,9 @@
      "ref": "scripts/spec/measure_uniform_feed.py"
     },
     {
-     "kind": "note",
-     "ref": "미해결 항목 목록 — 후속 조사 진입점"
+     "kind": "doc",
+     "ref": "미해결 항목 목록 — 후속 조사 진입점",
+     "note": "[2026-08-28] kind 를 열거 밖의 'note' 에서 'doc' 으로 고쳤다 — 이 ref 는 참조가 아니라 후속 작업 안내 산문이다"
     }
    ]
   },

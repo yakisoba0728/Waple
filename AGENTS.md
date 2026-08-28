@@ -13,13 +13,13 @@ Wallpaper Engine 을 macOS 에 재구현한 프로젝트다. 사용자용 소개
 ```
 WapleCore ←── WapleLibrary ──┐
     ↑                        ├──→ Waple (앱 실행 타깃)
-    └──── WapleRender ───────┘
+    └──── WapleRender ───────┤
+    │                        │
+    │                   WaplePolicy   ← 자신은 의존 0. 아래 경고
     │
     └──── WapleRender ──→ WapleCompatCore ──→ WapleCompat (CLI)
                               ↑
                         WapleSnapshot
-
-WaplePolicy   (의존 없음 · 앱 타깃과 WapleAppTests 가 의존 — 리눅스 spec 레인 전용. 아래 경고)
 WapleSaver    (SwiftPM 밖 — package-app.sh 가 직접 컴파일)
 ```
 
@@ -28,7 +28,7 @@ WapleSaver    (SwiftPM 밖 — package-app.sh 가 직접 컴파일)
 | `WapleCore` | 순수 파서·시뮬레이터. **AppKit/Metal 없음** — 그래서 테스트가 쉽다 | 없음 |
 | `WapleRender` | Metal 렌더러, 셰이더, 텍스처 디코드, 오디오·비디오·웹 | Core |
 | `WapleLibrary` | 라이브러리 스캔·임포트·영속화 | Core |
-| `Waple` | 메뉴바 앱 + SwiftUI 메인 윈도우 | Core, Library, Render |
+| `Waple` | 메뉴바 앱 + SwiftUI 메인 윈도우 | Core, Library, Render, **Policy** |
 | `WapleCompatCore` | 호환성 스캔·스냅샷 캡처/비교 **라이브러리** | Core, Render, Snapshot |
 | `WapleCompat` | 위의 CLI 진입점(`main.swift` 만) | **CompatCore**, Core, Render |
 | `WapleSnapshot` | 스냅샷 매니페스트·diff. Foundation 전용 | 없음 |
@@ -39,6 +39,11 @@ WapleSaver    (SwiftPM 밖 — package-app.sh 가 직접 컴파일)
 `Package.swift` 는 `swift-tools-version:5.9` 지만 이건 매니페스트 API 버전일 뿐이고,
 실제 빌드는 Swift 6.3+ 이다.
 
+> **[2026-08-27] 그 정정이 표의 절반만 고쳤다.** `WaplePolicy` 행은 "`Waple`·`WapleAppTests` 가
+> 이 모듈에 의존한다" 로 **들어오는** 의존을 기록했는데, 정작 `Waple` 행의 **나가는** 의존에는
+> `Policy` 가 빠진 채였고 ASCII 지도에도 화살표가 없었다(`Package.swift:59` 는 네 개를 적는다).
+> 같은 표를 같은 이유로 두 번 고치게 됐다 — 의존을 한 방향으로만 적으면 반대쪽이 빈다.
+>
 > **[2026-08-25] 위 표에 `WapleCompatCore`·`WaplePolicy` 가 빠져 있었고 `WapleCompat` 의 의존이
 > 틀려 있었다.** 이 문서는 "코드 만지기 전 필독" 으로 지정돼 있는데, 지도에 없는 타깃은
 > 그 타깃의 계약도 안 보인다는 뜻이다. 특히 `WaplePolicy` 가 그렇다:
@@ -69,7 +74,7 @@ WapleSaver    (SwiftPM 밖 — package-app.sh 가 직접 컴파일)
 
 ```bash
 swift build --build-tests      # ~20초 (유휴 상태 Apple Silicon)
-swift test                     # 3,774개(2026-08-27 CI 실측 — 코퍼스 유무와 무관)
+swift test                     # 개수 하한은 ci.yml `Skip / execution census` 가 정본(코퍼스 유무와 무관)
 swift run Waple                # 메뉴바 앱으로 실행
 ```
 
@@ -84,7 +89,7 @@ swift run Waple                # 메뉴바 앱으로 실행
   그 근거(실측 런 id·커밋·파일별 증분)는 거기서 읽어라. 값을 올릴 때도 거기만 고친다.
 - 위 `3,038` 은 그 시점 스냅샷일 뿐 게이트가 아니다. 정확한 현재값은 직접 세라 —
   **정적 개수를 세는 정본 레시피는 아래 한 줄이다. 다른 데서 본 판본이 이와 다르면 그쪽이 틀린
-  것이다**(2026-08-27 실측 **3,774** — CI `executed` 와 일치, 아래 [2026-08-27 래칫] 참조):
+  것이다**(레시피 자체가 정본이고, 값은 세는 시점의 스냅샷일 뿐이다 — 게이트는 `ci.yml` 이다):
 
   ```bash
   grep -rE '^\s*(@\w+(\([^)]*\))?\s+|(private|fileprivate|internal|public|open|final|static|class|nonisolated|override|mutating)\s+)*func test' Tests/ --include=*.swift | wc -l
@@ -92,8 +97,11 @@ swift run Waple                # 메뉴바 앱으로 실행
 
   선행 어트리뷰트(`@MainActor` · `@available(…)`)와 수식어(`private` · `final` · `static` …)를 모두
   허용하되 줄 시작에 앵커를 걸어 **주석 속 `func test` 산문 언급은 세지 않는다.** 앵커 없는
-  `'func test'` 는 지금 트리에서는 같은 3,774 이지만 주석 한 줄에 흔들리고, 앵커만 건
-  `'^\s*func test'` 는 `@MainActor` 선언 9개를 흘린다 — 아래 **[2026-08-26]** 참조.
+  `'func test'` 는 지금 트리에서도 레시피와 같은 값이지만 주석 한 줄에 흔들리고, 앵커만 건
+  `'^\s*func test'` 는 `@MainActor` 선언 9개를 흘려 9 만큼 적게 나온다 — 아래 **[2026-08-26]** 참조.
+  (2026-08-27 재측정으로 세 판본이 각각 3,875 / 3,875 / 3,866 임을 확인했다. 이 세 값은 서로의
+  **관계**를 보이려고 적은 것이지 기준값이 아니다 — 기준값을 여기 적었더니 아래 [2026-08-27] 처럼
+  또 썩었다.)
 - ~~**정적 개수와 CI 의 `Executed N tests` 는 지금까지 한 번도 어긋난 적이 없다.**~~
   → **정정 [2026-08-26]: 이 파일이 적어 둔 레시피로 세면 어긋나 있었다.** 아래 실측들은 전부
   *올바른* 레시피 기준이라 그대로 유효하지만, 종전 `'^\s*func test'` 로 세면 같은 트리에서
@@ -167,8 +175,9 @@ swift run Waple                # 메뉴바 앱으로 실행
 > 건드려 ±0 이다. 커밋별 실측은 `ci.yml` 하한 옆에 있다.
 >
 > 참고: 위 [2026-08-26 래칫] 의 `3723` 은 그 시점 스냅샷이라 그대로 둔다 — 현재 하한은 늘
-> `ci.yml` 에서 읽어라. 앵커 없는 판본은 지금 트리에서 정본과 같은 **3,774** 를 내지만
-> 주석 한 줄에 흔들리고, 앵커만 건 `'^\s*func test'` 는 **3,765** 로 여전히 정확히 9 를 흘린다.
+> `ci.yml` 에서 읽어라. **이 블록의 세 값(3,774 / 3,774 / 3,765)도 `e48bd3b` 시점 스냅샷이다.**
+> 관계만 읽어라 — 앵커 없는 판본은 정본과 같은 값을 내지만 주석 한 줄에 흔들리고, 앵커만 건
+> `'^\s*func test'` 는 언제나 정확히 9 를 흘린다(2026-08-27 재측정에서도 3,875 / 3,875 / 3,866).
 
 > **[2026-08-26 래칫] 3708 → 3723 — 새 정본 레시피로 열한 번째 연속 일치.**
 > run `32991538355` · 커밋 `0e1a744`(브랜치 tip 자신, debug·release 두 잡 성공)에서
@@ -307,9 +316,20 @@ localStorage 상한 1 · 재임포트 평점 유지 1 · 골든 판정 분기 1(
 근거를 두 곳에 적으면 한 곳은 반드시 썩는다. 그래서 이제 여기에 숫자를 적지 않는다.
 **정본은 `.github/workflows/ci.yml` 의 `Skip / execution census` 스텝 하나뿐이고**,
 현재 값과 그 근거(실측 런 id 포함)는 거기서 읽어라. 값을 올릴 때도 거기만 고친다.
-스킵 상한을 두는 이유는 따로 있다: `XCTSkip("no Metal")` 아래 테스트가 561개라
-GPU 없는 환경에서 돌면 **전부 스킵된 채 초록**이 뜬다. 실행 수만 봐서는 못 잡는다
-(실측 정상치는 스킵 46~47).
+스킵 상한을 두는 이유는 따로 있다: `XCTSkip("no Metal")` 로 게이트된 테스트가 많아
+GPU 없는 환경에서 돌면 **전부 스킵된 채 초록**이 뜬다. 실행 수만 봐서는 못 잡는다.
+**여기도 숫자를 적지 않는다 — 게이트 규모와 스킵 정상치의 정본은 `ci.yml` 의 census 스텝이다.**
+
+> **[2026-08-27] 여기 있던 `561` 과 `46~47` 은 둘 다 틀렸고, 561 은 애초에 다른 것을 센 값이었다.**
+> 재측정: `no Metal` 게이트는 파일 **77** · 사이트 **324** 이고, 그 파일들에 **거주하는** 테스트가
+> **575** 다. 561 은 거주 수(당시 값)이지 게이트에 걸린 수가 아닌데 "그 아래 테스트" 라는 한 문장에
+> 두 개념이 섞여 있었다. 실제로 게이트에 걸린 테스트는 귀속 방법에 따라 330~350 사이로 갈린다
+> (헬퍼 체인을 어디까지 따라가느냐의 문제라 단일 값으로 적을 수 없다 — 적으려면 세는 법을 함께 적어라).
+> `46~47` 은 2026-08-19 값이 굳은 것이고 현재 정상치는 이 문서 다른 곳(오디오 절)과 `ci.yml` 이
+> 말하는 63~64 다. 같은 문서 안에서 두 값이 공존하고 있었다.
+>
+> 561 은 이 문서와 `ci.yml` 3곳, handoff 2건까지 **다섯 곳에 복제돼 다 같이 썩었다.** 바로 위
+> 문단이 "근거를 두 곳에 적으면 한 곳은 반드시 썩는다" 를 적어 놓고 두 줄 뒤에서 같은 일을 했다.
 
 ## 코퍼스 — 이걸 모르면 검증했다고 착각한다
 
@@ -526,8 +546,14 @@ WE 호환을 위한 의도적 전수 처리다. 인식하지 못한 토큰을 �
 ## 정본(spec/)
 
 WE 동작에 대한 사실은 코드 주석이 아니라 [spec/](spec/) 에 둔다. 이전에 역공학
-산출물(`analysis/`)이 통째로 사라져 근거가 주석에만 남은 적이 있다 — 지금 코드가
-인용하는 `analysis/decompiled/all/...` 은 리포에 없다.
+산출물(`analysis/`)이 통째로 사라져 근거가 주석에만 남은 적이 있다.
+
+> **[2026-08-27]** 종전 여기 붙어 있던 "지금 코드가 인용하는 `analysis/decompiled/all/...` 은
+> 리포에 없다" 는 이제 정확하지 않다. 짝 저장소가 코퍼스를 재생성했고 **부채의 성격이 바뀌었다** —
+> 산출물이 없는 게 아니라 재생성이 주소 공간을 바꿨는데 인용이 안 따라온 것이다
+> (`Model3D.swift:110`·`ProjectJSONParser.swift:208` 이 rich header 주입본 시절 이름
+> `FUN_140261950` 을 가리킨다. 참 VA 는 `FUN_140261880`). 현황은 [spec/README.md](spec/README.md)
+> 의 같은 절이 정본이다 — **여기 두 번 적어서 또 썩었다.**
 
 - 모든 항목에 **근거가 필수**다. 없으면 `scripts/spec/validate.py` 가 거부한다.
 - 상태는 `확정`(직접 측정 + 재현 스크립트) / `보고`(정찰, 미재현) / `추정` 셋뿐이고,
@@ -549,8 +575,15 @@ python scripts/spec/verify_rosetta.py            # .obj ↔ .mdl 실물 대조
 워크샵 pkg 가 `common_*.h` 를 하나도 담지 않아서(162개 전수 0건) 없으면 씬이 불완전하게
 그려진다. WE 가 업데이트되면 `spec/assets/manifest.json` 의 해시가 어긋나 드리프트가 드러난다.
 
-**커밋된 스냅샷 기준선이 있다.** `spec/golden/snapshot/`. 읽기 전에 그 README 를 볼 것 —
-비디오-백드 24종은 머신 간 재현이 안 되고(strict 불일치는 회귀가 아니다), 비결정 씬이 1종 있다.
+**커밋된 스냅샷 기준선이 있다.** `spec/golden/snapshot/`. **읽기 전에 그 README 를 볼 것** —
+예외와 그 개수는 거기가 정본이다(비디오-백드는 머신 간 재현이 안 되고, strict 불일치가 곧
+회귀는 아니다). 여기에 숫자를 적지 않는다.
+
+> **[2026-08-27] 여기 있던 "비결정 씬이 1종 있다" 는 현행 기준선에 대해 거짓이다.**
+> `baseline-6f0bcf0/manifest.json` 은 entries 170 · `deterministic == false` **0건** ·
+> `selfMaxDiff != 0` **0건** 이다. 그 1종(`3363252053`)은 이식 전 기준선 `baseline-81098bb`
+> 쪽이고, README 도 "셀프체크 비결정 0종" 으로 적으며 `GoldenBaselineOracleTests.swift:80` 이
+> `XCTAssertEqual(nd, [], …)` 로 0종을 이미 못박고 있다. 기준선이 교체될 때 같이 안 고쳐졌다.
 
 ## 관례
 

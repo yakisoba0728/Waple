@@ -5033,6 +5033,7 @@
   {
    "id": "waple.unparsedGeneralKeys",
    "value": {
+    "method": "모집단은 **워크샵 요약 162씬**의 `general` 키 전수. '파싱됨' 쪽 집합은 ① `SceneDocument.applyGeneralSettings` 본문의 JSON 키 리터럴 ② parse()/parseCamera 에서 손으로 추린 general 접근(GENERAL_READ_IN_PARSE / GENERAL_READ_IN_CAMERA) ③ **다른 파일의 `general[\"…\"]` 첨자**(GENERAL_CONSUMER_FILES) 의 합집합이다. **한계**: ③ 은 첨자 형태만 잡는다 — general 을 다른 이름의 지역변수에 담아 읽는 코드는 여전히 놓치고, 그런 키는 여기 '미파싱' 으로 잘못 실린다. 이 목록이 비지 않았다면 소스를 직접 확인하고 나서 믿어라.",
     "keys": [
      {
       "key": "camerapreview",
@@ -5044,143 +5045,9 @@
        "True": 158,
        "False": 4
       }
-     },
-     {
-      "key": "lightconfig",
-      "scenes": 11,
-      "valueTypes": {
-       "dict": 11
-      },
-      "topValues": null
-     },
-     {
-      "key": "transparentsorting",
-      "scenes": 3,
-      "valueTypes": {
-       "bool": 3
-      },
-      "topValues": {
-       "True": 3
-      }
-     },
-     {
-      "key": "fogdistance",
-      "scenes": 2,
-      "valueTypes": {
-       "bool": 2
-      },
-      "topValues": {
-       "True": 2
-      }
-     },
-     {
-      "key": "fogdistancecolor",
-      "scenes": 2,
-      "valueTypes": {
-       "dict": 1,
-       "str": 1
-      },
-      "topValues": {
-       "0.00000 0.00000 0.00000": 1,
-       "0.63529 0.74510 0.75294": 1
-      }
-     },
-     {
-      "key": "fogdistanceend",
-      "scenes": 2,
-      "valueTypes": {
-       "dict": 1,
-       "float": 1
-      },
-      "topValues": null
-     },
-     {
-      "key": "fogdistanceenddensity",
-      "scenes": 2,
-      "valueTypes": {
-       "float": 2
-      },
-      "topValues": null
-     },
-     {
-      "key": "fogdistancestart",
-      "scenes": 2,
-      "valueTypes": {
-       "float": 2
-      },
-      "topValues": null
-     },
-     {
-      "key": "fogdistancestartdensity",
-      "scenes": 2,
-      "valueTypes": {
-       "float": 2
-      },
-      "topValues": null
-     },
-     {
-      "key": "fogheight",
-      "scenes": 1,
-      "valueTypes": {
-       "bool": 1
-      },
-      "topValues": {
-       "True": 1
-      }
-     },
-     {
-      "key": "fogheightcolor",
-      "scenes": 1,
-      "valueTypes": {
-       "dict": 1
-      },
-      "topValues": {
-       "0.63137 0.80392 1.00000": 1
-      }
-     },
-     {
-      "key": "fogheightend",
-      "scenes": 1,
-      "valueTypes": {
-       "dict": 1
-      },
-      "topValues": null
-     },
-     {
-      "key": "fogheightenddensity",
-      "scenes": 1,
-      "valueTypes": {
-       "float": 1
-      },
-      "topValues": null
-     },
-     {
-      "key": "fogheightstart",
-      "scenes": 1,
-      "valueTypes": {
-       "float": 1
-      },
-      "topValues": null
-     },
-     {
-      "key": "fogheightstartdensity",
-      "scenes": 1,
-      "valueTypes": {
-       "float": 1
-      },
-      "topValues": null
-     },
-     {
-      "key": "spritesheetrefreshsync",
-      "scenes": 1,
-      "valueTypes": {
-       "bool": 1
-      },
-      "topValues": {
-       "True": 1
-      }
      }
     ],
+    "correction2026_08_28": "종전 이 목록은 16키였는데 **15키가 이미 파스되고 있었다** — 진짜 미파싱은 `camerapreview` 하나뿐이다. 원인은 위 ③ 의 부재다: `fogdistance*`/`fogheight*` 12키는 `Sources/WapleRender/Scene3DLighting.swift` 가 전건 읽고, `transparentsorting`·`spritesheetrefreshsync`·`lightconfig` 는 `Sources/WapleCore/SceneDocument.swift` 의 applyGeneralSettings 안에서 읽는다(그 셋은 소스가 바뀐 뒤 정본이 따라가지 않은 것이다). '미파싱' 은 구현에 일을 시키는 목록이라, 낡으면 있지도 않은 갭을 쫓게 만든다.",
     "wapleParsedButNeverAuthored": [
      "quality"
     ]
@@ -5189,7 +5056,8 @@
    "evidence": [
     {
      "kind": "corpus",
-     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬",
+     "population": "워크샵 요약 162씬의 general 키 전수"
     },
     {
      "kind": "script",
@@ -5199,6 +5067,11 @@
      "kind": "file",
      "ref": "Sources/WapleCore/SceneDocument.swift",
      "note": "함수 경계로 잘라 타입별 파스 함수의 JSON 키 리터럴만 대조"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/Scene3DLighting.swift:717-731",
+     "note": "general.fogdistance*/fogheight* 12키 전건 파스 — 종전 '미파싱' 오분류의 반증"
     }
    ]
   },
@@ -5343,9 +5216,9 @@
       "expect": "그 자식들이 저작 로컬 좌표 그대로 남는다(부모 파티클 위치가 원점에서 멀수록 어긋난다)"
      },
      {
-      "what": "text.brightness 미파싱(568 오브젝트)",
-      "measured": "float 스칼라. SceneTextLayer 에 brightness 필드 자체가 없다",
-      "expect": "밝기 배수를 준 텍스트가 기본 밝기로 그려진다"
+      "what": "text.brightness 미파싱(568 오브젝트) — **HDR 씬 한정**",
+      "measured": "float 스칼라. SceneTextLayer 에 brightness 필드 자체가 없다. **다만 WE 도 LDR 씬에서는 이 배수를 곱하지 않는다** — 게이트가 `test dword [rax+0x118],0x2000`(씬 HDR 비트 13)이고, 꺼져 있으면 배수는 1.0 으로 고정된다. 그래서 갭은 `general.hdr:true` 인 씬에서만 발현한다.",
+      "expect": "[2026-08-28] 종전엔 '밝기 배수를 준 텍스트가 기본 밝기로 그려진다' 를 **무조건문**으로 적었다. 그것은 과장이다 — **LDR 씬에서는 Waple 이 정답이고 갭이 아니다.** 실제 갭은 HDR 씬뿐이고 그 모집단은 작다: 설치본 고유 HDR **3씬**(spec/engine/tonemapping.json engine.tonemap.finalPixelExpression.hdrScenes), 워크샵 요약 162씬 중 **16씬**. 그 안의 text.brightness 저작만 화면에 닿는다."
      },
      {
       "what": "light.visible 스크립트 유실(5건)",
@@ -5383,11 +5256,19 @@
      },
      {
       "what": "scene.version(1/3/4/5, 159씬)",
-      "why": "Waple 이 아예 읽지 않는다. 4세대 스키마를 한 파서로 처리 중이며 지금까지는 문제가 관측되지 않았다"
+      "why": "[2026-08-28] 종전 '**Waple 이 아예 읽지 않는다**' 는 거짓이다 — `Sources/WapleCore/SceneDocument.swift:1775` 의 `let schemaVersion = numericInt(scene[\"version\"])` 가 읽고, 그 값이 바로 다음 줄 `versionGatedGeneral(scene[\"general\"], schemaVersion:)` 의 게이트로 들어간다(불리언은 수로 세지 않는 엄격 판이라 `{\"version\":true}` 는 누락과 같이 다룬다). **갭이 아닌 이유는 '안 읽어서' 가 아니라 '읽고 게이트에 쓰는데 지금까지 어긋난 관측이 없어서' 다.**"
      },
      {
-      "what": "general.camerapreview(162)/lightconfig(11)/transparentsorting(3)/fog*(2)",
-      "why": "에디터 메타 또는 미구현 기능. 렌더 소비처가 없다"
+      "what": "general.camerapreview(162)",
+      "why": "에디터 메타. 렌더 소비처가 없다 — general 키 중 **유일하게 실제로 미파싱**인 것이고(waple.unparsedGeneralKeys), 그래도 갭이 아니다."
+     },
+     {
+      "what": "general.lightconfig(11)",
+      "why": "[2026-08-28] 종전 '**렌더 소비처가 없다**' 는 거짓이다 — `SceneDocument.applyGeneralSettings` 가 `SceneLightConfig.parse` 로 읽고, `Sources/WapleRender/SceneRenderer3D.swift:245` 가 `scene3DLightConfig` 에 담아 같은 파일 `:1595` 와 `Sources/WapleRender/SceneRendererFrameEncoder.swift:971` 이 라이트 슬롯 예산으로 **소비한다**. 갭이 아닌 이유는 '소비처가 없어서' 가 아니라 '이미 구현돼 있어서' 다."
+     },
+     {
+      "what": "general.transparentsorting(3) / spritesheetrefreshsync(1) / fog*(2)",
+      "why": "전부 파스된다 — 앞의 둘은 `Sources/WapleCore/SceneDocument.swift:4049-4050`, fog 12키는 `Sources/WapleRender/Scene3DLighting.swift:717-731`. 종전 정본이 이들을 '미구현 기능' 으로 묶은 것은 waple.unparsedGeneralKeys 의 오분류를 그대로 물려받은 것이다."
      }
     ]
    },
@@ -5401,6 +5282,16 @@
      "kind": "file",
      "ref": "Sources/WapleCore/SceneDocument.swift",
      "note": "함수 경계로 잘라 타입별 파스 함수의 JSON 키 리터럴만 대조"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift:1775",
+     "note": "numericInt(scene[\"version\"]) — '아예 읽지 않는다' 의 반증"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/SceneRenderer3D.swift:1595",
+     "note": "scene3DLightConfig 소비 (배선은 :245) — 짝 소비처 SceneRendererFrameEncoder.swift:971"
     }
    ]
   }

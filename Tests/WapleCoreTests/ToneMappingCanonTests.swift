@@ -16,8 +16,12 @@ import XCTest
 ///  ① 코퍼스·바이너리가 있는 머신에서 `scripts/spec/measure_tonemapping.py` 를 다시 돌렸을 때
 ///     이 수치들이 **조용히 바뀌는 것**(`docs/dev/re-methodology.md` §2 함정 19·20).
 ///  ② 정본과 구현이 갈리는 것 — `blur13Weights`·탭 스트라이드·기본값을 양쪽에서 대조한다.
-///  ③ "톤매핑이 없다" 가 **재지 않은 0** 으로 퇴화하는 것. 전수 인구(셰이더 137 · 씬 358)를
+///  ③ "톤매핑이 없다" 가 **재지 않은 0** 으로 퇴화하는 것. 전수 인구(셰이더 137 · 씬 186)를
 ///     같이 단언해서, 표본이 0 이 되면 개수 쪽이 먼저 붉어지게 한다.
+///
+/// [2026-08-28] 위 씬 수는 358 이었다 — 동봉과 설치본을 둘 다 세서 172씬이 두 번 들어간
+/// 값이다. ①이 막으려던 "조용히 바뀌는 것" 은 잡았지만, **틀린 값이 조용히 굳는 것** 은 못
+/// 막았다. 개수를 잠글 때는 **모집단 이름도 같이 잠가야 한다**(아래 `corpusPopulation` 단언).
 ///
 /// 근거 VA 는 `docs/re/tonemapping.md` · `docs/re/scene-postprocessing.md` 에 있다.
 final class ToneMappingCanonTests: XCTestCase {
@@ -245,22 +249,41 @@ final class ToneMappingCanonTests: XCTestCase {
     // MARK: 최종 픽셀 식과 도달
 
     func testFinalPixelExpressionAndCorpusReach() throws {
+        // [2026-08-28] 이 테스트가 고정하던 358 계열은 **이중계수된 값**이었다.
+        //
+        // 생성기 `measure_tonemapping.py` 의 `corpus_reach()` 가 동봉
+        // `Sources/WapleRender/Resources/WEAssets/` 와 설치본 `WE_ROOT/assets/` 를 **둘 다**
+        // 훑었는데, 그 둘은 같은 집합이다(md5 동일). 172씬을 두 번 세서 186 이 358 이 됐다.
+        // 산술이 그대로 드러난다 — 348 = 178+170 · 6 = 5+1 · 4 = 3+1.
+        //
+        // 더 나쁜 것은 이 테스트가 그 값을 **잠그고 있었다**는 점이다. 정본이 틀린 채로
+        // 초록이었고, 테스트는 "바뀌었는지" 만 봤지 "맞는지" 는 못 봤다. 여기서 배울 것은
+        // 도수 단언에는 **모집단 이름이 같이 잠겨야 한다**는 것이다 — 그래서 아래에
+        // `corpusPopulation` 을 함께 단언한다. 수치만 고정하면 같은 사고가 반복된다.
         let v = try value("engine.tonemap.finalPixelExpression")
-        XCTAssertEqual(v["corpusScenes"] as? Int, 358, "씬 전수가 바뀌었다")
+        XCTAssertEqual(v["corpusScenes"] as? Int, 186, "씬 전수가 바뀌었다")
+
+        // 모집단을 값과 함께 잠근다 — 어느 집합을 센 186 인지가 186 만큼 중요하다.
+        let population = try XCTUnwrap(v["corpusPopulation"] as? String)
+        XCTAssertTrue(population.contains("설치본"),
+                      "도수의 모집단이 설치본이라는 선언이 사라졌다 — 이중계수 재발 경로다")
 
         let reachRaw = try XCTUnwrap(v["corpusReach"] as? [String: Any])
         var reach: [String: Int] = [:]
         for (k, n) in reachRaw { reach[k] = (n as? NSNumber)?.intValue }
-        XCTAssertEqual(reach.values.reduce(0, +), 358, "도달 표의 합이 전수와 다르다")
-        XCTAssertEqual(reach["LDR + bloom off"], 348)
-        XCTAssertEqual(reach["LDR + bloom on"], 6)
-        XCTAssertEqual(reach["HDR + bloom on"], 4)
+        XCTAssertEqual(reach.values.reduce(0, +), 186, "도달 표의 합이 전수와 다르다")
+        XCTAssertEqual(reach["LDR + bloom off"], 178)
+        XCTAssertEqual(reach["LDR + bloom on"], 5)
+        XCTAssertEqual(reach["HDR + bloom on"], 3)
         // `hdr:true && !bloom` 이 0 이라는 것이 `passthroughsrgb` 경로가 코퍼스로 재현되지
         // 않는다는 뜻이다 — 골든으로 그 분기를 검증할 수 없다는 사실을 잠근다.
         XCTAssertEqual(reach["HDR + bloom off"], 0)
 
+        // 고유 HDR 씬은 3개다. 종전 4개는 `previewthunderbolt` 를 동봉 경로와 설치 경로로
+        // 두 번 실은 것 — 이중계수의 같은 뿌리다. 경로 중복이 다시 들어오면 여기서 잡힌다.
         let hdrScenes = try XCTUnwrap(v["hdrScenes"] as? [String])
-        XCTAssertEqual(hdrScenes.count, 4)
+        XCTAssertEqual(hdrScenes.count, 3)
+        XCTAssertEqual(Set(hdrScenes).count, hdrScenes.count, "HDR 씬 목록에 같은 씬이 두 경로로 실렸다")
 
         let byPath = try XCTUnwrap(v["byPath"] as? [String: String])
         XCTAssertEqual(byPath["LDR + bloom"], "scene + bloom — combine.frag:10-15. 곡선 없음, 클램프는 UNORM 타깃이 한다.")
