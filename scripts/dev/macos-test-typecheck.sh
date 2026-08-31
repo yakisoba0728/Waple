@@ -113,13 +113,33 @@ echo "── 테스트 타깃 타입체크"
 fail=0
 for T in $TARGETS; do
     if [ ! -d "$ROOT/Tests/$T" ]; then echo "  ✗ Tests/$T 없음"; fail=1; continue; fi
-    out=$(swiftc -typecheck -module-name "$T" \
+    # [2026-08-30] **드라이버 종료코드를 버리면 안 된다.** 종전엔 여기서 바로
+    # `| grep ': error:'` 로 파이프해 `swiftc` 자신의 rc 를 통째로 잃었고, 판정이
+    # 매치 줄 수 하나에만 걸려 있었다. 그래서 **드라이버의 인자 파서**가 내는 진단
+    # (`error: unknown argument: '…'` — `<unknown>:0:` 도 `file:line:col:` 도 없는 맨
+    # `error: ` 형태)은 grep 이 못 잡아 **에러 0건 = 통과**로 찍혔다. 실측(2026-08-30,
+    # Swift 6.4 / arm64): 이 줄에 `--bogus-flag-xyz` 를 끼우면 rc=1 · 매치 0 인데
+    # 종전 로직은 7개 타깃 전부 `✓` 를 찍고 rc=0 으로 끝났다 — 타입체크는 한 건도
+    # 안 한 상태다. 프론트엔드 진단도 형태가 하나가 아니다. 실측에서 `-swift-version 9` ·
+    # 없는 `-sdk` · 없는 입력 파일은 `: error:` 매치가 1개 이상이지만, 잘못된 트리플은
+    # `error: unknown target 'bogus-triple'` 만 내므로 **매치 0**이다. 새 rc 분기가 그 반례도 잡는다.
+    #
+    # 그러니 rc 를 따로 받는다. **파이프를 쓰면 안 된다** — 통과 케이스에서 파이프라인의
+    # `$?` 는 grep 의 no-match rc=1 이라(실측) 7개 타깃이 전부 거짓 실패한다.
+    # `rc≠0 && n=0` 은 "도구가 제 일을 안 했다" 는 뜻이므로 하드 실패로 다룬다.
+    raw=$(swiftc -typecheck -module-name "$T" \
             -I "$SHIM_DIR" -I "$MODDIR" \
             -F "$MODDIR/PackageFrameworks" -F "$MODDIR" \
             -sdk "$SDK" -target "$TARGET_TRIPLE" \
-            "$ROOT/Tests/$T"/*.swift 2>&1 | grep ': error:')
+            "$ROOT/Tests/$T"/*.swift 2>&1)
+    rc=$?
+    out=$(printf '%s' "$raw" | grep ': error:')
     n=$(printf '%s' "$out" | grep -c ': error:')
-    if [ "$n" -eq 0 ]; then
+    if [ "$rc" -ne 0 ] && [ "$n" -eq 0 ]; then
+        printf "  ✗ %-24s swiftc rc=%s 인데 ': error:' 진단 0건 — 타입체크가 아예 안 돌았다\n" "$T" "$rc"
+        printf '%s\n' "$raw" | sed "s#$ROOT/##" | head -20 | sed 's/^/      /'
+        fail=1
+    elif [ "$n" -eq 0 ]; then
         printf "  ✓ %-24s\n" "$T"
     else
         printf "  ✗ %-24s 에러 %s건\n" "$T" "$n"

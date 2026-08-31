@@ -8,6 +8,7 @@ import WebKit
 /// F573 디렉터리 재귀 열거 백그라운드화 / F574 pause 중 페이지 resume() 재개 /
 /// F575 스킴 태스크 stop 경합 원자화 / F576 폴터 <video> 음량 적용.
 /// (F571 서브리소스 egress 는 정책 문서화 주석이라 테스트 없음.)
+@MainActor
 final class WebRenderFixRegressionTests: XCTestCase {
     private var webViews: [WKWebView] = []
     private var windows: [NSWindow] = []

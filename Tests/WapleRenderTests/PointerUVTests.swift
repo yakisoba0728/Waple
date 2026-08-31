@@ -23,6 +23,20 @@ final class PointerUVTests: XCTestCase {
         r.setPointerButtonDown(false)
         XCTAssertEqual(r.engineUniform(time: 0, texRes: [], targetRes: noTarget)[22], 0, "버튼 업 → 0")
     }
+
+    /// g_ParallaxPosition은 포인터 슬롯과 독립된 마지막 float4에 패킹된다.
+    /// 앞 80 float의 ABI는 그대로 두고 80/81에 vec2를 추가해 기존 셰이더 오프셋을 보존한다.
+    func testParallaxPositionFlowsToIndependentEngineUSlot() {
+        let r = SceneRenderer()
+        r.pointerUV = SIMD2<Float>(0.25, 0.75)
+        r.parallaxPosition = SIMD2<Float>(0.25, 0.25)
+        let e = r.engineUniform(time: 0, texRes: [], targetRes: SIMD4<Float>(1, 1, 1, 1))
+        XCTAssertEqual(e.count, 84)
+        XCTAssertEqual(e[17], 0.25, accuracy: 1e-6)
+        XCTAssertEqual(e[18], 0.75, accuracy: 1e-6)
+        XCTAssertEqual(e[80], 0.25, accuracy: 1e-6)
+        XCTAssertEqual(e[81], 0.25, accuracy: 1e-6)
+    }
 }
 
 final class PuppetVerticesTests: XCTestCase {

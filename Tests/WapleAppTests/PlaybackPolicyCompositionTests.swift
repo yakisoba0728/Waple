@@ -1,5 +1,6 @@
 import XCTest
 @testable import Waple
+import WapleCore
 import WaplePolicy
 
 /// stage 2c — 전역 사유(`PauseGate`)와 재생정책 판정의 합류, 그리고 엣지 추적.
@@ -10,6 +11,14 @@ final class PlaybackPolicyCompositionTests: XCTestCase {
 
     private func verdict(stop: Bool = false, muted: Bool = false, pauseMask: UInt32 = 0) -> PlaybackVerdict {
         PlaybackVerdict(stop: stop, muted: muted, pauseMask: pauseMask)
+    }
+
+    /// 아무 축도 선언하지 않은 벽지 — 전역 정책이 그대로 적용된다
+    /// (`PlaybackPolicyResolver.effective` 는 선언 없는 축을 전역값으로 남긴다).
+    private func project(_ id: String) -> WallpaperProject {
+        WallpaperProject(id: id, type: .scene, fileName: nil, previewName: nil,
+                         title: id, tags: [], contentRating: nil, workshopId: nil,
+                         dependency: nil, folderURL: URL(fileURLWithPath: "/tmp/\(id)"))
     }
 
     // MARK: 합류 규칙
@@ -259,5 +268,64 @@ final class PlaybackPolicyCompositionTests: XCTestCase {
         let all = RenderPauseComposition.decideAll(globallyPaused: false, verdict: v, rendererCount: 2)
         XCTAssertEqual(all.map(\.paused), [false, false], "음소거 축은 아무것도 멈추지 않는다")
         XCTAssertTrue(RenderPauseComposition.wantsGlobalMute(all), "그리고 전 화면이 음소거된다")
+    }
+
+    // MARK: 프로덕션이 실제로 부르는 오버로드 — 빈 슬롯 레이아웃 (2026-08-30)
+    //
+    // **여기 셋이 없던 동안 스큐가 배송됐다.** 위 통합 오라클들은 전부
+    // `decideAll(verdict:rendererCount:)` 를 쓰는데 그 오버로드에서는 인덱스 == 배열 위치가
+    // 정의상 참이다. 프로덕션이 부르는 것은 `decideAll(projects:conditions:global:)` 하나뿐이고
+    // 그쪽에는 오라클이 0건이었다 — 실측: 그 오버로드의 `monitorIndex` 를 전부 0 으로 굳히는
+    // 회귀를 넣어도 WapleAppTests 458개가 통째로 통과했다.
+
+    /// **렌더러 배열 위치는 모니터 인덱스가 아니다 — 빈 슬롯 레이아웃을 모델링한다.**
+    ///
+    /// 화면 2개(`allMonitorsMask: 0b11`), 그중 **화면 1만 마운트**된 상태다. 전역 선택 없이
+    /// 화면별 할당만 쓰면(`global == nil` → `MonitorMapping.resolveProjectSlots` 가 nil 슬롯을
+    /// 낸다 → `applyResolved` 의 `compactMap` 이 그 화면을 떨어뜨린다) 렌더러가 하나뿐인 이
+    /// 레이아웃이 나온다. 그 하나는 **화면 1** 에 있다.
+    ///
+    /// 다른 앱이 화면 1을 전체화면으로 덮었다(`fullscreenMask: 0b10` — 비트 자리는
+    /// `NSScreen.screens` 위치다). WE 기본값 `playbackfullscreen = pause` 이므로 그 렌더러는
+    /// **반드시 멈춘다.** 종전에는 배열 위치 0 을 `monitorIndex` 로 먹여 `isPaused(0)` → 비트 0 →
+    /// false 를 받아 계속 디코드했다(이 단언이 그때 실패한다 — `[false]` vs `[true]`).
+    func testPerProjectDecideAllUsesRealMonitorIndexNotArrayPosition() {
+        let conditions = PlaybackConditions(allMonitorsMask: 0b11, fullscreenMask: 0b10)
+        let all = RenderPauseComposition.decideAll(
+            globallyPaused: false,
+            projects: [(monitorIndex: 1, project: project("mounted-on-screen-1"))],
+            conditions: conditions,
+            global: .weDefault)
+        XCTAssertEqual(all.map(\.paused), [true],
+                       "빈 슬롯으로 재인덱싱된 배열 위치(0)가 아니라 실제 화면 인덱스(1)로 판정해야 한다")
+    }
+
+    /// **대칭 실패도 막는다** — 보이는 화면이 남의 비트를 물려받아 멈추는 쪽.
+    /// 위와 같은 레이아웃에서 덮인 것이 화면 0(마운트되지 않은 화면)이면, 살아 있는
+    /// 화면 1의 렌더러는 **돌아야 한다.** 배열 위치로 판정하면 `isPaused(0)` → true 로
+    /// 아무 일도 없는 화면이 멈춘다.
+    func testPerProjectDecideAllDoesNotInheritAnotherScreensPauseBit() {
+        let conditions = PlaybackConditions(allMonitorsMask: 0b11, fullscreenMask: 0b01)
+        let all = RenderPauseComposition.decideAll(
+            globallyPaused: false,
+            projects: [(monitorIndex: 1, project: project("mounted-on-screen-1"))],
+            conditions: conditions,
+            global: .weDefault)
+        XCTAssertEqual(all.map(\.paused), [false],
+                       "덮인 것은 화면 0(미마운트)이다 — 화면 1의 렌더러가 남의 비트로 멈추면 안 된다")
+    }
+
+    /// 인덱스가 배열 위치와 무관하다는 것을 **순서를 뒤집어** 못 박는다. 반환 배열의 순서·길이는
+    /// 입력 그대로여야 한다(적용부 `PerRendererPauseState` 가 렌더러 배열 위치로 짝짓는다).
+    func testPerProjectDecideAllRespectsGivenIndicesRegardlessOfOrder() {
+        let conditions = PlaybackConditions(allMonitorsMask: 0b111, fullscreenMask: 0b100)
+        let all = RenderPauseComposition.decideAll(
+            globallyPaused: false,
+            projects: [(monitorIndex: 2, project: project("A")),
+                       (monitorIndex: 0, project: project("B"))],
+            conditions: conditions,
+            global: .weDefault)
+        XCTAssertEqual(all.map(\.paused), [true, false],
+                       "덮인 것은 화면 2다 — 첫 항목이 멈추고 순서는 입력 그대로다")
     }
 }

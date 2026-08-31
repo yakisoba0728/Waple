@@ -35,6 +35,7 @@
 import ast
 import collections
 import glob
+import importlib.util
 import io
 import json
 import pathlib
@@ -122,6 +123,23 @@ def compare(gen_by_id, canon, used):
     return bad, compared
 
 
+def particle_source_ref_mismatches(doc, expected_site, expected_ref, expected_comment):
+    """Dynamic particle fields that can be recomputed without the external corpus."""
+    entries = {e.get("id"): e for e in doc.get("entries", []) if isinstance(e, dict)}
+    entry = entries.get("engine.particle.systemFlagsUnused", {})
+    value = entry.get("value", {}) if isinstance(entry, dict) else {}
+    refs = [ev.get("ref") for ev in entry.get("evidence", [])
+            if isinstance(ev, dict) and ev.get("kind") == "file"]
+    bad = []
+    if value.get("consumeSite") != expected_site:
+        bad.append(("consumeSite", value.get("consumeSite"), expected_site))
+    if value.get("staleComment") != expected_comment:
+        bad.append(("staleComment", value.get("staleComment"), expected_comment))
+    if refs != [expected_ref]:
+        bad.append(("evidence.file.ref", refs, [expected_ref]))
+    return bad
+
+
 def selftest() -> None:
     """음성 대조 — 잡아야 할 것과 통과시켜야 할 것을 매 실행 확인한다.
 
@@ -151,6 +169,15 @@ def selftest() -> None:
     if skipped["값 동적(f-string·변수 등)"] != 1:
         print(f"selftest 실패: 동적 값 집계가 어긋난다 — {dict(skipped)}", file=sys.stderr)
         raise SystemExit(2)
+    particle_bad = particle_source_ref_mismatches(
+        {"entries": [{"id": "engine.particle.systemFlagsUnused",
+                      "value": {"consumeSite": "old", "staleComment": "old"},
+                      "evidence": [{"kind": "file", "ref": "old:1"}]}]},
+        "new", "new:2", "current")
+    if [item[0] for item in particle_bad] != ["consumeSite", "staleComment", "evidence.file.ref"]:
+        print(f"selftest 실패: 파티클 동적 근거 드리프트를 못 잡는다 — {particle_bad!r}",
+              file=sys.stderr)
+        raise SystemExit(2)
     # 면제가 실제로 먹는지, 그리고 먹은 것이 기록되는지
     ALLOWED_DIVERGENCE[("x.diff", "a")] = "selftest"
     try:
@@ -178,6 +205,33 @@ def main() -> int:
         b, c = compare(gen, canon, used)
         compared += c
         bad += [(pathlib.Path(g).name,) + t for t in b]
+
+    # `particle-fields.json` 의 이 세 값은 코퍼스 없이도 현재 소스에서 다시 만들 수 있다.
+    # 리터럴 검사에서 동적 값으로 빠지므로 별도로 대조한다.
+    particle_path = ROOT / "spec" / "engine" / "particle-fields.json"
+    generator_path = ROOT / "scripts" / "spec" / "measure_particle_fields.py"
+    try:
+        particle_doc = json.loads(particle_path.read_text(encoding="utf-8"))
+        module_spec = importlib.util.spec_from_file_location("particle_fields_generator", generator_path)
+        particle = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(particle)
+        line = particle._flags_consume_lineno()
+        if line is None:
+            particle_dynamic_bad = [("source", None, "`(sys.def.flags & 1)` 조건식")]
+        else:
+            particle_dynamic_bad = particle_source_ref_mismatches(
+                particle_doc, particle.flags_consume_site(), f"{particle.RSRC}:{line}",
+                particle.flags_comment_staleness())
+    except (OSError, ValueError, AttributeError) as error:
+        particle_dynamic_bad = [("검사 자체", str(error), "성공")]
+
+    if particle_dynamic_bad:
+        print("[canon-generator-values] particle-fields 동적 소스 근거가 정본과 갈린다.",
+              file=sys.stderr)
+        for key, current, expected in particle_dynamic_bad:
+            print(f"  {key}\n      정본: {str(current)[:240]}\n      생성: {str(expected)[:240]}",
+                  file=sys.stderr)
+        return 1
 
     if bad:
         print(f"[canon-generator-values] 생성기와 정본의 값이 갈린다 {len(bad)}건 — "

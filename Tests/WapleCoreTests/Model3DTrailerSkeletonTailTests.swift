@@ -3,9 +3,27 @@ import simd
 @testable import WapleCore
 
 /// D2/D3(2026-07-28): 메시 트레일러 게이트 구조 + MDLS 꼬리(T1..T7) 정식 파스 테스트.
-/// 근거: WE 2.8.42 디컴파일 FUN_140261950(:1214-1457 트레일러, :235-1059 MDLS) + wallpaper64.exe
-/// 어셈블리 대조 + 실물 418파일 전수 착지 검증. 픽스처 값은 실물 관측치(Kirby gateB 16B,
-/// 眼睛_puppet 모프 레코드, cat11_puppet T4a/T4b)를 축약 사용.
+/// 근거: WE 2.8.42 MDL 디코더 **`FUN_140261880`(RVA 0x261880)** + wallpaper64.exe 어셈블리 대조
+/// + 실물 418파일 전수 착지 검증. 픽스처 값은 실물 관측치(Kirby gateB 16B, 眼睛_puppet 모프
+/// 레코드, cat11_puppet T4a/T4b)를 축약 사용.
+///
+/// **[정정 2026-08-30] 이 파일의 디컴파일 인용 이름을 참 VA 로 옮긴다.** 종전 머리말은
+/// > `근거: WE 2.8.42 디컴파일 FUN_140261950(:1214-1457 트레일러, :235-1059 MDLS)`
+/// 였다. `FUN_140261950` 은 rich header 주입본 시절 이름이고 재생성 코퍼스에 **없다** —
+/// 짝 저장소 `analysis/decompiled/manifest.json` 의 7,748 함수 어디에도 그 주소가 함수 시작으로
+/// 없고, `−0xD0` 한 `0x140261880` 이 함수 시작으로 실재한다(`FUN_140261880`, 3,299줄).
+/// `Sources/WapleCore/Model3D.swift` 의 같은 취지 정정 블록과 `spec/README.md` 가 이 개명을 적어
+/// 뒀는데 정작 인용 지점인 이 파일은 안 따라왔다.
+///
+/// **줄 번호는 옮기지 않고 버린다.** 폐기된 변위 코퍼스 기준의 `:1214-1457`·`:235-1059` 같은
+/// 범위는 재생성본에서 맞지 않는다(실측: `:1214` 는 트레일러가 아니라 float 선택 루프,
+/// `:235-1059` 는 MDLS `strncmp` 를 품기는 하나 825줄 폭이라 앵커로 쓸모가 없다).
+/// Model3D.swift 의 지침대로 **줄 번호 대신 VA·조건식**으로 적는다:
+///   · 트레일러 게이트(v≥21) — `if (0x14 < iVar11)`, 그 블록 첫 호출 지점 VA `0x140261b70`
+///   · v≥23 모프 리드     — `if (0x16 < iVar11)`, 첫 리드 VA `0x140261bea`
+///   · MDLS 태그          — `strncmp(pcVar20,"MDLS0004",4)`
+///   · MDLS 본 상한       — `if (0x80 < uVar14) { swi(0x29); }`(__fastfail), 주변 VA `0x140262501`
+/// 세 VA 전부 `FUN_140261880` 범위 안임을 manifest 로 확인했다(+0x2f0 / +0x36a / +0xc81).
 final class Model3DTrailerSkeletonTailTests: XCTestCase {
     // MARK: synthetic byte builders
 
@@ -163,7 +181,11 @@ final class Model3DTrailerSkeletonTailTests: XCTestCase {
         XCTAssertNil(m.meshes[1].trailer)
     }
 
-    /// v<21 은 트레일러 자체가 없다(엔진: 디컴파일 :1214 `if (0x14 < iVar17)` — v≥21 전용 리드).
+    /// v<21 은 트레일러 자체가 없다(엔진 `FUN_140261880` 의 v≥21 게이트 `if (0x14 < iVar11)`
+    /// — 그 블록 안에서만 트레일러를 읽는다. 첫 호출 지점 VA `0x140261b70`).
+    /// **[정정 2026-08-30]** 종전 이 자리는 ~~`디컴파일 :1214 \`if (0x14 < iVar17)\``~~ 였다.
+    /// 줄 번호도 변수명도 재생성본과 어긋난다 — 그 줄은 float 선택 루프이고 실제 게이트의 변수는
+    /// `iVar11` 이다(887줄 차). 재생성마다 흔들리는 줄 번호 대신 조건식과 VA 로 적는다.
     /// 종전 코드는 메시 사이에 무조건 6B 를 건니뛰어 v16 다중메시를 붕괴시켰다(미수용 매직이라
     /// 실물 미관측이나 정본 정합). V0016: AABB 부재 + 정점 플래그 0x09(stride 20 = pos|uv).
     func testV16MultiMeshHasNoTrailer() throws {

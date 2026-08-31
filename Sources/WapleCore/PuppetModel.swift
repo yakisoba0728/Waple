@@ -13,7 +13,8 @@ import simd
 /// "MDLA0001" | u8 0 | u32 다음오프셋(=EOF-1, 실측 일치) | u32 애니수 |
 ///   애니별: **u64 id** | cstring 이름 | cstring 모드(loop/mirror/single) | f32 fps |
 ///   u32 frameCount | u32 flags | u32 본수 |
-///   본별: u32 trackFlags | u32 트랙크기 | 키×36B(pos 3f, 각 3f, 스케일 3f — 프레임당 1키, 키수=frameCount+1)
+///   본별: u32 trackFlags | u32 트랙크기 | 키×36B(pos 3f, 각 3f, 스케일 3f — 프레임당 1키, 키수=frameCount+1) |
+///   u32 이벤트수 | 이벤트별 f32 time + cstring JSON(`{"frame":N,"name":"…"}`)
 /// (MDLA 프레이밍은 2026-08-21 에 엔진 0x140263968–0x140263cb2 선형 디스어셈으로 정정했다.
 ///  종전 모델의 "u32 id | u32 0" 은 클립0 의 u64 id 였고 "u32 블롭2크기" 는 다음 본의 trackFlags 였다 —
 ///  자세한 근거와 v≥2..v≥6 게이트 블록은 docs/re/skeleton-animation.md §6.)
@@ -67,8 +68,8 @@ public struct PuppetModel: Equatable {
         public let fps: Float
         public let lengthFrames: Int
         public let tracks: [[Key]]        // 본 인덱스별 키 배열(프레임당 1키), 빈 배열 = 정적 본
-        /// 이벤트 마커(MDLV0023 컨테이너 퍼펫의 MDLA0006 트레일러 — Model3D.Animation.events 이식).
-        /// 네이티브 MDLV0013(MDLA0001)은 코퍼스 이벤트 실측 0 — 항상 빈 배열.
+        /// 이벤트 마커. MDLA 이벤트 블록은 버전 게이트 밖이라 MDLA0001/0003...0006 모두 같은 형식이다.
+        /// 네이티브 MDLV0013 코퍼스의 저작 이벤트는 0건이지만, 형식상 빈 배열로 고정하지 않는다.
         public var events: [AnimationMarker] = []
         /// C③: 클립 고유 id — MDLV0023 등 컨테이너 퍼펫은 Model3D.Animation.id 이식(있으면).
         /// **[2026-08-21 정정]** 네이티브 MDLV0013(MDLA0001)에도 클립별 id 는 있다 — 클립 레코드
@@ -224,19 +225,37 @@ public struct PuppetModel: Equatable {
             indices.append(UInt16(bytes[o + i]) | (UInt16(bytes[o + i + 1]) << 8))
         }
         o += iSize
-        // F441: Model3D.swift:255 와 동일한 인덱스 상한 검증 — 손상된 인덱스 블롭은 소비처가 범위 밖을
-        // 스킵해 플랫 삼각형 경계가 전부 어긋나므로(메시 붕괴), 파스 실패(→ 폴터 쿼드)가 낫다.
+        // F441: Model3D 의 인덱스 상한 검증과 동일 — 그쪽 site 는 `parse` 안의
+        // `if let maxIndex = indices.max(), Int(maxIndex) >= vCount { return nil }` 다.
+        // 손상된 인덱스 블롭은 소비처가 범위 밖을 스킵해 플랫 삼각형 경계가 전부 어긋나므로
+        // (메시 붕괴), 파스 실패(→ 폴터 쿼드)가 낫다.
+        // **[정정 2026-08-30]** 종전 이 자리는 ~~`Model3D.swift:255 와 동일한 인덱스 상한 검증`~~
+        // 이었다. :255 는 이제 MDLA `Key` 36바이트 산문이다 — 줄 번호가 드리프트했다.
+        // 이 리포 관례대로 줄 번호 대신 조건식으로 적는다(그 조건식으로 grep 하면 바로 찾는다).
         if let maxIndex = indices.max(), Int(maxIndex) >= vCount { return nil }
 
         var model = PuppetModel(material: mat, vertices: vertices, indices: indices)
         // 스켈레톤(있으면): "MDLS0001" 섹션. 실패는 본 없이 반환(정지 메시 렌더는 가능).
         if o + 8 <= bytes.count, String(bytes: bytes[o..<o+8], encoding: .utf8) == "MDLS0001" {
             o += 8 + 1  // magic + lead u8(0)
-            // Model3D.swift:569 와 동일한 본 수 상한(100k). 손상 헤더의 거대 boneCount 가 그대로 루프
-            // 상한이 되면 readCString/u32 실패로 빠져나올 때까지 헛돈다 — 상한 초과는 본 없이 반환
-            // (정지 메시 렌더 가능; 아래 개별 실패 경로와 같은 정책).
-            // 참고: WE 엔진 자체는 본 128개에서 하드 실패한다(RE 분석). 그 의미론을 여기 들이지 않고
-            // Model3D 와의 정합만 맞춘다 — 새 한계를 발명하지 않는다.
+            // 방어선 100k — 손상 헤더의 거대 boneCount 가 그대로 루프 상한이 되면 readCString/u32
+            // 실패로 빠져나올 때까지 헛돈다. 상한 초과는 본 없이 반환(정지 메시 렌더 가능;
+            // 아래 개별 실패 경로와 같은 정책).
+            //
+            // **이것은 Model3D 와의 정합이 아니라 의도적 발산이다.** WE 엔진은 본 128개를 넘으면
+            // `cmp eax, 0x80` @`0x140262501` 뒤 `int 0x29`(__fastfail)로 즉사하고, Model3D 는 그것을
+            // 그대로 좁혀 `Model3DFormat.maxBoneCount`(= 128)로 거른다. 이쪽은 즉사하지 않고 그대로
+            // 읽는다 — 이 파일 머리말 `Bone` 주석의 "관용, 의도적 발산" 결정이 그것이다.
+            // 그러므로 이 가드를 `Model3DFormat.maxBoneCount` 로 바꾸지 마라. 값을 바꾸는 것은
+            // 그 결정을 뒤집는 것이고, 128 초과 MDLS 는 엔진이 즉사시키므로 실물에 존재할 수 없다.
+            //
+            // **[정정 2026-08-30]** 종전 이 자리는 ~~`Model3D.swift:569 와 동일한 본 수 상한(100k)`~~
+            // + ~~`Model3D 와의 정합만 맞춘다`~~ 였다. 둘 다 거짓이다: (1) Model3D 는 2026-08-21 에
+            // 상한을 100,000 → 128 로 좁혔으므로(`boneCount <= UInt32(Model3DFormat.maxBoneCount)`)
+            // "동일한 상한" 이 성립하지 않는다. 이 주석은 2026-08-19(`8ebd9ff9`) 에 쓰였고 이틀 뒤
+            // 반대쪽이 움직였는데 따라오지 않았다. (2) 인용한 :569 는 이제 `hasAABB` 대입이다.
+            // 정합이 아니라 발산이라는 것이 사실이고, 그 발산은 이미 위 `Bone` 주석에 근거와 함께
+            // 기록돼 있었다 — 여기서 "정합" 이라 적은 것이 그 기록과 모순됐다.
             guard let _ = u32(o), let boneCount = u32(o + 4), boneCount < 100_000 else { return model }
             o += 8
             var bones: [Bone] = []
@@ -285,7 +304,8 @@ public struct PuppetModel: Equatable {
         // (b) 클립이 둘 이상이면 다음 클립의 u64 id 를 건너뛰지 않아 **두 번째 클립부터 전부 유실**된다.
         // trackFlags 비트0 은 엔진에서 클립 flags 에 0x80000000 을 세우는 데만 쓰이고(0x140263c9d)
         // 키 해석을 바꾸지 않으므로 여기서는 읽고 버린다.
-        // MDLA0001 은 버전 1 이라 v≥2..v≥6 게이트 블록이 전부 꺼져 있다(§6) — 본 트랙 뒤가 곧 다음 클립이다.
+        // MDLA0001 은 버전 1 이라 v≥2..v≥6 게이트 블록은 전부 꺼져 있다. 단 이벤트 블록은
+        // 버전 게이트 밖이라 본 트랙 뒤의 `u32 count + count×(f32 time,cstring JSON)`을 항상 소비한다.
         if o + 8 <= bytes.count, String(bytes: bytes[o..<o+8], encoding: .utf8) == "MDLA0001" {
             o += 8 + 1  // magic + u8(0)
             guard let _ = u32(o), let animCount = u32(o + 4) else { return model }
@@ -326,9 +346,30 @@ public struct PuppetModel: Equatable {
                     tracks.append(keys)
                 }
                 guard ok, tracks.count == Int(boneCount) else { break }  // 부분 애니는 드롭, 누적분 유지
+                // 이벤트 블록은 MDLA 버전과 무관하다(0x14026536d count,
+                // 0x1402653bd time, 0x1402653e0 JSON cstring). time은 JSON frame과 중복이라
+                // 소비만 하고, 공개 마커 값은 다른 애니 경로와 같은 JSON payload를 정본으로 삼는다.
+                guard let eventCount = u32(o), eventCount <= 4096 else { break }
+                o += 4
+                var events: [AnimationMarker] = []
+                var eventsOK = true
+                events.reserveCapacity(Int(eventCount))
+                for _ in 0..<eventCount {
+                    guard f32(o) != nil, let payload = readCString(bytes, at: o + 4) else {
+                        eventsOK = false
+                        break
+                    }
+                    o = payload.next
+                    if let object = AssetJSON.dictionary(Data(payload.value.utf8)),
+                       let eventName = object["name"] as? String,
+                       let frame = (object["frame"] as? NSNumber)?.floatValue {
+                        events.append(AnimationMarker(name: eventName, frame: frame))
+                    }
+                }
+                guard eventsOK else { break }
                 anims.append(Animation(name: name, mode: mode, fps: fps,
                                        lengthFrames: Int(length), tracks: tracks,
-                                       events: [], id: clipId))
+                                       events: events, id: clipId))
             }
             model.animations = anims
         }

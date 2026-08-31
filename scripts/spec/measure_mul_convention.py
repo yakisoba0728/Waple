@@ -1,7 +1,7 @@
 """WE 셰이더 방언의 `mul(a,b)` 인자 규약 판별 → spec/engine/mul-convention.json.
 
-WE 셰이더는 GLSL 문법으로 저작되지만 함수는 HLSL 네이티브를 쓴다(`mul` 은 엔진 프롤로그에
-정의되지 않는다). HLSL 은 `m[행][열]`, GLSL/MSL 은 `m[열][행]` 이라 **같은 소스 대입문이 만드는
+WE 셰이더는 GLSL 문법으로 저작되지만 HLSL 네이티브 이름 `mul` 을 쓴다. HLSL 은
+`m[행][열]`, GLSL/MSL 은 `m[열][행]` 이라 **같은 소스 대입문이 만드는
 행렬은 서로 전치**이고, 그래서 HLSL `mul(v,M)`(행벡터) 과 등가인 GLSL/MSL 식은 `M*v` 다.
 
 이 스크립트는 그 규약을 **판별식으로 측정한다** — 문헌 인용이 아니라 계산이다:
@@ -381,7 +381,7 @@ def main():
     entries = [
         specfmt.entry(
             "mul.shim",
-            {"weDialect": "GLSL 문법 + HLSL 네이티브 함수(엔진 프롤로그가 `mul` 을 정의하지 않는다)",
+            {"weDialect": "GLSL 문법의 동봉 셰이더가 HLSL 네이티브 이름 `mul` 을 호출한다",
              "hlslSemantics": "mul(v, M) = 행벡터 v·M, m[행][열]",
              "portedShim": "#define mul(a,b) ((b)*(a))  // GLSL/MSL 은 m[열][행] — 같은 대입문이 만드는 행렬이 전치라 순서를 뒤집어야 등가",
              "translatorEmits": "(b * a)" if emits_matvec else "(a * b)",
@@ -390,8 +390,6 @@ def main():
             [specfmt.ev("shader", "Sources/WapleRender/Resources/WEAssets/shaders/common_perspective.h "
                                   f"(sha256_16 {sha16(PERSPECTIVE_H)}) — `#if HLSL` 분기가 같은 원문이 두 백엔드로 컴파일됨을 보인다"),
              specfmt.ev("file", "Sources/WapleCore/GLSLTranslator.swift translateBody ①"),
-             specfmt.ev("doc", "wallpaper_dev/references/…/analysis/deep/lanes/A4-headers-blending-fog.md §1.4 "
-                               "— wallpaper64.exe strings 의 매크로 프롤로그에 `mul` 정의 0건, 포팅 시 `((b)*(a))` 필요"),
              S]),
         specfmt.entry(
             "mul.squareToQuadCornerIdentity",

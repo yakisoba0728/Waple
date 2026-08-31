@@ -307,7 +307,7 @@ final class TexDecoderTests: XCTestCase {
         XCTAssertEqual(px.count, 501 * 489 * 4)
         // 실 이미지 변이(단색 폴백이면 전부 동일). RGB 다양성 + 알파 범위 측정.
         var aMin = 255, aMax = 0
-        var firstRGB = (px[0], px[1], px[2]); var rgbVaries = false
+        let firstRGB = (px[0], px[1], px[2]); var rgbVaries = false
         for i in stride(from: 0, to: px.count, by: 4) {
             let a = Int(px[i + 3]); aMin = min(aMin, a); aMax = max(aMax, a)
             if (px[i], px[i + 1], px[i + 2]) != firstRGB { rgbVaries = true }

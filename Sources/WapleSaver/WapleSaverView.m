@@ -15,6 +15,9 @@
 @property(nonatomic, strong) AVPlayerLayer *playerLayer;
 @property(nonatomic, strong) CATextLayer *messageLayer;
 @property(nonatomic, strong) id endObserver;
+@property(nonatomic, copy) NSString *loadedVideoPath;
+@property(nonatomic, copy) NSDictionary *loadedVideoIdentity;
+@property(nonatomic) BOOL hasLoadedContent;
 @end
 
 @implementation WapleSaverView
@@ -26,7 +29,7 @@
         self.layer = [CALayer layer];
         self.layer.backgroundColor = NSColor.blackColor.CGColor;
         [self setAnimationTimeInterval:1.0 / 30.0];
-        [self loadContent];
+        [self reloadContentIfNeeded];
     }
     return self;
 }
@@ -37,7 +40,9 @@
 
 - (void)startAnimation {
     [super startAnimation];
-    [self loadContent];  // 시작 시 재로드 — 앱에서 배경을 바꿨어도 최신 경로를 반영
+    // ScreenSaverEngine은 같은 인스턴스에 start/stop을 반복 호출한다. 설정이 그대로인데
+    // player/observer/layer를 매번 버리면 재생 위치가 0으로 돌아가고 디코더도 재생성된다.
+    [self reloadContentIfNeeded];
     [self.player play];
 }
 
@@ -83,9 +88,53 @@
     return [@[ @"mp4", @"mov", @"m4v" ] containsObject:path.pathExtension.lowercaseString];
 }
 
-- (void)loadContent {
-    [self tearDownContent];
+// 같은 경로의 파일이 원자적으로 교체됐는지 판별한다. 워크숍 재임포트는 최종 경로를
+// 유지한 채 새 디렉터리를 옮겨 놓으므로 경로 비교만으로는 이전 AVPlayer가 남을 수 있다.
+- (NSDictionary *)videoFileIdentityForPath:(NSString *)path {
+    if (path.length == 0) {
+        return nil;
+    }
+    NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:path error:nil];
+    if (!attributes) {
+        return nil;
+    }
+    NSMutableDictionary *identity = [NSMutableDictionary dictionary];
+    for (NSFileAttributeKey key in @[
+        NSFileSystemNumber,
+        NSFileSystemFileNumber,
+        NSFileSize,
+        NSFileCreationDate,
+        NSFileModificationDate,
+    ]) {
+        id value = attributes[key];
+        if (value) {
+            identity[key] = value;
+        }
+    }
+    return identity.count > 0 ? [identity copy] : nil;
+}
+
+- (void)reloadContentIfNeeded {
     NSString *path = [self configuredVideoPath];
+    BOOL samePath = (path == nil && self.loadedVideoPath == nil)
+        || [path isEqualToString:self.loadedVideoPath];
+    BOOL playable = [self isPlayableVideoPath:path];
+    NSDictionary *videoIdentity = playable ? [self videoFileIdentityForPath:path] : nil;
+    BOOL sameIdentity = !playable || (videoIdentity != nil
+        && [videoIdentity isEqual:self.loadedVideoIdentity]);
+    BOOL contentMatchesState = (playable && self.player != nil)
+        || (!playable && self.player == nil);
+    if (self.hasLoadedContent && samePath && sameIdentity && contentMatchesState) {
+        return;
+    }
+    [self loadContentForPath:path];
+}
+
+- (void)loadContentForPath:(NSString *)path {
+    [self tearDownContent];
+    self.loadedVideoPath = [path copy];
+    self.loadedVideoIdentity = [self videoFileIdentityForPath:path];
+    self.hasLoadedContent = YES;
     if (![self isPlayableVideoPath:path]) {
         [self showMessage:@"Waple\n재생할 동영상이 없습니다 — Waple 메뉴에서 동영상 배경을 적용한 뒤 다시 시도하세요."];
         return;
@@ -147,6 +196,9 @@
     self.playerLayer = nil;
     [self.messageLayer removeFromSuperlayer];
     self.messageLayer = nil;
+    self.loadedVideoPath = nil;
+    self.loadedVideoIdentity = nil;
+    self.hasLoadedContent = NO;
 }
 
 @end

@@ -6,7 +6,8 @@
 - 바이너리: `/root/.claude/uploads/.../440072bd-wallpaper64.exe`
 - 셰이더 평문: `assets/shaders/` **137 파일**(`.frag` 59 · `.vert` 59 · `.h` 14 · `.geom` 4 · `.json` 1).
   동봉 사본 `Sources/WapleRender/Resources/WEAssets/shaders/` 와 설치본이 **파일 목록·내용 전건 동일**
-- 씬 코퍼스: 동봉 172 + 설치본 186 = **358** (`{scene,gifscene}.json`)
+- 씬 코퍼스: 설치본 `wallpaper_engine/{assets,projects}`의 **186개** `{scene,gifscene}.json`.
+  동봉 172개는 설치본 `assets/` 사본이라 합산하지 않는다.
 
 관련 문서(중복 대신 참조): `docs/re/scene-postprocessing.md`(블룸 파이프라인·씬 키 전표),
 `docs/re/volumetric-light.md`(볼류메트릭), `docs/re/tex-format.md`(`.tex` 컨테이너),
@@ -35,7 +36,7 @@
 | 9 | 블룸 탭 규약(최근 Waple 수정) | **재검증 통과.** 다운샘플 `1<<i`(`0x14018374a`), 업샘플 `2<<(i-1)`(`0x140183856`), BICUBIC = 가장 깊은 두 단(`0x140183810`), `bloomhdrstrength` 기본 **2.0**(`0x1401870c2`) — 넷 다 Waple 현행과 일치(§5) |
 | 10 | 컬러 그레이딩 | 있다. **32×32×32 RGBA8 3D LUT** + HSV 밝기/대비/채도/색상. **씬 키가 아니라 앱(월페이퍼) 설정** `wec_*`/`wcc_*` 다(§6) |
 | 11 | 합성 순서 | 씬(+볼류메트릭) → 블룸 → **감마 디코드(HDR 한정)** → 그레이딩 → 페이드. **감마가 그레이딩보다 앞**이다(§7) |
-| 12 | 도달 | `hdr:true` 는 358씬 중 **4씬**(비-프리뷰 24씬 중 **2씬**). 즉 감마 논쟁이 화면에 닿는 표본이 애초에 4/358 이다(§8) |
+| 12 | 도달 | `hdr:true` 는 설치본 186씬 중 **3씬**(비-프리뷰 19씬 중 **2씬**). 즉 감마 논쟁이 화면에 닿는 표본이 애초에 3/186 이다(§8) |
 | 13 | **블룸 체인의 정밀도** | **LDR 3패스는 8비트 UNORM, HDR 피라미드만 fp16.** §1.4 의 표에서 따라 나오는 결과다 — LDR 블룸 버퍼 셋은 HDR 에서 생성되지 않으므로(`0x14017f5b8`) 컬러 enum 이 항상 `1` 이다. 곧 추출·블러 결과가 **매 패스 [0,1] 로 잘린다**. 이식하며 float 로 올리면 WE 보다 밝아진다(§1.6) |
 | 13b | **`scene-postprocessing.md` §3.2 의 포맷 열** | **정정.** 컬러/뎁스 인자를 섞어 블룸 타깃의 "포맷" 을 `0x1b`(= 뎁스 없음)로 적고 있었고, `_rt_FullFrameBuffer` 의 `0x16`/`0x1a` 갈림을 "(LDR)/(HDR)" 로 적었다 — 실제로는 **bit0**(리플렉션)이다(`0x14017f56c and al, 1`). 이 문서 §1.4 와 정면으로 갈려 있었다(§1.6) |
 | 14 | **`lin()` 을 건너뛰는 분기는 도달 불가** | §2.4 의 표에서 따라 나오지만 적혀 있지 않던 결론이다: `lin()` 을 건너뛰는 유일한 분기 `#if LINEAR == 1` 을 거는 머티리얼(`combine_hdr_upsample_linear.json`)이 **런타임 미로드**이므로 **HDR 경로에서 감마 디코드가 꺼지는 경우는 없다**(§2.4 보강) |
@@ -449,7 +450,7 @@ Waple 은 **세 자리**에서 같은 문장을 적고 있다 — `HDRBloomPass.
 `combine.frag`(디코드 없음)를 탄 것이고, 두 관측이 모두 옳다. 이 문서는 골든 픽스처의 `hdr` 여부를
 확인할 수 없어 **[미해결 C]** 로 남긴다.
 
-**어느 쪽이든 코드 변경은 필요 없다** — Waple 의 현행 동작(디코드 미이식)은 LDR 358−4 씬에서
+**어느 쪽이든 코드 변경은 필요 없다** — Waple 의 현행 동작(디코드 미이식)은 LDR 186−3 씬에서
 정확하다. 바꿔야 하는 것은 **주석의 근거**다(§9 W-20).
 
 ### 2.7 `downsample_quarter_linear` — 유일한 인코드가 걸리는 자리
@@ -504,11 +505,11 @@ Waple 은 **세 자리**에서 같은 문장을 적고 있다 — `HDRBloomPass.
 
 최종 픽셀 연산 전건(§2.4 의 게이트와 짝):
 
-| 경로 | 씬 수(358) | 최종 식 |
+| 경로 | 씬 수(186) | 최종 식 |
 | --- | ---: | --- |
-| LDR · 블룸 on | 10 − (hdr 4 중 겹침 4) = **6** | `scene + bloom` (UNORM 타깃이 클램프) |
-| LDR · 블룸 off | **348** | 최종 패스 없음 |
-| HDR · 블룸 on · SDR 모니터 | **4** | `saturate(lin(scene + 4탭bloom)) * g_RenderVar0.x` |
+| LDR · 블룸 on | 8 − (hdr 3 중 겹침 3) = **5** | `scene + bloom` (UNORM 타깃이 클램프) |
+| LDR · 블룸 off | **178** | 최종 패스 없음 |
+| HDR · 블룸 on · SDR 모니터 | **3** | `saturate(lin(scene + 4탭bloom)) * g_RenderVar0.x` |
 | HDR · 블룸 on · HDR10 모니터 | 〃 | `lin(max(0, saturate(scene)+bloom)) * (g_RenderVar0.y·smoothstep(1,5,luma) + g_RenderVar0.x)` |
 | HDR · 블룸 off | **0** | `lin(scene)` |
 | 비디오 HDR(flags bit16) | 0 | `saturate(rgb / (2·g_HDRParams.y)) · (2·g_HDRParams.y)` — 순수 클리핑 |
@@ -863,7 +864,7 @@ albedo.rgb = mix(albedo.rgb, albedoFiltered, g_LutParams);
 
 ### 7.1 `fade` = `camerafade` 소비 지점 — `scene-postprocessing.md` §8-4 를 닫는다
 
-종전 §8-4 는 *"`camerafade`(bit2, 195씬 저작)의 소비 지점을 못 찾았다"* 로 남아 있었다. 찾았다.
+종전 §8-4 는 *"`camerafade`(bit2, 101씬 저작)의 소비 지점을 못 찾았다"* 로 남아 있었다. 찾았다.
 
 - 머티리얼 로드: `0x140181bce` `lea rdx, "materials/util/fade.json"` → `[composite+0x3180]`(`0x140181bda`)
 - 게이트: `0x140180c1a` `test byte [scene+0xe0], 4` (bit2 = `camerafade`)
@@ -875,47 +876,47 @@ albedo.rgb = mix(albedo.rgb, albedoFiltered, g_LutParams);
   머티리얼 `usershadervalues: { "schemecolor": "tint" }`, `tint` 기본 `(0.315, 0.135, 0.1125)`.
 
 즉 `camerafade` 는 **후처리 체인의 마지막 전면 패스**이고, 씬 페이드-인/아웃(플레이리스트 전환이 아니라
-씬 자체 타임라인)에 쓰인다. 코퍼스가 전건 기본값(true)이라 A/B 로는 안 드러난다는 §8-4 의 진단도 맞다.
+씬 자체 타임라인)에 쓰인다. 설치본 저작 101건 중 98건이 기본값(true)이라 이 분기는 기본값 위주의
+코퍼스 A/B 만으로 식별하기 어렵다는 §8-4 의 진단도 맞다.
 
 ---
 
-## 8. 동봉 + 설치본 358 씬 도달 실측
+## 8. 설치본 단일 모집단 186 씬 도달 실측
 
-파스: 엄격 JSON → 실패 시 `//` 주석·트레일링 콤마 제거 재시도. **358/358 성공, 실패 0.**
-"프리뷰"는 경로에 `preview` 가 들어간 씬(이펙트/프리셋/파티클 엘리먼트 미리보기) = **334**,
-나머지 **24** 가 실제 벽지/에디터 씬이다.
+파스: 엄격 JSON. **186/186 성공, 실패 0.** "프리뷰"는 경로에 `preview` 가 들어간 씬
+(이펙트/프리셋/파티클 엘리먼트 미리보기) = **167**, 나머지 **19** 가 실제 벽지/에디터 씬이다.
+동봉 `WEAssets` 172개는 이 설치본 `assets/`의 사본이라 모집단에 다시 더하지 않는다.
 
 ### 8.1 키별 저작·생략
 
 `저작 수(기본값과 같음 / 다름) · 생략 수` 형식.
 
-| 키 | 기본값 | 비-프리뷰 24 | 프리뷰 334 | 합계 저작 |
+| 키 | 기본값 | 비-프리뷰 19 | 프리뷰 167 | 합계 저작 |
 | --- | --- | --- | --- | ---: |
-| `hdr` | false | 5 (3/**2**) · 생략 19 | 172 (170/**2**) · 생략 162 | 177 |
-| `bloom` | **true** | 24 (8/**16**) · 생략 0 | 334 (2/**332**) · 생략 0 | 358 |
-| `bloomstrength` | 2.0 | 7 (4/**3**) · 생략 17 | 334 (334/0) · 생략 0 | 341 |
-| `bloomthreshold` | 0.65 | 7 (4/**3**) · 생략 17 | 334 (334/0) · 생략 0 | 341 |
-| `bloomhdrstrength` | 2.0 | 7 (3/**4**) · 생략 17 | 172 (172/0) · 생략 162 | 179 |
-| `bloomhdrthreshold` | 1.0 | 5 (4/**1**) · 생략 19 | 172 (172/0) · 생략 162 | 177 |
-| `bloomhdrfeather` | 0.1 | 5 (4/**1**) · 생략 19 | 172 (172/0) · 생략 162 | 177 |
-| `bloomhdrscatter` | 1.619 | 5 (3/**2**) · 생략 19 | 172 (172/0) · 생략 162 | 177 |
-| `bloomhdriterations` | 8 | 3 (3/0) · 생략 21 | 170 (170/0) · 생략 164 | 173 |
-| `bloomtint` | (1,1,1) | 0 · 생략 24 | 154 (154/**0**) · 생략 180 | 154 |
+| `hdr` | false | 4 (2/**2**) · 생략 15 | 86 (85/**1**) · 생략 81 | 90 |
+| `bloom` | **true** | 19 (7/**12**) · 생략 0 | 167 (1/**166**) · 생략 0 | 186 |
+| `bloomstrength` | 2.0 | 6 (3/**3**) · 생략 13 | 167 (167/0) · 생략 0 | 173 |
+| `bloomthreshold` | 0.65 | 6 (3/**3**) · 생략 13 | 167 (167/0) · 생략 0 | 173 |
+| `bloomhdrstrength` | 2.0 | 5 (2/**3**) · 생략 14 | 86 (86/0) · 생략 81 | 91 |
+| `bloomhdrthreshold` | 1.0 | 4 (3/**1**) · 생략 15 | 86 (86/0) · 생략 81 | 90 |
+| `bloomhdrfeather` | 0.1 | 4 (3/**1**) · 생략 15 | 86 (86/0) · 생략 81 | 90 |
+| `bloomhdrscatter` | 1.619 | 4 (2/**2**) · 생략 15 | 86 (86/0) · 생략 81 | 90 |
+| `bloomhdriterations` | 8 | 2 (2/0) · 생략 17 | 85 (85/0) · 생략 82 | 87 |
+| `bloomtint` | (1,1,1) | 0 · 생략 19 | 77 (77/**0**) · 생략 90 | 77 |
 
 읽는 법 몇 가지:
 
-- **`bloomtint` 는 저작 154건이 전부 정확히 `"1.00000 1.00000 1.00000"`** = 기본값이다.
+- **`bloomtint` 는 저작 77건이 전부 정확히 `"1.00000 1.00000 1.00000"`** = 기본값이다.
   코퍼스에 틴트를 실제로 쓰는 씬이 **0건**이다.
-- `bloomhdriterations` 는 저작 173건 전부 `8` — 기본값 외 값이 **0건**이다.
-- `bloom` 은 358/358 이 명시 저작하고 그중 348이 `false` 다. **엔진 기본은 `true`** 라
+- `bloomhdriterations` 는 저작 87건 전부 `8` — 기본값 외 값이 **0건**이다.
+- `bloom` 은 186/186 이 명시 저작하고 그중 178이 `false` 다. **엔진 기본은 `true`** 라
   코퍼스만 보면 절대 드러나지 않는다(`scene-postprocessing.md` §2.2 W-4 와 같은 이야기).
 
-### 8.2 `hdr:true` 씬 전건 (4/358)
+### 8.2 `hdr:true` 씬 전건 (3/186)
 
 | 범위 | 경로 | bloom | 특기 |
 | --- | --- | --- | --- |
-| 동봉 | `presets/lightning/previewthunderbolt/scene.json` | true | 프리뷰 |
-| 설치본 | `assets/presets/lightning/previewthunderbolt/scene.json` | true | 위와 동일 파일 |
+| 설치본 | `assets/presets/lightning/previewthunderbolt/scene.json` | true | 프리뷰 |
 | 설치본 | `projects/defaultprojects/razer_bedroom/scene.json` | true | **비-프리뷰** |
 | 설치본 | `projects/defaultprojects/shimmering_particles/scene.json` | true | **비-프리뷰** |
 
@@ -923,7 +924,7 @@ albedo.rgb = mix(albedo.rgb, albedoFiltered, g_LutParams);
 따라서 §2 의 감마 논쟁·§1.5 의 `g_RenderVar0`·`combine_hdr` 경로는 **동봉 코퍼스만으로는
 화면이 전혀 안 바뀐다.**
 
-### 8.3 비-프리뷰 24씬 전표
+### 8.3 비-프리뷰 19씬 전표
 
 `-` = 생략. `DYN` = `{"script":…}` 또는 `{"user":…}` 동적 바인딩.
 
@@ -948,22 +949,16 @@ albedo.rgb = mix(albedo.rgb, albedoFiltered, g_LutParams);
 | `defaultprojects/shimmering_particles` | **T** | T | **DYN** | **0.36** | **DYN** | **0.7** | **0** | **1.13** | - |
 | `templates/flag` | - | F | - | - | - | - | - | - | - |
 | `templates/gif` | - | F | - | - | - | - | - | - | - |
-| `scenes/gifs`(동봉) | - | F | - | - | - | - | - | - | - |
-| `scenes/modeleditor`(동봉) | F | T | 2 | 0.65 | 2 | 1 | 0.1 | 1.619 | 8 |
-| `scenes/particleeditor`(동봉) | - | F | - | - | - | - | - | - | - |
-| `scenes/particleeditor3dscale`(동봉) | - | F | - | - | - | - | - | - | - |
-| `scenes/videoplayer`(동봉) | - | F | - | - | **0** | - | - | - | - |
 
 읽을 만한 것:
 
-- **`videoplayer` 는 `bloomhdrstrength: 0` 을 명시한다**(동봉·설치본 양쪽). `hdr` 를 생략하므로
+- **`videoplayer` 는 `bloomhdrstrength: 0` 을 명시한다.** `hdr` 를 생략하므로
   현 상태로는 도달하지 않지만, **기본값을 0 으로 두던 종전 Waple 이 우연히 맞던 유일한 씬**이다.
 - `shimmering_particles` 는 `bloomstrength`·`bloomhdrstrength` 를 **동적 바인딩**으로 저작한다
   (`{"script": "…thisObject.bloomstrength = changedUserProperties.glow * 0.5…"}`,
   `{"user":"glow","value":2.0}`). 정적 기본값만 반영하는 파서는 이 씬에서 값이 다르다.
 - `bloomhdrscatter` 비기본 저작은 코퍼스 전체에서 **2건**뿐이고 둘 다 비-프리뷰다:
-  `1.62`(razer_bedroom) · `1.13`(shimmering_particles). 프리뷰 172건은 전부 기본값이다
-  (저작 문자열은 `1.619` 171건 · `1.61899995803833` 4건 두 표기로 갈리지만 float 로는 같은 값이다).
+  `1.62`(razer_bedroom) · `1.13`(shimmering_particles). 프리뷰 저작 86건은 전부 기본값 `1.619`다.
 - `bloomhdrthreshold` 비기본은 **1건**(`0.7`, shimmering_particles), `bloomhdrfeather` 비기본도
   **1건**(`0`, 같은 씬).
 
@@ -1000,10 +995,10 @@ albedo.rgb = mix(albedo.rgb, albedoFiltered, g_LutParams);
 
 **측정으로 반증된다**(§1.1·§1.2). 대신 아래 두 근거로 갈아 끼우면 같은 결론이 선다:
 
-1. **`lin()` 은 `hdr:true` 뒤에만 있다**(§2.4). 358씬 중 354씬은 `combine.frag`(감마 없음) 또는
+1. **`lin()` 은 `hdr:true` 뒤에만 있다**(§2.4). 설치본 186씬 중 183씬은 `combine.frag`(감마 없음) 또는
    패스 없음이므로, Waple 의 LDR 경로는 **디코드가 없는 것이 정확하다**.
 2. HDR 경로의 골든 실측(주석이 이미 인용한 p50 0.047 vs 0.18)이 디코드 미적용 쪽을 지지한다.
-   그 골든 씬이 `hdr:true` 였는지 확인되면 §2.6 의 [미해결 C] 가 닫히고, `hdr:true` 4씬에 대해서만
+   그 골든 씬이 `hdr:true` 였는지 확인되면 §2.6 의 [미해결 C] 가 닫히고, `hdr:true` 3씬에 대해서만
    결론이 확정된다.
 
 **권고**: 네 자리의 "sRGB-뷰 스왑체인" 문구를 지우고
@@ -1107,10 +1102,9 @@ for i in range(0x1c):
 
 ```python
 import json, glob, os, re, collections
-ROOTS = ['/home/user/Waple/Sources/WapleRender/Resources/WEAssets',
-         '/home/user/Waple-wallpaper-source/wallpaper_engine']
+ROOTS = ['/home/user/Waple-wallpaper-source/wallpaper_engine']
 files = [p for r in ROOTS for pat in ('**/scene.json','**/gifscene.json')
-           for p in glob.glob(os.path.join(r, pat), recursive=True)]      # 358
+           for p in glob.glob(os.path.join(r, pat), recursive=True)]      # 186
 # general 에서 hdr/bloom*/bloomtint 를 꺼내 기본값과 대조 (§8.1 표)
 ```
 

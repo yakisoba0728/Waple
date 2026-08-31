@@ -234,9 +234,33 @@ def general_keys_in_other_files():
     return out
 
 
+def version_gate_counterexample_minima(version_counts, key_counts):
+    """철회된 version 게이트의 반례 씬 수 하한.
+
+    옛 게이트는 version 이 없으면 general 을 그대로 돌려줬다. 따라서 ``None`` 씬은
+    "게이트 대상인데 키를 저작한 씬" 하한에서 v>=임계 씬과 **함께** 제외해야 한다.
+    """
+    missing = int(version_counts.get("None", 0))
+
+    def at_least(threshold):
+        return sum(int(n) for version, n in version_counts.items()
+                   if version != "None" and int(version) >= threshold)
+
+    ungated_v3 = at_least(3) + missing
+    ungated_v4 = at_least(4) + missing
+    return {
+        "hdr": int(key_counts.get("hdr", 0)) - ungated_v3,
+        "bloomtint": int(key_counts.get("bloomtint", 0)) - ungated_v3,
+        "perspectiveoverridefov": int(key_counts.get("perspectiveoverridefov", 0)) - ungated_v3,
+        "windenabled": int(key_counts.get("windenabled", 0)) - ungated_v4,
+    }
+
+
 # ── 본 측정 ───────────────────────────────────────────────────────────────
 
 def main():
+    specfmt.require_inputs("measure_scene_schema",
+                           ("dir", WS, "WE_WORKSHOP", "워크샵 코퍼스"))
     per_func, whole_file = swift_function_keys()
     parse_keys = per_func.get("parse", set())
     # applyGeneralSettings 는 general[...] 만 읽으므로 그 함수의 리터럴 전체가 general 키다.
@@ -602,6 +626,7 @@ def main():
     script_ev = specfmt.ev("script", "scripts/spec/measure_scene_schema.py")
     src_ev = specfmt.ev("file", "Sources/WapleCore/SceneDocument.swift",
                         "함수 경계로 잘라 타입별 파스 함수의 JSON 키 리터럴만 대조")
+    gate_min = version_gate_counterexample_minima(versions, gen_n)
 
     entries = [
         specfmt.entry("scene.corpus.population", {
@@ -823,13 +848,25 @@ def main():
         "notGaps": [
             {"what": "general.quality", "why": "Waple 이 파싱하지만 코퍼스 162씬 중 0건이 저작 — 게이트가 죽어 있다"},
             {"what": "scene.version(1/3/4/5, 159씬)",
-             "why": "[2026-08-28] 종전 '**Waple 이 아예 읽지 않는다**' 는 거짓이다 — "
-                    "`Sources/WapleCore/SceneDocument.swift:1775` 의 "
-                    "`let schemaVersion = numericInt(scene[\"version\"])` 가 읽고, 그 값이 바로 다음 "
-                    "줄 `versionGatedGeneral(scene[\"general\"], schemaVersion:)` 의 게이트로 들어간다"
-                    "(불리언은 수로 세지 않는 엄격 판이라 `{\"version\":true}` 는 누락과 같이 다룬다). "
-                    "**갭이 아닌 이유는 '안 읽어서' 가 아니라 '읽고 게이트에 쓰는데 지금까지 어긋난 "
-                    "관측이 없어서' 다.**"},
+             "why": "[정정 2026-08-30] 종전 사유 '**읽고 게이트에 쓰는데 지금까지 어긋난 관측이 "
+                    "없어서**' 는 거짓이었다 — 어긋난 관측은 이 정본이 커밋되기 **28분 전에 이미 "
+                    "존재했다**(짝 저장소 `Waple-wallpaper-source` 커밋 `0bb963ed`, 2026-08-28 "
+                    "11:52:35 UTC 가 `corpus_scan/scene-json-schema.md:189` 의 version 게이트 서술을 "
+                    "취소선으로 철회하고 소비자로 `SceneDocument.swift` 를 명시했다. 이 파일의 당시 "
+                    "커밋 `83da9851` 은 12:20:21 UTC 다). **반증은 이 정본 자신으로도 재현된다** — "
+                    "`scene.corpus.population.version` = {5:63, 1:33, 4:32, 3:31, None:3}(162씬, "
+                    "v≥3 은 126 · v≥4 는 95)인데 version 부재 3씬은 옛 guard 에서 무게이트였으므로 "
+                    "두 집합과 함께 제외해야 한다. `scene.general.keys` 의 n 으로 비둘기집 하한을 "
+                    f"계산하면 **최소 {gate_min['hdr']}씬이 v3 미만인데 `hdr`/`zoom` 을, "
+                    f"`bloomtint` 는 {gate_min['bloomtint']}씬, `perspectiveoverridefov` 는 "
+                    f"{gate_min['perspectiveoverridefov']}씬, 최소 {gate_min['windenabled']}씬이 "
+                    "v4 미만인데 wind/gravity 를 저작한다** — 게이트는 "
+                    "어느 방향으로도 성립할 수 없다. "
+                    "**그래서 2026-08-30 게이트를 걷어냈다**(`versionGatedGeneral` 과 그 호출부 삭제, "
+                    "그 자리에 날짜 붙은 묘비. 이제 general 키는 version 이 아니라 **키 존재 여부**로 "
+                    "읽는다). 지금 이것이 갭이 아닌 이유는 '게이트에 쓰는데 반증이 없어서' 가 아니라 "
+                    "**'general 소비가 version 에 더는 의존하지 않아서'** 다 — `scene.version` 은 "
+                    "이제 Waple 의 어떤 분기에도 들어가지 않는다."},
             {"what": "general.camerapreview(162)",
              "why": "에디터 메타. 렌더 소비처가 없다 — general 키 중 **유일하게 실제로 미파싱**인 것이고"
                     "(waple.unparsedGeneralKeys), 그래도 갭이 아니다."},

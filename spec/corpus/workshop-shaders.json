@@ -132,7 +132,7 @@
     {
      "kind": "script",
      "ref": "scripts/spec/measure_workshop_shaders.py",
-     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+     "note": "ShaderPreprocessor.swift / GLSLTranslator.swift 의 거부 판정 경로 포트(preprocessStrict · evaluateConditionals · ExprEval · weNumericLiteral · isEngine). `--selftest` 는 Swift 소스에서 연산자 집합을 파싱하고 `Tests/WapleCoreTests/` 의 단언 52건을 수확해 대조한다(+ 수확 불가 경로 46건은 이 파일의 고정 기대값). **[정정 2026-08-30]** 종전 이 note 는 \"Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과\" 라고 적었는데 세 군데가 틀렸다: (a) 셀프테스트는 Swift 를 부르지 않았다 (이식본 대 이식본 대조), (b) 그 \"거부 14\" 중 12건은 HEAD 에서 **평가된다**, (c) 같은 목록을 세는 `portFidelity` 는 F610 2건을 포함해 \"거부 16\" 이라 적어 두 문면이 서로 어긋났다. 줄 번호 인용도 드리프트해 심볼명으로 바꿨다."
     },
     {
      "kind": "file",
@@ -465,7 +465,7 @@
     {
      "kind": "script",
      "ref": "scripts/spec/measure_workshop_shaders.py",
-     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+     "note": "ShaderPreprocessor.swift / GLSLTranslator.swift 의 거부 판정 경로 포트(preprocessStrict · evaluateConditionals · ExprEval · weNumericLiteral · isEngine). `--selftest` 는 Swift 소스에서 연산자 집합을 파싱하고 `Tests/WapleCoreTests/` 의 단언 52건을 수확해 대조한다(+ 수확 불가 경로 46건은 이 파일의 고정 기대값). **[정정 2026-08-30]** 종전 이 note 는 \"Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과\" 라고 적었는데 세 군데가 틀렸다: (a) 셀프테스트는 Swift 를 부르지 않았다 (이식본 대 이식본 대조), (b) 그 \"거부 14\" 중 12건은 HEAD 에서 **평가된다**, (c) 같은 목록을 세는 `portFidelity` 는 F610 2건을 포함해 \"거부 16\" 이라 적어 두 문면이 서로 어긋났다. 줄 번호 인용도 드리프트해 심볼명으로 바꿨다."
     },
     {
      "kind": "file",
@@ -743,7 +743,8 @@
       "copiesInCorpus": 2
      }
     ],
-    "note": "연산자 도수는 ExprEval 토크나이저 기준(&& 와 & 를 혼동하지 않는다)"
+    "note": "연산자 도수는 ExprEval 토크나이저 기준(&& 와 & 를 혼동하지 않는다)",
+    "histogramMechanismCorrection": "**[정정 2026-08-30]** 종전 이 히스토그램의 `%`·`&(비트)`·`|(비트)`·`^`·`~`·`<<`·`>>` 버킷은 **`unsupported` 플래그 안에서 식 원문 문자열 검사로** 셌다. G2 이후 그 연산자들은 지원되므로 플래그가 서지 않아 그 버킷은 구조적으로 **항상 0** 이 된다(도수가 아니라 죽은 코드였다). 이제 토큰에서 직접 센다. **위 표의 값은 바뀌지 않는다** — 이 코퍼스의 `#if`/`#elif` 식에는 그 연산자들이 실제로 0건이라(그래서 종전에도 표에 없었다) 세는 법만 고쳐졌다. `?:`·`.멤버` 버킷도 정규식 대신 렉서가 실제로 모른 문자로 센다."
    },
    "status": "확정",
    "evidence": [
@@ -754,7 +755,7 @@
     {
      "kind": "script",
      "ref": "scripts/spec/measure_workshop_shaders.py",
-     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+     "note": "ShaderPreprocessor.swift / GLSLTranslator.swift 의 거부 판정 경로 포트(preprocessStrict · evaluateConditionals · ExprEval · weNumericLiteral · isEngine). `--selftest` 는 Swift 소스에서 연산자 집합을 파싱하고 `Tests/WapleCoreTests/` 의 단언 52건을 수확해 대조한다(+ 수확 불가 경로 46건은 이 파일의 고정 기대값). **[정정 2026-08-30]** 종전 이 note 는 \"Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과\" 라고 적었는데 세 군데가 틀렸다: (a) 셀프테스트는 Swift 를 부르지 않았다 (이식본 대 이식본 대조), (b) 그 \"거부 14\" 중 12건은 HEAD 에서 **평가된다**, (c) 같은 목록을 세는 `portFidelity` 는 F610 2건을 포함해 \"거부 16\" 이라 적어 두 문면이 서로 어긋났다. 줄 번호 인용도 드리프트해 심볼명으로 바꿨다."
     }
    ]
   },
@@ -778,7 +779,7 @@
       "firstSeen": "2904908532/scene.pkg::shaders/workshop/2872146492/effects/lens_distorsion.frag"
      }
     },
-    "portFidelity": "이 수치는 Swift 를 실행해 얻은 것이 아니다(이 머신에 Swift 툴체인 없음). ShaderPreprocessor/ExprEval 의 거부 판정 경로를 Python 으로 1:1 포팅하고 Swift 회귀테스트의 기대값(거부 16·통과 9·분기선택 6·인클루드 2 케이스)으로 포트를 검증했다. 미커버 경로에서 발산할 가능성은 남는다 — macOS 에서 GLSLTranslator.translate 를 코퍼스에 직접 돌려 재확인할 것",
+    "portFidelity": "이 수치는 ShaderPreprocessor/ExprEval 의 **거부 판정 경로를 Python 으로 이식한 판본**으로 측정한 것이고, 코퍼스에 대해 Swift 를 직접 돌려 얻은 것은 아니다. 이식본은 `--selftest` 가 검증한다: ① `ShaderPreprocessor.swift` 의 렉서 두 줄에서 연산자 집합을 파싱해 대조 ② `Tests/WapleCoreTests/` 의 XCTest 단언에서 기대값 52건을 수확해 대조(evalChecked 48 · preprocessStrict 4) ③ 수확 불가 경로 46건은 이 파일의 고정 기대값과 대조(거부 9 · G2·BK 평가 14 · G5 매크로 3 · 통과 9 · 평가값 5 · 분기선택 6). `--selftest` 는 Swift 바이너리를 실행하지 않으므로 이 셋은 직접 differential 증거가 아니다. 미커버 경로에서 발산할 가능성은 남는다 — macOS 에서 GLSLTranslator.translate 를 코퍼스에 직접 돌려 재확인할 것. **[정정 2026-08-30]** 종전 이 문면은 두 가지를 거짓으로 주장했다. ① ~~\"이 머신엔 Swift 툴체인이 없다\"~~ — 이 값이 기록된 2026-08-01 시점에는 맞았지만 지금은 아니다(`xcode-select -p` = Xcode 27.0 Beta 5, `swift --version` = 6.4). ② ~~\"Swift 회귀테스트의 기대값(거부 16·통과 9·분기선택 6·인클루드 2 케이스)으로 포트를 검증했다\"~~ — `--selftest` 는 Swift 를 **한 번도 부르지 않았고**, 이식본을 자기 자신이 적어 둔 기대값과 대조했을 뿐이다. 그 기대값이 이식 시점(pre-G2)에 함께 굳어서 **Swift 가 반대를 단언하는 12건을 거부로 계속 단언**하고 있었다: `% & | ^ ~ << >>` · `0x10` · `A == 0x10` · `1u` · `#elif A % 2` 체인 · `#define X 0x10` — 실측(HEAD 70a8a708, `preprocessStrict(_, combos: [\"A\": 3])`)으로 14건 중 **2건만** 거부다(삼항 · 잔여 토큰). Swift 쪽 반대 단언은 `Tests/WapleCoreTests/ShaderPreprocessorRequireTests.swift:179-192`. 그래서 `--selftest` 는 프로덕션 로직이 통째로 바뀐 뒤에도 \"통과 (0 실패)\" 를 찍는 죽은 게이트였다. 이식본을 G2(1e4660ad)/BK(ba2b6623, 둘 다 2026-08-21)에 맞춰 넓혔고, 연산자 집합과 수확 가능한 52건은 Swift 소스·테스트에서 유도하고, 수확 불가 46건은 이 파일의 고정 기대값으로 남겼다. 그러므로 직접 differential 이라는 주장은 하지 않는다.",
     "verdict": "ShaderPreprocessor 가 거부하는 워크샵 셰이더는 0건. 22,723 개 #if/#elif 식 중 ExprEval 이 평가 못 하는 것은 1개뿐이고 그마저 F610 동일-분기 관용으로 통과한다",
     "combosCaveat": "측정은 [COMBO] 기본값(스테이지 합집합) 기준. 씬/머티리얼이 콤보를 명시하면 활성 분기가 바뀐다(resolvePassCombos/samplerCombos)",
     "comboIndependence": {
@@ -800,6 +801,7 @@
       "M_PI_F": 13,
       "blurPreciseLimit": 11
      },
+     "suspectCriterionCorrection": "**[정정 2026-08-30]** 바로 위 `suspectDefineCandidates` 와 `suspectDefineCandidatesTop` 은 **옛 판정 기준으로 센 값이다**(2026-08-01 측정). 종전 기준은 \"숫자로 시작하는데 10진 정수도 괄호 정수도 아니면 suspect\" 라 `0x10`·`1u`·`1.5`·`0.0174533` 을 전부 후보로 셌는데, G2/BK(1e4660ad·ba2b6623, 둘 다 2026-08-21) 이후 Swift 는 그 넷을 **값으로 등록**한다(`ShaderPreprocessor.swift` 의 `ExprEval.numericLiteral` 분기 — `#define X 0x10` · `1.5` 는 이제 suspect 가 아니다). 실측(HEAD 70a8a708, `preprocessStrict`): `#define DEG2RAD 0.0174533` + `#if DEG2RAD > 0` → `\"no\"`(값 0 으로 평가, nil 아님) · `#define M_D_PI_2 1.5707963` + `#if … > 0` → `\"yes\"`(값 1). 즉 위 표의 상위 항목 대부분이 HEAD 의 suspect 집합에 없다. 남는 후보는 실물이 **수로도 못 읽는** 값뿐이다(`1e5` 류 지수 표기). 생성기(`measure_workshop_shaders.py`)의 판정은 이 정정과 함께 고쳤으니 다음 재생성이 참값을 적을 것이다 — **워크샵 코퍼스가 두 리포 어디에도 없어 지금 재측정할 수 없다**(`WE_WORKSHOP` 미설정, 기본 경로 `Z:\\SteamLibrary\\…\\431960` 부재). 숫자를 지우지 않는 이유는 근거 보존이다 — 옛 값이 무엇이었는지가 이 드리프트의 증거다. **이 항목의 논지와 headline 은 바뀌지 않는다.** HEAD 의 suspect 집합은 옛 기준의 **진부분집합**이므로 넓은 기준에서 이미 빈 `suspectNamesReferencedInIf: {}` 는 좁은 기준에서도 비어 있고(단조성), 같은 이유로 `refusedFiles: 0` 과 `verdict` 는 재생성에서 0 이 아닌 값으로 바뀔 수 없다 — 즉 이 정정은 정확성 회복이 아니라 **근거 문면의 정정**이다.",
      "suspectNamesReferencedInIf": {},
      "note": "거부 트리거는 ① 미지원 식 ② suspect define 참조 ③ 잔여 토큰뿐이고 셋 다 식 원문으로 결정된다. 콤보는 값만 바꾸므로 활성 분기를 바꿔도 새 거부를 만들 수 없다 — 단 ①이 있는 셰이더에서 분기 텍스트가 갈리는 신규 저작물은 예외"
     }
@@ -809,7 +811,7 @@
     {
      "kind": "script",
      "ref": "scripts/spec/measure_workshop_shaders.py",
-     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+     "note": "ShaderPreprocessor.swift / GLSLTranslator.swift 의 거부 판정 경로 포트(preprocessStrict · evaluateConditionals · ExprEval · weNumericLiteral · isEngine). `--selftest` 는 Swift 소스에서 연산자 집합을 파싱하고 `Tests/WapleCoreTests/` 의 단언 52건을 수확해 대조한다(+ 수확 불가 경로 46건은 이 파일의 고정 기대값). **[정정 2026-08-30]** 종전 이 note 는 \"Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과\" 라고 적었는데 세 군데가 틀렸다: (a) 셀프테스트는 Swift 를 부르지 않았다 (이식본 대 이식본 대조), (b) 그 \"거부 14\" 중 12건은 HEAD 에서 **평가된다**, (c) 같은 목록을 세는 `portFidelity` 는 F610 2건을 포함해 \"거부 16\" 이라 적어 두 문면이 서로 어긋났다. 줄 번호 인용도 드리프트해 심볼명으로 바꿨다."
     }
    ]
   },
@@ -860,6 +862,7 @@
     },
     "note": "관용 하나씩 끄고 전수 재측정 — 각 관용이 실제로 몇 파일을 살리는지. directiveComment=지시문 주석 절단, ifParen=`#if(` 정규화, trailingSemicolon=후행 `;` 절단, identicalBranches=F610 동일분기, parentActive=비활성 부모 관용",
     "ifParenCaveat": "ifParen 을 꺼도 거부는 0 — 실패 모드가 다르다. `#if(` 는 prefix 검사에 안 걸려 지시문 줄이 그대로 MSL 로 새고 짝 #endif 만 소비된다(조용한 파손). 코퍼스 실사용 6건",
+    "causeLabelsCorrection": "**[검증 2026-08-30]** 위 `causes` 의 세 라벨(`residualTokens`·`unknownChar`·`memberAccess`)은 G2/BK 뒤에도 **전부 살아 있는 거부 사유**다(`ShaderPreprocessor.swift` 가 남은 트리거를 미지 문자·suspect define·잔여 토큰 셋으로 열거한다). 각 어블레이션이 건드리는 트리거도 여전히 거부된다: `directiveComment` 를 끄면 `/* mic */` 가 `/`·`*`·식별자·`*`·`/` 토큰으로 남아 잔여 토큰 가드에 걸리고(그 다섯은 전부 1글자 연산자다), `trailingSemicolon` 을 끄면 `;` 가 미지 문자로 남고, `identicalBranches` 를 끄면 `g_Texture0Resolution.x` 의 수 밖 `.` 이 미지 문자로 남는다. 그래서 이 표는 재생성에서 같은 값이 나올 것으로 본다 — 종전 생성기가 냈던 죽은 라벨(`shift`·`hexLiteral`·`modulo`·`bitwise`·`suffixedOrExpLiteral`)은 이 표에 애초에 등장하지 않는다. 정정이 필요한 것은 위 `evidence.note` 의 셀프테스트 주장뿐이다.",
     "ifParenOccurrences": 6
    },
    "status": "확정",
@@ -867,7 +870,7 @@
     {
      "kind": "script",
      "ref": "scripts/spec/measure_workshop_shaders.py",
-     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+     "note": "ShaderPreprocessor.swift / GLSLTranslator.swift 의 거부 판정 경로 포트(preprocessStrict · evaluateConditionals · ExprEval · weNumericLiteral · isEngine). `--selftest` 는 Swift 소스에서 연산자 집합을 파싱하고 `Tests/WapleCoreTests/` 의 단언 52건을 수확해 대조한다(+ 수확 불가 경로 46건은 이 파일의 고정 기대값). **[정정 2026-08-30]** 종전 이 note 는 \"Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과\" 라고 적었는데 세 군데가 틀렸다: (a) 셀프테스트는 Swift 를 부르지 않았다 (이식본 대 이식본 대조), (b) 그 \"거부 14\" 중 12건은 HEAD 에서 **평가된다**, (c) 같은 목록을 세는 `portFidelity` 는 F610 2건을 포함해 \"거부 16\" 이라 적어 두 문면이 서로 어긋났다. 줄 번호 인용도 드리프트해 심볼명으로 바꿨다."
     }
    ]
   },
@@ -2384,7 +2387,7 @@
     {
      "kind": "script",
      "ref": "scripts/spec/measure_workshop_shaders.py",
-     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+     "note": "ShaderPreprocessor.swift / GLSLTranslator.swift 의 거부 판정 경로 포트(preprocessStrict · evaluateConditionals · ExprEval · weNumericLiteral · isEngine). `--selftest` 는 Swift 소스에서 연산자 집합을 파싱하고 `Tests/WapleCoreTests/` 의 단언 52건을 수확해 대조한다(+ 수확 불가 경로 46건은 이 파일의 고정 기대값). **[정정 2026-08-30]** 종전 이 note 는 \"Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과\" 라고 적었는데 세 군데가 틀렸다: (a) 셀프테스트는 Swift 를 부르지 않았다 (이식본 대 이식본 대조), (b) 그 \"거부 14\" 중 12건은 HEAD 에서 **평가된다**, (c) 같은 목록을 세는 `portFidelity` 는 F610 2건을 포함해 \"거부 16\" 이라 적어 두 문면이 서로 어긋났다. 줄 번호 인용도 드리프트해 심볼명으로 바꿨다."
     }
    ]
   },
@@ -2411,7 +2414,7 @@
     {
      "kind": "script",
      "ref": "scripts/spec/measure_workshop_shaders.py",
-     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+     "note": "ShaderPreprocessor.swift / GLSLTranslator.swift 의 거부 판정 경로 포트(preprocessStrict · evaluateConditionals · ExprEval · weNumericLiteral · isEngine). `--selftest` 는 Swift 소스에서 연산자 집합을 파싱하고 `Tests/WapleCoreTests/` 의 단언 52건을 수확해 대조한다(+ 수확 불가 경로 46건은 이 파일의 고정 기대값). **[정정 2026-08-30]** 종전 이 note 는 \"Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과\" 라고 적었는데 세 군데가 틀렸다: (a) 셀프테스트는 Swift 를 부르지 않았다 (이식본 대 이식본 대조), (b) 그 \"거부 14\" 중 12건은 HEAD 에서 **평가된다**, (c) 같은 목록을 세는 `portFidelity` 는 F610 2건을 포함해 \"거부 16\" 이라 적어 두 문면이 서로 어긋났다. 줄 번호 인용도 드리프트해 심볼명으로 바꿨다."
     },
     {
      "kind": "corpus",

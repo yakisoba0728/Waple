@@ -283,7 +283,39 @@ final class ToneMappingCanonTests: XCTestCase {
         // 두 번 실은 것 — 이중계수의 같은 뿌리다. 경로 중복이 다시 들어오면 여기서 잡힌다.
         let hdrScenes = try XCTUnwrap(v["hdrScenes"] as? [String])
         XCTAssertEqual(hdrScenes.count, 3)
-        XCTAssertEqual(Set(hdrScenes).count, hdrScenes.count, "HDR 씬 목록에 같은 씬이 두 경로로 실렸다")
+
+        // **[정정 2026-08-30] 종전 이 자리에 있던 집합 크기 단언은 자기가 노리는 이중계수를 못 잡았다.**
+        //
+        // `5d6cba8b` 은 `XCTAssertEqual(Set(hdrScenes).count, hdrScenes.count, …)` 를
+        // "이중계수의 **재발 경로 자체**" 를 막는 방어로 들여놓았는데, 정작 그 버그는 같은
+        // 씬을 **서로 다른 접두로** 실었다 — 문자열이 달라서 집합 크기가 줄지 않는다.
+        // 실제로 변이를 넣어 재현했다(2026-08-30):
+        //
+        // | 변이 | 집합 단언 | 수 단언(바로 위 줄) |
+        // | --- | --- | --- |
+        // | 종전 4건(동봉+설치 중복) | **통과** — 4 == 4 | 실패 |
+        // | 동봉 경로 1건만 남기고 수는 3 유지 | **통과** | **통과** |
+        //
+        // 둘째 줄이 진짜 구멍이다 — 이중계수의 뿌리인 "동봉 트리 경로가 목록에
+        // 실린다" 가 수만 맞으면 통과해 버린다. 그래서 집합 크기 대신 **모집단 접두 자체**를
+        // 단언한다: 모집단은 설치본 하나이므로(위 `corpusPopulation`) 모든 항목이
+        // `WE_ROOT/` 으로 시작해야 하고, 동봉 트리 경로가 하나라도 들어오는 순간 그 자체가 실패다.
+        for scene in hdrScenes {
+            XCTAssertTrue(scene.hasPrefix("WE_ROOT/"),
+                          "모집단 밖 경로가 HDR 씬 목록에 실렸다(이중계수 재발 경로): \(scene)")
+            XCTAssertFalse(scene.contains("Resources/WEAssets"),
+                           "동봉 트리 경로다 — 설치본 사본이므로 같이 실으면 이중계수다: \(scene)")
+        }
+        // 접두를 떼고 봐도 서로 다른 씬이어야 한다 — 다른 접두로 가장한 같은 씬을 잡는다.
+        let hdrSceneSuffixes = hdrScenes.map { scene -> String in
+            for prefix in ["WE_ROOT/assets/", "WE_ROOT/projects/",
+                           "Sources/WapleRender/Resources/WEAssets/"] where scene.hasPrefix(prefix) {
+                return String(scene.dropFirst(prefix.count))
+            }
+            return scene
+        }
+        XCTAssertEqual(Set(hdrSceneSuffixes).count, hdrSceneSuffixes.count,
+                       "접두를 떼면 같은 씬이다 — 한 씬을 두 트리에서 실은 것")
 
         let byPath = try XCTUnwrap(v["byPath"] as? [String: String])
         XCTAssertEqual(byPath["LDR + bloom"], "scene + bloom — combine.frag:10-15. 곡선 없음, 클램프는 UNORM 타깃이 한다.")

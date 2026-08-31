@@ -94,8 +94,9 @@ final class MonitorAssignmentStoreTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
 
-        backupCorruptStoreFile(url, &corrupt)
+        let succeeded = backupCorruptStoreFile(url, &corrupt)
 
+        XCTAssertFalse(succeeded, "move 실패를 호출자에게 알려 save 중단을 가능하게 해야 한다")
         XCTAssertTrue(corrupt, "move 실패 시 플래그가 true 로 남아 다음 save() 가 재시도할 수 있어야 한다")
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "실패한 백업 시도가 원본을 건드리면 안 된다")
         let backups = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
@@ -110,12 +111,33 @@ final class MonitorAssignmentStoreTests: XCTestCase {
         try Data("{ not json".utf8).write(to: url)
 
         var corrupt = true
-        backupCorruptStoreFile(url, &corrupt)
+        let succeeded = backupCorruptStoreFile(url, &corrupt)
 
+        XCTAssertTrue(succeeded)
         XCTAssertFalse(corrupt, "정상적으로 백업됐으면 플래그를 내려야 한다")
         let backups = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
             .filter { $0.lastPathComponent.hasPrefix("monitors.json.corrupt") }
         XCTAssertEqual(backups.count, 1)
+    }
+
+    /// 백업 대상 이름이 이미 있어 rename 만 실패하는 조건에서는 atomic write 자체는 가능하다.
+    /// 이때 호출자가 백업 실패를 무시하면 손상 원본이 새 JSON 으로 덮여 복구 바이트가 사라진다.
+    func testBackupFailureDoesNotAllowCallerToOverwriteCorruptFile() throws {
+        let dir = tempDir()
+        let url = dir.appendingPathComponent("monitors.json")
+        let garbage = Data("{ recoverable but invalid json".utf8)
+        try garbage.write(to: url)
+        let store = MonitorAssignmentStore(baseDirectory: dir, backupCorruptFile: { _, corrupt in
+            XCTAssertTrue(corrupt, "손상 파일 로드 뒤 백업 경계를 타야 한다")
+            return false
+        })
+
+        store.setAssignment("new-value", for: "display")
+
+        XCTAssertEqual(try Data(contentsOf: url), garbage,
+                       "백업 실패 시 save 를 중단해 복구 가능한 손상 원본을 보존해야 한다")
+        XCTAssertNil(MonitorAssignmentStore(baseDirectory: dir).assignment(for: "display"),
+                     "백업되지 않은 원본 위에 새 JSON 을 기록하면 안 된다")
     }
 }
 

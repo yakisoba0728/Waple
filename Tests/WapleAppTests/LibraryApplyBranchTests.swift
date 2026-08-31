@@ -3,10 +3,11 @@ import XCTest
 import WapleCore
 import WapleLibrary
 
-/// 감사 V06 — LibraryViewModel.apply(_:) 3분기 커버리지(Sources/Waple/LibraryViewModel.swift:279-293).
+/// LibraryViewModel.apply(_:)의 동기 3분기와 비동기 확정 커버리지.
 /// ① 북마크 해석 실패 → onNotify + 미적용(마운트 미시도·선택 미변경)
-/// ② onApply(마운트) false → onNotify + 기존 선택 유지(영속 없음)
+/// ② onApply(마운트) failed → onNotify + 기존 선택 유지(영속 없음)
 /// ③ 성공 → store.select 영속 + selectedId 갱신
+/// ④ pending → 성공 콜백 전까지 기존 선택 유지
 final class LibraryApplyBranchTests: XCTestCase {
 
     private var tempDirs: [URL] = []
@@ -55,9 +56,9 @@ final class LibraryApplyBranchTests: XCTestCase {
         var errors: [String] = []
         var mountAttempts = 0
         vm.onNotify = { errors.append($0) }
-        vm.onApply = { _ in mountAttempts += 1; return true }
+        vm.onApply = { _, _ in mountAttempts += 1; return .applied }
 
-        XCTAssertFalse(vm.apply(ghost))
+        XCTAssertEqual(vm.apply(ghost), .failed)
         XCTAssertEqual(errors.count, 1)
         XCTAssertTrue(errors[0].contains("폴더를 찾을 수 없습니다"), "해석 실패 안내 메시지")
         XCTAssertEqual(mountAttempts, 0, "폴더 해석 실패 시 마운트 시도 자체가 없어야 한다")
@@ -79,9 +80,9 @@ final class LibraryApplyBranchTests: XCTestCase {
         store.select("wp0")
         var errors: [String] = []
         vm.onNotify = { errors.append($0) }
-        vm.onApply = { _ in false }
+        vm.onApply = { _, _ in .failed }
 
-        XCTAssertFalse(vm.apply(entry))
+        XCTAssertEqual(vm.apply(entry), .failed)
         XCTAssertEqual(errors.count, 1)
         XCTAssertTrue(errors[0].contains("적용하지 못했습니다"), "마운트 실패 안내 메시지")
         XCTAssertEqual(vm.selectedId, "wp0", "마운트 실패 시 기존 선택 유지")
@@ -101,15 +102,58 @@ final class LibraryApplyBranchTests: XCTestCase {
         let vm = makeVM(store: store, dir: dir)
         var mounted: [URL] = []
         var errors: [String] = []
-        vm.onApply = { url in mounted.append(url); return true }
+        vm.onApply = { url, _ in mounted.append(url); return .applied }
         vm.onNotify = { errors.append($0) }
 
-        XCTAssertTrue(vm.apply(entry))
+        XCTAssertEqual(vm.apply(entry), .applied)
         XCTAssertEqual(mounted.map { $0.standardizedFileURL.path },
                        [folder.standardizedFileURL.path], "북마크 해석된 원본 폴더로 마운트 요청")
         XCTAssertTrue(errors.isEmpty, "성공 경로는 onNotify 를 타지 않는다")
         XCTAssertEqual(vm.selectedId, "wp1", "뷰모델 선택 갱신")
         XCTAssertEqual(LibraryStore(baseDirectory: dir).selectedId, "wp1",
                        "store.select 가 인덱스에 영속돼야 한다(재로드 검증)")
+    }
+
+    func testPendingApplyKeepsOldSelectionUntilExplicitSuccessCommit() throws {
+        let dir = tempDir()
+        let store = LibraryStore(baseDirectory: dir)
+        let old = try store.importFolder(makeWallpaperFolder(id: "old"))
+        let nextFolder = try makeWallpaperFolder(id: "next")
+        let next = try store.importFolder(nextFolder)
+        let vm = makeVM(store: store, dir: dir)
+        store.select(old.id)
+        vm.selectedId = old.id
+        var finishPending: ((WallpaperApplyResolution) -> Void)?
+        vm.onApply = { _, finish in finishPending = finish; return .pending }
+
+        XCTAssertEqual(vm.apply(next), .pending)
+        XCTAssertEqual(vm.selectedId, old.id)
+        XCTAssertEqual(LibraryStore(baseDirectory: dir).selectedId, old.id)
+
+        finishPending?(.applied)
+        XCTAssertEqual(vm.selectedId, next.id)
+        XCTAssertEqual(LibraryStore(baseDirectory: dir).selectedId, next.id)
+    }
+
+    func testPendingFailureAndCancellationNeverCommitTheCandidate() throws {
+        for terminal in [WallpaperApplyResolution.failed, .cancelled] {
+            let dir = tempDir()
+            let store = LibraryStore(baseDirectory: dir)
+            let old = try store.importFolder(makeWallpaperFolder(id: "old-\(terminal)"))
+            let next = try store.importFolder(makeWallpaperFolder(id: "next-\(terminal)"))
+            let vm = makeVM(store: store, dir: dir)
+            store.select(old.id)
+            vm.selectedId = old.id
+            var finishPending: ((WallpaperApplyResolution) -> Void)?
+            var observed: WallpaperApplyResolution?
+            vm.onApply = { _, finish in finishPending = finish; return .pending }
+
+            XCTAssertEqual(vm.apply(next) { observed = $0 }, .pending)
+            finishPending?(terminal)
+
+            XCTAssertEqual(observed, terminal)
+            XCTAssertEqual(vm.selectedId, old.id)
+            XCTAssertEqual(LibraryStore(baseDirectory: dir).selectedId, old.id)
+        }
     }
 }

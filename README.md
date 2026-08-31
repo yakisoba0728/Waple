@@ -43,7 +43,7 @@ Legend: ✅ implemented · 🟡 partial (the gap is named) · ❌ not implemente
 | Text | 🟡 | Fonts, alignment, colour, clock/date/media scripts (JavaScriptCore `update(value)`). In 3D scenes a text billboard animates placement and visibility per frame, but its *string* is rasterized once. `anchor`/`padding`/`backgroundBrightness` are parsed and preserved, not yet drawn |
 | Audio | 🟡 | Audio-reactive effects (pulse, spectrum bars) and scene-embedded sound (mp3). Sound is mixed globally in 2D — `spatialization`/`mindistance`/`attenuation` are parsed but not spatialized |
 | Mouse | ✅ | Parallax, `g_PointerPosition` cursor reaction, `cursorClick`/`Down`/`Up`/`Move` hooks |
-| HDR / bloom | 🟡 | Bloom on both the LDR and HDR paths. The HDR path now mirrors WE's own plaintext structure — a dual-filter pyramid built from `hdr_downsample.frag` with 4 taps at ±0.5 source texels, **no Gaussian pass**, a 4-tap additive upsample chain and the 4-tap `combine_hdr` add (swapped as one unit on 2026-08-02; the previous hand-rolled chain widened with a 13-tap blur and narrowed with single-tap upsample/combine, and the two errors cancelled). There is **no ACES or filmic tone curve**: WE 2.8's final step is a plain `saturate` clamp. The upsample weight question is **closed** (2026-08-20): WE's own `hdr_downsample.frag:61` reads `albedo *= 0.25 * g_BloomScatter`, so the `0.25` is the 4-tap average and `scatter` is a separate factor on top — the two were never competing candidates. The engine loads the authored `bloomhdrscatter` unmodified, and the blow-out seen earlier came from moving the weight without also moving the paired `scatter^(max(N,2)−2)+1` division in the extraction step. Waple now matches the shader text. The LDR path is still the 3-pass extract → blur → composite rather than a pyramid |
+| HDR / bloom | 🟡 | Bloom on both the LDR and HDR paths. The HDR path now mirrors WE's own plaintext structure — a dual-filter pyramid built from `hdr_downsample.frag` with 4 taps at ±0.5 source texels, **no Gaussian pass**, a 4-tap additive upsample chain and the 4-tap `combine_hdr` add (swapped as one unit on 2026-08-02; the previous hand-rolled chain widened with a 13-tap blur and narrowed with single-tap upsample/combine, and the two errors cancelled). There is **no ACES or filmic tone curve**: WE 2.8's final step is a plain `saturate` clamp. The upsample weight question is **closed** (2026-08-20): WE's own `hdr_downsample.frag:78` reads `albedo *= 0.25 * g_BloomScatter`, so the `0.25` is the 4-tap average and `scatter` is a separate factor on top — the two were never competing candidates. The engine loads the authored `bloomhdrscatter` unmodified, and the blow-out seen earlier came from moving the weight without also moving the paired `scatter^(max(N,2)−2)+1` division in the extraction step. Waple now matches the shader text. The LDR path is still the 3-pass extract → blur → composite rather than a pyramid |
 
 **Waple does not claim full Wallpaper Engine runtime compatibility.** Most unsupported scene features
 are skipped with a log entry, but some paths — for example a layer texture whose bytes are present but
@@ -110,7 +110,7 @@ xattr -dr com.apple.quarantine /Applications/Waple.app     # or: right-click →
 
 ```bash
 swift run Waple                 # run as a menu-bar utility
-swift test                      # full test suite + real-scene ground truth
+swift test                      # full synthetic suite; real-scene GT only when corpus env vars are set
 swift build -c release          # release build
 bash scripts/package-app.sh     # build Waple.app (bundling the .saver screensaver) + Waple.dmg
 ```
@@ -131,6 +131,10 @@ human contributors and AI agents. Documentation index: [docs/README.md](docs/REA
 | Set as still wallpaper | Freeze one video frame, a scene capture or an image as the system wallpaper |
 | Screensaver | Plays video wallpapers as a macOS screensaver (`.saver`); the previous screensaver is backed up and restored |
 | Also | Launch at login, playlist rotation (shuffle, interval), per-monitor wallpaper assignment |
+
+These rows describe implemented paths, not a completed hardware acceptance run. Playlist/policy interaction,
+multi-monitor behaviour, live audio and idle-power behaviour still require the manual checks recorded in
+[the latest handoff checklist](docs/handoff-2026-08-27c.md#5-남은-작업-원장).
 
 ## Project layout
 

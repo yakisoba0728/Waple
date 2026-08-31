@@ -33,7 +33,11 @@ enum Scene3DMath {
 
     /// 원근 투영(세로 화각 도(度), Metal 뎁스 0..1). 뷰 z=-near → ndc z 0, z=-far → 1.
     static func perspective(fovYDegrees: Float, aspect: Float, nearZ: Float, farZ: Float) -> simd_float4x4 {
-        let y = 1 / tan(fovYDegrees * .pi / 180 / 2)
+        // W-8: Scene::updateCamera의 최종 소비 경계와 같은 `[0.1, 179.9]` 클램프.
+        // 정적 camera.fov뿐 아니라 프레임별 스크립트 결과와 NaN(minss → 상한)도 여기로 모인다
+        // (`wallpaper64.exe` 0x140189b1a–0x140189b4c).
+        let fov = CameraMotion.clampedFovDegrees(fovYDegrees)
+        let y = 1 / tan(fov * .pi / 180 / 2)
         let x = y / aspect
         let zz = farZ / (nearZ - farZ)
         return simd_float4x4(columns: (
@@ -44,8 +48,9 @@ enum Scene3DMath {
     }
 
     /// clip-space 병진행렬. viewProj 에 좌승(clipTranslation(s)·viewProj)하면 (s·w) 가 clip.xy 에 더해져
-    /// 원근분할 후 전 정점이 depth 무관하게 ndc 만큼 병진한다 — camerashake 3D 전역 카메라 지터를
-    /// 셰이더 무수정으로 viewProj 한 곳에 적용(2D shakeOffset 의 3D 동형). s=.zero → 항등(무회귀 가드).
+    /// 원근분할 후 전 정점이 depth 무관하게 ndc 만큼 병진한다. 현재 소비자는 2D 정사영 하이브리드
+    /// 메시의 `frameShakeOffset`이고, 원근 3D shake는 eye/center에 월드 델타를 직접 더한다.
+    /// s=.zero → 항등(무회귀 가드).
     static func clipTranslation(_ ndc: SIMD2<Float>) -> simd_float4x4 {
         simd_float4x4(columns: (
             SIMD4<Float>(1, 0, 0, 0),

@@ -13,6 +13,22 @@ enum EntryPreviewState: Equatable {
     case missingFolder
 }
 
+/// AppDelegate가 배경 적용 요청을 받은 시점의 결과. ffmpeg 선변환은 렌더러 교체
+/// 전에 비동기로 완료되므로 `pending`을 동기 성공으로 위장하지 않는다.
+enum WallpaperApplyDisposition: Equatable {
+    case applied
+    case pending
+    case failed
+}
+
+/// `.pending` 요청의 최종 결과. `cancelled`는 더 최신 적용 요청이 세대를 교체한 경우라
+/// 실패 후보를 계속 순회하면 안 된다 — 사용자가 고른 새 배경을 옛 재생목록 콜백이 덮게 된다.
+enum WallpaperApplyResolution: Equatable {
+    case applied
+    case failed
+    case cancelled
+}
+
 /// `@unchecked Sendable`: 이 뷰모델의 상태는 **메인 큐 한정**이다. `@Published` 대입은 전부 SwiftUI
 /// 갱신을 일으키므로 애초에 그럴 수밖에 없고, 유일한 오프메인 경로인 세 임포트(`importParent`/
 /// `importZip`/`importVideoFile`)는 무거운 I/O 만 `importQueue` 에서 하고 스토어 등록·`entries`
@@ -80,8 +96,10 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     /// 하단 바 "현재:" 표시용 — 적용된(selectedId) 배경 제목.
     var appliedTitle: String? { globalEntry?.title }
 
-    /// 적용 요청을 AppDelegate 로 전달한다(폴더 URL). 마운트 성공 여부를 반환한다.
-    var onApply: ((URL) -> Bool)?
+    /// 적용 요청을 AppDelegate 로 전달한다. `pending`은 선변환 중이므로 선택을
+    /// 아직 영속하지 않고, AppDelegate의 실제 교체 성공 콜백을 받은 이 타입이 commit한다.
+    /// 완료 콜백은 반환값이 `.pending`일 때만 나중에 정확히 한 번 호출한다.
+    var onApply: ((URL, @escaping (WallpaperApplyResolution) -> Void) -> WallpaperApplyDisposition)?
 
     /// 사용자에게 보여줄 메시지를 AppDelegate 로 전달한다.
     ///
@@ -403,26 +421,37 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         return entry
     }
 
-    /// 마운트 성공 시 true. 재생목록 전진(advancePlaylist)이 실패 후보를 건너뛰는 데 이 반환을 쓴다.
+    /// 적용 요청의 세 상태를 그대로 돌려준다. 특히 `.pending`을 Bool 성공으로 접지 않는다 —
+    /// 재생목록은 RendererSwap 성공 뒤에만 시계/커서를 확정해야 한다.
     @discardableResult
-    func apply(_ entry: LibraryEntry) -> Bool {
+    func apply(_ entry: LibraryEntry,
+               completion: @escaping (WallpaperApplyResolution) -> Void = { _ in })
+        -> WallpaperApplyDisposition {
         guard let folder = store.resolveFolderURL(for: entry) else {
             onNotify?(String(format: NSLocalizedString("‘%@’의 폴더를 찾을 수 없습니다. 다시 가져오세요.",
                                                       comment: "적용 실패 — 폴더 해석 불가"),
                             entry.title))
-            return false
+            return .failed
         }
-        // 적용(마운트) 성공이 확인된 뒤에만 선택을 영속·강조한다. 실패 시 기존 선택을 유지해
-        // 강조/저장된 선택이 항상 실제로 표시되는 배경과 일치하도록 한다.
-        guard onApply?(folder) == true else {
+        // 성공이 확인된 뒤에만 선택을 영속·강조한다. pending 시에도 기존 선택을 유지해
+        // 변환 실패가 새 선택으로 보이는 상태를 만들지 않는다.
+        let disposition = onApply?(folder) { [weak self] resolution in
+            if resolution == .applied { self?.commitAppliedSelection(entryId: entry.id) }
+            completion(resolution)
+        } ?? .failed
+        guard disposition != .failed else {
             onNotify?(String(format: NSLocalizedString("‘%@’을(를) 적용하지 못했습니다.",
                                                       comment: "적용 실패 — 마운트 거부"),
                             entry.title))
-            return false
+            return .failed
         }
-        store.select(entry.id)
-        selectedId = entry.id
-        return true
+        if disposition == .applied { commitAppliedSelection(entryId: entry.id) }
+        return disposition
+    }
+
+    private func commitAppliedSelection(entryId: String) {
+        store.select(entryId)
+        selectedId = entryId
     }
 
     /// Finder에서 보기 등 파일시스템 접근용 폴더 URL(w5d-library). 해석 실패(북마크 stale·손상 등) → nil.
@@ -505,7 +534,7 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     private func reapplyIfCurrent(_ entry: LibraryEntry) {
         if selectedId == entry.id {
             guard let folder = store.resolveFolderURL(for: entry) else { return }
-            _ = onApply?(folder)
+            _ = onApply?(folder, { _ in })
             return
         }
         if monitors.all.values.contains(entry.id) {

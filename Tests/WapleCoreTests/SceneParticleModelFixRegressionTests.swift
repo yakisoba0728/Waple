@@ -37,7 +37,7 @@ final class SceneParticleModelFixRegressionTests: XCTestCase {
         u32(0)                                  // 용도 미상(파서 프로브가 건륶뜀)
         u32(UInt32(vertCount * 52))             // 정점 블롭
         for _ in 0..<vertCount {
-            var rec = [Float](repeating: 0, count: 13)   // 52B 전부 0 비트 = 유효 정점
+            let rec = [Float](repeating: 0, count: 13)   // 52B 전부 0 비트 = 유효 정점
             rec.withUnsafeBytes { d.append(contentsOf: $0) }
         }
         u32(UInt32(indices.count * 2))

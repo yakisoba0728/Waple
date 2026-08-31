@@ -3,10 +3,7 @@ import simd
 @testable import WapleCore
 @testable import WapleRender
 
-/// camera 의사-오브젝트 origin.xy 팬(P1 잔여 — zoom 인트로와 연동된 팬).
-/// 코퍼스 실측(168씬): 정적/스크립트 base 는 실효 전수 중립(화면중심) — 팬은 origin.xy 애니(5씬,
-/// 전수 zoom single 인트로와 연동)만 실효. single 끝 클램프로 A/B 캡처 t=6 은 중립 정착(비트동일).
-/// path 는 스크립트 파일 참조("scripts/camera_paths_*.json")라 인라인 웨이포인트 부재 → 미소비(YAGNI).
+/// 정사영 씬의 runtime camera eye와 camera 의사-오브젝트 origin.xy를 렌더러에 잇는 경계.
 final class SceneCameraOriginTests: XCTestCase {
 
     private func kf(_ frame: Float, _ value: Float) -> PropertyKeyframe {
@@ -27,6 +24,30 @@ final class SceneCameraOriginTests: XCTestCase {
     }
 
     // MARK: 파스 — origin {"animation"} 바인딩 → originAnimation(zoom 과 동형 재사용)
+
+    func testOrthographicSceneCameraEyeIsPreservedWithoutEnablingPerspectiveRenderer() throws {
+        let scene: [String: Any] = [
+            "general": ["orthogonalprojection": ["width": 200, "height": 100]],
+            "camera": [
+                "eye": "20 -10 3",
+                "center": "20 -10 2",
+                "up": "0 1 0",
+            ],
+            "objects": [],
+        ]
+        let package = ScenePackage.assemble([
+            ("scene.json", try JSONSerialization.data(withJSONObject: scene)),
+        ])
+
+        let doc = try SceneDocument.parse(package: package)
+
+        XCTAssertTrue(doc.orthographic)
+        XCTAssertNil(doc.camera3D, "정사영 씬은 원근 렌더러를 켜면 안 된다")
+        let camera = try XCTUnwrap(doc.sceneCamera)
+        XCTAssertEqual(camera.eye.x, 20)
+        XCTAssertEqual(camera.eye.y, -10)
+        XCTAssertEqual(camera.eye.z, 3)
+    }
 
     func testParse_originAnimationBinding() throws {
         let scene: [String: Any] = [
@@ -81,19 +102,19 @@ final class SceneCameraOriginTests: XCTestCase {
         XCTAssertEqual(o.y, 0)
     }
 
-    // MARK: 팬 오프셋 수학 — 중심원점 씬픽셀 → 투영-NDC(shakeOffset 공간), +x 이동=콘텐츠 −x, 2px 데드존
+    // MARK: eye 오프셋 수학 — 카메라 +x/+y 이동은 콘텐츠를 정확히 −x/−y로 이동
 
-    func testOriginPanOffset_ndcAndDeadzone() {
+    func testCameraEyeNDCOffsetHasExactSignAndNoDeadzone() {
         // 중립(0,0) → .zero(비트동일 가드).
-        let z = SceneRenderer.cameraOriginPanOffset(originXY: SIMD2(0, 0), projW: 3840, projH: 2160)
+        let z = SceneRenderer.cameraEyeNDCOffset(eye: SIMD2(0, 0), projW: 3840, projH: 2160)
         XCTAssertEqual(z.x, 0); XCTAssertEqual(z.y, 0)
-        // 정착 잔차(3552064521 ≈(1,1)px) → 데드존 흡수 → .zero(A/B t=6 비트동일).
-        let d = SceneRenderer.cameraOriginPanOffset(originXY: SIMD2(1, 1), projW: 3840, projH: 2160)
-        XCTAssertEqual(d.x, 0, "2px 데드존"); XCTAssertEqual(d.y, 0)
-        // 인트로 오프셋(-85.54,1470.34) → NDC. x 부호반전(카메라 −x = 콘텐츠 +x).
-        let p = SceneRenderer.cameraOriginPanOffset(originXY: SIMD2(-85.53791, 1470.34143), projW: 3840, projH: 2160)
+        // 바이너리에는 2px 데드존이 없다. 1px도 양축 모두 반대 방향으로 정확히 이동한다.
+        let d = SceneRenderer.cameraEyeNDCOffset(eye: SIMD2(1, 1), projW: 3840, projH: 2160)
+        XCTAssertEqual(d.x, -2 / 3840, accuracy: 1e-7)
+        XCTAssertEqual(d.y, -2 / 2160, accuracy: 1e-7)
+        let p = SceneRenderer.cameraEyeNDCOffset(eye: SIMD2(-85.53791, 1470.34143), projW: 3840, projH: 2160)
         XCTAssertEqual(p.x, 2 * 85.53791 / 3840, accuracy: 1e-5)
-        XCTAssertEqual(p.y, 2 * 1470.34143 / 2160, accuracy: 1e-5)
+        XCTAssertEqual(p.y, -2 * 1470.34143 / 2160, accuracy: 1e-5)
     }
 
     // MARK: 카메라 부재/정적 중립 씬 무영향(비트동일 가드) + 재마운트 리셋

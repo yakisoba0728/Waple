@@ -30,7 +30,8 @@ protocol LDRBloomEncoding {
     ) -> Bool
 }
 
-/// `hdr:false` 씬(동봉+설치본 358 씬 중 354)의 블룸 — WE `Composite::drawBloomChain` LDR 분기
+/// `hdr:false` 씬(설치본 `assets/ + projects/` 단일 모집단 186 씬 중 183)의 블룸 —
+/// 그중 `bloom:true` 5 씬에서 WE `Composite::drawBloomChain` LDR 분기
 /// (`0x140183949`–`0x140183a5d`)를 그대로 옮긴 **3패스**다. HDR 피라미드(`HDRBloomPyramidPass`)와
 /// 완전히 다른 경로이고, 진입 게이트는 `0x140183618` `test dword [composite+0x128], 0x2000`
 /// (= `general.hdr` 비트13) 의 `je` 쪽이다.

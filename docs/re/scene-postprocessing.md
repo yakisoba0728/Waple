@@ -1,12 +1,12 @@
 # 씬 합성/후처리 체인 복원
 
-wallpaper64.exe (imagebase `0x140000000`) + 동봉 셰이더/머티리얼 평문 + 씬 코퍼스 358개를
+wallpaper64.exe (imagebase `0x140000000`) + 동봉 셰이더/머티리얼 평문 + 설치본 씬 코퍼스 186개를
 교차대조해, **씬이 화면에 도달하기까지의 합성·후처리 전 구간**을 복원한 기록이다.
 
 - 바이너리: `/root/.claude/uploads/.../440072bd-wallpaper64.exe`
 - 셰이더/머티리얼 평문: `wallpaper_engine/assets/{shaders,materials}/`
-- 코퍼스: `Sources/WapleRender/Resources/WEAssets/**/{scene,gifscene}.json`(171+1) +
-  `wallpaper_engine/**/{scene,gifscene}.json`(184+2) = **358 파일**
+- 코퍼스: `wallpaper_engine/{assets,projects}/**/{scene,gifscene}.json` = **186 파일**.
+  `Sources/WapleRender/Resources/WEAssets/`의 172개는 설치본 `assets/` 사본이라 합산하지 않는다.
 
 관련 정본(중복 서술 대신 참조): `spec/engine/render-pass.json`(패스 순서·머티리얼 슬롯),
 `spec/engine/uniform-feed.json`(유니폼 피드), `spec/engine/hdr-bloom.json`(피라미드 구조),
@@ -15,60 +15,61 @@ wallpaper64.exe (imagebase `0x140000000`) + 동봉 셰이더/머티리얼 평문
 
 ---
 
-## 1. 코퍼스 후처리 키 히스토그램 (358 씬)
+## 1. 코퍼스 후처리 키 히스토그램 (설치본 단일 모집단 186 씬)
 
 ### 1.1 `general.*` 전수 — 39키 (상위 30)
 
 | # | 키 | 씬 수 | 비율 | 타입 | 압도적 저작값 |
 |---|---|---:|---:|---|---|
-| 1 | `bloom` | 358 | 100.0% | bool | `false` 348 / `true` 10 |
-| 2 | `clearcolor` | 358 | 100.0% | vec3 | 정확히 `0.7 0.7 0.7` 273 · `0.70196` 18 |
-| 3 | `ambientcolor` | 353 | 98.6% | vec3 | `0.3 0.3 0.3` 348 |
-| 4 | `orthogonalprojection` | 353 | 98.6% | object | `{w:256,h:256}` 332 · `{auto:true}` 4 · `null` 3 |
-| 5 | `skylightcolor` | 353 | 98.6% | vec3 | `0.3 0.3 0.3` 352 |
-| 6 | `bloomstrength` | 341 | 95.3% | float | `2.0` 338 |
-| 7 | `bloomthreshold` | 341 | 95.3% | float | `0.65` 338 |
-| 8 | `cameraparallax` | 341 | 95.3% | bool | `false` 339 |
-| 9 | `cameraparallaxamount` | 341 | 95.3% | float | `0.5` 341 |
-| 10 | `cameraparallaxdelay` | 341 | 95.3% | float | `0.1` 341 |
-| 11 | `cameraparallaxmouseinfluence` | 341 | 95.3% | float | `0` 337 |
-| 12 | `camerapreview` | 341 | 95.3% | bool | `true` 341 — **런타임 미소비**(§2.4) |
-| 13 | `camerashake` | 341 | 95.3% | bool | `false` 341 |
-| 14 | `camerashakeamplitude` | 341 | 95.3% | float | `0.5` 341 |
-| 15 | `camerashakeroughness` | 341 | 95.3% | float | `1.0` 341 |
-| 16 | `camerashakespeed` | 341 | 95.3% | float | `3.0` 341 |
-| 17 | `clearenabled` | 277 | 77.4% | bool | `true` 188 / `null` 89 |
-| 18 | `camerafade` | 195 | 54.5% | bool | `true` 192 |
-| 19 | `fov` | 192 | 53.6% | float | `50.0` 190 |
-| 20 | `farz` | 188 | 52.5% | float | `10000.0` 188 |
-| 21 | `nearz` | 188 | 52.5% | float | `0.01` 180 / `0.1` 8 |
-| 22 | `zoom` | 181 | 50.6% | float | `1.0` 181 |
-| 23 | `bloomhdrstrength` | 179 | 50.0% | float | `2.0` 175 |
-| 24 | `bloomhdrfeather` | 177 | 49.4% | float | `0.1` 176 |
-| 25 | `bloomhdrscatter` | 177 | 49.4% | float | `1.619` 175 |
-| 26 | `bloomhdrthreshold` | 177 | 49.4% | float | `1.0` 176 |
-| 27 | `hdr` | 177 | 49.4% | bool | `false` 173 / `true` 4 |
-| 28 | `bloomhdriterations` | 173 | 48.3% | int | `8` 173 (전건) |
-| 29 | `bloomtint` | 154 | 43.0% | vec3 | `1 1 1` 154 (전건) |
-| 30 | `perspectiveoverridefov` | 154 | 43.0% | float | `95.0` 142 / `90.76` 12 |
+| 1 | `bloom` | 186 | 100.0% | bool | `false` 178 / `true` 8 |
+| 2 | `clearcolor` | 186 | 100.0% | vec3 | `0.7` 동치 140 · `0.70196` 9 |
+| 3 | `ambientcolor` | 183 | 98.4% | vec3 | `0.3` 동치 180 |
+| 4 | `orthogonalprojection` | 182 | 97.8% | object | `{w:256,h:256}` 166 · `{auto:true}` 2 · `null` 2 |
+| 5 | `skylightcolor` | 183 | 98.4% | vec3 | `0.3` 동치 182 |
+| 6 | `bloomstrength` | 173 | 93.0% | float | `2.0` 동치 170 |
+| 7 | `bloomthreshold` | 173 | 93.0% | float | `0.65` 동치 170 |
+| 8 | `cameraparallax` | 173 | 93.0% | bool | `false` 172 |
+| 9 | `cameraparallaxamount` | 173 | 93.0% | float | `0.5` 173 |
+| 10 | `cameraparallaxdelay` | 173 | 93.0% | float | `0.1` 동치 173 |
+| 11 | `cameraparallaxmouseinfluence` | 173 | 93.0% | float | `0` 동치 171 |
+| 12 | `camerapreview` | 173 | 93.0% | bool | `true` 173 — **런타임 미소비**(§2.4) |
+| 13 | `camerashake` | 173 | 93.0% | bool | `false` 173 |
+| 14 | `camerashakeamplitude` | 173 | 93.0% | float | `0.5` 173 |
+| 15 | `camerashakeroughness` | 173 | 93.0% | float | `1.0` 동치 173 |
+| 16 | `camerashakespeed` | 173 | 93.0% | float | `3.0` 동치 173 |
+| 17 | `clearenabled` | 141 | 75.8% | bool/null | `true` 96 / `null` 45 |
+| 18 | `camerafade` | 101 | 54.3% | bool | `true` 98 |
+| 19 | `fov` | 98 | 52.7% | float | `50.0` 97 |
+| 20 | `farz` | 96 | 51.6% | float | `10000.0` 96 |
+| 21 | `nearz` | 96 | 51.6% | float | `0.01` 동치 92 / `0.1` 동치 4 |
+| 22 | `zoom` | 92 | 49.5% | float | `1.0` 92 |
+| 23 | `bloomhdrstrength` | 91 | 48.9% | float | `2.0` 동치 88 |
+| 24 | `bloomhdrfeather` | 90 | 48.4% | float | `0.1` 동치 89 |
+| 25 | `bloomhdrscatter` | 90 | 48.4% | float | `1.619` 동치 88 |
+| 26 | `bloomhdrthreshold` | 90 | 48.4% | float | `1.0` 동치 89 |
+| 27 | `hdr` | 90 | 48.4% | bool | `false` 87 / `true` 3 |
+| 28 | `bloomhdriterations` | 87 | 46.8% | int | `8` 87 (전건) |
+| 29 | `bloomtint` | 77 | 41.4% | vec3 | `1 1 1` 77 (전건) |
+| 30 | `perspectiveoverridefov` | 77 | 41.4% | float | `95.0` 71 / `90.76` 6 |
 
 31~39위(후처리 밖이지만 `general` 소속): `gravitydirection`·`gravitystrength`·`winddirection`·
-`windenabled`·`windstrength` 각 138, `norecompile` 12, `spritesheetrefreshsync` 5,
-`lightconfig` 4, `transparentsorting` 4.
+`windenabled`·`windstrength` 각 69, `norecompile` 12, `spritesheetrefreshsync` 3,
+`lightconfig` 2, `transparentsorting` 2.
 
-`camera` 블록: `eye`/`center`/`up` 각 356, `paths` 4.
+`camera` 블록: `eye`/`center`/`up` 각 185, `paths` 4.
 
 ### 1.2 요청 목록 중 **코퍼스에 존재하지 않는** 키
 
-전 358 씬을 재귀 전수(모든 깊이, 모든 키 이름) 스캔한 결과:
+전 186 씬을 재귀 전수(모든 깊이, 모든 키 이름) 스캔한 결과:
 
 `tonemap` · `colorgrade` · `lut` · `fxaa` · `vignette` · `dof` · `motionblur`(키로서) ·
 `ambientocclusion` · `exposure` · `gamma` — **0건**.
 
 씬 레벨 후처리의 저작 표면은 `general.*` 하나뿐이고, 나머지 후처리는 전부
 오브젝트별 `effects[]`(별도 축)로 들어간다. 코퍼스가 참조하는 이펙트 상위:
-`scroll` 38, `tint` 17, `lightshafts` 8, `blend` 8, `foliagesway` 8, `blurradial` 6,
-`motionblur` 4(이펙트 파일), `vhs` 4, `blurprecise` 4, `colorkey` 4, `filmgrain` 3, `godrays` 3.
+`scroll` 34, `tint` 13, `lightshafts` 4, `blend` 4, `foliagesway` 4,
+`transform`·`opacity`·`shake`·`blurradial` 각 3, `waterripple`·`godrays`·`filmgrain`·`spin`·
+`blurprecise`·`motionblur`(이펙트 파일)·`colorkey`·`vhs`·`circle` 각 2.
 
 ### 1.3 바이너리에는 있으나 코퍼스가 **한 번도 저작하지 않는** general 키
 
@@ -82,15 +83,15 @@ wallpaper64.exe (imagebase `0x140000000`) + 동봉 셰이더/머티리얼 평문
 
 | 분기 | 씬 수 |
 |---|---:|
-| `bloom:true` | 10 / 358 (2.8%) |
-| `hdr:true` | 4 / 358 |
-| `hdr && bloom`(→ HDR 피라미드) | **4** |
-| `bloom && !hdr`(→ LDR 3패스) | 6 |
-| `orthogonalprojection` 이 딕셔너리(=2D 정사영) | 350 |
-| 그중 `auto:true` | 4 |
-| 딕셔너리 아님(=3D 원근) | 8 |
+| `bloom:true` | 8 / 186 (4.3%) |
+| `hdr:true` | 3 / 186 |
+| `hdr && bloom`(→ HDR 피라미드) | **3** |
+| `bloom && !hdr`(→ LDR 3패스) | 5 |
+| `orthogonalprojection` 이 딕셔너리(=2D 정사영) | 180 |
+| 그중 `auto:true` | 2 |
+| 딕셔너리 아님 또는 키 생략(=3D 원근) | 6 |
 
-`hdr && bloom` 4씬: `presets/lightning/previewthunderbolt`(동봉/설치본 각 1),
+`hdr && bloom` 3씬: `presets/lightning/previewthunderbolt`,
 `projects/defaultprojects/shimmering_particles`, `projects/defaultprojects/razer_bedroom`.
 
 ---
@@ -237,7 +238,7 @@ type==1 오브젝트의 `size`**(`obj+0x2f0/0x2f4`, `spec/engine/shape-quad.json
 
 값은 `"x y z"` 공백구분 문자열을 `strtod`(`0x1402d06ac`) 로 3회 파싱한다.
 
-**`camerapreview`(341씬 저작)는 `wallpaper64.exe` 에 문자열 0건이다** — 런타임 플레이어는 완전히
+**`camerapreview`(173씬 저작)는 `wallpaper64.exe` 에 문자열 0건이다** — 런타임 플레이어는 완전히
 무시한다. 에디터 전용 키다. 같은 스캔에서 `lightconfig`(`0x14048e4e0`, 로더 `0x1401876a2`),
 `norecompile`(`0x140187626`), `spritesheetrefreshsync`(`0x140187656`)는 파스된다.
 
@@ -476,13 +477,13 @@ gl_FragColor = vec4(texSample(tex0) + texSample(tex1), 1.0)
 
 최종 합성이 적용하는 전부는:
 
-| 경로 | 최종 픽셀 연산 | 출처 | 코퍼스 도달(358) |
+| 경로 | 최종 픽셀 연산 | 출처 | 코퍼스 도달(186) |
 |---|---|---|---|
-| LDR + bloom | `scene + bloom` (클램프는 UNORM 타깃이 함) | `combine.frag:13-15` | 6 |
-| LDR, bloom off | 패스 자체가 없다(씬이 이미 타깃에 있다) | `render-pass.json` 7.1 | 348 |
-| HDR + bloom | `saturate(lin(scene + bloom4tap)) * g_RenderVar0.x` | `combine_hdr.frag:37,43` | 4 |
+| LDR + bloom | `scene + bloom` (클램프는 UNORM 타깃이 함) | `combine.frag:13-15` | 5 |
+| LDR, bloom off | 패스 자체가 없다(씬이 이미 타깃에 있다) | `render-pass.json` 7.1 | 178 |
+| HDR + bloom | `saturate(lin(scene + bloom4tap)) * g_RenderVar0.x` | `combine_hdr.frag:37,43` | 3 |
 | HDR, bloom off | `lin(scene)` | `passthroughsrgb.frag:15-17` | **0** |
-| HDR + DISPLAYHDR | `lin(saturate(scene)+bloom) * (g_RenderVar0.y*smoothstep(1,5,luma) + g_RenderVar0.x)` | `combine_hdr.frag:27-32` | 4 중 모니터 의존 |
+| HDR + DISPLAYHDR | `lin(saturate(scene)+bloom) * (g_RenderVar0.y*smoothstep(1,5,luma) + g_RenderVar0.x)` | `combine_hdr.frag:27-32` | 3 중 모니터 의존 |
 | 비디오 HDR | `saturate(rgb / (2*g_HDRParams.y)) * (2*g_HDRParams.y)` | `combine_video_hdr.frag:10-13` | 0 |
 
 **[2026-08-21 정정] 종전 이 표에 "에디터 | `srgb(saturate(albedo))` — 역방향(linear→sRGB)"
@@ -565,7 +566,7 @@ scene[0x148] = fov       ; 0x140189b4c
 - fovY = `scene[0x148] * π/180` (`0x140183f30`·`0x140183f38`) → **fov 단위는 도(degree)**
 - 행렬 빌더 = 디바이스 vtable `+0x10` (`0x140183f50`)
 
-**결론: `nearz`/`farz` 는 3D 원근 씬(코퍼스 8개)에서만 살아 있다.** 2D 씬 188개가 저작한
+**결론: `nearz`/`farz` 는 3D 원근 씬(코퍼스 6개)에서만 살아 있다.** 2D 씬 95개가 저작한
 `nearz 0.01` / `farz 10000` 은 전부 무시된다.
 
 ---
@@ -628,7 +629,7 @@ volumetrics_combine   (passthrough, additive) → 화면
 - 디더링 `worldStart += worldStep * hash12(screenUV)` — SHADOW 일 때만 (:125)
 - 최종 `gl_FragColor.rgb = VAR_DENSITY * maxLightScale * shadowFactor * VAR_COLOR * 0.1` (:190)
 - `blur_k3` = `blur3` = `[0.25, 0.5, 0.25]`, 스트라이드 = `1/g_Texture0Resolution.xy`
-  (`common_blur.h:25-30`, `blur_k3.vert:27`)
+  (`common_blur.h:25-30`, `blur_k3.vert:13`)
 
 ---
 
@@ -657,9 +658,9 @@ volumetrics_combine   (passthrough, additive) → 화면
 | **W-4** | `bloom` 기본값 | **true**(flags bit1, `0x140186d1f` `qword=0x26`) | `?? false` — **[2026-08-21] 확인했으나 의도적 미반영** | **확정 · 고의 이탈** | `bloom` 키 없는 씬에 블룸이 켜진다. **동봉 172씬 영향 0건**(전건 명시 저작)이라 실사용 이득이 없는데, `sceneWantsLDRBloom = doc.bloom && !doc.hdr` 를 타고 **키를 생략한 합성 렌더 픽스처 60여 개**의 합성 결과가 한꺼번에 바뀐다(`Tests/WapleRenderTests` 66파일 중 `bloom` 을 저작하는 것은 3파일뿐). 필요한 변경은 `SceneDocument.bloom` 선언 1줄 + 파스 `?? false` 1줄이고, **렌더 픽스처를 같이 갱신할 수 있는 레인에서 한 커밋으로** 뒤집어야 한다 |
 | **W-5** | `nearz` 기본값 | **0.1** (`0x140186d7d`) | ~~`?? 0.01`~~ → **`?? 0.1` 반영(2026-08-21)** | **확정 · 해소** | 3D 원근 씬의 깊이 정밀도가 10배 올라 z-fighting 이 준다(대신 카메라 0.1 이내가 잘린다 — WE 와 동일 동작). 2D 는 무영향(§5.3). **동봉 172씬 영향 1건** — 3D 씬 2개 중 `particleeditor3dscale` 만 키를 생략한다(`modeleditor` 는 0.1 명시) |
 | **W-6** | 정사영 씬의 z 클립 범위 | **하드코딩 ±2000**(`0x140183df9`/`0x140183e01`, 카메라 상태에도 `0x140189df0` imm `0x44fa0000`) — `nearz/farz` 무시 | `let F: Float = 10000` 대칭 클립 (`SceneRendererFrameEncoder.swift:923`, 주석은 *"WE ortho 기본 farz"* 라고 적었으나 WE 는 ortho 에서 `farz` 를 읽지 않는다 — **수정 시 상수와 함께 그 주석도 지워야 한다**; 도달 불가능한 `nearz`/`farz` 팔의 정체는 §5.3 의 2026-08-21 보강 참조) | **확정** — 렌더 레인 잔여 | ortho 3D 하이브리드의 깊이 버퍼 정밀도가 5배 올라 동일 z 메시의 z-fighting 이 줄고, \|z\|>2000 오브젝트의 클립 여부가 WE 와 같아진다 |
-| **W-7** | 2D 실효 fov | 정사영이면 `perspectiveoverridefov`(기본 95°) (`0x140189278`–`0x1401892c4`) | 파스는 **`Float? = nil` → `Float = 95` 로 반영(2026-08-21)**. 렌더는 여전히 **리터럴 95 하드코딩** (`SceneRendererFrameEncoder.swift:596,1281`) — 렌더 레인 잔여 | **확정 · 파스 절반 해소** | 기본값 씬은 우연히 맞지만 `90.76` 을 저작한 씬(**동봉 6씬** · 전 코퍼스 12씬)의 `perspective:true` 레이어 원근 왜곡이 WE 와 일치한다. 렌더가 `doc.perspectiveOverrideFov` 를 읽기만 하면 끝난다(기본값이 이제 95 라 무저작 씬은 비트동일) |
-| **W-8** | fov 클램프 | `[0.1, 179.9]` (`0x140189b1a`, `0x140189b3a`) | 클램프 없음 | **확정** — **[2026-08-21 정정] 고칠 자리가 파스가 아니다.** WE 의 클램프는 `Scene::updateCamera` 가 **매 프레임** 실효 fov(`scene+0x148`)에 거는 것이고(§5.1–5.2 와 같은 함수), 저작값 파스 지점이 아니다. 종전 표가 지목한 파스 지점(`SceneDocument.swift` 의 `let fov = float(general["fov"]) ?? 50`)에 클램프를 넣으면 **정적 값만** 막히고 스크립트/애니메이션이 프레임마다 미는 fov 는 그대로 통과한다 — 즉 반쪽 수정이다. 소비처(렌더러 카메라 갱신)에서 걸어야 한다 | 스크립트가 fov 를 0/음수/180+ 로 몰 때 화면이 뒤집히거나 검게 되지 않는다 |
-| **W-9** | `orthogonalprojection.auto` | 첫 type==1 오브젝트의 `size` 로 투영/RT 크기 결정 (`0x14018b30c`–`0x14018b373`) | `width ?? 1920`, `height ?? 1080` (`SceneDocument.swift:1099-1100`) | **유력** | `auto:true` 4씬(파티클 프리뷰류)의 캔버스 비율/스케일이 맞는다 |
+| **W-7** | 2D 실효 fov | 정사영이면 `perspectiveoverridefov`(기본 95°) (`0x140189278`–`0x1401892c4`) | **해소(2026-08-31)**. `buildLayers`가 문서 FOV를 보존하고 정적·동적 쿼드 모두 `origin.z`와 함께 소비한다. 거리 `d=H/(2·tan(fov/2))`, 중심 스케일 `d/(d-z)`를 적용하며 z=0은 정사영과 비트동일이다 | **확정 · 해소** | 95 리터럴 고정과 발명된 상단 사다리꼴 왜곡이 사라지고, 저작 FOV/깊이에 따른 균일 중심 원근이 WE와 같아진다 |
+| **W-8** | fov 클램프 | `[0.1, 179.9]` (`0x140189b1a`, `0x140189b3a`) | **해소(2026-08-31)**. 2D 쿼드 소비와 3D `perspectiveMatrix` 소비 직전에 `CameraMotion.clampedFovDegrees`를 적용한다. 스크립트가 넣은 0/음수/180+/NaN도 같은 경계를 지난다 | **확정 · 해소** | hostile FOV에서도 투영이 뒤집히거나 비유한 행렬이 되지 않는다 |
+| **W-9** | `orthogonalprojection.auto` | 첫 type==1 오브젝트의 `size` 로 투영/RT 크기 결정 (`0x14018b30c`–`0x14018b373`) | `width ?? 1920`, `height ?? 1080` (`SceneDocument.swift:1099-1100`) | **유력** | `auto:true` 2씬(파티클 프리뷰류)의 캔버스 비율/스케일이 맞는다 |
 | **W-10** | `cameraparallaxamount` 기본값 | **0.5** (`0x140186fa5`) | ~~`?? 1`~~ → **`?? 0.5` 반영(2026-08-21)** | **확정 · 해소** | 키 생략 씬의 패럴랙스 이동량이 절반으로 — 종전은 2배로 흔들렸다. **동봉 172씬 영향 0건**(생략 4씬은 `cameraparallax` 도 생략 = 비활성) |
 | **W-11** | `cameraparallaxmouseinfluence` 기본값 | **0.5** (`0x140186fbb`, qword 스토어의 하위 dword) | ~~`?? 1`~~ → **`?? 0.5` 반영(2026-08-21)** | **확정 · 해소** | 마우스 추종이 절반으로 줄어 WE 와 같아진다. **동봉 172씬 영향 0건**(위와 같은 4씬) |
 | **W-12** | `cameraparallaxdelay` 기본값 | **0.1** (`0x140186fb0`) | ~~`?? 0`(즉시)~~ → **`?? 0.1` 반영(2026-08-21)** | **확정 · 해소** | 패럴랙스가 즉시 스냅하지 않고 WE 처럼 살짝 따라온다. **동봉 172씬 영향 0건**(위와 같은 4씬) |
@@ -697,7 +698,7 @@ volumetrics_combine   (passthrough, additive) → 화면
 | **W-22** | `camerapreview` | **`wallpaper64.exe`(런타임 엔진)에 문자열 0건** = 미소비. 단 `wallpaperui.exe`(에디터)에는 **1건** 있다(`0x140ad9ca8`) — **[2026-08-28 호스트 명시]** | 미파스 | **확정** | **일치**(런타임 둘 다 무시) — 조치 불필요 |
 | **W-23** | `transparentsorting`(bit12) · `customsortorder`(bit13) | 등록됨(`0x14019ad55`·`0x14019adfd`), 기본 false | **미파스**(`SceneDocument` 에 키가 없다) | **확정** — 2026-08-21 47키 전건 대조에서 나온 잔여 | 지금은 무영향(WE 쪽 소비 지점도 §8-4 로 미특정). 동봉 저작은 `transparentsorting:true` 2씬(둘 다 3D)뿐이라 소비처를 찾기 전엔 파스만 넣어도 화면이 안 바뀐다 |
 | **W-24** | `fov`/`nearz`/`farz` 파스 시점 | `general` 의 독립 키 — `camera` 블록 유무와 무관하게 씬 필드(`0x140`/`0x14c`/`0x150`)에 항상 실린다 | `parseCamera` 안에서만 읽는다 — `orthogonalprojection` 이 딕셔너리면(=2D) `camera3D == nil` 이라 세 값이 **문서에 남지 않는다** | **확정**(구조 차이) | 지금은 무영향(2D 는 세 값을 안 쓴다 — §5.3). `zoom`·`perspectiveoverridefov` 처럼 2D 에서도 살아 있어야 할 키가 늘면 그때 `applyGeneralSettings` 로 옮겨야 한다 |
-| **W-25** | HDR 피라미드 **레벨 수 산식** | 생성 단수 = `min(8, floor(log2(min(W,H))))` (`0x14017f363`·`0x14017f376`·`0x14017f37d`·`0x14017f383`·`0x14017f541`; 진입 전 두 변이 `max(·,2)` 로 클램프 `0x14017f1ec`·`0x14017f200`), 실효 `N = max(1, min(bloomhdriterations, 생성단수))` (`0x14017f7f7`–`0x14017f84c` → `obj+0x3108`) | ~~`w > 1 || h > 1` 로 도는 **max 기준**~~ → **해소(2026-08-21)**. `levelCount` 을 min 기준으로 다시 썼고 본체를 `WapleCore/HDRBloomMath.swift:66-75` 로 옮겼다(`HDRBloomPyramidPass.swift:176-179` 는 위임) | **확정 · 해소** | **풀스크린 화면 차이는 0**(짧은 변 ≥ 256 이면 양쪽 다 상한 8). 갈리는 것은 짧은 변 < 256 **이고 두 변의 2-거듭제곱 구간이 다른** 소스뿐이다 — 정사각 2의 거듭제곱(4×4·64×64)은 min=max 라 안 갈린다. **도달 실측: 이 리포의 골든 썸네일이 256×144**(`SnapshotPipeline.thumbW/thumbH`)라 `N` 이 8 → 7 로 바뀐다 — 정규화 분모가 19.01 → 12.12 라 HDR 블룸 씬 썸네일이 약 1.57배 밝아지고 **골든 재기준선이 필요하다**. 64×32 렌더 테스트는 6 → 5(`HDRBloomTests.swift` 의 두 기대치를 같이 고쳤다). 코퍼스 `bloomhdriterations` 는 157건 중 8 이 149건이라 요청 쪽이 먼저 캡을 만들지 않는다 |
+| **W-25** | HDR 피라미드 **레벨 수 산식** | 생성 단수 = `min(8, floor(log2(min(W,H))))` (`0x14017f363`·`0x14017f376`·`0x14017f37d`·`0x14017f383`·`0x14017f541`; 진입 전 두 변이 `max(·,2)` 로 클램프 `0x14017f1ec`·`0x14017f200`), 실효 `N = max(1, min(bloomhdriterations, 생성단수))` (`0x14017f7f7`–`0x14017f84c` → `obj+0x3108`) | ~~`w > 1 || h > 1` 로 도는 **max 기준**~~ → **해소(2026-08-21)**. `levelCount` 을 min 기준으로 다시 썼고 본체를 `WapleCore/HDRBloomMath.swift:66-75` 로 옮겼다(`HDRBloomPyramidPass.swift:176-179` 는 위임) | **확정 · 해소** | **풀스크린 화면 차이는 0**(짧은 변 ≥ 256 이면 양쪽 다 상한 8). 갈리는 것은 짧은 변 < 256 **이고 두 변의 2-거듭제곱 구간이 다른** 소스뿐이다 — 정사각 2의 거듭제곱(4×4·64×64)은 min=max 라 안 갈린다. **도달 실측: 이 리포의 골든 썸네일이 256×144**(`SnapshotPipeline.thumbW/thumbH`)라 `N` 이 8 → 7 로 바뀐다 — 정규화 분모가 19.01 → 12.12 라 HDR 블룸 씬 썸네일이 약 1.57배 밝아지고 **골든 재기준선이 필요하다**. 64×32 렌더 테스트는 6 → 5(`HDRBloomTests.swift` 의 두 기대치를 같이 고쳤다). 설치본 코퍼스 `bloomhdriterations` 87건은 전부 8이라 요청 쪽이 먼저 캡을 만들지 않는다 |
 
 > **W-1 이 어떻게 닫혔나(`b19db5b`).** 공용 헬퍼가 추출·다운샘플·업샘플 **세 곳을 겸하는 한**
 > 반경을 분리할 수 없다 — 헬퍼의 `0.5` 를 `1.0` 으로 바꾸면 업샘플이 반대로 어긋난다. 그래서
@@ -768,14 +769,14 @@ volumetrics_combine   (passthrough, additive) → 화면
    `0x14017e920` 이 이름 해시 조회(`0x140421e00`)와 맵 삽입으로 시작하므로,
    그 함수 안에서 `r9d`(=count) 가 `memcpy` 폭으로 흐르는지만 따라가면 닫힌다.
    (어느 쪽이든 실효 화면 영향은 없다.)
-4. `camerafade`(bit2, 195씬 저작) / `camerashake`(bit7) / `transparentsorting`(bit12) /
+4. `camerafade`(bit2, 101씬 저작) / `camerashake`(bit7) / `transparentsorting`(bit12) /
    `customsortorder`(bit13) 의 소비 지점을 못 찾았다. 코퍼스가 전건 기본값(shake/sorting=false,
    fade=true)이라 A/B 로도 안 드러난다.
-5. `zoom`(`scene+0x154`, 181씬 전건 1.0) 소비 지점 미특정.
+5. `zoom`(`scene+0x154`, 92씬 전건 1.0) 소비 지점 미특정.
 6. Waple `hdrActive = sceneIsHDR && accPixelFormat == .rgba16Float`
    (`SceneRenderer.swift:716,721-724`) 이므로 `quality` 가 low/medium 이면 `hdr:true` 씬에서
    HDR 블룸도 LDR 블룸도 돌지 않는다(`sceneWantsLDRBloom = doc.bloom && !doc.hdr`,
-   `SceneRenderer.swift:1289`). `quality` 는 Waple 확장 키이고 코퍼스 358/358 이 미저작이라
+   `SceneRenderer.swift:1289`). `quality` 는 Waple 확장 키이고 설치본 코퍼스 186/186 이 미저작이라
    현재는 잠복이다.
 
 ---

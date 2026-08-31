@@ -117,6 +117,7 @@ final class PuppetAbsentRefTests: XCTestCase {
             u(0)                                // 본0 trackFlags
             u(36)                               // 본0 트랙크기 = 1키(36B)
             f(dx); f(0); f(0); f(0); f(0); f(0); f(1); f(1); f(1)  // pos/angles/scale
+            u(0)                                // MDLA 이벤트 수(버전 게이트 밖, 이 픽스처는 0)
         }
         return d
     }
@@ -156,6 +157,7 @@ final class PuppetAbsentRefTests: XCTestCase {
         u(0)                                    // 본0 trackFlags
         u(36)                                   // 본0 트랙크기 = 1키(36B)
         f(0); f(0); f(0); f(0); f(0); f(0); f(1); f(1); f(1)  // pos/angles/scale(항등)
+        u(0)                                    // MDLA 이벤트 수
         return d
     }
 

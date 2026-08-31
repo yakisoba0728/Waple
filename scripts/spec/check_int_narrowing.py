@@ -110,7 +110,16 @@ PINS = [
 # 상수 4**다(`AudioDeviceID` = `UInt32`). 런타임 입력이 아니므로 좁힘이라기보다 상수 표기다.
 # 같은 커밋에서 `UInt32(0)`·`AudioDeviceID(0)` 두 자리는 타입 표기(`var x: UInt32 = 0`)로
 # 바꿔 아예 없앴다 — 게이트를 피하려는 것이 아니라 그쪽이 실제로 더 나은 스위프트다.
-CENSUS_BASELINE = 347
+# [2026-08-31] 347 → 348. `PuppetModel` 의 `Int(eventCount)` 는 native MDLA 이벤트
+# 트레일러를 읽기 위한 용량 예약이며, 직전에 `eventCount <= 4_096` 을 강제한다. 악성 입력이
+# `UInt32`→`Int` 경계를 넘지 못한다는 계약은 `PuppetMDLAFramingTests` 의 이벤트 개수 상한
+# 회귀 테스트가 지킨다. 실제 배열 인덱스/할당 전에 같은 상한을 거치므로 census만 래칫한다.
+# [2026-08-31] 348 → 350. `ParticleSimulator` 가 동적 instance override 키
+# `controlpointN`과 `controlpointangleN`의 N을 각각 `Int(key.dropFirst(...))`로 파싱한다.
+# 둘 다 `Int(StringProtocol)`의 **실패 가능 이니셜라이저**라 숫자가 너무 크거나 잘못되면
+# 트랩하지 않고 nil을 낸다. 이어지는 가드가 정확한 키 재구성과 0...7 범위까지
+# 검증하며, 비정상·범위 밖 키 회귀는 `ParticleInstanceOverrideAnimationRuntimeTests`가 지킨다.
+CENSUS_BASELINE = 350
 
 
 def swift_files():

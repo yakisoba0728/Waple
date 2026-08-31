@@ -22,7 +22,7 @@ final class EngineDefaultFixRegressionTests: XCTestCase {
 
     /// exponent>0 은 반경 밖에서 hard zero 가 아니라 pow(FLT_MIN, exponent) 로 이어진다.
     func testPositiveExponentHasNoHardZeroBeyondRadius() {
-        let fltMin: Float = 1.17549435e-38
+        let fltMin = Float(1.17549435e-38)
         // exponent=1: falloff 가 0 으로 포화돼도 결과는 FLT_MIN(작은 양수) — hard zero 금지.
         let beyond = SceneLight3D.finiteLightFalloff(distance: 15, radius: 10, exponent: 1)
         XCTAssertGreaterThan(beyond, 0, "hard zero 금지 — pow(falloff + 1.17549435e-38, exponent)")

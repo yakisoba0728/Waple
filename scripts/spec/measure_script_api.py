@@ -429,6 +429,14 @@ def is_api_name(s):
 
 
 def main():
+    specfmt.require_inputs(
+        "measure_script_api",
+        ("file", DLL, "WE_ROOT", "scenescript64.dll"),
+        ("file", EXE, "WE_ROOT", "wallpaper64.exe"),
+        ("file", DTS, "WE_ROOT", "sceneScript TypeScript 정의"),
+        ("file", BASECLASSES, "WE_ROOT", "baseclasses.js"),
+        ("dir", JSMODULES, "WE_ROOT", "JS modules"),
+    )
     dll, exe = read_pe(DLL), read_pe(EXE)
     dll_idx, exe_idx = string_va_index(dll), string_va_index(exe)
     types, dts_globals = parse_dts(DTS)

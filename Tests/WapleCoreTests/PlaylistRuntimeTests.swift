@@ -190,7 +190,7 @@ final class PlaylistRuntimeTests: XCTestCase {
     func testVideoEndDoesNothingOutsideTimerMode() {
         var settings = PlaylistSettings(delayMinutes: 10, mode: .daytime)
         settings.videoSequence = true
-        var r = runtime(settings, items: items(3))
+        let r = runtime(settings, items: items(3))
         XCTAssertFalse(r.shouldAdvanceOnVideoEnd(screenKey: "A"),
                        "videosequence 는 mode == timer 밖에서는 죽은 키다(0x140067762)")
     }

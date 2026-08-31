@@ -5256,7 +5256,7 @@
      },
      {
       "what": "scene.version(1/3/4/5, 159씬)",
-      "why": "[2026-08-28] 종전 '**Waple 이 아예 읽지 않는다**' 는 거짓이다 — `Sources/WapleCore/SceneDocument.swift:1775` 의 `let schemaVersion = numericInt(scene[\"version\"])` 가 읽고, 그 값이 바로 다음 줄 `versionGatedGeneral(scene[\"general\"], schemaVersion:)` 의 게이트로 들어간다(불리언은 수로 세지 않는 엄격 판이라 `{\"version\":true}` 는 누락과 같이 다룬다). **갭이 아닌 이유는 '안 읽어서' 가 아니라 '읽고 게이트에 쓰는데 지금까지 어긋난 관측이 없어서' 다.**"
+      "why": "[정정 2026-08-30] 종전 사유 '**읽고 게이트에 쓰는데 지금까지 어긋난 관측이 없어서**' 는 거짓이었다 — 어긋난 관측은 이 정본이 커밋되기 **28분 전에 이미 존재했다**(짝 저장소 `Waple-wallpaper-source` 커밋 `0bb963ed`, 2026-08-28 11:52:35 UTC 가 `corpus_scan/scene-json-schema.md:189` 의 version 게이트 서술을 취소선으로 철회하고 소비자로 `SceneDocument.swift` 를 명시했다. 이 파일의 당시 커밋 `83da9851` 은 12:20:21 UTC 다). **반증은 이 정본 자신으로도 재현된다** — `scene.corpus.population.version` = {5:63, 1:33, 4:32, 3:31, None:3}(162씬, v≥3 은 126 · v≥4 는 95)인데 version 부재 3씬은 옛 guard 에서 무게이트였으므로 두 집합과 함께 제외해야 한다. `scene.general.keys` 의 n 으로 비둘기집 하한을 계산하면 **최소 30씬이 v3 미만인데 `hdr`/`zoom` 을, `bloomtint` 는 13씬, `perspectiveoverridefov` 는 1씬, 최소 11씬이 v4 미만인데 wind/gravity 를 저작한다** — 게이트는 어느 방향으로도 성립할 수 없다. **그래서 2026-08-30 게이트를 걷어냈다**(`versionGatedGeneral` 과 그 호출부 삭제, 그 자리에 날짜 붙은 묘비. 이제 general 키는 version 이 아니라 **키 존재 여부**로 읽는다). 지금 이것이 갭이 아닌 이유는 '게이트에 쓰는데 반증이 없어서' 가 아니라 **'general 소비가 version 에 더는 의존하지 않아서'** 다 — `scene.version` 은 이제 Waple 의 어떤 분기에도 들어가지 않는다."
      },
      {
       "what": "general.camerapreview(162)",

@@ -34,15 +34,19 @@ final class OscillateFrequencyUnitTests: XCTestCase {
     /// 수명당 횟수 해석이었다면 이 시각들은 아무 의미가 없다(수명 20 에서 n=0.0785·0.157·0.236).
     func testPeriodIsTwoPiOverFrequencyInSeconds() {
         var sim = ParticleSimulator(def: makeDef(lifetime: 20, operators: [Self.sizeOp]), seed: 7)
-        func sizeAt(_ age: Float, from prev: Float) -> Float {
+        func particleAt(_ age: Float, from prev: Float) -> Particle {
             _ = sim.step(age - prev)
-            return sim.step(0)[0].size
+            return sim.step(0)[0]
         }
         // 첫 스텝은 0.01 — rate·dt < 1 이면 파티클이 아직 안 나온다(rate 1000 × 0.01 = 10).
-        XCTAssertEqual(sim.step(0.01)[0].size, 5.025, accuracy: 0.05, "age≈0 → sin≈0 → factor ≈1.0")
-        XCTAssertEqual(sizeAt(.pi / 2, from: 0.01), 7.5, accuracy: 0.05, "sin=1 → factor 1.5")
-        XCTAssertEqual(sizeAt(.pi, from: .pi / 2), 5.0, accuracy: 0.05, "sin=0 → factor 1.0")
-        XCTAssertEqual(sizeAt(3 * .pi / 2, from: .pi), 2.5, accuracy: 0.05, "sin=−1 → factor 0.5")
+        let start = sim.step(0.01)[0]
+        XCTAssertEqual(start.size, 5 * (0.5 + start.sharedRandom * 0.5 * (1 + sin(start.age))),
+                       accuracy: 0.05, "age≈0 → 공용 난수로 줄인 중간 진폭")
+        let peak = particleAt(.pi / 2, from: 0.01)
+        XCTAssertEqual(peak.size, 5 * (0.5 + peak.sharedRandom), accuracy: 0.05, "sin=1")
+        let middle = particleAt(.pi, from: .pi / 2)
+        XCTAssertEqual(middle.size, 5 * (0.5 + middle.sharedRandom * 0.5), accuracy: 0.05, "sin=0")
+        XCTAssertEqual(particleAt(3 * .pi / 2, from: .pi).size, 2.5, accuracy: 0.05, "sin=−1")
     }
 
     /// **수명에 무관하다.** 같은 freq·같은 age 면 수명이 10배 달라도 같은 값이어야 한다 —
@@ -51,10 +55,10 @@ final class OscillateFrequencyUnitTests: XCTestCase {
         var short = ParticleSimulator(def: makeDef(lifetime: 20, operators: [Self.sizeOp]), seed: 8)
         var long = ParticleSimulator(def: makeDef(lifetime: 200, operators: [Self.sizeOp]), seed: 8)
         _ = short.step(.pi / 2); _ = long.step(.pi / 2)
-        let s = short.step(0)[0].size, l = long.step(0)[0].size
-        XCTAssertEqual(s, 7.5, accuracy: 0.05)
-        XCTAssertEqual(l, 7.5, accuracy: 0.05)
-        XCTAssertEqual(s, l, accuracy: 1e-4, "수명은 진행 속도에 영향을 주지 않는다")
+        let s = short.step(0)[0], l = long.step(0)[0]
+        XCTAssertEqual(s.size, 5 * (0.5 + s.sharedRandom), accuracy: 0.05)
+        XCTAssertEqual(l.size, 5 * (0.5 + l.sharedRandom), accuracy: 0.05)
+        XCTAssertEqual(s.size, l.size, accuracy: 1e-4, "수명은 진행 속도에 영향을 주지 않는다")
     }
 
     /// 위상은 **초** 다 — φ 를 주면 파형이 시간축에서 φ 초 앞당겨진다. f=1, φ=π/2 면 age=0 에서
@@ -64,8 +68,10 @@ final class OscillateFrequencyUnitTests: XCTestCase {
                                                 scaleMin: 0.5, scaleMax: 1.5,
                                                 phaseMin: .pi / 2, phaseMax: .pi / 2)
         var sim = ParticleSimulator(def: makeDef(lifetime: 20, operators: [op]), seed: 9)
-        XCTAssertEqual(sim.step(0.01)[0].size, 7.5, accuracy: 0.05,
-                       "θ(0)=f·φ=π/2 → sin=1 → 마루")
+        let p = sim.step(0.01)[0]
+        let expected = 5 * (0.5 + p.sharedRandom * 0.5 * (1 + sin(p.age + .pi / 2)))
+        XCTAssertEqual(p.size, expected, accuracy: 0.05,
+                       "θ(0)=f·φ=π/2 → 공용 난수로 줄인 마루")
     }
 
     /// 위치 오프셋은 `scale·(sin θ(t) − sin θ(0))` 이라 **스폰 순간 정확히 0** 이다.

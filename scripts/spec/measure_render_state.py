@@ -509,6 +509,11 @@ def blend_flag_table(sites):
 
 # ── main ────────────────────────────────────────────────────────────────
 def main():
+    specfmt.require_inputs(
+        "measure_render_state",
+        ("file", BIN, "WE_ROOT", "wallpaper64.exe"),
+        ("dir", WS, "WE_WORKSHOP", "워크샵 코퍼스"),
+    )
     pe = PE(BIN)
 
     pkgs, scenes, mats_c, keys_c, vals_c, msaa_scene, cross_c = scan_corpus()

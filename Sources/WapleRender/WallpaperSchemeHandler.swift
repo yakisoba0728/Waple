@@ -1,26 +1,19 @@
 import Foundation
-// @preconcurrency: 컴파일러 자체 fix-it(`:2:1 add '@preconcurrency' … from module 'WebKit'`).
-// `any WKURLSchemeTask` 는 Sendable 이 아닌데 io 큐 클로저가 태스크를 잡는다 — 이건 WebKit 이
-// 동시성 감사를 받기 전 API 라서 나는 진단이고, 실제 직렬화는 우리 쪽 activeTasks/NSLock 이 한다
-// (stop 이후 호출 금지 계약을 isTaskLive/withLiveTask 가 지킨다 — F575→F590 이력 참조).
-@preconcurrency import WebKit
+import WebKit
 import UniformTypeIdentifiers
 import WapleCore
 
-public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
-    // nonisolated: WKURLSchemeHandler 가 @MainActor 프로토콜이라 이 클래스는 멤버 전체가 메인 액터로
-    // **추론**되지만, 이 타입의 실제 설계는 그 반대다 — 요청 처리는 ioQueue(동시 큐)에서 돌고 상태는
-    // NSLock 으로 지킨다(아래 activeTasks). 그래서 io 큐에서 읽는 순수 상수·순수 함수는 격리에서
-    // 명시적으로 빼낸다. 이게 없으면 "메인 액터 프로퍼티를 Sendable 클로저에서 참조" 진단이 뜨는데,
-    // 그건 여기선 실제 위험이 아니라 추론이 틀렸다는 신호다(값은 불변, 함수는 인스턴스 상태 무접근).
+public final class WallpaperSchemeHandler: NSObject, @MainActor WKURLSchemeHandler {
     nonisolated public static let scheme = "waple-asset"
     nonisolated public static let host = "wallpaper"
 
     private let root: URL
-    private let ioQueue = DispatchQueue(label: "waple.scheme.io", qos: .userInitiated, attributes: .concurrent)
-    private let lock = NSLock()
-    private var activeTasks = Set<ObjectIdentifier>()  // 시작됐고 아직 stop 안 된 태스크(use-after-stop 방지)
-    private let chunkSize = 64 * 1024
+    /// WebKit 태스크는 Sendable 이 아니므로 MainActor 밖으로 보내지 않는다.
+    /// 백그라운드 작업은 값 타입인 request 스냅샷만 받고, 응답 이벤트를
+    /// MainActor 클로저로 되돌린다. stop 은 여기서 태스크와 I/O job을 같이 취소한다.
+    @MainActor private var activeTasks: [ObjectIdentifier: WKURLSchemeTask] = [:]
+    @MainActor private var ioJobs: [ObjectIdentifier: Task<Void, Never>] = [:]
+    nonisolated private static let chunkSize = 64 * 1024
 
     /// WE `assets/zcompat/web/<워크샵ID>.json` 전표(없으면 빈 값). 규칙·주소 근거는
     /// `WapleCore/WebCompatPatch.swift` 헤더 참조.
@@ -76,7 +69,7 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
     ///
     /// `'unsafe-inline'`/`'unsafe-eval'` 은 WE 웹 월페이퍼가 인라인 스크립트 덩어리라 필수이고,
     /// 브리지 주입(WKUserScript)이 CSP 에 걸리지 않게 하는 보험이기도 하다.
-    static let contentSecurityPolicy: String = {
+    nonisolated static let contentSecurityPolicy: String = {
         let local = "'self' \(WallpaperSchemeHandler.scheme): blob: data:"
         return [
             "default-src \(local) 'unsafe-inline' 'unsafe-eval'",
@@ -99,42 +92,57 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         return WallpaperPathSecurity.containedFileURL(rel, root: root)
     }
 
+    /// 백그라운드 I/O 결과는 Sendable 값으로만 메인 액터에 복귀한다.
+    /// HTTPURLResponse 와 WKURLSchemeTask 호출은 `deliver`에서만 이루어진다.
+    private enum ResponseEvent: Sendable {
+        case response(url: URL, status: Int, headers: [String: String])
+        case data(Data)
+        case finish
+    }
+
+    @MainActor
     public func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         let id = ObjectIdentifier(task)
-        lock.lock(); activeTasks.insert(id); lock.unlock()
+        activeTasks[id] = task
         let requestURL = task.request.url
         let rangeHeader = task.request.value(forHTTPHeaderField: "Range")
-        let root = self.root
-        // 파일 읽기는 메인 스레드를 막지 않도록 백그라운드에서(큰 비디오 등). 본문 응답도 이 큐에서
-        // stop 여부 확인 후 직접 전달(감사 H — didReceive 는 백그라운드 큐 호출 가능).
-        ioQueue.async { [weak self] in
-            guard let self else { return }
-            if let url = requestURL,
-               url.scheme == WallpaperSchemeHandler.scheme,
-               url.host == WallpaperSchemeHandler.host,
-               let fileURL = WallpaperSchemeHandler.fileURL(forRequestPath: url.path, root: root) {
-                self.respondFile(task, id: id, requestURL: requestURL, rangeHeader: rangeHeader,
-                                 fileURL: fileURL, requestPath: url.path)
-            } else {
-                DispatchQueue.main.async {
-                    guard self.isTaskLive(id) else { return }
-                    self.respond(task, url: requestURL, status: 404, mime: "text/plain", data: Data())
-                    self.finishTask(id)
-                }
-            }
+        guard let url = requestURL,
+              url.scheme == WallpaperSchemeHandler.scheme,
+              url.host == WallpaperSchemeHandler.host,
+              let fileURL = WallpaperSchemeHandler.fileURL(forRequestPath: url.path, root: root) else {
+            deliverNotFound(id: id, requestURL: requestURL)
+            return
         }
+
+        let patches = compatPatches
+        let patchedFiles = compatFiles
+        let deliver: @MainActor @Sendable (ResponseEvent) -> Bool = { [weak self] event in
+            self?.deliver(event, id: id) ?? false
+        }
+        let job = Task.detached(priority: .userInitiated) {
+            await WallpaperSchemeHandler.streamFile(
+                requestURL: requestURL,
+                rangeHeader: rangeHeader,
+                fileURL: fileURL,
+                requestPath: url.path,
+                compatPatches: patches,
+                compatFiles: patchedFiles,
+                deliver: deliver
+            )
+        }
+        ioJobs[id] = job
     }
 
     /// Range 헤더 해석 결과. WebKit 의 미디어 로더(<video>/<audio>)는 Range 요청(206)이
     /// 지원되지 않으면 소스 선택 자체가 실패하므로(networkState=NO_SOURCE) 단일 범위를 지원한다.
-    enum ParsedRange: Equatable {
+    enum ParsedRange: Equatable, Sendable {
         case full                    // Range 없음/해석 불가 → 200 전체 (기존 정적 에셋 경로 그대로)
         case partial(Range<Int64>)   // 206 + Content-Range
         case unsatisfiable           // 416 (시작이 파일 끝 이후)
     }
 
     /// RFC 7233 단일 바이트 레인지 파싱. 멀티 레인지/비 bytes 단위/문법 오류는 .full 로 무시(전체 200 폴백).
-    static func parseRangeHeader(_ header: String?, fileSize: Int64) -> ParsedRange {
+    nonisolated static func parseRangeHeader(_ header: String?, fileSize: Int64) -> ParsedRange {
         guard let header else { return .full }
         let spec = header.trimmingCharacters(in: .whitespaces).lowercased()
         guard spec.hasPrefix("bytes=") else { return .full }
@@ -173,7 +181,13 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
     /// 서빙 시점에 메모리에서만 바꾼다: 결과 바이트는 같고 남의 파일을 건드리지 않는다.
     /// (그래서 WE 가 필요로 한 "패치 후에는 needle 이 사라지므로 재실행이 안전하다" 는 멱등성
     ///  논증에 기대지 않아도 된다 — 매 요청이 원본에서 출발한다.)
-    private func compatPatchedData(fileURL: URL, requestPath: String, size: Int64) -> Data? {
+    nonisolated private static func compatPatchedData(
+        fileURL: URL,
+        requestPath: String,
+        size: Int64,
+        compatPatches: WebCompatPatch.PatchSet,
+        compatFiles: Set<String>
+    ) -> Data? {
         guard !compatFiles.isEmpty else { return nil }
         guard size > 0, size <= WallpaperSchemeHandler.maxCompatPatchBytes else { return nil }
         let actions = compatPatches.actions(forRelativePath: requestPath)
@@ -183,8 +197,20 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         return patched == raw ? nil : patched   // 바뀐 게 없으면 스트리밍 경로가 더 싸다
     }
 
-    private func respondFile(_ task: WKURLSchemeTask, id: ObjectIdentifier, requestURL: URL?,
-                             rangeHeader: String?, fileURL: URL, requestPath: String) {
+    /// 파일 검증·Range 계산·읽기는 detached task에서 수행한다. `deliver`는
+    /// MainActor에 격리된 Sendable 클로저라, 이 함수에는 WebKit 참조가 넘어오지 않는다.
+    /// 청크마다 await 하므로 전달 순서·백프레셔를 유지하고, stop 이 태스크를 제거하면
+    /// 다음 전달이 false를 돌려 I/O도 즉시 끝난다.
+    nonisolated private static func streamFile(
+        requestURL: URL?,
+        rangeHeader: String?,
+        fileURL: URL,
+        requestPath: String,
+        compatPatches: WebCompatPatch.PatchSet,
+        compatFiles: Set<String>,
+        deliver: @escaping @MainActor @Sendable (ResponseEvent) -> Bool
+    ) async {
+        guard !Task.isCancelled else { return }
         // [2026-08-28] `.isRegularFileKey` 게이트를 추가한다 — 종전엔 정규파일 검사가 없었다.
         //
         // WE 는 서빙 경로에서 같은 검사를 두 번 한다(`webwallpaper64.exe` 의 거부 문자열
@@ -199,11 +225,14 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
               rv.isRegularFile == true,
               let size = rv.fileSize,
               let handle = try? FileHandle(forReadingFrom: fileURL) else {
-            DispatchQueue.main.async {
-                guard self.isTaskLive(id) else { return }
-                self.respond(task, url: requestURL, status: 404, mime: "text/plain", data: Data())
-                self.finishTask(id)
-            }
+            let target = requestURL ?? URL(string: "waple-asset://wallpaper/")!
+            guard await deliver(.response(
+                url: target,
+                status: 404,
+                headers: standardHeaders(mime: "text/plain")
+            )) else { return }
+            guard await deliver(.data(Data())) else { return }
+            _ = await deliver(.finish)
             return
         }
         defer { try? handle.close() }
@@ -214,37 +243,35 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         // 결과와 대응하지 않는다. WebKit 이 스크립트/문서에 Range 를 보내지 않으므로 실제
         // 도달이 없고(도달하더라도 200 전체 응답은 RFC 7233 상 허용되는 축소), 그래서
         // `Accept-Ranges: none` 으로 명시해 재요청을 유도하지 않는다.
-        if let patched = compatPatchedData(fileURL: fileURL, requestPath: requestPath, size: total) {
+        if let patched = compatPatchedData(
+            fileURL: fileURL,
+            requestPath: requestPath,
+            size: total,
+            compatPatches: compatPatches,
+            compatFiles: compatFiles
+        ) {
             let target = requestURL ?? URL(string: "waple-asset://wallpaper/")!
-            let response = HTTPURLResponse(
-                url: target, statusCode: 200, httpVersion: "HTTP/1.1",
-                headerFields: [
-                    "Content-Type": WallpaperSchemeHandler.mimeType(for: fileURL),
-                    "Accept-Ranges": "none",
-                    "Content-Length": String(patched.count),
-                    "Access-Control-Allow-Origin": "\(WallpaperSchemeHandler.scheme)://\(WallpaperSchemeHandler.host)",
-                    "Content-Security-Policy": WallpaperSchemeHandler.contentSecurityPolicy,
-                ]
-            )!
-            guard withLiveTask(id, { task.didReceive(response) }) else { return }
-            guard withLiveTask(id, { task.didReceive(patched) }) else { return }
-            DispatchQueue.main.async {
-                guard self.isTaskLive(id) else { return }
-                task.didFinish()
-                self.finishTask(id)
-            }
+            guard await deliver(.response(url: target, status: 200, headers: [
+                "Content-Type": mimeType(for: fileURL),
+                "Accept-Ranges": "none",
+                "Content-Length": String(patched.count),
+                "Access-Control-Allow-Origin": "\(scheme)://\(host)",
+                "Content-Security-Policy": contentSecurityPolicy,
+            ])) else { return }
+            guard await deliver(.data(patched)) else { return }
+            _ = await deliver(.finish)
             return
         }
 
         var headers = [
-            "Content-Type": WallpaperSchemeHandler.mimeType(for: fileURL),
+            "Content-Type": mimeType(for: fileURL),
             "Accept-Ranges": "bytes",
-            "Access-Control-Allow-Origin": "\(WallpaperSchemeHandler.scheme)://\(WallpaperSchemeHandler.host)",
-            "Content-Security-Policy": WallpaperSchemeHandler.contentSecurityPolicy,
+            "Access-Control-Allow-Origin": "\(scheme)://\(host)",
+            "Content-Security-Policy": contentSecurityPolicy,
         ]
         let status: Int
         let body: Range<Int64>
-        switch WallpaperSchemeHandler.parseRangeHeader(rangeHeader, fileSize: total) {
+        switch parseRangeHeader(rangeHeader, fileSize: total) {
         case .full:
             status = 200
             body = 0..<total
@@ -262,81 +289,76 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         }
 
         let target = requestURL ?? URL(string: "waple-asset://wallpaper/")!
-        // 감사 H: main.sync 왕복이면 스트리밍 처리량이 메인 큐 응답성에 결합되므로 ioQueue 에서 직접
-        // 전달한다. 이 함수는 태스크당 직렬로 진행돼 전달 순서는 유지된다.
-        // F590: live 확인과 didReceive 호출을 한 락 구간에서 원자화한 F575 는 폐기 — WebKit 호출이
-        // 락 안에서 블록되는 동안 메인의 isTaskLive(didFinish 경로)가 같은 락을 기다리는 교착이
-        // 실재했다(RealWebGroundTruthTests 에서 샘플링으로 확인). stop 과 호출의 잔여 경합(F-28)은
-        // 청크 루프의 isTaskLive 재확인으로 창을 좁히는 선에서 수용한다.
-        let response = HTTPURLResponse(
-            url: target, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers
-        )!
-        guard withLiveTask(id, { task.didReceive(response) }) else { return }
+        guard await deliver(.response(url: target, status: status, headers: headers)) else { return }
         if body.lowerBound > 0 { try? handle.seek(toOffset: UInt64(body.lowerBound)) }
         var remaining = Int(body.upperBound - body.lowerBound)
-        while remaining > 0, isTaskLive(id) {
+        while remaining > 0, !Task.isCancelled {
             let data = autoreleasepool {
-                (try? handle.read(upToCount: Swift.min(chunkSize, remaining))) ?? Data()
+                (try? handle.read(upToCount: Swift.min(Self.chunkSize, remaining))) ?? Data()
             }
             if data.isEmpty { break }
             remaining -= data.count
-            guard withLiveTask(id, { task.didReceive(data) }) else { break }
+            guard await deliver(.data(data)) else { return }
         }
-        DispatchQueue.main.async {
-            guard self.isTaskLive(id) else { return }
-            task.didFinish()
-            self.finishTask(id)
-        }
+        guard !Task.isCancelled else { return }
+        _ = await deliver(.finish)
     }
 
+    @MainActor
     public func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
-        lock.lock(); activeTasks.remove(ObjectIdentifier(task)); lock.unlock()
+        let id = ObjectIdentifier(task)
+        activeTasks.removeValue(forKey: id)
+        ioJobs.removeValue(forKey: id)?.cancel()
     }
 
-    private func respond(_ task: WKURLSchemeTask, url: URL?, status: Int, mime: String, data: Data) {
-        let target = url ?? URL(string: "waple-asset://wallpaper/")!
-        let response = HTTPURLResponse(
-            url: target, statusCode: status, httpVersion: "HTTP/1.1",
-            headerFields: [
-                "Content-Type": mime,
-                "Access-Control-Allow-Origin": "\(WallpaperSchemeHandler.scheme)://\(WallpaperSchemeHandler.host)",
-                "Content-Security-Policy": WallpaperSchemeHandler.contentSecurityPolicy,
-            ]
-        )!
-        task.didReceive(response)
-        task.didReceive(data)
-        task.didFinish()
+    nonisolated private static func standardHeaders(mime: String) -> [String: String] {
+        [
+            "Content-Type": mime,
+            "Access-Control-Allow-Origin": "\(scheme)://\(host)",
+            "Content-Security-Policy": contentSecurityPolicy,
+        ]
     }
 
-    private func isTaskLive(_ id: ObjectIdentifier) -> Bool {
-        lock.lock()
-        let live = activeTasks.contains(id)
-        lock.unlock()
-        return live
+    @MainActor
+    private func deliverNotFound(id: ObjectIdentifier, requestURL: URL?) {
+        let target = requestURL ?? URL(string: "waple-asset://wallpaper/")!
+        guard deliver(.response(
+            url: target,
+            status: 404,
+            headers: Self.standardHeaders(mime: "text/plain")
+        ), id: id) else { return }
+        guard deliver(.data(Data()), id: id) else { return }
+        _ = deliver(.finish, id: id)
     }
 
-    /// F590: live 확인과 태스크 메서드 호출은 락 밖에서 한다. 락을 쥔 채 WebKit 을 호출하면(F575)
-    /// WebKit 남부 블록 중 메인 스레드가 isTaskLive 에서 같은 락을 기다려 교착된다. 확인-호출 사이에
-    /// stop 이 끼는 창(F-28)은 마이크로초 단위라, 실재한 교착보다 이론적 경합을 택한다.
-    private func withLiveTask(_ id: ObjectIdentifier, _ body: () -> Void) -> Bool {
-        lock.lock()
-        let live = activeTasks.contains(id)
-        lock.unlock()
-        guard live else { return false }
-        body()
+    /// WKURLSchemeTask 콜백의 유일한 소비 지점. WebKit SDK의 MainActor 계약과
+    /// stop 반환 후 콜백 금지를 같은 격리 영역에서 지킨다.
+    @MainActor
+    private func deliver(_ event: ResponseEvent, id: ObjectIdentifier) -> Bool {
+        guard let task = activeTasks[id] else { return false }
+        switch event {
+        case .response(let url, let status, let headers):
+            guard let response = HTTPURLResponse(
+                url: url,
+                statusCode: status,
+                httpVersion: "HTTP/1.1",
+                headerFields: headers
+            ) else { return false }
+            task.didReceive(response)
+        case .data(let data):
+            task.didReceive(data)
+        case .finish:
+            task.didFinish()
+            activeTasks.removeValue(forKey: id)
+            ioJobs.removeValue(forKey: id)
+        }
         return true
-    }
-
-    private func finishTask(_ id: ObjectIdentifier) {
-        lock.lock()
-        activeTasks.remove(id)
-        lock.unlock()
     }
 
     /// 미디어 확장자 → MIME 명시 고정 테이블. UTType 은 LaunchServices(설치 앱의 UTI 등록)에
     /// 의존해 webm/ogv 등이 머신에 따라 미해결(→ octet-stream)될 수 있고, 그러면 <video> 소스
     /// 선택이 실패한다. 코퍼스 web <video> 는 전부 webm.
-    static let mediaMIMETypes: [String: String] = [
+    nonisolated static let mediaMIMETypes: [String: String] = [
         "webm": "video/webm",
         "mp4": "video/mp4",
         "m4v": "video/x-m4v",
@@ -350,7 +372,7 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         "flac": "audio/flac",
     ]
 
-    static func mimeType(for url: URL) -> String {
+    nonisolated static func mimeType(for url: URL) -> String {
         let ext = url.pathExtension.lowercased()
         if let mime = mediaMIMETypes[ext] { return mime }
         if let type = UTType(filenameExtension: ext),

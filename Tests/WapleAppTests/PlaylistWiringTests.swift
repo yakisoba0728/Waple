@@ -43,9 +43,11 @@ final class PlaylistWiringTests: XCTestCase {
     private func body(of declaration: String, in source: String) throws -> String {
         let start = try XCTUnwrap(source.range(of: declaration),
                                   "선언을 못 찾았다: \(declaration) — 시그니처가 바뀌었으면 이 오라클도 같이 고쳐라")
+        let open = try XCTUnwrap(source[start.lowerBound...].firstIndex(of: "{"),
+                                 "함수 여는 중괄호를 못 찾았다: \(declaration)")
         var depth = 1
         var out = ""
-        for ch in source[start.upperBound...] {
+        for ch in source[source.index(after: open)...] {
             if ch == "{" { depth += 1 }
             if ch == "}" { depth -= 1; if depth == 0 { break } }
             out.append(ch)
@@ -84,8 +86,10 @@ final class PlaylistWiringTests: XCTestCase {
         let code = stripComments(try body(of: "private func tickPlaylist() {", in: try appDelegateSource()))
         XCTAssertTrue(code.contains("playlistDriver.tick("),
                       "전진 판정이 사라졌다 — 순수층이 다시 고립된다")
-        XCTAssertTrue(code.contains("playlistDriver.advance("),
+        XCTAssertTrue(code.contains("playlistDriver.requestAdvance("),
                       "후보 선택·실패 건너뛰기는 드라이버 안이다 — 여기서 다시 정하지 마라")
+        XCTAssertTrue(code.contains("playlistDriver.hasPendingAdvance"),
+                      "pending 동안 다음 틱이 새 변환 세대를 시작하면 앞 요청을 계속 취소한다")
         XCTAssertTrue(code.contains("isPaused: pauseGate.isPaused"),
                       "정지 축이 상수로 굳으면 updateonpause 관문이 죽는다")
         XCTAssertFalse(code.contains("PlaylistScheduling.shuffleNext"),
@@ -94,10 +98,62 @@ final class PlaylistWiringTests: XCTestCase {
 
     func testManualNextUsesTheSameBagAsTheTimer() throws {
         let code = stripComments(try body(of: "private func advancePlaylist() {", in: try appDelegateSource()))
-        XCTAssertTrue(code.contains("playlistDriver.advance("),
+        XCTAssertTrue(code.contains("playlistDriver.requestAdvance("),
                       "수동 '다음 배경' 이 다른 경로를 타면 손으로 넘긴 것과 저절로 넘어간 것이 다른 순서를 걷는다")
-        XCTAssertTrue(code.contains("libraryVM.apply("),
+        XCTAssertTrue(code.contains("requestPrimaryPlaylistCandidate("),
                       "수동 전진은 전역 선택을 옮겨야 한다 — 라이브러리 강조·하단 바가 그 값을 본다")
+    }
+
+    // MARK: - 비동기 적용 트랜잭션
+
+    func testPendingIsNeverCollapsedThroughTheAcceptedBoolAdapter() throws {
+        let code = stripComments(try appDelegateSource())
+        XCTAssertFalse(code.contains(".accepted"),
+                       "pending을 Bool 성공으로 접으면 선택/재생목록 clock/화면 rebuild가 선확정된다")
+    }
+
+    func testSecondaryOverrideIsStagedUntilRendererSwapSucceeds() throws {
+        let source = try appDelegateSource()
+        let code = stripComments(try body(of: "private func requestSecondaryPlaylistCandidate(",
+                                          in: source))
+        XCTAssertTrue(code.contains("stagedPlaylistScreenOverrides[screenKey] = entryId"))
+        XCTAssertTrue(code.contains("finishStagedPlaylistOverride("))
+        XCTAssertTrue(code.contains("requestStagedSecondarySelection"))
+        XCTAssertFalse(code.contains("applyCurrentSelection"),
+                       "global-stale fallback이 staging 후보를 다시 읽으면 같은 변환을 2회 시도한다")
+        XCTAssertFalse(code.contains("playlistScreenOverrides[screenKey] = entryId"),
+                       "후보 요청 시점에 committed override를 바꾸면 async 실패 rollback이 불가능하다")
+
+        let stagedApply = stripComments(try body(of: "private func requestStagedSecondarySelection(",
+                                                 in: source))
+        XCTAssertEqual(stagedApply.components(separatedBy: "applyResolved(").count - 1, 1,
+                       "secondary 후보는 RendererSwap을 정확히 한 번만 열어야 한다")
+        XCTAssertFalse(stagedApply.contains("requestAssignedSelection"),
+                       "동일 후보 실패를 화면별 할당 폴백으로 재시도하면 다음 후보 진행이 지연된다")
+
+        let cancel = stripComments(try body(of: "private func cancelPendingRendererApply() {", in: source))
+        XCTAssertTrue(cancel.contains("completion?(.cancelled)"),
+                      "새 사용자 apply가 세대를 바꾸면 staged override 소유자에게 취소를 전달해야 한다")
+        let finish = stripComments(try body(of: "private func finishStagedPlaylistOverride(", in: source))
+        XCTAssertTrue(finish.contains("removeValue(forKey: screenKey)"))
+        XCTAssertTrue(finish.contains("resolution == .applied"),
+                      "실패/취소는 staging만 버리고 성공만 committed override로 승격해야 한다")
+    }
+
+    func testRestoreHandlesDeferredFailureInsteadOfTreatingPendingAsSuccess() throws {
+        let code = stripComments(try body(of: "private func restoreLastWallpaper() {",
+                                          in: try appDelegateSource()))
+        XCTAssertTrue(code.contains("requestApply(folderURL: folder) {"))
+        XCTAssertTrue(code.contains("handleRestoredWallpaperFailure()"),
+                      "시작 시 비디오 변환 실패도 선택 clear + 화면별 할당 fallback을 타야 한다")
+    }
+
+    func testScreenRebuildDefersCleanupDecisionUntilPendingResolves() throws {
+        let code = stripComments(try body(of: "private func performScreensChanged() {",
+                                          in: try appDelegateSource()))
+        XCTAssertTrue(code.contains("applyCurrentSelection {"))
+        XCTAssertTrue(code.contains("cleanupAfterFailedScreenRebuild()"),
+                      "rebuild 뒤 비동기 실패도 old-window renderer를 정리해야 한다")
     }
 
     // MARK: - ③ 종료 시 경과시간 영속

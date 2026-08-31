@@ -1,6 +1,10 @@
+import ast
+import json
 import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -152,6 +156,61 @@ class TestCrossDocChecks(unittest.TestCase):
         warns = validate.cross_document_checks(docs)
         self.assertTrue(any("gone" in w for w in warns), warns)
 
+    def test_prose_cross_ref_with_glob_target_is_not_a_dangling_id(self):
+        """산문 crossRef 는 문장 전체가 후보 id 가 되면 안 된다 — 2026-08-30 이전 유일한 경고.
+
+        `material.util.*` 는 글로브라 ID_IN_PROSE 가 못 뽑는다. 종전 폴백은 마침표만 있으면
+        90자 문장을 통째로 후보로 넣어 절대 해석 못 하는 경고를 영구히 냈다. 영구 오탐 하나가
+        채널을 죽인다(그 뒤에 들어오는 진짜 끊긴 링크와 구별이 안 된다).
+        """
+        docs = {
+            "spec/a.json": self._doc("g1", [self._e("misc.x", value={
+                "crossRef": "materials/util 상세 카탈로그는 spec/assets/material-schema.json 의 "
+                            "material.util.* 가 정본이다. 여기서는 대조용으로만 같이 센다"})]),
+            "spec/b.json": self._doc("g2", [self._e("material.util.catalog")]),
+        }
+        self.assertEqual(validate.cross_document_checks(docs), [])
+
+    def test_single_dot_bare_id_is_still_checked(self):
+        """폴백을 좁혔어도 맨몸 단일점 id 는 계속 봐야 한다 — 정본에 147종이 있고
+        ID_IN_PROSE 는 점 2개 이상을 요구하므로 이 폴백만이 그것들을 검사한다."""
+        docs = {"spec/a.json": self._doc("g1", [
+            self._e("x.y", value={"crossRef": "assets.nonexistent"})])}
+        warns = validate.cross_document_checks(docs)
+        self.assertTrue(any("assets.nonexistent" in w for w in warns), warns)
+
+    def test_single_dot_bare_id_that_exists_is_clean(self):
+        docs = {
+            "spec/a.json": self._doc("g1", [self._e("x.y", value={"crossRef": "assets.fileCount"})]),
+            "spec/b.json": self._doc("g2", [self._e("assets.fileCount")]),
+        }
+        self.assertEqual(validate.cross_document_checks(docs), [])
+
+
+class TestSupersededIDs(unittest.TestCase):
+    """묘비 집합에는 **id** 가 담겨야 한다 — hedge_triage 가 `e['id'] in tombstones` 로 본다."""
+
+    def _docs(self, sup):
+        return {"spec/a.json": {"weVersion": "2.8.42", "generatedBy": "g", "entries": [
+            {"id": "x.y", "value": {"supersedes": sup}, "status": "확정",
+             "evidence": [{"kind": "corpus", "ref": "r"}]}]}}
+
+    def test_bare_id_is_collected(self):
+        self.assertEqual(validate.superseded_ids(self._docs("engine.bloom.hdr.upsampleWeightUnknown")),
+                         {"engine.bloom.hdr.upsampleWeightUnknown"})
+
+    def test_id_is_extracted_from_prose(self):
+        """산문 묘비에서 id 를 뽑는다. 종전엔 문장을 통째로 담아 어떤 항목도 못 맞췄다."""
+        prose = ("spec/formats/tex.json format.tex.transcodeDecodes — 그 5표본은 "
+                 "재측정으로 대체됐다")
+        self.assertEqual(validate.superseded_ids(self._docs(prose)),
+                         {"format.tex.transcodeDecodes"})
+
+    def test_list_form_is_collected(self):
+        self.assertEqual(
+            validate.superseded_ids(self._docs(["a.b.c", "산문 안의 d.e.f 를 대체한다"])),
+            {"a.b.c", "d.e.f"})
+
 
 class TestHedgeTriage(unittest.TestCase):
     """확정 항목 안에 '미확인/추정' 이 섞이면 보고한다. 실패는 아니고 검토 대상이다."""
@@ -248,9 +307,9 @@ class TestDanglingRepoRefs(unittest.TestCase):
         self.assertTrue(any("리포에 없다" in e for e in errs), errs)
 
     def test_outside_repo_ref_is_not_checked(self):
-        # 설치본·코퍼스·바이너리는 머신마다 다르다 — 검사 대상이 아니다.
+        # 경로로 해석할 수 없는 코퍼스 산문과 임의 외부 경로는 검사 대상이 아니다.
+        # WE 설치 트리의 정형 경로는 아래 TestSiblingWERefs 가 별도로 검사한다.
         for ref in (r"Z:\SteamLibrary\steamapps\common\wallpaper_engine\assets",
-                    "wallpaper64.exe FUN_140099980 @ 0x140099980",
                     "162 pkg 전수"):
             with self.subTest(ref=ref):
                 self.assertEqual(validate.validate_doc(ref_doc(ref), "t.json"), [])
@@ -266,6 +325,184 @@ class TestDanglingRepoRefs(unittest.TestCase):
     def test_prose_after_path_is_ignored(self):
         self.assertEqual(
             validate.validate_doc(ref_doc("scripts/spec/validate.py 의 죽은 참조 검사"), "t.json"), [])
+
+
+class TestSiblingWERefs(unittest.TestCase):
+    """짝 저장소의 wallpaper_engine/ 근거도 경로로 해석해 존재를 검사한다.
+
+    종전 repo_ref_path 는 이 부류를 전부 None 으로 버렸다. 현재 정본에서
+    wallpaper64.exe 하나만 236회 인용되므로, 짝 저장소가 있는 개발 머신에서도
+    근거를 지워 보고 오류 0 이 나던 구멍이다.
+    """
+
+    def test_known_install_tree_forms_are_normalized(self):
+        cases = {
+            "wallpaper64.exe FUN_140099980 @ 0x140099980": "wallpaper64.exe",
+            "bin/scenescript64.dll 0x180012340": "bin/scenescript64.dll",
+            "shaders/common_blending.h:18-25": "assets/shaders/common_blending.h",
+            "wallpaper_engine/ui/dist/scripts/scripts.js": "ui/dist/scripts/scripts.js",
+        }
+        for ref, want in cases.items():
+            with self.subTest(ref=ref):
+                self.assertEqual(validate.we_ref_path(ref), want)
+
+    def test_existing_and_missing_sibling_refs_are_distinguished(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.makedirs(os.path.join(td, "bin"))
+            open(os.path.join(td, "wallpaper64.exe"), "wb").close()
+            with mock.patch.object(validate, "WE_ROOT", td):
+                self.assertEqual(
+                    validate.validate_doc(ref_doc("wallpaper64.exe FUN_1400"), "t.json"), [])
+                errs = validate.validate_doc(ref_doc("bin/scenescript64.dll FUN_1800"), "t.json")
+        self.assertTrue(any("WE 설치/짝 저장소에 없다" in e for e in errs), errs)
+
+    def test_missing_default_sibling_does_not_break_portable_validation(self):
+        with tempfile.TemporaryDirectory() as td:
+            missing = os.path.join(td, "not-cloned", "wallpaper_engine")
+            with mock.patch.object(validate, "WE_ROOT", missing):
+                self.assertEqual(
+                    validate.validate_doc(ref_doc("wallpaper64.exe FUN_1400"), "t.json"), [])
+
+    def test_current_canon_maps_at_least_the_audited_sibling_population(self):
+        mapped = 0
+        spec_root = os.path.join(validate.REPO_ROOT, "spec")
+        for dirpath, _dirs, files in os.walk(spec_root):
+            for filename in files:
+                path = os.path.join(dirpath, filename)
+                if not filename.endswith(".json") or not validate.is_canon_path(path):
+                    continue
+                try:
+                    with open(path, encoding="utf-8") as fh:
+                        canon = json.load(fh)
+                except (OSError, json.JSONDecodeError):
+                    continue
+                for entry in canon.get("entries", []):
+                    for evidence in entry.get("evidence", []) if isinstance(entry, dict) else []:
+                        if isinstance(evidence, dict) and validate.we_ref_path(evidence.get("ref")) is not None:
+                            mapped += 1
+        self.assertGreaterEqual(mapped, 349,
+                                "감사에서 실재 확인한 짝 저장소 ref 349건보다 매핑 그물이 작아졌다")
+
+    def test_evidence_census_keeps_unstructured_refs_visible(self):
+        d = doc(entries=[
+            {"id": "a.repo", "value": 1, "status": "확정",
+             "evidence": [{"kind": "file", "ref": "scripts/spec/validate.py"}]},
+            {"id": "a.we", "value": 1, "status": "확정",
+             "evidence": [{"kind": "binary", "ref": "wallpaper64.exe FUN_1400"}]},
+            {"id": "a.prose", "value": 1, "status": "확정",
+             "evidence": [{"kind": "corpus", "ref": "워크샵 전수"}]},
+        ])
+        self.assertEqual(validate.evidence_ref_census({"t.json": d}),
+                         {"total": 3, "repo": 1, "we": 1, "unstructured": 1})
+
+    def test_known_deleted_a4_document_is_not_cited_by_canon_or_generator(self):
+        needle = "A4-headers-blending-fog.md"
+        for relative in ("spec/engine/mul-convention.json",
+                         "scripts/spec/measure_mul_convention.py"):
+            with self.subTest(relative=relative):
+                with open(os.path.join(validate.REPO_ROOT, relative), encoding="utf-8") as fh:
+                    self.assertNotIn(needle, fh.read())
+
+
+class TestAuditCanonRegressions(unittest.TestCase):
+    """2026-08-31 감사에서 실제로 재현된 정본/생성기 드리프트를 고정한다."""
+
+    @staticmethod
+    def _entry(path, eid):
+        with open(os.path.join(validate.REPO_ROOT, path), encoding="utf-8") as fh:
+            doc = json.load(fh)
+        return next(e for e in doc["entries"] if e["id"] == eid)
+
+    @staticmethod
+    def _generator_file_refs(source, eid):
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "entry" and len(node.args) >= 4
+                    and isinstance(node.args[0], ast.Constant) and node.args[0].value == eid):
+                continue
+            refs = []
+            for child in ast.walk(node.args[3]):
+                if (isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+                        and child.func.attr == "ev" and len(child.args) >= 2):
+                    try:
+                        kind = ast.literal_eval(child.args[0])
+                        ref = ast.literal_eval(child.args[1])
+                    except (ValueError, TypeError):
+                        continue
+                    if kind == "file":
+                        refs.append(ref)
+            return refs
+        raise AssertionError(f"생성기에서 {eid} 엔트리를 못 찾았다")
+
+    def test_material_gap_file_evidence_uses_stable_symbol_anchors(self):
+        expected = {
+            "waple.gap.fboFormatDropped":
+                "Sources/WapleRender/SceneRendererResources.swift `static func metalFormat(_ f: EffectManifest.FBO.Format?, hdr: Bool)`",
+            "waple.gap.fboClearAndUnique":
+                "Sources/WapleRender/SceneRendererFrameEncoder.swift `uniqueStore.pendingClear` 순회 — `let c = fboSpecs[i].clearColor ?? SIMD4<Float>(0, 0, 0, 0)`",
+            "waple.gap.strictJSON": "Sources/WapleCore/EffectManifest.swift",
+            "waple.gap.bindPrevAlias":
+                "Sources/WapleRender/SceneRendererResources.swift `buildPassBindings` — `if let idx = fboIndex[b.name]` … `binds.append((b.index, -1))`",
+            "waple.gap.cullmodeInMaterialPass":
+                "Sources/WapleCore/SceneDocument.swift `parseMaterialPassProperties` — cullmode 미참조",
+            "waple.gap.comboCaseFolding":
+                "Sources/WapleCore/SceneDocument.swift `result.materialCombos[k] = i` (원문 대소문자 보존)",
+        }
+        with open(os.path.join(validate.REPO_ROOT, "scripts/spec/measure_material_schema.py"),
+                  encoding="utf-8") as fh:
+            generator = fh.read()
+        for eid, want in expected.items():
+            with self.subTest(eid=eid):
+                refs = [ev["ref"] for ev in self._entry("spec/assets/material-schema.json", eid)["evidence"]
+                        if ev["kind"] == "file"]
+                self.assertEqual(refs, [want])
+                self.assertEqual(self._generator_file_refs(generator, eid), [want],
+                                 "정본만 고치면 다음 코퍼스 재측정이 stale 줄 번호를 되살린다")
+
+        tree = ast.parse(generator)
+        line_refs = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "ev" and len(node.args) >= 2):
+                continue
+            try:
+                kind, ref = ast.literal_eval(node.args[0]), ast.literal_eval(node.args[1])
+            except (ValueError, TypeError):
+                continue
+            if kind == "file" and validate.ref_max_line(ref) is not None:
+                line_refs.append(ref)
+        self.assertEqual(line_refs, [], "줄번호 금지 선언과 generator evidence가 다시 모순된다")
+
+    def test_version_gate_pigeonhole_minima_include_missing_versions(self):
+        import measure_scene_schema
+
+        versions = {"5": 63, "1": 33, "4": 32, "3": 31, "None": 3}
+        key_counts = {"hdr": 159, "bloomtint": 142,
+                      "perspectiveoverridefov": 130, "windenabled": 109}
+        got = measure_scene_schema.version_gate_counterexample_minima(versions, key_counts)
+        self.assertEqual(got, {"hdr": 30, "bloomtint": 13,
+                               "perspectiveoverridefov": 1, "windenabled": 11})
+
+        impact = self._entry("spec/corpus/scene-schema.json", "waple.gapImpact")["value"]
+        why = next(x["why"] for x in impact["notGaps"] if x["what"].startswith("scene.version"))
+        self.assertIn("최소 30씬", why)
+        self.assertIn("최소 11씬", why)
+        self.assertNotIn("최소 33씬", why)
+        self.assertNotIn("최소 14씬", why)
+
+    def test_uniform_scanner_prefers_exact_nul_terminated_name(self):
+        import measure_engine_symbols
+
+        data = b"g_Array[\0padding\0g_Array\0g_Texture([\\d]+)\0"
+        secs = [(".rdata", 0, len(data), 0x140000000)]
+        got = measure_engine_symbols.collect_symbols(data, secs, measure_engine_symbols.UNIFORM)
+        self.assertEqual(got["g_Array"]["va"], hex(0x140000000 + data.index(b"g_Array\0")))
+        self.assertNotIn("coordinateKind", got["g_Array"])
+        self.assertEqual(got["g_Texture"]["coordinateKind"], "embeddedToken")
+
+        texture = self._entry("spec/engine/uniforms.json", "engine.uniforms")["value"]["g_Texture"]
+        self.assertEqual(texture["coordinateKind"], "embeddedToken")
 
 
 class TestGeneratedByExists(unittest.TestCase):

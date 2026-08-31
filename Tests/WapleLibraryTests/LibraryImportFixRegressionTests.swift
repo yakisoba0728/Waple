@@ -142,6 +142,40 @@ final class LibraryImportFixRegressionTests: XCTestCase {
         XCTAssertTrue(leftovers.isEmpty, "F584: 등록 실패한 관리 폴더가 고아로 남으면 안 된다 — \(leftovers)")
     }
 
+    /// stable workshopid 재가져오기는 새 임시 루트를 관리 위치로 옮기지 못해도 기존 관리 폴더를
+    /// 보존해야 한다. 소스 부모를 읽기 전용으로 만들어 dest 삭제는 성공하지만 move 는 실패하는
+    /// 실제 순서를 결정적으로 재현한다.
+    func testStableIdReimportMoveFailureRollsBackExistingManagedFolder() throws {
+        try XCTSkipIf(getuid() == 0, "root 실행 시 권한 0o555 기반 move 실패 재현 불가")
+        let store = LibraryStore(baseDirectory: base())
+        let originalZip = try makeZipFixture(wrapperName: "Wallpaper", workshopId: "ROLLBACK1", tag: "Original")
+        let original = try XCTUnwrap(store.importZip(originalZip).first)
+        let originalFolder = try XCTUnwrap(store.resolveFolderURL(for: original))
+        let originalAsset = originalFolder.appendingPathComponent("wallpaper.mp4")
+        XCTAssertEqual(try String(contentsOf: originalAsset, encoding: .utf8), "dummy-Original")
+
+        let replacementTemp = tmp.appendingPathComponent("replacement-temp", isDirectory: true)
+        let replacementRoot = replacementTemp.appendingPathComponent("Wallpaper", isDirectory: true)
+        try FileManager.default.createDirectory(at: replacementRoot, withIntermediateDirectories: true)
+        let replacementJSON = #"{"type":"video","file":"wallpaper.mp4","title":"Replacement","workshopid":"ROLLBACK1"}"#
+        try Data(replacementJSON.utf8).write(to: replacementRoot.appendingPathComponent("project.json"))
+        try Data("dummy-Replacement".utf8).write(to: replacementRoot.appendingPathComponent("wallpaper.mp4"))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: replacementTemp.path)
+        defer {
+            if FileManager.default.fileExists(atPath: replacementTemp.path) {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: replacementTemp.path)
+            }
+        }
+
+        XCTAssertTrue(store.importExtractedZip(replacementTemp).isEmpty, "이동 실패 픽스처는 가져오기에 실패해야 한다")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: originalAsset.path),
+                      "새 root 이동 실패가 기존 stable-id 관리 폴더를 삭제하면 안 된다")
+        XCTAssertEqual(try String(contentsOf: originalAsset, encoding: .utf8), "dummy-Original",
+                       "실패한 교체 뒤 기존 콘텐츠가 그대로 남아야 한다")
+        XCTAssertEqual(store.entries.map(\.id), ["ROLLBACK1"], "기존 라이브러리 엔트리도 유지돼야 한다")
+    }
+
     // MARK: - F585: FolderStore.move 빈 이름 가드
 
     /// createFolder 와 대칭 — 트림 후 빈 이름으로는 폴더를 만들지 않는다(루트 이동과 동일 취급).

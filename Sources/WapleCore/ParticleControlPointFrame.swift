@@ -326,11 +326,13 @@ public enum ParticleControlPointMath {
         out[0, 0] = cb * cc
         out[0, 1] = cb * sc
         out[0, 2] = -sb
-        out[1, 0] = sa * sb * cc - ca * sc
-        out[1, 1] = sa * sb * sc + ca * cc
+        // 아래 네 복합항은 원본 SSE의 mulss 결합 순서까지 보존한다. 대수적으로 같은
+        // `(sa * sb) * cc` 식은 정상 유한 입력에서도 결과가 1 ULP 달라질 수 있다.
+        out[1, 0] = (sb * cc) * sa - ca * sc
+        out[1, 1] = (sb * sc) * sa + ca * cc
         out[1, 2] = sa * cb
-        out[2, 0] = ca * sb * cc + sa * sc
-        out[2, 1] = ca * sb * sc - sa * cc
+        out[2, 0] = (ca * cc) * sb + sa * sc
+        out[2, 1] = (ca * sc) * sb - sa * cc
         out[2, 2] = ca * cb
         return out
     }
@@ -422,9 +424,11 @@ public enum ParticleControlPointMath {
         case pointer
         /// bit2 — 부모 CP 의 현재 4×4 를 통째로 복사. `0x14022e6b8`.
         case parentCopy
-        /// bit2 — `cur = parentCur × M`. `0x14022e6ee`–`0x14022e81b`.
+        /// bit2 — 부모 current를 부모/자식 공간 사이의 transform-stack bridge와 합성한다.
+        /// 자식 base는 읽지 않는다. `0x14022e6ee`–`0x14022eb26`.
         case parentCompose
-        /// bit2 인데 부모 시스템이 없거나 인덱스가 범위 밖 — 아무것도 안 한다. `0x14022e67e`/`0x14022e68f`.
+        /// bit2 인데 부모 시스템이 없거나 인덱스가 범위 밖 — 기본 updater로 폴백한다.
+        /// `0x14022e67e`/`0x14022e68f`.
         case parentUnavailable
         /// 부모 파티클이 이 슬롯을 먹인다 — 엔진은 기본 갱신을 **건너뛴다**. `0x14022eb47`.
         case fedByParentParticles

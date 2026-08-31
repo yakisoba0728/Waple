@@ -31,7 +31,10 @@ public final class FavoritesStore {
             NSLog("%@", "[Waple] favorites.json save skipped — earlier read failed transiently, avoiding clobber")
             return
         }
-        backupCorruptStoreFile(fileURL, &corrupt)
+        guard backupCorruptStoreFile(fileURL, &corrupt) else {
+            NSLog("%@", "[Waple] favorites save skipped — corrupt original backup failed, avoiding clobber")
+            return
+        }
         do { try JSONEncoder().encode(ids).write(to: fileURL, options: .atomic) }
         catch { NSLog("%@", "[Waple] favorites save failed: \(error)") }
     }

@@ -621,21 +621,30 @@ def measure_confound_verification():
     # 교란 ②: RT/UV 규약이 코드에서 실제로 어떻게 도는지 — 파일을 직접 인용(런타임 실행은 아니지만
     # 재현 가능한 grep 좌표다. PIL 등 외부 의존 없이 stdlib 전용 원칙을 지킨다).
     rt_convention_check = {
-        "solidLayerEffChainRT": "SceneRendererResources.swift:271-272,280-281 — "
-                                 "textureEntryName 비어있는(솔리드/이펙트 캐리어) 레이어의 "
-                                 "effW/effH = layer.size.x/y (isFrameBuffer 가 아닌 한). "
-                                 "**scale 은 곱하지 않는다** — RT 는 항상 저작 size(=기본값 "
-                                 "ortho.height 정사각) 해상도로 만들어진다.",
-        "quadVerticesScaling": "SceneRendererFrameEncoder.swift:510-521 — hw=size.x*scale.x*0.5, "
-                                "hh=size.y*scale.y*0.5. scale 은 화면에 붙이는 쿼드의 코너 좌표에만 "
-                                "들어가고 UV 는 항상 TL(0,0)..BR(1,1) 로 동일(:549-553) — scale=1 과 "
-                                "scale>1 사이에 축/방향 차이는 없다.",
+        "solidLayerEffChainRT": "SceneRendererResources.swift `layer.textureEntryName.isEmpty` 분기 — textureEntryName "
+                                "비어있는(솔리드/이펙트 캐리어) 레이어의 effW/effH = layer.size.x/y (isFrameBuffer 가 아닌 한). **scale 은 "
+                                "곱하지 않는다** — RT 는 항상 저작 size(=기본값 ortho.height 정사각) 해상도로 만들어진다.",
+        "quadVerticesScaling": "SceneRendererFrameEncoder.swift `quadVertices(origin:size:scale:angleZ:…)` — "
+                               "hw=size.x*scale.x*0.5, hh=size.y*scale.y*0.5. scale 은 화면에 붙이는 쿼드의 코너 좌표에만 들어가고 UV 는 "
+                               "항상 TL(0,0)..BR(1,1) 로 동일(같은 함수 말미의 `// uv: TL(0,0) TR(1,0) BR(1,1) BL(0,1)` return) "
+                               "— scale=1 과 scale>1 사이에 축/방향 차이는 없다.",
         "verdict": "교란 ②(비-풀스크린 UV/RT 축)는 **정합** — scale 과 무관하게 항상 레이어-로컬 "
                    "0..1 UV 다(축 불일치 아님). 그런데 그 정합 때문에 scale>1 쿼드는 RT 를 "
                    "size(=2160²)로 낮게 잡고 draw 에서 scale 배(예: 3·4배) 그대로 늘여 붙이는 "
                    "결과가 된다 — 이펙트 내용물(광선·rayfeather)이 저해상도로 계산된 뒤 확대돼 "
                    "번지거나 과다노출된다. **이게 축 버그가 아니라 해상도 버그라는 것을 코드로 "
                    "확인**했다(residualDefectNotInThisEntry 의 가설을 코드 좌표로 뒷받침).",
+        "인용정정": "**[정정 2026-08-30 — 함정 22]** 위 두 줄은 종전 "
+                      "~~`SceneRendererResources.swift:271-272,280-281`~~ · "
+                      "~~`SceneRendererFrameEncoder.swift:510-521`(UV `:549-553`)~~ 로 줄 번호를 걸고 있었고 **네 인용 "
+                      "모두 드리프트했다.** HEAD 에서 :271-281 은 `videoLayerProvider`, :505-521 은 "
+                      "`runBlendModeLayer`/`runBlendModeText` 꼬리, :549-553 은 `runRefractLayer` 안이다. **결론(축은 "
+                      "정합, RT 는 scale 미반영)은 참 자리에서 그대로 성립한다** — 바뀐 것은 인용뿐이다. 줄 번호로 다시 박지 않고 심볼/조건식으로 걸었다 "
+                      "(BACKLOG 가 F003 에서 같은 문제를 겪고 채택한 관례와 동일). 주의: 참 자리는 `textureEntryName.isEmpty` 분기 "
+                      "**하나**다 — 바로 아래 `videoLayerProvider` 분기도 `layer.size.x/y` 를 쓰지만 이 문장이 말하는 "
+                      "솔리드/이펙트-캐리어 경우가 아니므로 같이 인용하면 새 거짓이 된다. 또한 이 인용쌍이 뒷받침하는 RT-해상도 독법은 다음 항목 "
+                      "`shape.knownDefectScaledQuads20260818` 의 `ruledOut.rtResolution` 이 실측으로 "
+                      "배제했고(`bakedIntoGolden: true`) 그 재베이스라인은 이미 채택됐다 — 이 항목은 살아 있는 게이트가 아니라 기록이다.",
     }
     # 육안 대조 — release 빌드 + WAPLE_THUMB_W/H 고해상 단건 캡처로 재현 가능(README 절차와 동일).
     visual_verification = {
@@ -765,6 +774,11 @@ def measure_known_defect_scaled_quads():
 
 
 def main():
+    specfmt.require_inputs(
+        "measure_shape_quad",
+        ("file", BIN, "WE_BIN", "wallpaper64.exe"),
+        ("dir", WS, "WE_WORKSHOP", "워크샵 코퍼스"),
+    )
     pe = PE(BIN)
     strings = measure_value_string_absent()
     dispatch = measure_dispatch(pe)
@@ -904,8 +918,16 @@ def main():
             "확정", [
                 specfmt.ev("corpus", "$WAPLE_REAL_PKGS/3521337568/scene.pkg"),
                 scriptref,
-                specfmt.ev("file", "Sources/WapleRender/SceneRendererResources.swift:271-272,280-281"),
-                specfmt.ev("file", "Sources/WapleRender/SceneRendererFrameEncoder.swift:510-521,549-553"),
+                specfmt.ev("file",
+                           "Sources/WapleRender/SceneRendererResources.swift — "
+                           "`layer.textureEntryName.isEmpty`(솔리드/컴포지션 placeholder) 분기의 `effW = "
+                           "layer.isFrameBuffer ? … : Self.safeFloatToInt(layer.size.x, floor: 1)` (grep `effW "
+                           "=`)"),
+                specfmt.ev("file",
+                           "Sources/WapleRender/SceneRendererFrameEncoder.swift — "
+                           "`quadVertices(origin:size:scale:angleZ:alignment:projW:projH:…)` 의 `let hw = size.x "
+                           "* scale.x * 0.5` / `let hh = size.y * scale.y * 0.5` 와 같은 함수 말미의 `// uv: TL(0,0) "
+                           "TR(1,0) BR(1,1) BL(0,1)` return"),
                 specfmt.ev("asset", "we-audit reference cursor-ripple-hdr-bloom_3299228616_01.png"),
                 specfmt.ev("asset", "<backgrounds>/{3404976219,3521337568,3558034522,"
                                     "3460973721,3640755971}/preview.gif — 작성자 원본 대조"),

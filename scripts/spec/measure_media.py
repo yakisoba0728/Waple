@@ -560,6 +560,12 @@ def as_dict(c):
 # ---------------------------------------------------------------------- 본체
 
 def main():
+    specfmt.require_inputs(
+        "measure_media",
+        ("file", WALLPAPER, "WE_ROOT", "wallpaper64.exe"),
+        ("file", MEDIAEXT, "WE_ROOT", "mediaextensions64.dll"),
+        ("dir", WS, "WE_WORKSHOP", "워크샵 코퍼스"),
+    )
     exp = pe_exports(MEDIAEXT)
     names = [n for _, n in exp if n]
     openal = [n for n in names if n.startswith(("al", "alc", "alsoft"))]

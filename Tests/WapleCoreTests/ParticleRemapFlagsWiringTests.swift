@@ -286,9 +286,8 @@ final class ParticleRemapFlagsWiringTests: XCTestCase {
         return ParticleSystemDef.parse(j, material: nil)
     }
 
-    /// 동봉 `operator[].remapvalue` **12건 / 8파일**의 `flags` 실측 — 그리고 그중 몇 건이
-    /// 실제로 `remapEval` 까지 **닿는지**. 닿지 않는 3건(레거시 `.remapValue(.speed)` 경로)이
-    /// 이 라운드의 **[미해결]** 이고, 넘길 패치안은 `docs/re/remap-operation.md` §11.4 다.
+    /// 동봉 `operator[].remapvalue` **12건 / 8파일**의 `flags` 실측 — 명시 `flags:3`인
+    /// speed 3건까지 전부 flags-aware Ex 경로로 들어가 `remapEval`에 닿아야 한다.
     func testBundledFlagsReachTable() throws {
         let root = try XCTUnwrap(Self.bundledAssetsRoot(), "동봉 WEAssets 를 못 찾았다")
         // (파일, 기대 Ex flags 목록, 기대 레거시 remapValue 건수)
@@ -296,10 +295,10 @@ final class ParticleRemapFlagsWiringTests: XCTestCase {
             ("scenes/particleelementpreviews/remapvalue/particles/new_particle_system.json", [1], 0),
             ("presets/lightning/particles/presets/thunderbolt.json", [0], 0),
             ("presets/lightning/previewthunderbolt/particles/presets/thunderbolt.json", [0], 0),
-            // simplexnoise/velocity 는 `operation` 명시라 Ex, fbmnoise/speed 는 확장 키가 없어 레거시.
-            ("presets/rain/particles/presets/rain_screen.json", [1], 1),
-            ("presets/rain/particles/presets/rain_screen_4k.json", [1], 1),
-            ("presets/rain/previewrainscreen/particles/presets/rain_screen.json", [1], 1),
+            // simplexnoise/velocity의 부재 기본 flags=1 뒤에, 명시 flags=3인 fbmnoise/speed가 온다.
+            ("presets/rain/particles/presets/rain_screen.json", [1, 3], 0),
+            ("presets/rain/particles/presets/rain_screen_4k.json", [1, 3], 0),
+            ("presets/rain/previewrainscreen/particles/presets/rain_screen.json", [1, 3], 0),
             ("presets/rain/particles/presets/rain_screen_fast.json", [1], 0),
             ("presets/rain/particles/presets/rain_screen_fast_4k.json", [1], 0),
             ("presets/rain/previewrainscreen/particles/presets/rain_screen_fast.json", [1], 0),
@@ -317,7 +316,7 @@ final class ParticleRemapFlagsWiringTests: XCTestCase {
             exTotal += ex.count; legacyTotal += legacy
         }
         XCTAssertEqual(exTotal + legacyTotal, 12, "동봉 remapvalue all 12")
-        XCTAssertEqual(legacyTotal, 3, "`flags:3` 3건이 아직 레거시 경로다 — [미해결]")
+        XCTAssertEqual(legacyTotal, 0, "명시 flags를 레거시 경로가 삼키면 안 된다")
     }
 
     /// `flags:3` 을 쓰는 3건이 어떤 것인지 **JSON 쪽에서도** 못박는다 — 파스가 그 키를 잃으면

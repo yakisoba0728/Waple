@@ -3,6 +3,7 @@ import WebKit
 @testable import WapleCore
 @testable import WapleRender
 
+@MainActor
 final class WebRendererSecurityTests: XCTestCase {
     func testWebRendererUsesNonPersistentDataStore() throws {
         let dir = try makeWebProject(html: "<html><body>ok</body></html>")
@@ -266,7 +267,7 @@ final class WebRendererSecurityTests: XCTestCase {
 
 private final class FakeSchemeTask: NSObject, WKURLSchemeTask {
     let request: URLRequest
-    // 핸들러의 io 큐(쓰기)와 테스트 스레드(읽기)가 교차하므로 모든 상태 접근을 lock 으로 동기화한다.
+    // 테스트 룰룹의 완료 관찰과 콜백 상태 갱신을 lock 으로 동기화한다.
     private let lock = NSLock()
     private var _response: URLResponse?
     private var _receivedData = Data()

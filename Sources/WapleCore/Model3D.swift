@@ -146,7 +146,9 @@ import simd
 /// 헤더 3필드가 **정확히 offset 9 부터 시작하는 단일 u32 formatFlag**(문서 corpus_scan/mdl-format.md 의
 /// "0x08 오프셋 lo/hi u16 쌍, hi=0x8000" 주장은 매직 cstring 리더가 byte8 의 NUL(=formatFlag 하위바이트
 /// 우연 일치)을 종단문자로 소비해 이후 리드가 1바이트 밀리는 것을 못 잡은 오프바이원 — 우리 구현이 이미
-/// 맞음, checklist match)임을 재확인. 버전 게이트(`if (iVar17 < 0x11)` 즉 <17 → AABB 없음)도 실행경로에서
+/// 맞음, checklist match)임을 재확인. 버전 게이트(`if (iVar11 < 0x11)` 즉 <17 → AABB 없음 —
+/// **[정정 2026-08-30]** 변수명이 ~~`iVar17`~~ 이었다. 재생성본 `FUN_140261880` 의 그 조건식 변수는
+/// `iVar11` 이다. 폐기 코퍼스의 변수명이라 그대로 grep 하면 0 hits 였다)도 실행경로에서
 /// 직접 대조(hasAABB = version >= 17 과 바이트 일치). 스켈레톤/애니 매직 디스패치(MDLS0004→MDLA0006→
 /// MDAT0001→MDMP0001→MDLE0002)는 코드에 존재하나 meshCount>0(local_400≠0) 파일에서는 타지 않는 분기 —
 /// 그 경로 자체가 "확인됨"은 아니고, 우리 매직-스캔 방식이 그와 **모순되지 않음**만 근거. MDLE0002 서브블록
@@ -205,7 +207,9 @@ public struct Model3D: Equatable {
 
     /// 메시 트레일러 gateA 블롭 — u32 word + u32 size + size 바이트
     /// (어셈블리 0x140261b6b-0x140261b96: u8 게이트 ≠ 0 시 u32(0x14009c560, 값 미소비) +
-    /// 블롭(FUN_14009c690 = u32 size + bytes)).
+    /// 블롭(`FUN_14009c5c0` = u32 size + bytes)).
+    /// **[정정 2026-08-30]** ~~`FUN_14009c690`~~ → `FUN_14009c5c0`(−0xD0). 변위본 이름은 짝 저장소
+    /// manifest 7,748 함수에 함수 시작으로 없고, 보정한 주소는 있다(전수 확인).
     public struct GateBlob: Equatable {
         public let word: UInt32
         public let data: Data
@@ -213,8 +217,10 @@ public struct Model3D: Equatable {
     }
 
     /// v≥23 모프/마스크 레코드 — 스트림: u64 id | cstring name | u32 flags | u32 n1 | n1×u32 |
-    /// u32 n2 | n2×u32 (디컴파일 :1227-1457 + 어셈블리 0x140261be0-0x140262013 — 첫 리드는
-    /// 0x1402616b0 = u64, 두 번째가 FUN_14009c5d0 cstring). 인덱스들은 gateB 16B 레코드
+    /// u32 n2 | n2×u32 (어셈블리 0x140261be0-0x140262013 — 첫 리드는 0x1402616b0 = u64,
+    /// 두 번째가 `FUN_14009c500` cstring). 인덱스들은 gateB 16B 레코드
+    /// **[정정 2026-08-30]** ~~`디컴파일 :1227-1457`~~ 은 폐기 코퍼스 줄 번호라 버렸고(이 파일 머리말
+    /// 지침대로 VA·조건식만 남긴다), ~~`FUN_14009c5d0`~~ → `FUN_14009c500`(−0xD0, manifest 확인).
     /// 참조(엔진은 레코드 수 N 이상 시 trap — 어셈블리 `cmp r12d,[rbp+0x110]`). 실물 12파일:
     /// name 은 전부 "masks/clipping_mask_*". 모프 렌더 소비는 범위 밖 — 파스·보존.
     public struct MorphTarget: Equatable {
@@ -644,8 +650,12 @@ public struct Model3D: Equatable {
             // 1179행)부터 언롤 24항(마스크 배열 base `_DAT_140484af0`, 기여값 배열 base
             // `_DAT_140484a80`, 각 +4×index) + 루프 2항(`while (lVar23 != 0x1a)`) = **26개
             // (마스크,기여) 엔트리** 누산 테이블, 헤더 오프셋9 formatFlag 를 키로 사용. 이후
-            // .rdata 테이블 원본 덤프(FUN_1400d8060.c:81-96 의 소비처 — D3D 입력 레이아웃의
-            // AlignedByteOffset 누적)으로 마스크/기여 상수 전수 확정 → vertexLayoutTable 로 구현.
+            // .rdata 테이블 원본 덤프(소비처 = `FUN_1400d7f90` 의 26엔트리 루프
+            // `if (((&DAT_140484a20)[lVar8] & (uint)param_2) != 0)` … `while (lVar8 != 0x1a)` —
+            // D3D 입력 레이아웃의 AlignedByteOffset 을 `iVar10 + (&DAT_1404849b0)[lVar8]` 로 누적)으로
+            // 마스크/기여 상수 전수 확정 → vertexLayoutTable 로 구현.
+            // **[정정 2026-08-30]** ~~`FUN_1400d8060.c:81-96`~~ → `FUN_1400d7f90`(−0xD0, manifest 확인).
+            // 줄 번호는 재생성본에서 안 맞으므로 옮기지 않고 조건식으로 대체했다.
             var minx: Float = 0, miny: Float = 0, minz: Float = 0
             var maxx: Float = 0, maxy: Float = 0, maxz: Float = 0
             var q = o + Model3DFormat.extraMeshHeaderWords(gateWord: gateWord) * 4
@@ -700,9 +710,16 @@ public struct Model3D: Equatable {
             // (Kirby channelmap: flag 0x00800021 — 테이블상 pos@0, boneIdx@12, TEXCOORD0 float4@28,
             // weights 부재) pos+uv 만 — 가중 0 스킨 합성으로 정점이 원점 붕괴하는 것보다 정적 메시가
             // 낫다(graceful degradation).
+            //
+            // **[정정 2026-08-30] 종전 이 판정에 `l.uv != nil` 이 붙어 있었다 — 테이블에 근거가 없다.**
+            // 본/웨이트 채널의 유무는 idx5·idx6 비트가 정하고 TEXCOORD0(idx7‥9)과 독립이다.
+            // 그 조건 때문에 TEXCOORD0 없는 스킨 플래그가 스키닝을 통째로 잃었다(실측:
+            // 0x01800003 = pos|normal|blendIndices|blendWeights, stride 56 → skinned=false,
+            // boneIndices=(0,0,0,0), weights=(0,0,0,0)). uv 부재는 uv 를 (0,0) 으로 만들 뿐이고
+            // 본을 지울 이유가 아니다 — 아래 readVertices 의 uv 게이팅이 그것을 담당한다.
             let skinFieldsFit: Bool
             if let l = layout {
-                skinFieldsFit = skinned && l.boneIndices != nil && l.weights != nil && l.uv != nil
+                skinFieldsFit = skinned && l.boneIndices != nil && l.weights != nil
             } else {
                 skinFieldsFit = skinned && stride >= 12 + (hasNormal ? 12 : 0) + (hasTangent ? 16 : 0) + 40
             }
@@ -775,7 +792,7 @@ public struct Model3D: Equatable {
             //   | (v≥23) u32 모프count + 레코드.
             // 전부 0 이면 v23 은 정확히 6바이트(= 종전 '6바이트 구분자'와 바이트 동형 — Kirby 의
             // gateB=1+16B 도 동형이라 종전 휴리스틱이 우연히 통과했던 것), v21/22 는 2바이트,
-            // v<21 은 트레일러 자체 부재(엔진이 v≥21 에서만 리드 — 디컴파일 :1214 `if (0x14 < iVar17)`,
+            // v<21 은 트레일러 자체 부재(엔진이 v≥21 에서만 리드 — `if (0x14 < iVar11)`, VA 0x140261b70,
             // 실물 v<21 파일은 전부 단일메시라 영향 없음). 마지막 메시 뒤에도 존재(실물 390/390).
             // 구조 불일치(손상) 시: 메시 사이는 종전 +6 폴백(무회귀), 마지막 메시 뒤는 진행
             // 없이 매직 스캔(종전과 동일).
@@ -877,7 +894,8 @@ public struct Model3D: Equatable {
     /// MDAT0001 부착점 파스. 레이아웃(실측 7씬 다중 엔트리 정렬 전수 일치):
     /// "MDAT0001" | u8 0 | u32 nextOff | u16 count |
     /// count×(u16 본인덱스 | cstring 이름(UTF-8) | 64B float4x4 로컬).
-    /// count 는 u16(엔진 정본: 디컴파일 FUN_140261880:1092-1099 의 FUN_140261750 u16 리드 — 종전
+    /// count 는 u16(엔진 정본: `FUN_140261880` 의 `strncmp(pcVar20,"MDAT0001",8)` 분기에서
+    /// `FUN_140261680(…+0x38)` u16 리드 — 종전
     /// u8+pad 리드와 하위바이트 동일이라 pad=0 인 전 코퍼스에서 바이트 무차별, ≥256 도 수용).
     /// count×(u16 본인덱스 | cstring 이름(UTF-8) | 64B float4x4 로컬).
     /// 구조 불일치(본 인덱스 범위 밖 포함)는 빈 배열 — 추측 파스로 이상 부착을 만드느니 무부착이 낫다.
@@ -1034,7 +1052,8 @@ public struct Model3D: Equatable {
     /// (wallpaper64.exe): gateA 0x140261b6b-0x140261b96(u8 | u32 + u32 size + blob),
     /// gateB 0x140261b9b-0x140261bd7(u8 | u32 size + blob, size>>4 = 16B 레코드 수),
     /// 모프 0x140261bd7 `cmp edi,0x17`(v≥23 게이트) — 레코드: u64(0x1402616b0) |
-    /// cstring(FUN_14009c5d0) | u32 flags | u32 n1 | n1×u32 | u32 n2 | n2×u32.
+    /// cstring(`FUN_14009c500`) | u32 flags | u32 n1 | n1×u32 | u32 n2 | n2×u32.
+    /// **[정정 2026-08-30]** ~~`FUN_14009c5d0`~~ → `FUN_14009c500`(−0xD0, manifest 확인).
     private static func parseMeshTrailer(bytes: [UInt8], at p: Int, version: Int) -> (end: Int, trailer: MeshTrailer)? {
         var t = MeshTrailer()
         var o = p
@@ -1260,6 +1279,28 @@ public struct Model3D: Equatable {
 
     /// 정점 블롭에서 vCount 개 정점을 읽어 반환한다. 바이트 범위 밖이면 nil(호출측 parse failure).
     /// 채널 오프셋은 layout(테이블 산출) 또는 고전/꼬리고정 규칙을 그대로 따른다.
+    ///
+    /// **[정정 2026-08-30] uv0 도 normal/tangent 와 같은 규칙으로 게이팅한다.** 종전 두 자리는
+    /// > `let uo = b + (layout?.uv ?? stride - 8)`  (스킨 분기)
+    /// > `} else if let uo = layout?.uv ?? (stride >= 8 ? stride - 8 : nil) {`  (비스킨 분기)
+    /// 였다. `layout?.uv` 는 **"테이블이 없다"** 와 **"테이블이 TEXCOORD0 없다고 말한다"** 를
+    /// 구별하지 못한다(둘 다 `nil`) — 그래서 후자에서도 `stride − 8` 꼬리고정으로 떨어져
+    /// **꼬리를 차지한 다른 채널의 바이트를 uv0 으로 읽었다.** 실측(flag→uv0):
+    ///   `0x03`(pos+normal, stride 24) → normal.yz · `0x07`(+tangent, stride 40) → tangent.zw ·
+    ///   `0x01`(pos만, stride 12) → position.yz. `vSize % stride == 0` 과 `maxIndex < vCount` 가
+    ///   모두 성립하므로 어떤 가드도 울지 않는다 — 조용히 틀린 텍스처 좌표가 샘플러로 간다.
+    /// 엔진 근거: 입력 레이아웃 조립부 `0x1400d7f90` 이 26엔트리를 돌며 **비트가 선 엔트리에만**
+    /// `D3D11_INPUT_ELEMENT_DESC` 를 붙인다(`(&DAT_140484a20)[lVar8] & param_2` 로 마스크를 보고,
+    /// 통과할 때만 `0x140482af0` 의 디스크립터를 복사한 뒤 `iVar10 += (&DAT_1404849b0)[lVar8]` 로
+    /// 오프셋을 전진시킨다 — 부재 엔트리는 엘리먼트도 스트라이드 기여도 0). 즉 WE 에는
+    /// 그 자리에 uv 속성이 **아예 없고** D3D 가 셰이더에 0 을 먹인다. 우리도 `.zero` 로 맞춘다.
+    /// 꼬리고정 폴백은 `layout == nil`(추론 스트라이드) 경로 전용으로 남긴다 —
+    /// `layout.map { $0.uv }` 가 그 두 경우를 갈라 준다(`Int??` → 바깥 nil 만 폴백).
+    /// 실물 도달은 없다: 설치본 45메시 플래그는 0x09/0x0b/0x0f/0x27 전부 TEXCOORD0 비트를 단다.
+    /// 짝 저장소 실물 `.mdl` 28개(`find . -name '*.mdl' | wc -l` = 28)를 이 수정 전후로 파스해
+    /// 메시별 정점수·uv 합·웨이트 합·본인덱스 합을 대조했고 **45메시 전건 바이트 동일**이었다.
+    /// 즉 이 수정은 실물 출력을 바꾸지 않는다 — 워크샵·손상 컨텐츠로만 닿는 잠재 구멍을 막는다.
+    /// 합성 플래그로는 확실히 갈린다(위 실측 3종 + 스킨 0x01800003).
     /// 오프셋 산수 보존 근거: posOff, normal, tangent, boneIndices, weights, uv 오프셋 계산식이
     /// 인라인 원본과 동일(식 복사, 변수명만 파라미터화). stride·skinFieldsFit·hasNormal·hasTangent
     /// 판정은 호출측이 원본 그대로 계산해 넘긴다.
@@ -1302,14 +1343,21 @@ public struct Model3D: Equatable {
                 // 테이블: 채널 오프셋 직독 / 추론 경로: 종전 꼬리고정.
                 let bo = b + (layout?.boneIndices ?? stride - 40)
                 let wo = b + (layout?.weights ?? stride - 24)
-                let uo = b + (layout?.uv ?? stride - 8)
+                // uv 오프셋은 normal/tangent 와 같은 규칙으로 고른다 — 테이블 경로에서
+                // TEXCOORD0 부재는 "꼬리 8바이트" 가 아니라 채널 없음이다(이 함수 머리말의 정정 블록 참조).
+                let uvOff = layout.map { $0.uv } ?? (stride >= 8 ? stride - 8 : nil)
                 guard let b0 = u32(bo), let b1 = u32(bo + 4), let b2 = u32(bo + 8), let b3 = u32(bo + 12),
-                      let w0 = f32(wo), let w1 = f32(wo + 4), let w2 = f32(wo + 8), let w3 = f32(wo + 12),
-                      let u = f32(uo), let v = f32(uo + 4) else { return nil }
-                vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: SIMD2(u, v),
+                      let w0 = f32(wo), let w1 = f32(wo + 4), let w2 = f32(wo + 8), let w3 = f32(wo + 12)
+                else { return nil }
+                var uv0 = SIMD2<Float>.zero
+                if let uo = uvOff.map({ b + $0 }) {
+                    guard let u = f32(uo), let v = f32(uo + 4) else { return nil }
+                    uv0 = SIMD2(u, v)
+                }
+                vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: uv0,
                                        boneIndices: SIMD4(b0, b1, b2, b3), weights: SIMD4(w0, w1, w2, w3),
                                        uv1: uv1))
-            } else if let uo = layout?.uv ?? (stride >= 8 ? stride - 8 : nil) {
+            } else if let uo = layout.map({ $0.uv }) ?? (stride >= 8 ? stride - 8 : nil) {
                 // TEXCOORD0 가 float3/float4 여도 선두 .xy 만 읽는다(Kirby float4@28 — RE 테이블).
                 guard let u = f32(b + uo), let v = f32(b + uo + 4) else { return nil }
                 vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: SIMD2(u, v), uv1: uv1))
