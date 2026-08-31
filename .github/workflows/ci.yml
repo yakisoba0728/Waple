@@ -678,7 +678,7 @@ jobs:
       # (위 표에서 스킵 64/65 로 갈려도 executed 는 둘 다 3,686 이었다).
       #
       # **[후속 2026-08-31 — PR CI 근거 마감 + 3875 → 4016 래칫]** PR #8의 커밋
-      # `4901527c`를 push/PR 두 이벤트가 각각 검증했다(run `33377467569` · `33377406808`).
+      # `4901527c`를 PR/push 두 이벤트가 각각 검증했다(run `33377467569` · `33377406808`).
       # debug·release 네 잡 모두 `executed=4016` · 실패 0이었고, skipped만 63/64로 갈렸다.
       # 정본 레시피의 정적 개수도 정확히 4,016이므로 위 3,875의 원격 근거를 마감하고,
       # 같은 실측치로 새 오라클까지 여유 0으로 래칫한다.
@@ -686,7 +686,8 @@ jobs:
       # 순증 +141의 출처: CameraParallaxRender +16 · ScenePerspectiveOverrideFovRender +15 ·
       # ParticleMapSequenceOracle +14 · ParticleInstanceOverrideAnimationRuntime +11 ·
       # Scene3DPointerTarget +10 · ParticleEmitterControlPoint +8 · ParticleChildren +6 = +80,
-      # 나머지 29개 테스트 파일 +63, CameraShake의 중복 오라클 통합 -2. 삭제된 단언은 없다.
+      # 나머지 29개 테스트 파일 +63, CameraShake는 기존 Core exact 오라클과 겹친 낡은
+      # 근사 테스트를 제거·교체해 -2다.
       #
       # ⚠️ **[2026-08-27] 래칫 미이행 — 지금 여유는 101 이다. 다음 그린에서 반드시 올려라.**
       # (**[정정 2026-08-30]** 위 [2026-08-30 래칫] 에서 이행했다. 아래 근거는 그대로 둔다 —
