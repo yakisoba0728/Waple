@@ -39,6 +39,13 @@ enum PlaylistSettingsBridge {
     }
 }
 
+/// 비동기 후보 적용까지 포함한 한 번의 재생목록 전진 결말.
+enum PlaylistAdvanceResolution: Equatable {
+    case applied(screenKey: String, entryId: String)
+    case exhausted(screenKey: String)
+    case cancelled(screenKey: String)
+}
+
 /// 재생목록 스케줄러의 **앱 측 소비자**. `AppDelegate` 가 붙잡는 것은 이 객체 하나다.
 ///
 /// 왜 `AppDelegate` 밖인가
@@ -56,6 +63,20 @@ enum PlaylistSettingsBridge {
 @MainActor
 final class PlaylistDriver {
 
+    typealias CandidateApply =
+        (String, @escaping (WallpaperApplyResolution) -> Void) -> WallpaperApplyDisposition
+
+    private struct PendingAdvance {
+        let token: UInt64
+        let screenKey: String
+        let index: Int
+        let entryId: String
+        let now: Date
+        let remainingAttempts: Int
+        let apply: CandidateApply
+        let completion: (PlaylistAdvanceResolution) -> Void
+    }
+
     /// 경과시간을 파일에 되쓰는 최소 간격. 매 틱 쓰면 1초마다 디스크가 돌고, 안 쓰면 강제 종료에
     /// 전부 잃는다. 60초면 최악의 손실이 1분치다.
     static let persistIntervalSeconds: TimeInterval = 60
@@ -71,6 +92,10 @@ final class PlaylistDriver {
     /// 한 틱 동안만 adopt 가 한 번 더 돌고(이미 0 인 시계를 0 으로 되돌린다) 그 뒤로 조용하다.
     private var lastGlobalEntryId: String?
     private var hasSynced = false
+    /// RendererSwap 하나가 앱 전체 화면 세트를 교체하므로 pending 전진도 전역 한 개만 허용한다.
+    /// 같은 1초 틱이 다시 와도 후보/ffmpeg 작업을 중복 시작하지 않는다.
+    private var pendingAdvance: PendingAdvance?
+    private var nextPendingToken: UInt64 = 0
 
     init(stateTime: PlaylistStateTimeStore, calendar: Calendar = .current) {
         self.stateTime = stateTime
@@ -127,27 +152,96 @@ final class PlaylistDriver {
         return wants
     }
 
-    /// 한 화면을 실제로 전진시킨다. 후보를 **순서대로 시도해** `apply` 가 성공하는 첫 것으로 확정한다.
+    /// 비동기 선준비가 가능한 후보 적용. `.pending`은 후보를 예약만 하고, 완료 콜백의
+    /// `.applied`가 도착했을 때만 runtime cursor/clock을 commit·persist한다.
     ///
-    /// 실패 후보를 건너뛰는 것이 요점이다 — 라이브러리에서 지워졌거나 폴더가 사라진 항목 하나가
-    /// 재생목록을 그 자리에 영구 정지시킨 이력이 있다(`PlaylistScheduling.advance` 독스트링).
-    /// 한 바퀴(항목 수)까지만 돈다.
-    ///
-    /// - Returns: 실제로 걸린 엔트리 id. 전부 실패하면 `nil`(기존 배경 유지).
+    /// 실패 콜백이면 같은 advance의 남은 후보를 즉시 계속 순회한다. 새 사용자 적용이 세대를
+    /// 교체해 `.cancelled`가 오면 순회를 중단한다 — 옛 재생목록 요청이 새 선택을 덮지 않는다.
     @discardableResult
-    func advance(screenKey: String, now: Date, apply: (String) -> Bool) -> String? {
-        let reading = PlaylistClockReading(date: now, calendar: calendar)
-        for _ in 0..<entryIds.count {
-            guard let index = runtime.nextCandidate(screenKey: screenKey, now: reading) else { return nil }
-            guard entryIds.indices.contains(index) else { continue }
-            let id = entryIds[index]
-            if apply(id) {
-                runtime.commit(index: index, screenKey: screenKey)
-                persist(now: now)   // 경과시간이 0 이 됐다 — 이 상태를 잃으면 되살릴 근거가 없다
-                return id
-            }
+    func requestAdvance(
+        screenKey: String,
+        now: Date,
+        apply: @escaping CandidateApply,
+        completion: @escaping (PlaylistAdvanceResolution) -> Void = { _ in }
+    ) -> WallpaperApplyDisposition {
+        guard pendingAdvance == nil else { return .pending }
+        return continueAdvance(screenKey: screenKey, now: now,
+                               remainingAttempts: entryIds.count,
+                               apply: apply, completion: completion)
+    }
+
+    var hasPendingAdvance: Bool { pendingAdvance != nil }
+
+    private func continueAdvance(
+        screenKey: String,
+        now: Date,
+        remainingAttempts: Int,
+        apply: @escaping CandidateApply,
+        completion: @escaping (PlaylistAdvanceResolution) -> Void
+    ) -> WallpaperApplyDisposition {
+        guard remainingAttempts > 0 else {
+            completion(.exhausted(screenKey: screenKey))
+            return .failed
         }
-        return nil
+        let reading = PlaylistClockReading(date: now, calendar: calendar)
+        guard let index = runtime.nextCandidate(screenKey: screenKey, now: reading),
+              entryIds.indices.contains(index) else {
+            completion(.exhausted(screenKey: screenKey))
+            return .failed
+        }
+        let id = entryIds[index]
+        nextPendingToken &+= 1
+        let token = nextPendingToken
+        pendingAdvance = PendingAdvance(token: token, screenKey: screenKey, index: index,
+                                        entryId: id, now: now,
+                                        remainingAttempts: remainingAttempts - 1,
+                                        apply: apply, completion: completion)
+
+        let disposition = apply(id) { [weak self] resolution in
+            self?.resolvePendingAdvance(token: token, resolution: resolution)
+        }
+        switch disposition {
+        case .pending:
+            return .pending
+        case .applied:
+            guard pendingAdvance?.token == token else { return .applied }
+            pendingAdvance = nil
+            runtime.commit(index: index, screenKey: screenKey)
+            persist(now: now)
+            completion(.applied(screenKey: screenKey, entryId: id))
+            return .applied
+        case .failed:
+            guard pendingAdvance?.token == token else { return .failed }
+            pendingAdvance = nil
+            return continueAdvance(screenKey: screenKey, now: now,
+                                   remainingAttempts: remainingAttempts - 1,
+                                   apply: apply, completion: completion)
+        }
+    }
+
+    private func resolvePendingAdvance(token: UInt64, resolution: WallpaperApplyResolution) {
+        guard let pending = pendingAdvance, pending.token == token else { return }
+        pendingAdvance = nil
+        switch resolution {
+        case .applied:
+            // 목록이 pending 동안 편집됐다면 같은 index가 다른 항목을 뜻할 수 있다. 렌더러는
+            // 이미 성공했더라도 그 잘못된 index를 재생목록 상태로 확정하지 않는다.
+            guard entryIds.indices.contains(pending.index),
+                  entryIds[pending.index] == pending.entryId else {
+                pending.completion(.cancelled(screenKey: pending.screenKey))
+                return
+            }
+            runtime.commit(index: pending.index, screenKey: pending.screenKey)
+            persist(now: pending.now)
+            pending.completion(.applied(screenKey: pending.screenKey,
+                                        entryId: pending.entryId))
+        case .failed:
+            _ = continueAdvance(screenKey: pending.screenKey, now: pending.now,
+                                remainingAttempts: pending.remainingAttempts,
+                                apply: pending.apply, completion: pending.completion)
+        case .cancelled:
+            pending.completion(.cancelled(screenKey: pending.screenKey))
+        }
     }
 
     /// 사용자가 그 화면의 배경을 직접 바꿨다. 전진이 아니므로 시계만 되돌린다.

@@ -124,6 +124,31 @@ final class ParticleControlPointFrameTests: XCTestCase {
                          0, 0, 0, 1])
     }
 
+    /// 복합항 네 개는 대수적으로 같은 재결합도 허용하지 않는다. 원본은 먼저 y·z 항을
+    /// 만든 뒤 x를 곱하며, 정상 유한 입력에서도 결합 순서를 바꾸면 1 ULP가 갈린다.
+    func testRotationCompositeTermsMatchBinaryFloatAssociation() {
+        let cases: [(Vec3, Int, Int, UInt32)] = [
+            (Vec3(x: Float(bitPattern: 0x40d4_9248),
+                  y: Float(bitPattern: 0x407d_08a8),
+                  z: Float(bitPattern: 0xc0b3_b09f)), 1, 0, 0xbf47_bd6e),
+            (Vec3(x: Float(bitPattern: 0xbf47_bca0),
+                  y: Float(bitPattern: 0xc09d_9568),
+                  z: Float(bitPattern: 0xbfa3_7840)), 1, 1, 0x3f5d_2e04),
+            (Vec3(x: Float(bitPattern: 0xc046_663c),
+                  y: Float(bitPattern: 0x40a1_bbe0),
+                  z: Float(bitPattern: 0x40bd_46e8)), 2, 0, 0x3f64_a859),
+            (Vec3(x: Float(bitPattern: 0xc046_663c),
+                  y: Float(bitPattern: 0x40a1_bbe0),
+                  z: Float(bitPattern: 0x40bd_46e8)), 2, 1, 0xbe99_a577),
+        ]
+
+        for (angles, row, column, expected) in cases {
+            let actual = ParticleControlPointMath.rotation(angles: angles)[row, column]
+            XCTAssertEqual(actual.bitPattern, expected,
+                           "row \(row), column \(column)")
+        }
+    }
+
     /// `m02 = -sin(y)` 이지 `+sin(y)` 가 아니다 — 부호가 뒤집히면 화면이 거울이 된다.
     /// y 만 90° 로 돌려 닫힌 값으로 못 박는다.
     func testRotationYawSignIsNegative() {

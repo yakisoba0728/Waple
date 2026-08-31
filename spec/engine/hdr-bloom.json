@@ -232,7 +232,7 @@
     "howToClose": "wallpaper64.exe 에서 scatter 머티리얼 프로퍼티를 셰이더 상수로 넘기는 지점을 찾거나(정적 분석), 윈도우에서 같은 씬을 캡처해 헤일로 감쇠율을 재면 된다.",
     "closed": "**[2026-08-20] 이 미해결은 닫혔다** → engine.bloom.hdr.upsampleWeight 참조. 위 question/openQuestion/howToClose 는 당시 서술을 지우지 않고 남긴 것이다.",
     "whyItWasWrong": "미확인이 아니었다. ① 동봉 셰이더 원문의 어노테이션이 material 이름을 직접 적고 있었다(함정 ⑦: x86 전에 GLSL 을 먼저 봤어야 했다). ② 같은 정본 uniform-feed.json 이 **확정** 등급으로 답을 갖고 있었다. ③ 출하 코드는 이미 확정 쪽을 따랐다. 정본만 낡아 모순을 배포하고 있었다.",
-    "whyKeptAsTombstone": "id 를 지우지 않는 이유 둘. ① 근거 축소 가드가 항목·키 소멸을 잡는데 이 하나를 통과시키려면 allow_shrink 를 켜야 하고 그러면 이 파일의 가드가 영구히 꺼진다 — 이 리포가 반복해서 잡아낸 '원격 스위치' 부류다. ② Sources/WapleRender/HDRBloomPyramidPass.swift 와 docs/history/parity-sweep-2026-08-19.md 가 이 id 를 인용한다."
+    "whyKeptAsTombstone": "id 를 지우지 않는 이유 둘. ① 근거 축소 가드가 항목·키 소멸을 잡는데 이 하나를 통과시키려면 allow_shrink 를 켜야 하고 그러면 이 파일의 가드가 영구히 꺼진다 — 이 리포가 반복해서 잡아낸 '원격 스위치' 부류다. ② ~~Sources/WapleRender/HDRBloomPyramidPass.swift 와 docs/history/parity-sweep-2026-08-19.md 가 이 id 를 인용한다.~~ **[정정 2026-08-30]** 그 두 곳 중 **소스 쪽이 거짓**이다. 이 문장을 넣은 커밋 `93abc7ce`(2026-08-20) 이 **같은 커밋에서** 소스 쪽 인용을 지웠다 — 그 자리의 `/// 정본:` 주석은 지금 `engine.uniformFeed.hdrBloom.materialParams` 를 가리킨다(`hdrBloomUpsample` 프래그먼트 바로 위). 즉 문장은 태어날 때부터 거짓이었다. 실측(HEAD): `grep -rn upsampleWeightUnknown Sources/` → **0건** · 인용은 `docs/history/parity-sweep-2026-08-19.md` 와 `docs/mac-handoff-2026-08-01.md` **두 문서뿐**이다. ③ 그리고 이유는 셋이다 — `validate.py` 의 `superseded_ids` 헤지 면제가 **다른 항목이 실제로 supersedes 로 대체할 것**을 요구하는데 `engine.bloom.hdr.upsampleWeight` 가 이 id 를 그렇게 가리킨다. 이 묘비를 지우면 그 면제도 함께 깨진다."
    },
    "status": "확정",
    "evidence": [

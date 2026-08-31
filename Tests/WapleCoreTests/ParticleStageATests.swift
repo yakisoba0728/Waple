@@ -32,8 +32,8 @@ final class ParticleStageATests: XCTestCase {
         let op = ParticleOperator.oscillateSize(frequencyMin: 1, frequencyMax: 1,
                                                 scaleMin: 0.5, scaleMax: 1.5, phaseMin: 0, phaseMax: 0)
         var sim = ParticleSimulator(def: makeDef(lifetime: 20, operators: [op]), seed: 11)
-        let a = sim.step(.pi / 2)   // sin(π/2)=1 → factor=1.5
-        XCTAssertEqual(a[0].size, 7.5, accuracy: 0.01)
+        let a = sim.step(.pi / 2)   // sin(π/2)=1 → factor=0.5+r
+        XCTAssertEqual(a[0].size, 5 * (0.5 + a[0].sharedRandom), accuracy: 0.01)
         let c = sim.step(.pi)       // age=3π/2 → sin=−1 → factor=0.5
         XCTAssertEqual(c[0].size, 2.5, accuracy: 0.01)
     }

@@ -35,8 +35,8 @@ enum ParticleShaders {
         float2 uv  = float2(v[b + 2], v[b + 3]);
         float4 col = float4(v[b + 4], v[b + 5], v[b + 6], v[b + 7]);
         // shakeOffset = camerashake 전역 지터 — parallaxDepth 무관(전역 카메라 병진). 미보유 씬 = 0 → 비트동일.
-        // parallaxDepth(F200) = 파티클 오브젝트 마우스 시차 가중치(QuadShaders.v_main 과 동형). 기본(1,1)
-        // 이거나 cameraOffset=0(헤드리스 captureFrames 항상 0 — draw() 참조)이면 곱해도 종전과 비트동일.
+        // parallaxDepth(F200) = 파티클 오브젝트 마우스 시차 가중치(QuadShaders.v_main 과 동형).
+        // CPU 는 최상위 루트에서 계산한 오프셋을 cameraOffset에, 단위 depth를 이 슬롯에 싣는다.
         float2 p = (pos + cameraOffset * parallaxDepth + shakeOffset) * aspectScale;
         PVOut o; o.pos = float4(p.x, p.y, 0.0, 1.0); o.uv = uv; o.color = col;
         // 시트 크로스페이드: 다음 프레임 UV(슬롯 8·9) + 섞임 비율(슬롯 10). 시트 없음/게이트 꺼짐이면

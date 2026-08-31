@@ -98,6 +98,55 @@ final class SceneParticleTests: XCTestCase {
             .colorRandom(min: Vec3(x: 50, y: 50, z: 100), max: Vec3(x: 100, y: 100, z: 200), exponent: 1)))
     }
 
+    /// SceneDocument의 재귀 자식 로더도 전체 override는 루트에만 적용하되, 엔진에서 같은 scene owner를
+    /// 갖는 자식/손자에는 opcode4용 count 배수만 공유해야 한다.
+    func testInstanceOverrideCountSharesRuntimeMultiplierWithDescendantsOnly() {
+        let scene = """
+        {"objects":[{"id":1,"particle":"particles/root.json",
+          "instanceoverride":{"count":2}}]}
+        """
+        let root = """
+        {"children":[{"name":"particles/child.json","type":"static","maxcount":6}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """
+        let child = """
+        {"children":[{"name":"particles/grand.json","type":"static","maxcount":7}],
+         "renderer":[{"name":"sprite"}],"maxcount":3}
+        """
+        let grand = """
+        {"flags":1,
+         "controlpoint":[{"offset":"0 0 0"},{"offset":"7 0 0"}],
+         "emitter":[{"name":"boxrandom","rate":0,"instantaneous":8,"distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":10,"max":10},
+                        {"name":"mapsequencebetweencontrolpoints","count":4,"flags":16}],
+         "renderer":[{"name":"sprite"}],"maxcount":8}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("particles/root.json", d(root)),
+            ("particles/child.json", d(child)),
+            ("particles/grand.json", d(grand)),
+        ])
+        let def = try! SceneDocument.parse(package: pkg).particles[0].def
+        let childDef = def.children[0].def
+        let grandDef = childDef.children[0].def
+
+        XCTAssertEqual(def.maxCount, 2, "전체 count override는 루트 정적 def에만 적용")
+        XCTAssertEqual(childDef.maxCount, 3, "자식 maxcount는 authored 값 유지")
+        XCTAssertEqual(grandDef.maxCount, 8, "손자 maxcount도 authored 값 유지")
+        XCTAssertEqual(def.instanceCountMultiplier, 2)
+        XCTAssertEqual(childDef.instanceCountMultiplier, 2)
+        XCTAssertEqual(grandDef.instanceCountMultiplier, 2)
+
+        var sim = ParticleSimulator(def: def, seed: 407)
+        _ = sim.step(0.01)
+        let particles = sim.descendantDisplay(path: [0, 0])
+        XCTAssertEqual(particles.count, 8)
+        for (particle, expectedX) in zip(particles, (0...7).map(Float.init)) {
+            XCTAssertEqual(particle.pos.x, expectedX, accuracy: 1e-5)
+        }
+    }
+
     /// controlpointN 오버라이드는 CP 오프셋 **절대 대체**이고, controlpointattract 의 target 은 def 파스
     /// 시 CP 로 베이크되므로(ParticleSystem attract 재바인딩) 오버라이드가 베이크 **전에** 적용돼야 한다
     /// — 실측: CP 오버라이드 51오브젝트 중 22가 attract 보유(사후 def 복제로는 미치지 못하는 지점).

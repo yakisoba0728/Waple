@@ -877,7 +877,7 @@ final class WebHardPauseTests: XCTestCase {
             return same?["ready"] as? Int == 1 && data?["ready"] as? Int == 1
         })
         spin(0.30)
-        var events = try object(web, "window.__frameEvents")
+        let events = try object(web, "window.__frameEvents")
         XCTAssertEqual((events["same"] as? [String: Any])?["tick"] as? Int, 0)
         XCTAssertEqual((events["data"] as? [String: Any])?["tick"] as? Int, 0)
 

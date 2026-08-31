@@ -608,7 +608,7 @@ enum Mesh3DShaders {
         // ⚠️ 미이식: HDR 가지(common_pbr_2.h:367-370)는 `saturate(ambient + light) + light * overbright`,
         //    `overbright = saturate(length(light) - 2.0) * 0.5 / max(0.01, length(light))` 로 **다르다**.
         //    씬 `general.hdr:true` 일 때 엔진이 HDR 콤보를 주입해 그 가지가 켜진다(동봉 172 + 설치본 186
-        //    씬 전수에서 `hdr:true` 4건). 지금은 g_Brightness(applyHDRBrightness)만 이식돼 있고
+        //    단일 모집단 186 씬 전수에서 `hdr:true` 3건). 지금은 g_Brightness(applyHDRBrightness)만 이식돼 있고
         //    saturate/overbright 는 없다 — HDR 씬에서 라이트 길이가 2를 넘는 구간의 롤오프가 WE 와 갈린다.
         //    수식은 `SceneWELightMath.combineLighting(light:ambient:hdr:)`(WapleCore)에 고정해 뒀다.
         float3 lit = ambientColor * albedo + direct;

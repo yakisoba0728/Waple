@@ -219,9 +219,10 @@ public final class SceneVideoLayer {
         return tex
     }
 
-    /// F5-2: item.asset(비동기 트랙 로드) → preferredTransform 분류. 헤드리스 duration lazy var 와 동일하게
+    /// F5-2: AVURLAsset(비동기 트랙 로드) → preferredTransform 분류. 구체 Sendable 타입을
+    /// 유지해 Task 안으로 전달하고, 헤드리스 duration lazy var 와 동일하게
     /// 세마포어로 동기 대기(mount 1회 startLive 비용 — 매 프레임 호출 아님).
-    private func resolveTrackOrientation(asset: AVAsset) {
+    private func resolveTrackOrientation(asset: AVURLAsset) {
         let sem = DispatchSemaphore(value: 0)
         let transform = SemaphoreResultBox<CGAffineTransform>(.identity)
         Task {

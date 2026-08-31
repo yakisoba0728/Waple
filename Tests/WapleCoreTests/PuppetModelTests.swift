@@ -31,7 +31,7 @@ final class PuppetModelTests: XCTestCase {
             var f = UInt32(1); withUnsafeBytes(of: &f) { body.append(contentsOf: $0) }
             var pr = parent; withUnsafeBytes(of: &pr) { body.append(contentsOf: $0) }
             var msz = UInt32(64); withUnsafeBytes(of: &msz) { body.append(contentsOf: $0) }
-            var mat: [Float] = [1,0,0,0, 0,1,0,0, 0,0,1,0, tx[0],tx[1],0,1]
+            let mat: [Float] = [1,0,0,0, 0,1,0,0, 0,0,1,0, tx[0],tx[1],0,1]
             mat.withUnsafeBytes { body.append(contentsOf: $0) }
             body.append(0)
         }

@@ -1001,7 +1001,7 @@
    "value": {
     "g_TextureNResolution": {
      "we": "(paddedW, paddedH, imageW, imageH)",
-     "waple": "SceneRendererResources.buildPassBindings / SceneRenderer3D 가 SIMD4(w, h, w, h) 로 채운다 — .zw 가 .xy 의 복제다. 같은 파일 주석(SceneRendererResources.swift:736)은 WE 규약을 정확히 적어놓았는데 코드가 그걸 안 지킨다(주석과 코드 불일치).",
+     "waple": "SceneRendererResources.buildPassBindings / SceneRenderer3D 가 SIMD4(w, h, w, h) 로 채운다 — .zw 가 .xy 의 복제다. 같은 파일 주석(SceneRendererResources.swift `buildPassBindings` 선언부의 `WE 규약: g_TextureXResolution = (paddedW, paddedH, imageW, imageH)` — grep 으로 찾아라, 줄 번호로 걸지 않는다: 역공학 방법론 함정 22)은 WE 규약을 정확히 적어놓았는데 코드가 그걸 안 지킨다(주석과 코드 불일치).",
      "impact": "패딩된 TEX(비-POT 원본을 POT 로 저장한 것)에서 .zw/.xy 비율이 1 이 되어 스프라이트시트 프레임 폭(common_particles.h SPRITESHEETBLENDNPOT)과 퍼펫 채널 UV(puppettexturechannels.vert)가 어긋난다. EffectShaders.swift:233 이 이 규약 때문에 마스크 UV 를 손포팅해뒀다."
     },
     "g_TexelSize": {
@@ -1011,7 +1011,7 @@
     },
     "g_LightAmbientColor": {
      "we": "씬 authoring 값. 키가 없으면 (0,0,0) — 검정.",
-     "waple": "GLSLTranslator.engineReplacement 가 float4(1,1,1,1) 상수 주입.",
+     "waple": "GLSLTranslator.engineReplacement 가 `float3(1.0, 1.0, 1.0)` 상수 주입 (`if name == \"g_LightAmbientColor\" { return \"float3(1.0, 1.0, 1.0)\" }`). **[정정 2026-08-30]** 종전 문면은 ~~`float4(1,1,1,1)`~~ 이었다 — `7c8d1f19`(2026-08-19)가 float3 로 바꿨는데 이 문장이 안 따라왔다. 폭은 vec3 여야 한다: 동봉 WEAssets 의 `g_LightAmbientColor` 선언 12건이 전부 `uniform vec3` 이고 vec4 는 0건이라, float4 를 주입하면 소비처가 전부 타입 불일치로 MSL 컴파일에 실패한다 (예: fluidsimulation_combine.frag:117 `max(CAST3(0.001), g_LightAmbientColor)`). **이 항목의 논지는 그대로다** — 폭이 3 이든 4 든 저작값을 안 읽고 상수를 넣는다는 사실은 같다.",
      "impact": "폴백 방향이 반대다. WE 의 검정은 무연산이고 흰색은 씬 전체를 들어올린다. 코퍼스 162 씬 중 159 개가 ambientcolor 를 명시하므로(spec/corpus/scene-schema.json) 실질 문제는 '기본값'이 아니라 **저작값을 안 읽고 상수를 넣는 것**이다. SceneDocument 는 이미 올바르게 파싱해 둔다 (ambientColor 기본 (0,0,0)) — 번역기만 그 값에 연결되어 있지 않다."
     },
     "g_BloomBlendParams": {
@@ -1027,14 +1027,17 @@
     },
     "bloomhdrstrength 기본값": {
      "we": "2.0 (씬 설정 생성자)",
-     "waple": "SceneDocument.swift:776/2441 이 0 — 키가 없는 씬은 블룸이 완전히 꺼진다.",
-     "impact": "bloomhdrstrength 를 생략한 씬에서 WE 는 블룸이 보이고 Waple 은 안 보인다. threshold/feather/iterations/scatter 기본값은 전부 일치한다."
+     "waple": "[2026-08-20 이전 서술 — 아래 `해소` 참조] SceneDocument.swift 가 0 — 키가 없는 씬은 블룸이 완전히 꺼진다.",
+     "impact": "bloomhdrstrength 를 생략한 씬에서 WE 는 블룸이 보이고 Waple 은 안 보인다. threshold/feather/iterations/scatter 기본값은 전부 일치한다.",
+     "해소": "**[2026-08-21 해소(`2ebc5205`) · 묘비 2026-08-30]** 위 `waple` 서술은 그 시점 상태이고 **지금은 거짓이다.** HEAD 는 `SceneDocument.swift` 의 `out.bloomHDRStrength = float(general[\"bloomhdrstrength\"]) ?? 2` 로 2 를 준다 (선언부도 `public var bloomHDRStrength: Float = 2`). 바로 위 주석이 근거를 적는다 — `strength 기본 2.0 은 씬 생성자 0x1401870c2(scene+0x3c4 ← 0x40000000) 실측이다 — 종전 0 은 키를 생략한 HDR 씬의 블룸을 전멸시켰다`. **끝까지 도달한다**: `SceneRenderer.swift` 가 `doc.bloomHDRStrength` 를 단일레벨(`strength: doc.bloomHDRStrength * Float(max(1, doc.bloomHDRIterations)) * HDRBloomPass.strengthScale`)과 피라미드(`hdrBloomPyramidStrength = doc.bloomHDRStrength`) 양쪽에 싣는다 — 파스 자리만 고친 것이 아니다. 회귀 그물: Tests/WapleCoreTests/SceneGeneralDefaultsWEParityTests.swift 의 `XCTAssertEqual(doc.bloomHDRStrength, 2, accuracy: 1e-6)`(생성자 VA 주석 동반) — 값을 되돌리면 즉시 붉어진다. 같은 묘비가 docs/re/scene-postprocessing.md W-3 에도 있다. **다시 열지 마라**: `HDRBloomPass.swift` · `HDRBloomPyramidPass.swift` 의 구조체 수준 `defaults` 는 아직 strength 0 이지만(docs W-3 이 `렌더 레인 잔여` 로 적는다) 씬 구동 경로에서 도달 불가다 — `SceneRenderer` 가 항상 doc 값을 실어 주므로 그 0 은 이 갭을 되살리지 않는다."
     },
     "skylightcolor 폴백": {
      "we": "ambientcolor 와 독립. 둘 다 기본 (0,0,0).",
-     "waple": "SceneDocument.swift:867 `vec3(...) ?? ambientColor` — ambient 로 폴백.",
-     "impact": "둘 다 기본이 0 이라 기본값에서는 결과가 같다. ambientcolor 만 저작된 씬에서 갈린다(WE=검정 skylight, Waple=ambient 복제)."
-    }
+     "waple": "[2026-08-20 이전 서술 — 아래 `해소` 참조] SceneDocument.swift 가 `vec3(...) ?? ambientColor` — ambient 로 폴백.",
+     "impact": "둘 다 기본이 0 이라 기본값에서는 결과가 같다. ambientcolor 만 저작된 씬에서 갈린다(WE=검정 skylight, Waple=ambient 복제).",
+     "해소": "**[2026-08-21 해소(`2ebc5205`) · 묘비 2026-08-30]** 위 `waple` 서술은 그 시점 상태이고 **지금은 거짓이다.** HEAD 는 `SceneDocument.swift` 의 `let skylightColor = vec3(general[\"skylightcolor\"]) ?? Vec3(x: 0, y: 0, z: 0)` 로 (0,0,0) 에 떨어지고, 바로 위 주석이 `부재 시 (0,0,0) — ambientcolor 폴백이 아니다(선언부 주석: 등록/저장/생성자 모두 독립)` 라고 적는다. 선언부(`public var skylightColor`)의 `[2026-08-21 정정]` 블록이 근거다 — 등록도 저장도 독립이고 (`skylightcolor` 등록 `0x14019a26f` → `scene+0x374`, `ambientcolor` 등록 `0x14019a1c6` → `scene+0x368`) 생성자는 둘 다 0 으로만 깐다(`0x140186f6f`·`0x140186f76`), 그리고 `종전의 ?? ambientColor 는 ambientcolor 만 저작한 씬에서 하늘광을 이중 가산했다`. 회귀 그물: Tests/WapleCoreTests/SceneGeneralDefaultsWEParityTests.swift 의 `testSkylightColorDoesNotFallBackToAmbientColor`(ambientcolor 만 저작한 씬에서 skylightColor == (0,0,0) 을 실패 메시지 `종전 ?? ambientColor 는 하늘광 이중 가산` 과 함께 못박는다) + 기본값 전수 대조의 `XCTAssertEqual(doc.skylightColor, Vec3(x: 0, y: 0, z: 0))`. 같은 묘비가 docs/re/scene-postprocessing.md W-13 에도 있다. 이 파일의 형제 항목 `engine.uniformFeed.sceneDefaults` 가 이미 `colorsDefaultBlack.skylightcolor: [0,0,0]` 을, `engine.uniformFeed.ambientAndSkylight` 가 독립성을 적고 있었다 — 한 문서가 참값과 그 참값을 부정하는 갭 주장을 동시에 담고 있었다."
+    },
+    "인용규약": "**[2026-08-30]** 이 항목의 `evidence` 파일 인용은 전부 **심볼·조건식 앵커**다 — 줄 번호를 쓰지 않는다. 이유: 종전 인용 여섯 자리가 모두 드리프트해 있었고 (`GLSLTranslator.swift:1254-1257`/`1274-1286` → 지수 스캐너·MatrixVarying, `SceneRendererResources.swift:736`/`763` → `var passes` 선언·conditions 주석, `SceneDocument.swift:776`/`2441`/`867` → animationlayer 주석·shape ortho 주석·닫는 중괄호, `HDRBloomMath.swift:145-152` → 주석 블록, `SceneRenderer.swift:1158-1168` → pointerUV 주석), `validate.py` 는 인용 줄이 파일 길이를 넘을 때만 실패하므로 파일이 커진 뒤에는 아무 게이트도 이것을 잡지 못했다(GLSLTranslator.swift 는 2588줄이라 1286 이 조용히 통과한다). 새로 인용을 달 때도 줄 번호 대신 grep 가능한 문면을 적어라 (역공학 방법론 함정 22)."
    },
    "status": "확정",
    "evidence": [
@@ -1052,27 +1055,27 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCore/GLSLTranslator.swift:1254-1257, 1274-1286"
+     "ref": "Sources/WapleCore/GLSLTranslator.swift engineReplacement — `name == \"g_TexelSize\"` / `\"g_TexelSizeHalf\"` / `\"g_LightAmbientColor\"` 분기와 `hasPrefix(\"g_Texture\") && hasSuffix(\"Resolution\")` / `… && hasSuffix(\"Texel\")` 분기"
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleRender/SceneRendererResources.swift:736, 763"
+     "ref": "Sources/WapleRender/SceneRendererResources.swift — `buildPassBindings` 선언부 주석 `WE 규약: g_TextureXResolution = (paddedW, paddedH, imageW, imageH)` 와 `SIMD4(lw, lh, lw, lh)` 로 texRes 를 채우는 자리"
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCore/HDRBloomMath.swift:95-98, 145-152"
+     "ref": "Sources/WapleCore/HDRBloomMath.swift — `public static func normalizedStrength(strength:scatter:levels:)` 와 `public static func blendParams(threshold:feather:)`"
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleRender/HDRBloomPyramidPass.swift:131-132, 162-164, 255-256"
+     "ref": "Sources/WapleRender/HDRBloomPyramidPass.swift — `normalizedStrength`/`blendParams` 위임 두 자리와 `tintStrength: SIMD4(… Self.normalizedStrength(strength: parameters.strength, …))` 호출"
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleRender/SceneRenderer.swift:1158-1168"
+     "ref": "Sources/WapleRender/SceneRenderer.swift — `strength: doc.bloomHDRStrength * Float(max(1, doc.bloomHDRIterations)) * HDRBloomPass.strengthScale`(단일레벨) 와 `hdrBloomPyramidStrength = doc.bloomHDRStrength`(피라미드)"
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCore/SceneDocument.swift:758-784, 866-867, 2441-2445"
+     "ref": "Sources/WapleCore/SceneDocument.swift — `out.bloomHDRStrength = float(general[\"bloomhdrstrength\"]) ?? 2` · `let skylightColor = vec3(general[\"skylightcolor\"]) ?? Vec3(x: 0, y: 0, z: 0)` · 선언부 `public var bloomHDRStrength: Float = 2` / `public var skylightColor`"
     }
    ]
   },

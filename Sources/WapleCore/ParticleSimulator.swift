@@ -106,6 +106,27 @@ public struct ParticleSimulator {
     private var particles: [Particle] = []
     private var acc: [Float]
     private var time: Float = 0
+    /// `mapsequencebetweencontrolpoints` 선언별 VM 레코드 상태(`t`/`step`). 파티클마다 새로
+    /// 만들면 모든 스폰이 시퀀스 시작점에 겹치므로, 시스템 수명 동안 선언별로 하나씩 유지한다.
+    private var mapSequenceBetweenSolvers: [MapSequenceBetweenSolver]
+    /// `mapsequencearoundcontrolpoint` 선언별 opid 13 레코드 상태. between과 같은 스트림에
+    /// 있어도 서로 다른 페이로드이므로 별도 인덱스/누산기를 유지한다.
+    private var mapSequenceAroundSolvers: [MapSequenceAroundSolver]
+    /// 매 프레임 바뀔 수 있는 CP 작업 배열. 정의의 정적 값을 시작점으로 삼고,
+    /// `children[].flags & 1` 링크가 부모 파티클 위치를 자식 슬롯에 공급한다.
+    private var runtimeControlPoints: [Vec3]
+    /// 씬 `instanceoverride.controlpointN` 키프레임. 이미터/mapsequence/remap은 이 live 배열을
+    /// 직접 읽고, 파스 때 target을 구운 오퍼레이터는 정적 target에 현재 CP 이동분을 합성한다.
+    private let controlPointPositionAnimations: [(slot: Int, animation: PropertyAnimation)]
+    /// 씬 `instanceoverride.controlpointangleN` 키프레임. 정의의 정적 override를 base로 삼아
+    /// 시뮬레이터 시간축에서 매 스텝 평가한다. 이미터와 opid 13이 같은 live 배열을 읽는다.
+    private let controlPointAngleAnimations: [(slot: Int, animation: PropertyAnimation)]
+    private var runtimeControlPointFrameAngles: [Vec3]
+    /// `maintaindistancebetweencontrolpoints`가 직전 선분의 축 좌표를 현재 선분으로 옮길 때 쓴다.
+    private var previousRuntimeControlPoints: [Vec3]
+    /// 부모 시스템/부모 파티클이 child.step 직전에 CP를 갱신했는지. 첫 외부 쓰기에서만 previous를
+    /// 잡아, 부모부착+링크피드+자체 위치 애니메이션이 한 프레임에 겹쳐도 직전 프레임을 잃지 않는다.
+    private var controlPointsUpdatedBeforeStep = false
 
     // 파생 오퍼레이터(스폰 시/표시 시 참조) 캐시.
     /// `movement` 오퍼레이터 캐시. `worldGravity` = 오퍼레이터 `flags & 1`(중력이 월드 벡터).
@@ -142,9 +163,10 @@ public struct ParticleSimulator {
     /// remapValueEx 중 표시 파생(opacity/color/size) 동사 보유 — display() 조기 우회 게이트.
     private let hasDisplayRemaps: Bool
     private let attractors: [(scale: Float, threshold: Float, target: SIMD3<Float>,
-                              delete: Bool, flags: Int)]
+                              delete: Bool, flags: Int, controlPoint: Int?)]
     /// maintaindistancetocontrolpoint — CP 중심 반지름 `distance` 구면으로 **위치를 투영**한다.
-    private let maintainDists: [(distance: Float, variableStrength: Float, target: SIMD3<Float>)]
+    private let maintainDists: [(distance: Float, variableStrength: Float, target: SIMD3<Float>,
+                                 controlPoint: Int?)]
     /// maintaindistancebetweencontrolpoints — 두 CP 를 잇는 선분의 **축 성분만** [0, L] 로 가둔다
     /// (수직 성분은 그대로). 인덱스로 들고 있다가 적용 시 `def.controlPoints` 를 본다 — 형제
     /// `maintainDists` 가 파스 때 베이크한 것과 다른 이유는, 이쪽은 **두 점의 차**가 필요해서
@@ -167,7 +189,7 @@ public struct ParticleSimulator {
     private var frameCounter: Int = 0
     private let vortices: [(axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float,
                             offset: SIMD3<Float>, audio: AudioProcessing?,   // F624: 오디오반응 속도 배수
-                            centerForce: Float, ring: VortexRing?, flags: Int)]
+                            centerForce: Float, ring: VortexRing?, flags: Int, controlPoint: Int?)]
     // F628: 난류 흐름장 배열(전 turbulence 오퍼레이터 누적 — 종전 "first wins"는 2번째를 드롭).
     // 파티클별 속도/위상 범위(smin/smax, pmin/pmax)는 스폰 시 뽑아 고정, 나머지는 장 파라미터.
     private let turbulences: [(smin: Float, smax: Float, scale: Float, timeScale: Float,
@@ -178,7 +200,7 @@ public struct ParticleSimulator {
     // invRange/redDelta 는 실물 ctor(0x1401cd38d–0x1401cd3e7)가 굽는 파생값을 그대로 옮긴 것 —
     // 퇴화 케이스 대입값(각각 −0.0 / 1.0)까지 원본과 같다.
     private let reduceMoves: [(target: SIMD3<Float>, distIn: Float, invRange: Float,
-                               redIn: Float, redDelta: Float)]
+                               redIn: Float, redDelta: Float, controlPoint: Int?)]
     // 트레일 히스토리 설정(스프라이트면 0 → 미기록).
     private let trailSamples: Int
     // controlpointattract/vortex 가 있으면 속도 상한(폭주 방지, px/s).
@@ -242,10 +264,39 @@ public struct ParticleSimulator {
     /// 라이브 오디오 스펙트럼(렌더러가 매 프레임 주입). nil/무신호(silent) = 오디오반응 스킵 → 기존 rate.
     public var currentAudio: AudioSpectrum16?
 
-    public init(def: ParticleSystemDef, seed: UInt64) {
+    public init(def: ParticleSystemDef, seed: UInt64,
+                instanceOverrideAnimations: [String: PropertyAnimation] = [:]) {
         self.def = def
         self.rng = SplitMix64(seed: seed)
         self.acc = Array(repeating: 0, count: def.emitters.count)
+        // 주 스트림은 authored step으로 만들고, 두 번째 스트림 opcode 4는 `_step` 시작에 패치한다.
+        self.mapSequenceBetweenSolvers = def.mapSequenceBetween.map(MapSequenceBetweenSolver.init)
+        self.mapSequenceAroundSolvers = def.mapSequenceAround.map(MapSequenceAroundSolver.init)
+        self.runtimeControlPoints = def.controlPoints
+        let positionPrefix = "controlpoint"
+        self.controlPointPositionAnimations = instanceOverrideAnimations.compactMap { key, animation in
+            guard key.hasPrefix(positionPrefix),
+                  let slot = Int(key.dropFirst(positionPrefix.count)),
+                  key == "\(positionPrefix)\(slot)",
+                  def.controlPoints.indices.contains(slot),
+                  def.controlPointFlags.indices.contains(slot),
+                  def.controlPointFlags[slot] & ParticleControlPointFlag.overrideBlockMask == 0
+            else { return nil }
+            return (slot: slot, animation: animation)
+        }.sorted { $0.slot < $1.slot }
+        let anglePrefix = "controlpointangle"
+        self.controlPointAngleAnimations = instanceOverrideAnimations.compactMap { key, animation in
+            guard key.hasPrefix(anglePrefix),
+                  let slot = Int(key.dropFirst(anglePrefix.count)),
+                  key == "\(anglePrefix)\(slot)",
+                  def.controlPointFrameAngles.indices.contains(slot),
+                  def.controlPointFlags.indices.contains(slot),
+                  def.controlPointFlags[slot] & ParticleControlPointFlag.overrideBlockMask == 0
+            else { return nil }
+            return (slot: slot, animation: animation)
+        }.sorted { $0.slot < $1.slot }
+        self.runtimeControlPointFrameAngles = def.controlPointFrameAngles
+        self.previousRuntimeControlPoints = def.controlPoints
 
         var mv: [(SIMD3<Float>, Float, Bool)] = []
         var ang: [(SIMD3<Float>, Float)] = []
@@ -257,18 +308,22 @@ public struct ParticleSimulator {
         // 오실레이터는 "첫 인스턴스만 채택" 규약이라 창도 그 인스턴스의 것을 함께 굳힌다.
         var opBlend = BlendWindow.identity
         var oaBlend = BlendWindow.identity
-        var attr: [(Float, Float, SIMD3<Float>, Bool, Int)] = []
-        var mdist: [(Float, Float, SIMD3<Float>)] = []
+        var controlPointByOperator: [Int: Int] = [:]
+        for binding in def.controlPointBindings where controlPointByOperator[binding.op] == nil {
+            controlPointByOperator[binding.op] = binding.cp
+        }
+        var attr: [(Float, Float, SIMD3<Float>, Bool, Int, Int?)] = []
+        var mdist: [(Float, Float, SIMD3<Float>, Int?)] = []
         var mdistBtw: [(Int, Int)] = []
         var boids: [(Float, Float, Float, Float, Float, Float, Int)] = []
-        var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>, Float, VortexRing?, Int)] = []
+        var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>, Float, VortexRing?, Int, Int?)] = []
         // F628: 전 turbulence 오퍼레이터 누적(종전 first-wins 드롭 — 3000562427 의 지배 성분 손실).
         var turb: [(Float, Float, Float, Float, SIMD3<Float>, Float, Float, BlendWindow)] = []
         var osz: (Float, Float, Float, Float, Float, Float)? = nil
         var ac: [(st: Float, et: Float, sv: Float, ev: Float)] = []
         var rms: [CachedRemap] = []
         var caps: [(Float, BlendWindow)] = []
-        var rmv: [(SIMD3<Float>, Float, Float, Float, Float)] = []
+        var rmv: [(SIMD3<Float>, Float, Float, Float, Float, Int?)] = []
         for (opIdx, op) in def.operators.enumerated() {
             let bw = opIdx < def.operatorBlends.count ? def.operatorBlends[opIdx] : BlendWindow.identity
             switch op {
@@ -284,13 +339,15 @@ public struct ParticleSimulator {
             case let .oscillateAlpha(fmin, fmax, smin, smax, pmin, pmax):
                 if oa == nil { oa = (fmin, fmax, smin, smax, pmin, pmax); oaBlend = bw }
             case let .controlPointAttract(scale, threshold, target, deleteThreshold, flags):
-                attr.append((scale, threshold, s3(target), deleteThreshold, flags))
+                attr.append((scale, threshold, s3(target), deleteThreshold, flags,
+                             controlPointByOperator[opIdx]))
             case let .maintainDistanceToControlPoint(distance, vs, target):
-                mdist.append((distance, vs, s3(target)))
+                mdist.append((distance, vs, s3(target), controlPointByOperator[opIdx]))
             case let .boids(sepThr, nbrThr, maxSpeed, sepF, aliF, cohF, flags):
                 boids.append((sepThr, nbrThr, maxSpeed, sepF, aliF, cohF, flags))
             case let .vortex(axis, dIn, dOut, sIn, sOut, offset, centerForce, ring, flags):
-                vort.append((s3(axis), dIn, dOut, sIn, sOut, s3(offset), centerForce, ring, flags))
+                vort.append((s3(axis), dIn, dOut, sIn, sOut, s3(offset), centerForce, ring, flags,
+                             controlPointByOperator[opIdx]))
             case let .turbulence(smin, smax, scale, timeScale, mask, pmin, pmax):
                 turb.append((smin, smax, scale, timeScale, s3(mask), pmin, pmax, bw))
             case let .oscillateSize(fmin, fmax, smin, smax, pmin, pmax):
@@ -328,7 +385,8 @@ public struct ParticleSimulator {
                 // 세 지점(안쪽·중간·바깥)으로 그 차이를 못박는다.
                 let invRange: Float = dOut == dIn ? 1 : 1 / (dOut - dIn)
                 let redDelta: Float = rOut == rIn ? 1 : (rOut - rIn)
-                rmv.append((s3(target), dIn, invRange, rIn, redDelta))
+                rmv.append((s3(target), dIn, invRange, rIn, redDelta,
+                            controlPointByOperator[opIdx]))
             case let .maintainDistanceBetweenControlPoints(st, en):
                 mdistBtw.append((st, en))
             case .inheritValueFromEvent:
@@ -353,14 +411,17 @@ public struct ParticleSimulator {
         oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
         oscAlphaBlend = oaBlend
         oscPosBlend = opBlend
-        attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2, delete: $0.3, flags: $0.4) }
-        maintainDists = mdist.map { (distance: $0.0, variableStrength: $0.1, target: $0.2) }
+        attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2, delete: $0.3,
+                                 flags: $0.4, controlPoint: $0.5) }
+        maintainDists = mdist.map { (distance: $0.0, variableStrength: $0.1, target: $0.2,
+                                     controlPoint: $0.3) }
         boidsOps = boids.map { (sepThr: $0.0, nbrThr: $0.1, maxSpeed: $0.2,
                                 sepF: $0.3, aliF: $0.4, cohF: $0.5, flags: $0.6) }
         vortices = vort.indices.map { (axis: vort[$0].0, dIn: vort[$0].1, dOut: vort[$0].2,
                                         sIn: vort[$0].3, sOut: vort[$0].4, offset: vort[$0].5,
                                         audio: $0 < def.vortexAudio.count ? def.vortexAudio[$0] : nil,
-                                        centerForce: vort[$0].6, ring: vort[$0].7, flags: vort[$0].8) }   // F624
+                                        centerForce: vort[$0].6, ring: vort[$0].7, flags: vort[$0].8,
+                                        controlPoint: vort[$0].9) }   // F624
         turbulences = turb.map { (smin: $0.0, smax: $0.1, scale: $0.2, timeScale: $0.3,
                                   mask: $0.4, pmin: $0.5, pmax: $0.6, blend: $0.7) }
         oscSizeOp = osz.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
@@ -374,7 +435,8 @@ public struct ParticleSimulator {
             }
         }
         velocityCaps = caps.map { (maxSpeed: $0.0, blend: $0.1) }
-        reduceMoves = rmv.map { (target: $0.0, distIn: $0.1, invRange: $0.2, redIn: $0.3, redDelta: $0.4) }
+        reduceMoves = rmv.map { (target: $0.0, distIn: $0.1, invRange: $0.2, redIn: $0.3,
+                                 redDelta: $0.4, controlPoint: $0.5) }
         trailSamples = def.renderer.trailSampleCount
         speedCap = (attr.isEmpty && vort.isEmpty) ? nil : 5000
         hasEmitterAudio = def.emitterAudio.contains { $0 != nil }
@@ -458,7 +520,12 @@ public struct ParticleSimulator {
     }
 
     private mutating func _step(_ dt: Float) -> [Particle] {
+        refreshMapSequenceBetweenSteps()
         time += dt
+        let hadExternalControlPointUpdate = controlPointsUpdatedBeforeStep
+        controlPointsUpdatedBeforeStep = false
+        updateControlPointPositionAnimations(capturePrevious: !hadExternalControlPointUpdate)
+        updateControlPointAngleAnimations()
         let countBeforeEmission = particles.count
         // 방출(starttime 이후, 자식 원샷/고아는 정지). burst(실물 instantaneous)는 생성 1회 일괄 스폰,
         // rate(연속)와 독립 병행(F621).
@@ -546,6 +613,31 @@ public struct ParticleSimulator {
         stepChildren(dt)
         // 표시 스냅샷.
         return particles.map { display($0) }
+    }
+
+    /// 동적 씬 override는 정적 `value`가 이미 반영된 def 값을 매번 base로 평가한다.
+    /// 직전 runtime 값을 base로 쓰면 relative 트랙이 프레임마다 누적되므로 반드시 def에서 다시 시작한다.
+    private mutating func updateControlPointPositionAnimations(capturePrevious: Bool) {
+        guard !controlPointPositionAnimations.isEmpty else { return }
+        if capturePrevious { previousRuntimeControlPoints = runtimeControlPoints }
+        for item in controlPointPositionAnimations {
+            let base = def.controlPoints[item.slot]
+            runtimeControlPoints[item.slot] = Vec3(
+                x: item.animation.value(component: 0, atTime: time, base: base.x),
+                y: item.animation.value(component: 1, atTime: time, base: base.y),
+                z: item.animation.value(component: 2, atTime: time, base: base.z))
+        }
+    }
+
+    private mutating func updateControlPointAngleAnimations() {
+        guard !controlPointAngleAnimations.isEmpty else { return }
+        for item in controlPointAngleAnimations {
+            let base = def.controlPointFrameAngles[item.slot]
+            runtimeControlPointFrameAngles[item.slot] = Vec3(
+                x: item.animation.value(component: 0, atTime: time, base: base.x),
+                y: item.animation.value(component: 1, atTime: time, base: base.y),
+                z: item.animation.value(component: 2, atTime: time, base: base.z))
+        }
     }
 
     /// 개별 파티클 적분: remap → 힘(attract/vortex) → speedCap → movement → 위치 → 난류 → 각속도 → 트레일.
@@ -750,7 +842,8 @@ public struct ParticleSimulator {
         // maintaindistance → controlpointattract)에 맞춰 위치 적분 뒤에 둔다.
         if !maintainDists.isEmpty {
             for m in maintainDists {
-                let d = particles[k].pos - m.target
+                let target = liveControlPointTarget(m.target, boundTo: m.controlPoint)
+                let d = particles[k].pos - target
                 let len = simd_length(d)
                 guard len > 1e-6 else { continue }   // 실물은 rsqrtps 근사라 0 에서 발산한다
                 // s: `variablestrength ≠ 0` 이면 `clamp01(vs·dt)`(0x1402419a0 `mulss xmm0,
@@ -779,24 +872,41 @@ public struct ParticleSimulator {
         // 실물 핸들러 0x140242058 은 일반형으로
         //     p′ = A + s·û + perp     (p = Ap + t·ûp + perp, s = clamp01(t/|Dp|)·|D|)
         // 를 계산한다 — 즉 이전 프레임 선분 기준으로 분해해 현재 선분에 재매핑하고, 수직 성분은
-        // 월드축 그대로 보존한다(회전시키지 않는다). Waple 의 CP 는 정적이라 A ≡ Ap · B ≡ Bp 이고,
-        // 그러면 û ≡ ûp · L ≡ Lp 이므로 일반형이 아래 축약형으로 붕괴한다:
-        //     t = dot(p − A, û);  p += (clamp(t, 0, L) − t)·û
-        // **CP 가 움직이게 되면 일반형으로 되돌려야 한다.**
+        // 월드축 그대로 보존한다(회전시키지 않는다). 정적 CP면 종전 축약식을 그대로 써
+        // 비트동일 경로를 보존하고, 자식 피드로 CP가 움직이면 일반형을 쓴다.
         //
         // 속도는 건드리지 않는다 — 실물도 위치 배열(0x2b0/0x2b8/0x2c0)에만 쓴다.
         for m in mdistBetween {
-            guard m.start < def.controlPoints.count, m.end < def.controlPoints.count else { continue }
-            let a = s3(def.controlPoints[m.start])
-            let d = s3(def.controlPoints[m.end]) - a
+            guard runtimeControlPoints.indices.contains(m.start),
+                  runtimeControlPoints.indices.contains(m.end),
+                  previousRuntimeControlPoints.indices.contains(m.start),
+                  previousRuntimeControlPoints.indices.contains(m.end) else { continue }
+            let a = s3(runtimeControlPoints[m.start])
+            let b = s3(runtimeControlPoints[m.end])
+            let d = b - a
             let l2 = simd_length_squared(d)
-            // 실물 게이트: |D|² 가 2⁻⁴⁶(≈1.42e-14) 이하면 스킵(0x1402421ff·0x14024220c).
-            // 동봉 `thunderbolt_beam_child` 가 CP0 ≡ CP1 ≡ 원점이라 정확히 이 경로로 빠진다.
+            // 실물 게이트: 현재/직전 |D|² 중 하나라도 2⁻⁴⁶ 이하면 스킵
+            // (`comiss` 두 자리 0x1402421ff·0x14024220c).
             guard l2 > 1.4210854715202004e-14 else { continue }
             let len = l2.squareRoot()
             let u = d / len
-            let t = simd_dot(particles[k].pos - a, u)
-            particles[k].pos += (min(max(t, 0), len) - t) * u
+            let ap = s3(previousRuntimeControlPoints[m.start])
+            let bp = s3(previousRuntimeControlPoints[m.end])
+            if ap == a, bp == b {
+                let t = simd_dot(particles[k].pos - a, u)
+                particles[k].pos += (min(max(t, 0), len) - t) * u
+                continue
+            }
+            let dp = bp - ap
+            let lp2 = simd_length_squared(dp)
+            guard lp2 > 1.4210854715202004e-14 else { continue }
+            let prevLen = lp2.squareRoot()
+            let prevU = dp / prevLen
+            let rel = particles[k].pos - ap
+            let axial = simd_dot(rel, prevU)
+            let perpendicular = rel - axial * prevU
+            let fraction = min(max(axial / prevLen, 0), 1)
+            particles[k].pos = a + fraction * len * u + perpendicular
         }
         // F431/F439: 선형 movement(위 280-283행)와 동형 — force/drag 는 전 오퍼레이터에 누적하고
         // rotation 적분은 스텝당 1회. 종전엔 루프 안에서 적분해 angularmovement N개면 N회 중복
@@ -830,6 +940,12 @@ public struct ParticleSimulator {
         }
         for li in def.children.indices {
             let link = def.children[li]
+            let cpFeed = link.feedsControlPoints
+                ? ParticleControlPointMath.childControlPointFeed(
+                    startIndex: link.controlPointStartIndex,
+                    parentLifetimes: particles.map(\.lifetime),
+                    childControlPointFlags: link.def.controlPointFlags)
+                : []
             var displays: [Particle] = []
             // take-패턴 인플레이스 변이: `for var inst`(값 복사→keep 재조립)는 버퍼 공유 탓에
             // 인스턴스마다 파티클 배열 전체를 매 스텝 COW 복사한다 — GT 스위트 실측 병목.
@@ -839,6 +955,14 @@ public struct ParticleSimulator {
                 if link.trigger == .follow {
                     if let pp = uidPos[insts[i].parentUID] { insts[i].sim.emitOrigin = pp + s3(link.origin) }
                     else { insts[i].sim.emissionPaused = true }   // 고아 — 드레인만
+                }
+                // child CP flags&4는 자기 `parentcontrolpoint`가 가리키는 **부모 시스템 CP**의
+                // 현재 위치/프레임을 매 스텝 받는다. 파스 시점 정적 복사는 최초 base일 뿐이다.
+                insts[i].sim.applyAttachedParentControlPoints(
+                    parentControlPoints: runtimeControlPoints,
+                    parentFrameAngles: runtimeControlPointFrameAngles)
+                if link.feedsControlPoints {
+                    insts[i].sim.applyParentControlPointFeed(cpFeed, parentParticles: particles)
                 }
                 insts[i].sim.currentAudio = currentAudio   // 오디오 하향 전파(무신호면 무영향 → 무회귀)
                 displays.append(contentsOf: insts[i].sim.step(dt))
@@ -853,6 +977,54 @@ public struct ParticleSimulator {
             childStates[li] = insts
             childDisplaysCache[li] = displays
         }
+    }
+
+    /// 부모 파티클의 현재 위치를 자식 CP 작업 슬롯에 공급한다. 실제 번들 thunderbolt 체인의
+    /// `mapsequencebetweencontrolpoints`가 정적인 0,0 대신 이 두 점을 읽는 경로다.
+    private mutating func applyParentControlPointFeed(
+        _ feed: [ParticleControlPointMath.ChildControlPointFeed],
+        parentParticles: [Particle]
+    ) {
+        guard !feed.isEmpty else { return }
+        beginExternalControlPointUpdate()
+        for item in feed
+        where runtimeControlPoints.indices.contains(item.slot)
+            && parentParticles.indices.contains(item.parentParticle) {
+            let p = parentParticles[item.parentParticle].pos
+            runtimeControlPoints[item.slot] = Vec3(x: p.x, y: p.y, z: p.z)
+        }
+    }
+
+    /// CP `flags & 4`: child slot을 `parentcontrolpoint`가 가리키는 부모 시스템의 live CP에 붙인다.
+    /// Waple의 현재 3×3+translation 모델에서는 world/world 및 identity local/local에 정확하고,
+    /// 비항등 mixed-space 4×4 bridge는 기존 정적 경로와 같은 근사 경계를 유지한다.
+    private mutating func applyAttachedParentControlPoints(
+        parentControlPoints: [Vec3],
+        parentFrameAngles: [Vec3]
+    ) {
+        let count = min(runtimeControlPoints.count,
+                        def.controlPointFlags.count,
+                        def.controlPointParent.count)
+        var beganUpdate = false
+        for slot in 0..<count where def.controlPointFlags[slot] & ParticleControlPointFlag.parentAttached != 0 {
+            let parent = def.controlPointParent[slot]
+            guard parentControlPoints.indices.contains(parent) else { continue }
+            if !beganUpdate {
+                beginExternalControlPointUpdate()
+                beganUpdate = true
+            }
+            runtimeControlPoints[slot] = parentControlPoints[parent]
+            if runtimeControlPointFrameAngles.indices.contains(slot),
+               parentFrameAngles.indices.contains(parent) {
+                runtimeControlPointFrameAngles[slot] = parentFrameAngles[parent]
+            }
+        }
+    }
+
+    private mutating func beginExternalControlPointUpdate() {
+        guard !controlPointsUpdatedBeforeStep else { return }
+        previousRuntimeControlPoints = runtimeControlPoints
+        controlPointsUpdatedBeforeStep = true
     }
 
     // MARK: - 이미터 방출 창
@@ -1002,6 +1174,31 @@ public struct ParticleSimulator {
         return sp.x
     }
 
+    /// 이미터가 참조하는 active CP 프레임. 평행이동은 항상 적용하지만, 3×3 기저는 실물 게이트
+    /// `(system.flags & 1) != 0 || controlpoint != 0`일 때만 적용한다(CP0 로컬공간 예외).
+    private func emitterControlPointFrame(_ emitterIndex: Int) ->
+        (translation: SIMD3<Float>, rotation: CPMatrix4, appliesBasis: Bool) {
+        let raw = def.emitterControlPoints.indices.contains(emitterIndex)
+            ? def.emitterControlPoints[emitterIndex]
+            : 0
+        let slot = ParticleControlPointLimits.clampIndex(raw)
+        let translation = runtimeControlPoints.indices.contains(slot)
+            ? s3(runtimeControlPoints[slot])
+            : SIMD3<Float>(repeating: 0)
+        let rotation = runtimeControlPointFrameAngles.indices.contains(slot)
+            ? ParticleControlPointMath.rotation(angles: runtimeControlPointFrameAngles[slot])
+            : .identity
+        return (translation, rotation, simulatesInWorldSpace || slot != 0)
+    }
+
+    /// CPMatrix4의 행벡터 규약으로 방향/변위를 3×3에 곱한다. row3 평행이동은 호출자가 따로 더해
+    /// 속도에는 절대 섞이지 않는다.
+    private func applyEmitterBasis(_ value: SIMD3<Float>, _ matrix: CPMatrix4) -> SIMD3<Float> {
+        SIMD3(value.x * matrix[0, 0] + value.y * matrix[1, 0] + value.z * matrix[2, 0],
+              value.x * matrix[0, 1] + value.y * matrix[1, 1] + value.z * matrix[2, 1],
+              value.x * matrix[0, 2] + value.y * matrix[1, 2] + value.z * matrix[2, 2])
+    }
+
     private mutating func spawn(_ emitter: Emitter, index: Int) -> Particle {
         var p = Particle()
         switch emitter {
@@ -1013,29 +1210,54 @@ public struct ParticleSimulator {
             if sg.x != 0 { dir.x = sg.x > 0 ? abs(dir.x) : -abs(dir.x) }
             if sg.y != 0 { dir.y = sg.y > 0 ? abs(dir.y) : -abs(dir.y) }
             if sg.z != 0 { dir.z = sg.z > 0 ? abs(dir.z) : -abs(dir.z) }
-            p.pos = s3(origin) + dir * rng.range(dmin, dmax)
+            let frame = emitterControlPointFrame(index)
+            let localDisplacement = dir * rng.range(dmin, dmax)
+            let framedDisplacement = frame.appliesBasis
+                ? applyEmitterBasis(localDisplacement, frame.rotation)
+                : localDisplacement
+            // 실물은 local·M3 뒤 row3(CP 평행이동), 그 뒤 emitter.origin을 더한다.
+            p.pos = s3(origin) + frame.translation + framedDisplacement
             // F620: 이미터 speedmin/speedmax = 방출 방향(dir) 초기속도(WE 문서: movement 오퍼레이터와
             // 결합하는 particle speed). 실물도 이미터가 먼저 속도를 쓰고 그 뒤 스폰 VM 이 돈다 —
             // 그래서 `velocityrandom` 핸들러가 `addss` 로 **누적**한다(0x14023bbea–0x14023bbf7).
             // 종전에는 그 이니셜라이저가 여기 초기속도를 덮어썼다(apply 의 velocityRandom 주석 참조).
             let speed = emitterSpeedSample(index)
-            if speed != 0 { p.vel = dir * speed }
+            if speed != 0 {
+                let framedDirection = frame.appliesBasis
+                    ? normalizeSafe(applyEmitterBasis(dir, frame.rotation))
+                    : dir
+                p.vel = framedDirection * speed
+            }
         case let .box(origin, dmax, _, _):
             let d = s3(dmax)
+            let frame = emitterControlPointFrame(index)
+            let localDisplacement: SIMD3<Float>
             // F627: distancemin 지정 시 두 코너의 성분별 AABB(음수/역순 축은 성분별 min/max 정규화 —
             // 실물 "500 500 0"~"1000 256 0" 처럼 min>max 축 존재). 부재 시 ±distanceMax 대칭 레거시.
             // 두 경로 모두 드로 3개라 RNG 시퀀스 길이는 동일.
             if index < def.boxDistanceMin.count, let mn = def.boxDistanceMin[index] {
                 let lo = s3(mn)
-                p.pos = s3(origin) + SIMD3(rng.range(min(lo.x, d.x), max(lo.x, d.x)),
-                                           rng.range(min(lo.y, d.y), max(lo.y, d.y)),
-                                           rng.range(min(lo.z, d.z), max(lo.z, d.z)))
+                localDisplacement = SIMD3(rng.range(min(lo.x, d.x), max(lo.x, d.x)),
+                                          rng.range(min(lo.y, d.y), max(lo.y, d.y)),
+                                          rng.range(min(lo.z, d.z), max(lo.z, d.z)))
             } else {
-                p.pos = s3(origin) + SIMD3(rng.range(-d.x, d.x), rng.range(-d.y, d.y), rng.range(-d.z, d.z))
+                localDisplacement = SIMD3(rng.range(-d.x, d.x),
+                                          rng.range(-d.y, d.y),
+                                          rng.range(-d.z, d.z))
             }
+            let framedDisplacement = frame.appliesBasis
+                ? applyEmitterBasis(localDisplacement, frame.rotation)
+                : localDisplacement
+            p.pos = s3(origin) + frame.translation + framedDisplacement
             // F620(box): 방향 정의가 없어 균등 랜덤 방향 근사 — 코퍼스 box speed 는 전부 0(묵발동).
             let speed = emitterSpeedSample(index)
-            if speed != 0 { p.vel = randomUnitVector() * speed }
+            if speed != 0 {
+                let localDirection = randomUnitVector()
+                let framedDirection = frame.appliesBasis
+                    ? normalizeSafe(applyEmitterBasis(localDirection, frame.rotation))
+                    : localDirection
+                p.vel = framedDirection * speed
+            }
         }
         p.pos += emitOrigin   // 자식 인스턴스: 부모 위치(또는 링크 origin) 오프셋. 루트는 0.
         p.uid = nextUID; nextUID += 1
@@ -1053,7 +1275,22 @@ public struct ParticleSimulator {
         // (0x14023b5c0)보다 **먼저**이고 그 사이에 분기가 없다 — `Particle.sharedRandom` 주석 참조.
         // (`randomframe` 드로가 이 앞에 오는 것은 Waple 관례다 — 실물 대응 위치는 미확인.)
         p.sharedRandom = rng.nextFloat()
-        for ini in def.initializers { apply(ini, to: &p) }
+        // 두 mapsequence 페이로드 배열은 각 타입 선언만 센 순서다. 서로가 사이에 있어도 상대
+        // 인덱스를 소비하지 않으며, 각 선언의 solver는 시스템 상태 배열에서 다음 스폰까지 이어진다.
+        var mapSequenceBetweenIndex = 0
+        var mapSequenceAroundIndex = 0
+        for ini in def.initializers {
+            switch ini {
+            case .mapSequence(_, _, true):
+                applyMapSequenceBetween(mapSequenceBetweenIndex, to: &p)
+                mapSequenceBetweenIndex += 1
+            case .mapSequence(_, _, false):
+                applyMapSequenceAround(mapSequenceAroundIndex, to: &p)
+                mapSequenceAroundIndex += 1
+            default:
+                apply(ini, to: &p)
+            }
+        }
         // ── 아래 다섯은 **난수를 뽑지 않는다.** 실물은 전부 `sharedRandom` 하나의 아핀이다. ──
         // 종전에는 파티클당 최대 10회를 더 뽑아 오퍼레이터끼리 상관을 없앴는데, 실물은 같은 r 을
         // 공유해 **진동 3종·난류·리맵이 서로 상관된다** — 같은 파티클은 셋 다 빠르거나 셋 다 느리다.
@@ -1119,10 +1356,24 @@ public struct ParticleSimulator {
     ///  · 사거리 — 종전은 무한(threshold 밖에서도 1/r 로 계속 당김), 실물은 **하드 컷오프**
     ///  · 근접부 — 종전은 threshold 안쪽 전부 1.0 포화, 실물은 dist→0 에서 1, threshold 에서 **0**
     /// 즉 `threshold` 는 "포화 반경" 이 아니라 **작용 반경 겸 선형 감쇠 스케일**이다.
+    /// 정적 target에는 파스 시점 CP가 이미 들어 있다. 현재 CP와 정적 CP의 차만 더하면 authored
+    /// offset(vortex)을 보존하면서 위치 애니메이션과 부모 live feed를 같은 경로로 반영할 수 있다.
+    /// CP가 움직이지 않았으면 원본 target을 그대로 반환해 기존 Float 연산을 비트 단위로 보존한다.
+    private func liveControlPointTarget(_ staticTarget: SIMD3<Float>, boundTo slot: Int?) -> SIMD3<Float> {
+        guard let slot,
+              runtimeControlPoints.indices.contains(slot),
+              def.controlPoints.indices.contains(slot)
+        else { return staticTarget }
+        let current = s3(runtimeControlPoints[slot])
+        let base = s3(def.controlPoints[slot])
+        guard current != base else { return staticTarget }
+        return staticTarget + (current - base)
+    }
+
     private func applyAttract(_ a: (scale: Float, threshold: Float, target: SIMD3<Float>,
-                                    delete: Bool, flags: Int),
+                                    delete: Bool, flags: Int, controlPoint: Int?),
                               to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dtScaled: Float) -> Bool {
-        let d = a.target - pos
+        let d = liveControlPointTarget(a.target, boundTo: a.controlPoint) - pos
         let dist = simd_length(d)
         // **[미구현 — 실물과 다르다]** 실물의 삭제는 (a) `flags & 1` 게이트(0x14024193d)를 지나고
         // (b) 점–점이 아니라 **직전 위치→현재 위치 선분과 CP 의 최단거리 제곱**을
@@ -1159,9 +1410,9 @@ public struct ParticleSimulator {
     /// 60fps 에서 r=1.67→1 로 정지다. 바깥(reductionouter 기본 0)에서는 r=0 → 무동작.
     /// rsqrtps 근사는 재현하지 않고 정확한 sqrt 를 쓴다(상대오차 ≤ 1.5e-3, 램프 클램프 안에서 무의미).
     private func applyReduceMovement(_ r: (target: SIMD3<Float>, distIn: Float, invRange: Float,
-                                           redIn: Float, redDelta: Float),
+                                           redIn: Float, redDelta: Float, controlPoint: Int?),
                                      to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float) {
-        let len = simd_length(pos - r.target)
+        let len = simd_length(pos - liveControlPointTarget(r.target, boundTo: r.controlPoint))
         let t = max(0, min(1, (len - r.distIn) * r.invRange))
         let reduction = max(0, min(1, (r.redIn + t * r.redDelta) * dt))
         if reduction > 0 { vel *= (1 - reduction) }
@@ -1176,13 +1427,14 @@ public struct ParticleSimulator {
     /// vortex_v2 전용, **`flags & 4`** 게이트. 힘 수식은 아래 본문 주석대로 아직 [추정]이다.
     private func applyVortex(_ v: (axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float,
                                    offset: SIMD3<Float>, audio: AudioProcessing?,
-                                   centerForce: Float, ring: VortexRing?, flags: Int),
+                                   centerForce: Float, ring: VortexRing?, flags: Int, controlPoint: Int?),
                              to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float, dtScaled: Float,
                              audioScale: Float) {
         // 축은 **파스 시점에** 정규화된다(0x1401cdc16–0x1401cdc58). |axis| ≤ 0.001 이면 스킵이
         // 아니라 **(0,0,1) 로 대체**한다 — 종전의 `guard … else { return }`(무동작)와 다르다.
         let axisN = simd_length(v.axis) > 0.001 ? normalizeSafe(v.axis) : SIMD3<Float>(0, 0, 1)
-        let rel = pos - v.offset
+        let center = liveControlPointTarget(v.offset, boundTo: v.controlPoint)
+        let rel = pos - center
         // **flags bit0 이 없으면 축 성분을 빼지 않는다** — 런타임이 `andps xmm2, mask`(0x140243316)
         // 로 proj 를 통째로 0 으로 만들어 radial 이 3D 전체가 된다. 기본 flags = 0 이라 이쪽이
         // 기본 경로다(종전엔 항상 투영했다).
@@ -1229,7 +1481,7 @@ public struct ParticleSimulator {
         // 실물이 `divps xmm0, [rbp+0xf0]`(= 생 dt 4레인) @0x14024345c 로 나눈다. 섞지 말 것.
         var delta = tangent * (speed * audioScale) * dtScaled
         if v.centerForce != 0, dt > 0 {
-            let relP = (pos + vel * dt) - v.offset
+            let relP = (pos + vel * dt) - center
             let radialP = relP - axisN * proj
             let distP = simd_length(radialP)
             if distP > 1e-6 {
@@ -1267,6 +1519,73 @@ public struct ParticleSimulator {
 
     private mutating func randomRange(_ min: Float, _ max: Float, exponent: Float) -> Float {
         min + (max - min) * randomFactor(exponent: exponent)
+    }
+
+    /// opid 14 결과를 실물 SoA 쓰기 슬롯과 같은 스폰 상태에 반영한다. 파서가 만든 def에서는
+    /// initializer/spec/solver 수가 항상 맞지만, 직접 조립한 def도 허용하므로 불일치는 무동작으로 둔다.
+    private mutating func applyMapSequenceBetween(_ index: Int, to p: inout Particle) {
+        guard mapSequenceBetweenSolvers.indices.contains(index),
+              def.mapSequenceBetween.indices.contains(index) else { return }
+        let spec = def.mapSequenceBetween[index]
+        guard runtimeControlPoints.indices.contains(spec.cpStart),
+              runtimeControlPoints.indices.contains(spec.cpEnd) else { return }
+
+        // 배열 원소의 mutating 호출과 self의 다른 필드 읽기가 겹치지 않게 입력을 먼저 캡처한다.
+        let a = s3(runtimeControlPoints[spec.cpStart])
+        let b = s3(runtimeControlPoints[spec.cpEnd])
+        var solver = mapSequenceBetweenSolvers[index]
+        let output = solver.apply(position: p.pos, velocity: p.vel, baseSize: p.initialSize,
+                                  a: a, b: b, spec: spec,
+                                  systemWorldSpace: simulatesInWorldSpace)
+        mapSequenceBetweenSolvers[index] = solver
+
+        p.pos = output.position
+        p.vel = output.velocity
+        // 핸들러는 기준 size(+0x278)를 갱신한다. 표시 size는 매 step 기준 size에서 재파생되므로
+        // 스폰 시 둘을 함께 맞추고 이후 size 이니셜라이저/오퍼레이터가 정상 순서로 덮도록 둔다.
+        p.initialSize = output.baseSize
+        p.size = output.baseSize
+    }
+
+    /// opid 13 결과를 스폰 상태에 반영한다. `t`/`step`은 선언 레코드의 상태라 solver를
+    /// 파티클마다 다시 만들지 않고 배열에 되쓴다.
+    private mutating func applyMapSequenceAround(_ index: Int, to p: inout Particle) {
+        guard mapSequenceAroundSolvers.indices.contains(index),
+              def.mapSequenceAround.indices.contains(index) else { return }
+        let spec = def.mapSequenceAround[index]
+        guard runtimeControlPoints.indices.contains(spec.controlPoint) else { return }
+
+        // 원본 호출 순서가 z → x → y다. speed가 전부 0이어도 세 호출은 생략하지 않는다.
+        // 이니셜라이저 뒤쪽이 같은 스트림을 이어 쓰므로 결과가 0인 경우에도 소비 길이가 계약이다.
+        let randomZ = rng.nextFloat()
+        let randomX = rng.nextFloat()
+        let randomY = rng.nextFloat()
+        let cp = s3(runtimeControlPoints[spec.controlPoint])
+        let frame = runtimeControlPointFrameAngles.indices.contains(spec.controlPoint)
+            ? ParticleControlPointMath.rotation(angles: runtimeControlPointFrameAngles[spec.controlPoint])
+            : .identity
+        var solver = mapSequenceAroundSolvers[index]
+        let output = solver.apply(position: p.pos, velocity: p.vel,
+                                  controlPoint: cp,
+                                  frameRotation: frame,
+                                  randomXYZ: SIMD3(randomX, randomY, randomZ),
+                                  spec: spec)
+        mapSequenceAroundSolvers[index] = solver
+        p.pos = output.position
+        p.vel = output.velocity
+    }
+
+    /// 보조 스트림 opcode 4는 시스템 업데이트마다 opid 14의 step을 양수로 다시 쓴다.
+    /// producer 게이트가 닫힌 선언은 `nil`이라 mirror가 뒤집은 기존 부호를 그대로 보존한다.
+    private mutating func refreshMapSequenceBetweenSteps() {
+        for index in mapSequenceBetweenSolvers.indices {
+            guard def.mapSequenceBetween.indices.contains(index),
+                  let step = def.mapSequenceBetween[index].opcode4Step(
+                      instanceCountMultiplier: def.instanceCountMultiplier,
+                      systemFlags: def.flags
+                  ) else { continue }
+            mapSequenceBetweenSolvers[index].applyOpcode4Step(step)
+        }
     }
 
     private mutating func apply(_ ini: Initializer, to p: inout Particle) {
@@ -1407,11 +1726,9 @@ public struct ParticleSimulator {
             // 밖에서 이미 막힌다. 19선언 전부 `animationmode` 부재라 randomframe 과도 안 겹친다.
             // 근거 전문은 `Initializer.mapSequence` 주석(ParticleSystem.swift).
             //
-            // **위치 산식은 여전히 [미배선]이다.** 실물 두 암은 위치를 옮기는데
-            // (`MapSequenceBetweenSolver` 가 그 산술을 들고 오라클 27건으로 잠겨 있다),
-            // 배선하면 **화면이 실제로 바뀌므로**(동봉 between 12선언 중 8선언이 `flags & 4` 로
-            // 크기까지 줄인다) 맥 A/B 캡처 전까지 남긴다. 그때까지 이 케이스는 **무동작**이다 —
-            // 근거 없는 값을 쓰는 것보다 아무것도 안 쓰는 쪽이 실물에 가깝다.
+            // **[2026-08-31] 두 mapsequence는 spawn 루프가 이 switch에 들어오기 전에 각 선언별
+            // solver로 처리한다.** 파서가 만든 값은 여기 도달하지 않는다. 이 방어 no-op은 직접 조립한
+            // 불완전 def를 위한 것이며, 어느 분기도 시퀀스 슬롯을 건드리지 않는다.
             break
         case let .positionOffsetRandom(directions, sign, scale, distance, timescale, octaves):
             // fBm 노이즈 변위. **RNG 드로 0** — 실물 핸들러 0x14023c09a 에 난수 호출이 없다
@@ -1475,7 +1792,9 @@ public struct ParticleSimulator {
             // 파스에 2π 곱셈이 없다). 종전의 `2π·f·(age/lifetime)` 해석은 수명이 긴 파티클에서
             // 사실상 정지하고 짧은 파티클에서 앨리어싱했다.
             let osc01 = 0.5 * (1 + sin(p.oscSizeFreq * (p.age + p.oscSizePhase)))
-            d.size *= lerp(os.smin, os.smax, osc01)
+            // WE 는 스폰 프롤로그의 공용 난수 r로 scale span 자체를 줄인다:
+            // factor = smin + r * (smax - smin) * 0.5 * (1 + sin(theta)).
+            d.size *= os.smin + p.sharedRandom * (os.smax - os.smin) * osc01
         }
         // color
         d.color = p.initialColor
@@ -1490,12 +1809,11 @@ public struct ParticleSimulator {
             a *= lerp(op.sv, op.ev, changeProgress(n, op.st, op.et))
         }
         if let oa = oscAlphaOp {
-            // 자매 oscillateSize(위 sizeOp 분기)와 동형 직접보간 — scaleMin/Max 는 파티클별 랜덤화 없이
-            // def 고정값을 그대로 보간 양끝으로 쓴다(F184: 종전 "1 - scale*osc" 감산식은 peak 가 항상 1
-            // 로 고정되고 trough 만 scale 로 눌리는 별개 수식이었다).
+            // 자매 oscillateSize(위 sizeOp 분기)와 동형. 공용 난수 r이 진폭 span에도 걸린다.
+            // F184의 종전 "1 - scale*osc" 감산식은 peak가 항상 1인 별개 수식이었다.
             // **[2026-08-20 F832 반증]** frequency 는 rad/s, phase 는 초 — 위 sizeOp 분기 주석 참조.
             let osc01 = 0.5 * (1 + sin(p.oscAlphaFreq * (p.age + p.oscAlphaPhase)))
-            var f = lerp(oa.smin, oa.smax, osc01)
+            var f = oa.smin + p.sharedRandom * (oa.smax - oa.smin) * osc01
             // G-C2-03: 배율 자리의 가중(`f = 1 + w·(f₀ − 1)`). 동봉 `fireworks3hit` 이 이 경로다.
             let w = oscAlphaBlend.weight(lifeFraction: n)
             if w != 1 { f = 1 + w * (f - 1) }
@@ -1881,7 +2199,7 @@ public struct ParticleSimulator {
 
     /// remapValueEx 입력 CP 룩업(범위 밖 id → 원점).
     private func remapCP(_ id: Int) -> SIMD3<Float> {
-        id >= 0 && id < def.controlPoints.count ? s3(def.controlPoints[id]) : SIMD3(0, 0, 0)
+        runtimeControlPoints.indices.contains(id) ? s3(runtimeControlPoints[id]) : SIMD3(0, 0, 0)
     }
 
     /// remapValueEx **값 산출**(순수 — RNG 無, 스폰 시드 remapPhase 만 참조).
@@ -2159,11 +2477,17 @@ private func changeProgress(_ n: Float, _ st: Float, _ et: Float) -> Float {
     if span == 0 { return n >= st ? 1 : 0 }
     return max(0, min(1, (n - st) / span))
 }
-/// alphaFade: fadeIn(수명 비율) 동안 0→1, fadeOut(말미 비율) 동안 1→0.
+/// alphaFade: `fadeInTime`까지 0→1, `fadeOutTime`부터 1→0.
+/// 두 값은 모두 정규화 수명상의 경계 시각이다. WE의 분기 순서를 그대로 유지한다.
 private func fadeFactor(_ n: Float, _ fin: Float, _ fout: Float) -> Float {
-    let i = fin > 0 ? max(0, min(1, n / fin)) : 1
-    let o = fout > 0 ? max(0, min(1, (1 - n) / fout)) : 1
-    return i * o
+    if n < fin {
+        return fin != 0 ? max(0, min(1, n / fin)) : 1
+    }
+    if fout < n {
+        let span = 1 - fout
+        return span != 0 ? max(0, min(1, (1 - n) / span)) : 1
+    }
+    return 1
 }
 
 // MARK: - mapsequencebetweencontrolpoints 산술 (opid 14, 핸들러 0x14023ca93–0x14023ce53)
@@ -2171,15 +2495,14 @@ private func fadeFactor(_ n: Float, _ fin: Float, _ fout: Float) -> Float {
 /// `mapsequencebetweencontrolpoints` 의 **런타임 산술 전문**. 실물 핸들러를 명령 순서 그대로
 /// 옮겼다(이 저장소에서 직접 다시 떴다 — 함정 16).
 ///
-/// **왜 시뮬에 배선돼 있지 않은가.** 이 이니셜라이저는 스폰된 파티클을 `CP[start]→CP[end]`
-/// 선분 위로 **옮긴다**. 즉 배선하면 화면이 바뀐다. 이 컨테이너에는 Metal 이 없어 A/B 캡처가
-/// 불가능하고, 동봉·설치 두 코퍼스에서 `between` 선언 **12건 중 8건**이 `flags & 4` 를 세워
-/// 크기까지 `(1−0.9) + 0.9·arc` 로 줄인다(양 끝에서 원래의 10%). 그래서 **산술만 먼저 잠근다** —
-/// 배선은 맥에서 A/B 를 뜬 뒤다(`docs/re/particle-control-points.md` §9).
+/// **[2026-08-31 배선 완료]** `ParticleSimulator`가 선언별 solver를 시스템 수명 동안 보존하고,
+/// 스폰 순서대로 이 함수를 호출해 위치·속도·기준 크기를 되쓴다. burst 3개의 `t=0,0.5,1`과
+/// 다중 선언/around 사이 순서 보존은 `ParticleMapSequenceOracleTests`의 통합 테스트가 잠근다.
 ///
 /// **누산기 `t` 는 파티클이 아니라 이 이니셜라이저 인스턴스의 상태다.** 실물은 레코드
 /// 페이로드 `+0x04`(`t`) / `+0x00`(`step`)에 들고 스폰마다 갱신한다 — 파티클 위치에서
-/// 유도하는 값이 아니다. 그래서 이 타입이 `mutating` 으로 그 둘을 들고 간다.
+/// 유도하는 값이 아니다. 그래서 이 타입이 `mutating` 으로 그 둘을 들고 가며 시뮬레이터가
+/// 파티클마다 재생성하지 않고 선언별 배열에 저장한다.
 ///
 /// ```text
 /// A    = row3(CP[start])                                   0x14023caf1
@@ -2232,6 +2555,9 @@ public struct MapSequenceBetweenSolver: Equatable {
     public init(spec: MapSequenceBetweenSpec) { self.t = 0; self.step = spec.step }
     /// 임의 상태에서 재개(테스트·직렬화용).
     public init(t: Float, step: Float) { self.t = t; self.step = step }
+
+    /// 두 번째 스트림 opcode 4의 페이로드 쓰기. 누산기 `t`는 건드리지 않는다.
+    mutating func applyOpcode4Step(_ step: Float) { self.step = step }
 
     /// - Parameters:
     ///   - position: 스폰 직후 파티클 위치.
@@ -2294,5 +2620,135 @@ public struct MapSequenceBetweenSolver: Equatable {
             nt = -nt                            // 0x14023ce3a
         }
         t = nt
+    }
+}
+
+/// `mapsequencearoundcontrolpoint`(opid 13)의 선언별 런타임 레코드.
+///
+/// 위치식은 원본 `wallpaper64.exe`의 `0x14023c4cf`–`0x14023c977`을 옮긴 것이다.
+/// 파서가 만든 세 기저 중 `D`는 저작 axis, `B`는 그 축에 수직인 접선 시작축,
+/// `C = D × B`이며, identity CP 프레임에서 원 둘레 방향은 `cos(theta)·C + sin(theta)·B`다.
+public struct MapSequenceAroundSolver: Equatable {
+    /// 레코드 `+0x04`에서 시작하는 step, `+0x08`의 누산기 t에 대응한다.
+    public private(set) var t: Float
+    public private(set) var step: Float
+
+    public struct Output: Equatable {
+        public var position: SIMD3<Float>
+        public var velocity: SIMD3<Float>
+        /// `boundsMin + t·boundsSpan`(진단/오라클용).
+        public var sequence: Float
+    }
+
+    public init(spec: MapSequenceAroundSpec) {
+        self.t = 0
+        self.step = spec.step
+    }
+
+    public init(t: Float, step: Float) {
+        self.t = t
+        self.step = step
+    }
+
+    public mutating func apply(position: SIMD3<Float>,
+                               velocity: SIMD3<Float>,
+                               controlPoint cp: SIMD3<Float>,
+                               frameRotation: CPMatrix4 = .identity,
+                               randomXYZ random: SIMD3<Float>,
+                               spec: MapSequenceAroundSpec) -> Output {
+        let axis = SIMD3(spec.axis.x, spec.axis.y, spec.axis.z)
+        let d: SIMD3<Float>
+        if axis.x == 0, axis.y == 0, axis.z == 0 {
+            // FUN_1401c19e0: 정확한 영벡터만 +Z로 대체한다(근사 epsilon 게이트가 아니다).
+            d = SIMD3(0, 0, 1)
+        } else {
+            let length = sqrtf((axis.x * axis.x + axis.y * axis.y) + axis.z * axis.z)
+            // 원본은 reciprocal을 한 번 계산한 뒤 mulss/mulps로 세 축에 적용한다.
+            d = axis * (1 / length)
+        }
+
+        let b: SIMD3<Float>
+        let c: SIMD3<Float>
+        if d.x == 0, d.y == 0 {
+            b = SIMD3(1, 0, 0)
+            // FUN_1401c19e0의 수직축 특이분기는 D×B를 계산하지 않는다. D.z의 부호와
+            // 무관하게 두 벡터를 상수로 써서 -Z에서도 C가 +Y로 유지된다.
+            c = SIMD3(0, 1, 0)
+        } else {
+            let raw = SIMD3(d.y, -d.x, Float(0))
+            let length = sqrtf(raw.x * raw.x + raw.y * raw.y)
+            b = raw * (1 / length)
+            // C는 정규화된 B가 아니라 아직 raw인 B 레지스터와 D의 cross다.
+            let cross = SIMD3(d.y * raw.z - d.z * raw.y,
+                              d.z * raw.x - d.x * raw.z,
+                              d.x * raw.y - d.y * raw.x)
+            let crossLength = sqrtf((cross.x * cross.x + cross.y * cross.y) + cross.z * cross.z)
+            c = cross * (1 / crossLength)
+        }
+
+        // 0x140184440: row-vector `v × M3`. CP 평행이동은 별도로 row3에서 읽으므로 여기에는
+        // 회전 3×3만 적용한다. 파티클 JSON angles는 이 행렬에 들어오지 않는다.
+        func rotate(_ v: SIMD3<Float>) -> SIMD3<Float> {
+            SIMD3(v.x * frameRotation[0, 0] + v.y * frameRotation[1, 0] + v.z * frameRotation[2, 0],
+                  v.x * frameRotation[0, 1] + v.y * frameRotation[1, 1] + v.z * frameRotation[2, 1],
+                  v.x * frameRotation[0, 2] + v.y * frameRotation[1, 2] + v.z * frameRotation[2, 2])
+        }
+        let worldD = rotate(d)
+        let worldB = rotate(b)
+        let worldC = rotate(c)
+
+        let q = position - cp
+        let axial = (q.x * worldD.x + q.y * worldD.y) + q.z * worldD.z
+        let perpendicular = q - axial * worldD
+        let radius = sqrtf((perpendicular.x * perpendicular.x + perpendicular.y * perpendicular.y)
+                           + perpendicular.z * perpendicular.z)
+        let sequence = spec.boundsMin + t * spec.boundsSpan
+        // 0x140492864 = 0x40c90fdb. Float.pi를 재계산하지 않고 PE 상수를 그대로 둔다.
+        let theta = sequence * Float(bitPattern: 0x40c90fdb)
+        let sine = sinf(theta)
+        let cosine = cosf(theta)
+        let radial = SIMD3(cosine * worldC.x + sine * worldB.x,
+                           cosine * worldC.y + sine * worldB.y,
+                           cosine * worldC.z + sine * worldB.z)
+        let tangent = SIMD3((-sine) * worldC.x + cosine * worldB.x,
+                            (-sine) * worldC.y + cosine * worldB.y,
+                            (-sine) * worldC.z + cosine * worldB.z)
+        let base = cp + axial * worldD
+        let newPosition = base + radius * radial
+
+        // 파서는 원본 레코드에는 span(max-min)을 굽지만 Swift 모델은 raw max를 보존한다.
+        // 원본의 per-lane 명령 순서도 보존한다: R minY → R spanY → T minX → T spanX →
+        // D minZ → D spanZ. 축별 scalar를 먼저 affine으로 접으면 1 ULP가 달라질 수 있다.
+        let spanX = spec.speedMax.x - spec.speedMin.x
+        let spanY = spec.speedMax.y - spec.speedMin.y
+        let spanZ = spec.speedMax.z - spec.speedMin.z
+        var addedVelocity = radial * spec.speedMin.y
+        addedVelocity += random.y * (radial * spanY)
+        addedVelocity += tangent * spec.speedMin.x
+        addedVelocity += random.x * (tangent * spanX)
+        addedVelocity += worldD * spec.speedMin.z
+        addedVelocity += random.z * (worldD * spanZ)
+
+        advance(mirror: spec.mirror)
+        return Output(position: newPosition, velocity: velocity + addedVelocity, sequence: sequence)
+    }
+
+    /// opid 13의 `0x14023c9c4`–`0x14023ca8e`. between과 달리 repeat는 0 대입이 아니라
+    /// `fmodf(t, 1)`이며, 정확한 1.0은 먼저 한 번 소비된다.
+    public mutating func advance(mirror: Bool) {
+        var next = t + step
+        if next > 1 {
+            if mirror {
+                step = -step
+                next = 1 - (next - 1)
+            } else {
+                next = next.truncatingRemainder(dividingBy: 1)
+            }
+        } else if next < 0 {
+            step = -step
+            next = -next
+        }
+        // NaN은 두 ordered 비교가 모두 거짓이라 그대로 저장된다.
+        t = next
     }
 }

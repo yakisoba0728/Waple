@@ -98,7 +98,7 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
         return d
     }
 
-    /// P⑥: 커스텀 3D 메시 셰이더가 (a) buffer(1)=EngineU(320B) 정본을 바인딩하는지(g_Texture1Resolution
+    /// P⑥: 커스텀 3D 메시 셰이더가 (a) buffer(1)=EngineU(336B) 정본을 바인딩하는지(g_Texture1Resolution
     /// 이 아닌 값을 읽으면 MeshUniform 오독 — normalMatrix/tint 바이트가 텍셀 크기로 잡힘), (b) 정점
     /// bufferIndex 0↔4 충돌을 회피해 머티리얼 상수(buffer(0))가 있어도 파이프라인이 실제로 빌드·드로우
     /// 되는지(충돌 시 try? 가 조용히 nil→스톡 폴백, 커스텀 셰이더가 전혀 반영되지 않음), (c) 보조 텍스처

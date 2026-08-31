@@ -11,6 +11,19 @@ import Accelerate
 ///   :419-424 피크 < threshold → 무음. 어휘: strings/json-keys.txt:424-425(audioinputvolume/threshold).
 final class AudioInputPipelineTests: XCTestCase {
     private let fftSize = 1024
+    private var defaultsSuiteName: String!
+    private var defaults: UserDefaults!
+
+    override func setUpWithError() throws {
+        defaultsSuiteName = "waple.audio-input-tests.\(ProcessInfo.processInfo.processIdentifier).\(UUID().uuidString)"
+        defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsSuiteName))
+        AudioInputSettings.defaults = defaults
+    }
+
+    override func tearDownWithError() throws {
+        AudioInputSettings.defaults = .standard
+        defaults.removePersistentDomain(forName: defaultsSuiteName)
+    }
 
     private func makeSetup() -> (FFTSetup, vDSP_Length)? {
         let log2n = vDSP_Length(round(log2(Double(fftSize))))
@@ -153,9 +166,6 @@ final class AudioInputPipelineTests: XCTestCase {
     /// 정확히 곱수 1.0 을 만들기 때문에(50 × 0.02f, 오차 2.2e-8 < 반ULP 3.0e-8) **기본 설치의
     /// 관측 결과는 변하지 않는다** — 그 등식을 여기서 값으로 못 박는다.
     func testInputSettingDefaultsMatchShippedConfigAndDeriveTheOldDefaults() {
-        let d = UserDefaults.standard
-        d.removeObject(forKey: AudioInputSettings.volumeSettingKey)
-        d.removeObject(forKey: AudioInputSettings.thresholdSettingKey)
         XCTAssertEqual(AudioInputSettings.volumeSetting, 50)      // 배포 config.json
         XCTAssertEqual(AudioInputSettings.thresholdSetting, 0)
         XCTAssertEqual(AudioInputSettings.volume, 1)              // 종전 기본 곱수와 동일
@@ -164,11 +174,6 @@ final class AudioInputPipelineTests: XCTestCase {
 
     /// 라운드트립과 **변환**. 설정을 그대로 곱수로 쓰면 50배, 임계로 쓰면 1000배라는 것도 같이 잠근다.
     func testInputSettingRoundTripAppliesTheEngineScales() {
-        let d = UserDefaults.standard
-        defer {
-            d.removeObject(forKey: AudioInputSettings.volumeSettingKey)
-            d.removeObject(forKey: AudioInputSettings.thresholdSettingKey)
-        }
         AudioInputSettings.volumeSetting = 100
         AudioInputSettings.thresholdSetting = 10
         XCTAssertEqual(AudioInputSettings.volumeSetting, 100)
@@ -188,23 +193,15 @@ final class AudioInputPipelineTests: XCTestCase {
     /// 기본값이 나와야 한다 — 이름을 유지한 채 의미만 바꿨다면 여기서 1.5 가 **설정 1.5**로 읽혀
     /// 곱수가 0.03 이 됐을 것이다(그리고 반대 방향의 마이그레이션이었다면 50배).
     func testLegacyKeysAreNeverRead() {
-        let d = UserDefaults.standard
-        d.set(Float(1.5), forKey: AudioInputSettings.legacyVolumeKey)
-        d.set(Float(0.25), forKey: AudioInputSettings.legacyThresholdKey)
-        d.removeObject(forKey: AudioInputSettings.volumeSettingKey)
-        d.removeObject(forKey: AudioInputSettings.thresholdSettingKey)
-        defer {
-            d.removeObject(forKey: AudioInputSettings.legacyVolumeKey)
-            d.removeObject(forKey: AudioInputSettings.legacyThresholdKey)
-        }
+        defaults.set(Float(1.5), forKey: AudioInputSettings.legacyVolumeKey)
+        defaults.set(Float(0.25), forKey: AudioInputSettings.legacyThresholdKey)
         XCTAssertEqual(AudioInputSettings.volumeSetting, 50)
         XCTAssertEqual(AudioInputSettings.volume, 1)
         XCTAssertEqual(AudioInputSettings.thresholdSetting, 0)
         XCTAssertEqual(AudioInputSettings.threshold, 0)
         // 새 키에 쓴 값은 옛 키를 건드리지 않는다(옛 값은 남아 있고, 읽히지만 않는다).
         AudioInputSettings.volumeSetting = 75
-        defer { d.removeObject(forKey: AudioInputSettings.volumeSettingKey) }
-        XCTAssertEqual(d.float(forKey: AudioInputSettings.legacyVolumeKey), 1.5)
+        XCTAssertEqual(defaults.float(forKey: AudioInputSettings.legacyVolumeKey), 1.5)
         XCTAssertEqual(AudioInputSettings.volume, 1.5, accuracy: 1e-6)   // 75 × 0.02
     }
 
@@ -216,5 +213,19 @@ final class AudioInputPipelineTests: XCTestCase {
         XCTAssertEqual(AudioInputSettings.thresholdSettingKey, "waple.audioInputThresholdSetting")
         XCTAssertNotEqual(AudioInputSettings.legacyVolumeKey, AudioInputSettings.volumeSettingKey)
         XCTAssertNotEqual(AudioInputSettings.legacyThresholdKey, AudioInputSettings.thresholdSettingKey)
+    }
+
+    /// 테스트 주입점의 읽기·쓰기가 실제 고유 suite 로 향하는지 잠근다. 이 테스트를 포함해 클래스 어디도
+    /// 사용자 단위 `UserDefaults.standard` 의 오디오 키를 읽거나 쓰지 않는다.
+    func testInputSettingsUseInjectedDefaultsSuite() {
+        defaults.set(321, forKey: AudioInputSettings.volumeSettingKey)
+        defaults.set(Float(12.5), forKey: AudioInputSettings.thresholdSettingKey)
+        XCTAssertEqual(AudioInputSettings.volumeSetting, 321)
+        XCTAssertEqual(AudioInputSettings.thresholdSetting, 12.5)
+
+        AudioInputSettings.volumeSetting = 88
+        AudioInputSettings.thresholdSetting = 4.25
+        XCTAssertEqual(defaults.integer(forKey: AudioInputSettings.volumeSettingKey), 88)
+        XCTAssertEqual(defaults.float(forKey: AudioInputSettings.thresholdSettingKey), 4.25)
     }
 }

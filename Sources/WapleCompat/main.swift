@@ -19,6 +19,7 @@ struct WapleCompatCLI {
     var visBlastOut: String? = nil       // --vis-blast <csv>: W3-① C8 가시성 상속 코퍼스 블라스트 반경(파스만)
     var remount = false                  // --remount: 프로세스 내 2차 마운트(웜) 비용 측정
     var frameRes = "1920x1080"           // --frame-res WxH: 실해상도 프레임 타이밍(GPU 예산 분모)
+    var snapshotSelfCheckPass: (root: String, out: String)? = nil
 
     mutating func parse(arguments: [String]) throws {
         var iterator = arguments.dropFirst().makeIterator()
@@ -57,6 +58,10 @@ struct WapleCompatCLI {
                 remount = true
             case "--frame-res":
                 frameRes = try value(for: "--frame-res")
+            case "--snapshot-self-check-pass":
+                let root = try value(for: "--snapshot-self-check-pass")
+                let out = try value(for: "--snapshot-self-check-pass")
+                snapshotSelfCheckPass = (root, out)
             case "--help", "-h":
                 printUsage()
                 Foundation.exit(0)
@@ -101,6 +106,12 @@ struct WapleCompatCLI {
     }
 
     func run() throws {
+        if let pass = snapshotSelfCheckPass {
+            let root = NSString(string: pass.root).expandingTildeInPath
+            let out = NSString(string: pass.out).expandingTildeInPath
+            Foundation.exit(SnapshotPipeline.runSelfCheckPass(
+                root: root, outDir: URL(fileURLWithPath: out, isDirectory: true)))
+        }
         let root = NSString(string: rootPath).expandingTildeInPath
         warnIgnoredFlagCombinations()
         if let inv = inventoryOut {

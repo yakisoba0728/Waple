@@ -40,6 +40,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentFolderURL: URL?
     private var currentProjectId: String?
     private var activeVideoProjectIds: [String] = []
+    /// ffmpeg 선변환을 기다리는 apply 세대. 새 apply가 시작되면 이전 완료 콜백은
+    /// 저장된 렌더러/선택 상태를 늦게 덮지 못한다.
+    private var rendererApplyGeneration: UInt64 = 0
+    private var pendingVideoPreparation: VideoPreparationBatch?
+    private var pendingRendererApplyCompletion: ((WallpaperApplyResolution) -> Void)?
 
     private let store = LibraryStore(baseDirectory: LibraryStore.defaultBaseDirectory())
     private let monitorStore = MonitorAssignmentStore(baseDirectory: LibraryStore.defaultBaseDirectory())
@@ -56,6 +61,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `monitors.json`(사용자가 못박은 할당)을 재생목록이 덮어쓰면 그 설정이 무의미해진다.
     /// 그래서 `effectiveAssignment(for:)` 에서 사용자 할당이 **먼저**다.
     private var playlistScreenOverrides: [String: String] = [:]
+    /// 부 화면 후보를 실제 RendererSwap에 먹이되 성공 전 committed override로 보이지 않게 하는
+    /// 트랜잭션 staging 영역. pending 실패/취소면 버리고 성공 때만 위 맵으로 승격한다.
+    private var stagedPlaylistScreenOverrides: [String: String] = [:]
     private lazy var libraryVM = LibraryViewModel(store: store, playlist: playlistStore, monitors: monitorStore,
                                                   favorites: favoritesStore, folders: folderStore)
     private lazy var settingsVM: SettingsViewModel = {
@@ -116,7 +124,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `renderers` 와 **같은 순서·같은 길이**인 화면별 프로젝트. 재생정책은 벽지별 선언을 보므로
     /// 화면마다 다른 벽지가 붙으면 판정도 화면마다 달라진다. 둘을 같은 자리에서 대입해 어긋나지
     /// 않게 한다 — 어긋나면 A 화면 벽지의 선언이 B 화면을 멈춘다.
-    private var rendererProjects: [WallpaperProject] = []
+    ///
+    /// **[2026-08-30] `screenKey` 를 함께 들고 있는다 — 배열 위치는 모니터 인덱스가 아니다.**
+    /// 종전엔 `[WallpaperProject]` 였고, `applyPlaybackPolicy` 가 그 **배열 위치**를 재생정책의
+    /// `monitorIndex` 로 먹였다. 그런데 이 배열은 `screenProjects`(= `screenViews` 를 nil 슬롯에서
+    /// 떨어뜨린 `compactMap` 결과)에서 오므로, 앞쪽에 빈 슬롯이 하나라도 있으면 위치가 모니터
+    /// 인덱스보다 작아진다. 대조되는 `pauseMask` 는 `NSScreen.screens` 위치로 만들어지니
+    /// (아래 `screenFrames:`) 첫 빈 슬롯 이후 모든 화면이 **다른 화면의 pause 결정**을 받았다.
+    /// 빈 슬롯은 `global == nil`(전역 선택 없이 화면별 할당만 쓰는 F029 의 공식 지원 모드)에서만
+    /// 나므로 전역 벽지가 걸린 경우는 무관했다 — 좁은 전제이지만 사용자가 도달하는 경로다.
+    ///
+    /// 인덱스를 저장하지 않고 **안정 키**를 저장하는 이유는 F840 과 같다: 배열 위치는 안정
+    /// 식별자가 아니라 디스플레이 착탈로 갈린다. 적용 시점의 위치를 굳혀 두면 다음 틱에
+    /// 스테일해질 수 있으므로, 판정 시점에 마스크를 만든 **그 `NSScreen.screens` 배열**에서
+    /// 키로 위치를 되찾는다 — 두 인덱스가 같은 기준임이 구조로 보장된다.
+    private var rendererProjects: [(screenKey: String, project: WallpaperProject)] = []
     // 렌더 정지 사유(가림·수동·슬립)를 한 곳에서 합성 — 서로 덮어쓰지 않게. 합성 로직은 PauseGate(순수).
     private var pauseGate = PauseGate()
     // 상태바 아이콘 글리프(w5d-tray): 최근 apply 성공/실패. 다음 적용 성공까지 지속(refreshStatusIcon 참조).
@@ -233,7 +255,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
         statusMenu = menu
 
-        libraryVM.onApply = { [weak self] folder in self?.apply(folderURL: folder) ?? false }
+        libraryVM.onApply = { [weak self] folder, completion in
+            self?.requestApply(folderURL: folder, completion: completion) ?? .failed
+        }
         libraryVM.onNotify = { [weak self] message in self?.notify(message) }
         // F840: 종전에는 desktopController.screenViews 스냅샷과 라이브 NSScreen.screens 를
         // **배열 인덱스**로 짝지었다. 인덱스는 안정 식별자가 아니다 — 디스플레이를 뽑거나 주
@@ -517,7 +541,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 없을 때만 재생목록이 그 화면에 돌린 배경을 쓴다. 재생목록은 애초에 못박히지 않은 화면만
     /// 굴리므로(`playlistScreenKeys()`) 두 규칙은 같은 말이다 — 어긋날 자리가 없게 둔다.
     private func effectiveAssignment(for screenKey: String) -> String? {
-        monitorStore.assignment(for: screenKey) ?? playlistScreenOverrides[screenKey]
+        monitorStore.assignment(for: screenKey)
+            ?? stagedPlaylistScreenOverrides[screenKey]
+            ?? playlistScreenOverrides[screenKey]
     }
 
     /// 라이브러리 엔트리 id → 배경 폴더 URL(없거나 해석 실패 → nil). MonitorMapping 주입용.
@@ -536,38 +562,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    @discardableResult
-    private func apply(folderURL: URL) -> Bool {
+    private func videoSourceURL(for project: WallpaperProject) -> URL? {
+        guard project.type == .video,
+              let url = WallpaperPathSecurity.containedFileURL(project.fileName, root: project.folderURL)
+        else { return nil }
+        return url.standardizedFileURL
+    }
+
+    private func cancelPendingRendererApply() {
+        let completion = pendingRendererApplyCompletion
+        pendingRendererApplyCompletion = nil
+        rendererApplyGeneration &+= 1
+        pendingVideoPreparation = nil
+        completion?(.cancelled)
+    }
+
+    private func completePendingRendererApply(generation: UInt64,
+                                              resolution: WallpaperApplyResolution) {
+        guard rendererApplyGeneration == generation else { return }
+        let completion = pendingRendererApplyCompletion
+        pendingRendererApplyCompletion = nil
+        pendingVideoPreparation = nil
+        completion?(resolution)
+    }
+
+    private func requestApply(
+        folderURL: URL,
+        completion: @escaping (WallpaperApplyResolution) -> Void = { _ in }
+    ) -> WallpaperApplyDisposition {
         guard let project = projectForMount(folderURL: folderURL) else {
+            cancelPendingRendererApply()
             notify(NSLocalizedString("적용 실패: project.json 또는 preset dependency 를 해석할 수 없습니다",
                                      comment: "적용 실패 — 파스 불가"))
             markApplyResult(success: false)
-            return false
+            return .failed
         }
         guard RendererFactory.makeRenderer(for: project) != nil else {
+            cancelPendingRendererApply()
             notify(String(format: NSLocalizedString("지원하지 않는 타입입니다: %@",
                                                     comment: "적용 실패 — 미지원 타입"),
                           project.type.storageString))
             markApplyResult(success: false)
-            return false
+            return .failed
         }
-        return applyResolved(global: project, folderURL: folderURL)
+        return applyResolved(global: project, folderURL: folderURL, completion: completion)
     }
 
-    @discardableResult
-    private func applyCurrentSelection() -> Bool {
+    /// 현재 전역 선택을 우선 적용하고, 그것이 실패하면 화면별 할당만으로 폴백한다.
+    /// 비동기 전역 실패도 같은 폴백을 타도록 완료 체인을 여기서 한 번만 구성한다.
+    private func applyCurrentSelection(
+        completion: @escaping (WallpaperApplyResolution) -> Void = { _ in }
+    ) -> WallpaperApplyDisposition {
         if let folder = currentFolderURL {
-            if apply(folderURL: folder) { return true }
+            let outcome = requestApply(folderURL: folder) { [weak self] resolution in
+                guard let self else { return }
+                guard resolution == .failed else { completion(resolution); return }
+                let fallback = self.requestAssignedSelection(completion: completion)
+                if fallback == .applied { completion(.applied) }
+                if fallback == .failed { completion(.failed) }
+            }
+            if outcome != .failed { return outcome }
             // F482: 전역 마운트 실패(스테일 currentFolderURL — 폴더 외부 삭제/이동) 시 화면별 할당
             // 폴백. 종전엔 restoreLastWallpaper(F032)에만 있어 할당 변경·비디오 설정·베이스 에셋·
             // 화면 변경 경로는 정상인 모니터별 할당까지 전부 마운트되지 않았다.
             // (비디오 설정 경로는 F820 에서 라이브 반영으로 바뀌어 더는 재적용을 타지 않는다.)
             // 단, 마운트 가능한 할당이 하나도 없으면 폴백하지 않는다 — 빈 슬롯 성공이 살아있는
             // 렌더러까지 teardown 하는 역효과를 막는다(F035/F036 롤백 보호 유지).
-            guard resolvedScreenProjectSlots(global: nil).contains(where: { $0.project != nil }) else { return false }
-            return applyResolved(global: nil, folderURL: nil)
+            return requestAssignedSelection(completion: completion)
         }
-        return applyResolved(global: nil, folderURL: nil)
+        // 전역 선택 자체가 없는 정상 경로는 빈 슬롯 성공(기존 렌더러 정리)도 의미가 있다.
+        // 위의 "실패 폴백"만 mountable 할당을 요구한다.
+        return applyResolved(global: nil, folderURL: nil, completion: completion)
+    }
+
+    private func requestAssignedSelection(
+        completion: @escaping (WallpaperApplyResolution) -> Void
+    ) -> WallpaperApplyDisposition {
+        guard resolvedScreenProjectSlots(global: nil).contains(where: { $0.project != nil }) else {
+            cancelPendingRendererApply()
+            return .failed
+        }
+        return applyResolved(global: nil, folderURL: nil, completion: completion)
     }
 
     /// F820: 음량/배속 변경 라이브 반영 — 살아있는 VideoRenderer 의 AVPlayer.volume/defaultRate 를
@@ -579,7 +654,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @discardableResult
-    private func applyResolved(global project: WallpaperProject?, folderURL: URL?) -> Bool {
+    private func applyResolved(global project: WallpaperProject?, folderURL: URL?,
+                               preparedVideoURLs: [URL: URL] = [:],
+                               continuingGeneration: UInt64? = nil,
+                               completion: @escaping (WallpaperApplyResolution) -> Void = { _ in })
+        -> WallpaperApplyDisposition {
+        let generation: UInt64
+        if let continuingGeneration {
+            guard continuingGeneration == rendererApplyGeneration else { return .failed }
+            generation = continuingGeneration
+        } else {
+            cancelPendingRendererApply()
+            generation = rendererApplyGeneration
+        }
         // 화면별로 마운트할 프로젝트 결정(할당 있으면 그 폴더, 없으면 전역; 폴더당 1회 파스) — 추출 로직.
         let screens = desktopController.screenViews
         let projectSlots = MonitorMapping.resolveProjectSlots(
@@ -598,12 +685,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return (screen.screenKey, screen.view, project)
         }
 
+        // ffmpeg 필요 소스는 RendererSwap 전에 전부 준비한다. VideoRenderer.mount 안에서
+        // 비동기 변환을 시작한 뒤 바로 return 하면 Swap이 성공으로 커밋해 기존 렌더러를
+        // 먼저 teardown 한다. 고유 URL을 선변환해 하나라도 실패하면 Swap 자체를 열지 않는다.
+        let sourcesNeedingPreparation: [URL]
+        if FFmpegConverter.isAvailable {
+            sourcesNeedingPreparation = screenProjects.compactMap { pair in
+                guard let source = videoSourceURL(for: pair.project),
+                      FFmpegConverter.needsConversion(source),
+                      preparedVideoURLs[source] == nil else { return nil }
+                return source
+            }
+        } else {
+            sourcesNeedingPreparation = []
+        }
+        if !sourcesNeedingPreparation.isEmpty {
+            let batch = VideoPreparationBatch(sources: sourcesNeedingPreparation)
+            pendingVideoPreparation = batch
+            pendingRendererApplyCompletion = completion
+            for source in batch.sources {
+                FFmpegConverter.convert(source) { [weak self] output in
+                    Task { @MainActor [weak self] in
+                        guard let self,
+                              self.rendererApplyGeneration == generation,
+                              var current = self.pendingVideoPreparation else { return }
+                        switch current.record(source: source, output: output) {
+                        case .ignored:
+                            self.pendingVideoPreparation = current
+                        case .pending:
+                            self.pendingVideoPreparation = current
+                        case .failed(let failedSource):
+                            NSLog("%@", "[Waple] video preparation failed: \(failedSource.path)")
+                            self.notify(String(format: NSLocalizedString("적용 실패: %@",
+                                                                          comment: "적용 실패 — 마운트 오류"),
+                                                       String(describing: RendererError.unsupportedCodec)))
+                            self.markApplyResult(success: false)
+                            self.completePendingRendererApply(generation: generation,
+                                                              resolution: .failed)
+                        case .ready(let outputs):
+                            self.pendingVideoPreparation = nil
+                            let deferredCompletion = self.pendingRendererApplyCompletion ?? { _ in }
+                            self.pendingRendererApplyCompletion = nil
+                            let accumulatedOutputs = VideoPreparationBatch.accumulated(
+                                existing: preparedVideoURLs, newlyPrepared: outputs)
+                            let outcome = self.applyResolved(global: project, folderURL: folderURL,
+                                                             preparedVideoURLs: accumulatedOutputs,
+                                                             continuingGeneration: generation,
+                                                             completion: deferredCompletion)
+                            switch outcome {
+                            case .applied: deferredCompletion(.applied)
+                            case .failed: deferredCompletion(.failed)
+                            case .pending:
+                                // 재해석된 화면 세트가 새 소스를 요구한 경우 completion은
+                                // 새 pending 배치가 다시 소유한다.
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+            return .pending
+        }
+        pendingVideoPreparation = nil
+
         // 전부 성공해야 교체, 하나라도 실패하면 부분 정리 후 롤백(기존 렌더러 유지) — 추출 로직.
         let result = RendererSwap.apply(
             screens: screenProjects,
             existing: renderers,
             makeAndMount: { pair -> WallpaperRenderer? in
-                guard let renderer = RendererFactory.makeRenderer(for: pair.project) else { return nil }
+                let prepared = self.videoSourceURL(for: pair.project).flatMap { preparedVideoURLs[$0] }
+                guard let renderer = RendererFactory.makeRenderer(for: pair.project,
+                                                                  preparedVideoURL: prepared) else { return nil }
                 try renderer.mount(in: pair.view, project: pair.project)
                 return renderer
             },
@@ -613,7 +765,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .success(let newRenderers):
             renderers = newRenderers
             // 위 주석의 불변식 — `RendererSwap.apply` 가 `screenProjects` 순서대로 만들므로 같은 순서다.
-            rendererProjects = screenProjects.map(\.project)
+            // 화면 키를 함께 나른다(선언부 [2026-08-30]) — 이 배열의 위치는 모니터 인덱스가 아니다.
+            rendererProjects = screenProjects.map { (screenKey: $0.screenKey, project: $0.project) }
             policyPauseState.reset()   // 렌더러 세트가 바뀌었다 → 다음 틱이 전부 다시 적용
             // 음소거도 같이 리셋한다. 새 렌더러는 `policyMuted == false` 로 태어나므로, 리셋하지
             // 않으면 엣지 추적이 "이미 음소거 중" 이라고 기억한 채 아무것도 밀지 않아 정책
@@ -658,12 +811,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             )
             markApplyResult(success: true)
-            return true
+            return .applied
         case .failure(let error):
             notify(String(format: NSLocalizedString("적용 실패: %@", comment: "적용 실패 — 마운트 오류"),
                           String(describing: error)))
             markApplyResult(success: false)
-            return false
+            return .failed
         }
     }
 
@@ -674,17 +827,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = applyCurrentSelection()
             return
         }
-        if !apply(folderURL: folder) {
-            // F031: 실패한 선택이 Now Playing/그리드에 계속 "적용됨"으로 오표시되지 않도록 UI 쪽 선택을
-            // 비운다(영속 store.selectedId 는 유지 — 다음 실행도 같은 배경을 먼저 시도하되, 원본이
-            // 다시 연결되면 자동 복구되고, 실패해도 아래와 동일하게 화면별 할당으로 폴백해 무해하다).
-            libraryVM.selectedId = nil
-            // F032: 전역 선택 마운트가 실패해도 화면별 할당(MonitorMapping) 배경은 정상일 수 있다 —
-            // apply(folderURL:) 의 실패를 그냥 버리면(종전) 정상적인 할당-전용 배경까지 통째로 누락된다.
-            // apply 실패는 applyResolved 이전(projectForMount/makeRenderer)에서 나므로 currentFolderURL 은
-            // 아직 미설정 — applyCurrentSelection() 이 전역 없이(global: nil) 화면별 할당만 재시도한다.
-            _ = applyCurrentSelection()
+        let outcome = requestApply(folderURL: folder) { [weak self] resolution in
+            guard let self, resolution == .failed else { return }
+            self.handleRestoredWallpaperFailure()
         }
+        if outcome == .failed { handleRestoredWallpaperFailure() }
+    }
+
+    private func handleRestoredWallpaperFailure() {
+        // F031: 실패한 선택이 Now Playing/그리드에 계속 "적용됨"으로 오표시되지 않도록 UI 쪽 선택을
+        // 비운다(영속 store.selectedId 는 유지 — 다음 실행도 같은 배경을 먼저 시도한다).
+        libraryVM.selectedId = nil
+        // F032: **비동기 ffmpeg 실패도** 화면별 할당 폴백을 탄다. pending을 Bool true로 접던
+        // 시기에는 시작 화면이 빈 채로 남고 이 분기가 영원히 실행되지 않았다.
+        _ = requestAssignedSelection { _ in }
     }
 
     /// F034: didChangeScreenParametersNotification 은 단일 모니터 연결/해제·해상도 정착·Dock
@@ -724,20 +880,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 성공 시점까지 지연"이라고 적어 둔 대가가 이것이다). 롤백 자체는 그대로 둔다(applyResolved
         // 안에서 mount 실패 시 기존 렌더러를 지키는 안전망은 여전히 필요하다). 창이 사라진 뒤에는
         // 보존할 대상이 아니므로, 실패가 확정된 이 시점에만 정리하고 다음 적용에 맡긴다.
-        if !applyCurrentSelection() {
-            renderers.forEach { $0.teardown() }
-            renderers = []
-            rendererProjects = []
-            policyPauseState.reset()
-            policyMuteState.reset()   // 렌더러 세트가 비었다 — 정지와 같은 이유로 함께 리셋한다
-            activeVideoProjectIds = []
+        let outcome = applyCurrentSelection { [weak self] resolution in
+            guard resolution != .applied else { return }
+            self?.cleanupAfterFailedScreenRebuild()
         }
+        if outcome == .failed { cleanupAfterFailedScreenRebuild() }
 
         if newScreenDetected {
             notify(NSLocalizedString(
                 "새 디스플레이가 연결됐습니다 — 화면마다 다른 배경을 지정하려면 '디스플레이' 버튼을 확인하세요",
                 comment: "새 모니터 감지 안내"))
         }
+    }
+
+    private func cleanupAfterFailedScreenRebuild() {
+        renderers.forEach { $0.teardown() }
+        renderers = []
+        rendererProjects = []
+        policyPauseState.reset()
+        policyMuteState.reset()   // 렌더러 세트가 비었다 — 정지와 같은 이유로 함께 리셋한다
+        activeVideoProjectIds = []
     }
 
     /// 재생목록 틱 재구성.
@@ -790,6 +952,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             currentEntryId: store.selectedId)
     }
 
+    private func requestPrimaryPlaylistCandidate(
+        entryId: String,
+        completion: @escaping (WallpaperApplyResolution) -> Void
+    ) -> WallpaperApplyDisposition {
+        guard let entry = store.entries.first(where: { $0.id == entryId }) else { return .failed }
+        return libraryVM.apply(entry, completion: completion)
+    }
+
+    private func requestSecondaryPlaylistCandidate(
+        entryId: String,
+        screenKey: String,
+        completion: @escaping (WallpaperApplyResolution) -> Void
+    ) -> WallpaperApplyDisposition {
+        guard let entry = store.entries.first(where: { $0.id == entryId }),
+              store.resolveFolderURL(for: entry) != nil else { return .failed }
+
+        // committed override는 그대로 두고 해석 경로에만 후보를 보인다. applyResolved가
+        // screenProjects를 만들 때 이 staging 값을 읽고, 실제 swap 성공 뒤에만 승격한다.
+        stagedPlaylistScreenOverrides[screenKey] = entryId
+        let outcome = requestStagedSecondarySelection { [weak self] resolution in
+            guard let self else { completion(.cancelled); return }
+            self.finishStagedPlaylistOverride(entryId: entryId, screenKey: screenKey,
+                                              resolution: resolution)
+            completion(resolution)
+        }
+        switch outcome {
+        case .applied:
+            finishStagedPlaylistOverride(entryId: entryId, screenKey: screenKey,
+                                         resolution: .applied)
+        case .failed:
+            finishStagedPlaylistOverride(entryId: entryId, screenKey: screenKey,
+                                         resolution: .failed)
+        case .pending:
+            break
+        }
+        return outcome
+    }
+
+    /// secondary 후보 전용 단일 apply. `applyCurrentSelection`은 스테일한 **전역** 선택 실패에서
+    /// 화면별 할당 폴백을 한 번 더 여는 복구 경로인데, staging 후보 실패에 그 폴백을 쓰면
+    /// `effectiveAssignment`가 같은 staging 값을 다시 읽어 동일 ffmpeg 변환을 2회 시도한다.
+    /// 여기서는 RendererSwap 자체가 기존 렌더러를 보존하므로 후보를 정확히 한 번만 시도한다.
+    private func requestStagedSecondarySelection(
+        completion: @escaping (WallpaperApplyResolution) -> Void
+    ) -> WallpaperApplyDisposition {
+        let global: WallpaperProject?
+        if let folder = currentFolderURL {
+            guard let resolved = projectForMount(folderURL: folder),
+                  RendererFactory.makeRenderer(for: resolved) != nil else { return .failed }
+            global = resolved
+        } else {
+            global = nil
+        }
+        return applyResolved(global: global, folderURL: currentFolderURL, completion: completion)
+    }
+
+    private func finishStagedPlaylistOverride(entryId: String, screenKey: String,
+                                              resolution: WallpaperApplyResolution) {
+        guard stagedPlaylistScreenOverrides[screenKey] == entryId else { return }
+        stagedPlaylistScreenOverrides.removeValue(forKey: screenKey)
+        if resolution == .applied { playlistScreenOverrides[screenKey] = entryId }
+    }
+
     /// 1초 틱. 판정은 드라이버가 하고 여기서는 **마운트만** 한다.
     private func tickPlaylist() {
         let keys = playlistScreenKeys()
@@ -798,30 +1023,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let now = Date()
         let wants = playlistDriver.tick(now: now, isPaused: pauseGate.isPaused)
         guard !wants.isEmpty else { return }
-
-        // 부 화면부터 정한다. 주 화면 적용은 곧바로 전체 리마운트를 태우므로, 그 전에
-        // 오버라이드가 자리에 있어야 한 틱에 두 화면이 바뀔 때 마운트가 두 번 일어나지 않는다.
-        var overridesChanged = false
-        for key in wants where key != primary {
-            let applied = playlistDriver.advance(screenKey: key, now: now) { id in
-                guard let entry = self.store.entries.first(where: { $0.id == id }) else { return false }
-                return self.store.resolveFolderURL(for: entry) != nil
+        // RendererSwap은 화면 세트 전체의 전역 트랜잭션이다. 한 번에 한 화면의 advance만 열고,
+        // 나머지 due 화면은 다음 1초 틱에서 처리한다. pending 동안 새 후보를 시작하면 새 세대가
+        // 앞 세대를 취소해 두 화면 모두 확정되지 않는 교차 취소가 된다.
+        guard !playlistDriver.hasPendingAdvance else { return }
+        let target = wants.contains(primary) ? primary : wants[0]
+        if target == primary {
+            _ = playlistDriver.requestAdvance(screenKey: target, now: now) { [weak self] id, finish in
+                guard let self else { return .failed }
+                return self.requestPrimaryPlaylistCandidate(entryId: id, completion: finish)
             }
-            guard let applied else { continue }
-            playlistScreenOverrides[key] = applied
-            overridesChanged = true
-        }
-
-        var primaryApplied = false
-        if wants.contains(primary) {
-            let applied = playlistDriver.advance(screenKey: primary, now: now) { id in
-                guard let entry = self.store.entries.first(where: { $0.id == id }) else { return false }
-                return self.libraryVM.apply(entry)
+        } else {
+            _ = playlistDriver.requestAdvance(screenKey: target, now: now) { [weak self] id, finish in
+                guard let self else { return .failed }
+                return self.requestSecondaryPlaylistCandidate(entryId: id, screenKey: target,
+                                                              completion: finish)
             }
-            primaryApplied = applied != nil
         }
-        // 주 화면이 안 바뀌었으면 부 화면 오버라이드를 화면에 반영할 재적용이 따로 필요하다.
-        if overridesChanged && !primaryApplied { _ = applyCurrentSelection() }
     }
 
     /// 수동 "다음 배경"(하단 바 forward · 트레이). 자동 틱과 **같은 셔플백/커서**를 쓴다 —
@@ -835,9 +1053,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if keys.isEmpty { keys = playlistScreenKeys(includingAssigned: true) }
         syncPlaylistDriver(screenKeys: keys)
         guard let primary = keys.first else { return }
-        playlistDriver.advance(screenKey: primary, now: Date()) { id in
-            guard let entry = self.store.entries.first(where: { $0.id == id }) else { return false }
-            return self.libraryVM.apply(entry)
+        _ = playlistDriver.requestAdvance(screenKey: primary, now: Date()) { [weak self] id, finish in
+            guard let self else { return .failed }
+            return self.requestPrimaryPlaylistCandidate(entryId: id, completion: finish)
         }
     }
 
@@ -916,6 +1134,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let screens = NSScreen.screens
+        // **마스크와 판정이 같은 인덱스 기준을 쓰게 한다.** 아래 `screenFrames:`/`visibleFrames:`
+        // 가 `pauseMask` 의 비트 자리를 이 `screens` 배열 위치로 정하므로, 판정에 넘기는
+        // `monitorIndex` 도 **같은 배열에서** 나와야 한다. `renderers` 배열 위치는 그 기준이
+        // 아니다 — `applyResolved` 의 `compactMap` 이 빈 슬롯을 떨어뜨려 재인덱싱한 값이다
+        // (`rendererProjects` 선언부의 [2026-08-30]). 그래서 안정 키로 되찾는다.
+        let monitorIndexByKey = Dictionary(
+            screens.enumerated().map { (DesktopWindow.screenKey(for: $1), $0) },
+            uniquingKeysWith: { first, _ in first })
         let conditions = PlaybackConditionsBuilder.make(
             windows: visibilityMonitor.currentSnapshots(),
             // `Int(clamping:)` — pid_t(Int32) → Int 는 64비트에서 **확대**라 트랩이 불가능하다.
@@ -941,9 +1167,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 deviceRunningSomewhere: SystemAudioObserver.defaultOutputDeviceIsRunning(),
                 weArePlayingAudio: renderers.contains { $0.isPlayingAudio }))
 
+        // 키를 못 찾으면(마운트 뒤 그 화면이 빠졌고 재구성 전인 틱) 음수를 넘긴다 —
+        // `PlaybackVerdict.isPaused` 가 음수를 거짓으로 떨어뜨리므로 "정책이 이 화면을 멈추라고
+        // 하지 않았다" 가 된다. 사라진 화면에 남의 결정을 먹이는 것보다 무동작이 옳다(:913 가드와
+        // 같은 판단이고, 화면 변경은 `performScreensChanged` 가 0.5초 뒤 전체 재적용으로 정리한다).
         let decisions = RenderPauseComposition.decideAll(
             globallyPaused: pauseGate.isPaused,
-            projects: rendererProjects,
+            projects: rendererProjects.map {
+                (monitorIndex: monitorIndexByKey[$0.screenKey] ?? -1, project: $0.project)
+            },
             conditions: conditions,
             global: GlobalPlaybackSettings.current)
 
@@ -994,7 +1226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 상태바 아이콘 글리프·툴팁 (w5d-tray)
 
-    /// apply 성공/실패 초크포인트 — apply(folderURL:) 의 조기 실패 2곳과 applyResolved 의 성공/실패
+    /// apply 성공/실패 초크포인트 — requestApply 의 조기 실패 2곳과 applyResolved 의 성공/실패
     /// 분기가 전부 여기를 거친다. 오류 플래그는 다음 적용 성공까지 지속(무음 실패를 능동적으로 드러냄).
     private func markApplyResult(success: Bool) {
         lastApplyFailed = !success

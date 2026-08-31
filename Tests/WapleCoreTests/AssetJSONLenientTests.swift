@@ -57,7 +57,7 @@ final class AssetJSONLenientTests: XCTestCase {
         let src = Data(#"{"a":1,"b":[2,3],"s":"//not-a-comment"}"#.utf8)
         let strict = try? JSONSerialization.jsonObject(with: src) as? [String: Any]
         let ours = AssetJSON.dictionary(src)
-        XCTAssertEqual(ours?["a"] as? Int, (strict as? [String: Any])?["a"] as? Int)
+        XCTAssertEqual(ours?["a"] as? Int, strict?["a"] as? Int)
         XCTAssertEqual(ours?["s"] as? String, "//not-a-comment")
     }
 
@@ -232,13 +232,39 @@ final class AssetJSONLenientTests: XCTestCase {
     /// 합 **63** 이다. 그 63 도 전건 CRLF 다.
     ///
     /// **[중요] "JSONC 31" 과 "엄격 파스가 실패하는 31" 은 같은 수가 아니다.**
-    /// 이 세션에서 잰 리눅스 `swift-corelibs-foundation` 의 `JSONSerialization` 은
-    /// **트레일링 콤마를 그냥 받는다** — 그래서 이 플랫폼에서 엄격 파스가 실패하는 것은
-    /// 줄 주석 **27**건뿐이다. Darwin `NSJSONSerialization` 은 RFC 엄격이라 31건 전부
-    /// 실패한다고 알려져 있으나 이 세션에서 macOS 를 돌릴 수단이 없다(**추정**).
+    /// 리눅스 `swift-corelibs-foundation` 의 `JSONSerialization` 은 **트레일링 콤마를 그냥
+    /// 받는다** — 그래서 그 플랫폼에서 엄격 파스가 실패하는 것은 줄 주석 **27**건뿐이다.
+    ///
+    /// > **[정정 2026-08-30] 종전 이 자리의 Darwin 서술은 추정이었고, 그 추정이 틀렸다.**
+    /// > 종전 문장: "Darwin `NSJSONSerialization` 은 RFC 엄격이라 31건 전부 실패한다고
+    /// > 알려져 있으나 이 세션에서 macOS 를 돌릴 수단이 없다(**추정**)."
+    /// >
+    /// > 두 가지가 틀렸다. ① 이 테스트는 **Darwin 에서 돌고 있다** — `.github/workflows/ci.yml`
+    /// > 의 필수 macOS 레인(`runs-on: macos-26`)이 그것이다. 즉 재 볼 수단이 없던 것이 아니다.
+    /// > (같은 파일 :137-169 의 중복 키 테스트는 이미 macOS CI 실측을 인용한다.)
+    /// > ② 실측하면 **27** 이다. Apple Foundation 도 트레일링 콤마를 받는다:
+    /// >
+    /// > | 입력 | Apple Foundation 엄격 파스 |
+    /// > | --- | --- |
+    /// > | `{"a":1,}` · `[1,2,]` · `{"a":[1,2,],"b":{"c":1,},}` | **통과**(받는다) |
+    /// > | `{"a": 1 // c\n}` | 실패 |
+    /// >
+    /// > 동봉 트리 전수 스윕(macOS 27 / Swift 6.4 실측 2026-08-30):
+    /// > `total 1698 line 27 block 0 trail 4 jsonc 31 strictFails 27`, 그리고 트레일링 콤마만
+    /// > 가진 4건(`presets/water/preset.json`·`effects/fluidsimulation/effect.json` 과 각 preview
+    /// > 사본)은 **전건 `strictParses=true`** 다. 두 플랫폼이 이 축에서 갈리지 않는다.
+    /// >
+    /// > **그래서 `relaxed()` 의 트레일링 콤마 전처리는 macOS 에서도 실코퍼스 도달이 0이다.**
+    /// > 같은 스윕을 그 분기만 뺀 사본으로 한 번 더 돌려 확인했다 —
+    /// > `strictFails 27 recoveredWithBranch 27 recoveredWithoutBranch 27`,
+    /// > 그 분기를 **필요로 하는 파일 0건**. 이 사실이 곧 아래 단언을 등호로 좁히는 근거다.
+    /// > (분기를 지우라는 뜻은 아니다 — WE jsoncpp 가 `allowTrailingCommas` 를 켜므로
+    /// >  WE 호환 근거로는 남는다. 다만 "macOS 가 필요로 한다" 는 근거는 사실이 아니다.)
+    ///
     /// `scripts/spec/check_lenient_json_reach.py` 와 `scripts/re/bundled_key_coverage.py` 가
-    /// 말하는 "31" 은 **파이썬 `json.loads` 기준**이라 그쪽은 항상 31 이다.
-    /// 그래서 아래 단정은 **문법 스캔**(플랫폼 무관)으로 하고, 플랫폼 파서 쪽은 범위로만 잠근다.
+    /// 말하는 "31" 은 **파이썬 `json.loads` 기준**이라 그쪽은 항상 31 이다 — 그쪽의
+    /// `MIN_LENIENT_NEEDED = 31` 은 Swift 측 도달 수가 아니므로 27 로 내리지 마라(과대추정이
+    /// 안전한 방향이다).
     ///
     /// 이 수가 틀어지면 자산 트리가 재벤더링된 것이다 — 그때 `docs/re/bundled-key-coverage.md`
     /// §8 과 `scripts/spec/check_lenient_json_reach.py` 의 `MIN_LENIENT_NEEDED` 도 같이 갱신해라.
@@ -251,6 +277,7 @@ final class AssetJSONLenientTests: XCTestCase {
         }
         var total = 0, lineComment = 0, trailingComma = 0, blockComment = 0
         var bom = 0, jsonc = 0, jsoncCRLF = 0, strictFails = 0, recovered = 0
+        var trailingCommaOnlyStrictFails = 0
         for case let url as URL in en where url.pathExtension == "json" {
             guard let data = try? Data(contentsOf: url) else { continue }
             total += 1
@@ -264,10 +291,14 @@ final class AssetJSONLenientTests: XCTestCase {
                 jsonc += 1
                 if text.contains("\r\n") { jsoncCRLF += 1 }
             }
-            if (try? JSONSerialization.jsonObject(with: data)) == nil {
+            let strictParses = (try? JSONSerialization.jsonObject(with: data)) != nil
+            if !strictParses {
                 strictFails += 1
                 if AssetJSON.object(data) != nil { recovered += 1 }
             }
+            // 트레일링 콤마만 가진 자산이 엄격 파스를 통과하는가 — 위 정정 블록의 실측 근거를
+            // 오라클로 남긴다. 이게 0 이 아니게 되면 플랫폼 파서가 콤마를 거부하기 시작한 것이다.
+            if f.trailing && !f.line && !f.block && !strictParses { trailingCommaOnlyStrictFails += 1 }
         }
         // ── 문법 스캔(플랫폼 무관) ──
         XCTAssertEqual(total, 1698, "동봉 WEAssets `.json` 파일 수")
@@ -277,9 +308,16 @@ final class AssetJSONLenientTests: XCTestCase {
         XCTAssertEqual(bom, 0, "동봉 트리에 BOM 자산은 없다")
         XCTAssertEqual(jsonc, 31, "JSONC 총계 = 27 + 4(겹침 0)")
         XCTAssertEqual(jsoncCRLF, jsonc, "JSONC 는 **전건 CRLF** — 그게 이 경로가 실전에서 깨져 있던 이유")
-        // ── 플랫폼 파서(범위로만) ──
-        XCTAssertGreaterThanOrEqual(strictFails, 27, "줄 주석은 어느 플랫폼에서도 엄격 파스를 깬다")
-        XCTAssertLessThanOrEqual(strictFails, 31, "많아야 JSONC 전건")
+        // ── 플랫폼 파서(실측 등호 — 종전엔 추정 때문에 27~31 범위였다) ──
+        // 두 Foundation 구현 모두 트레일링 콤마를 받으므로 엄격 파스가 깨지는 것은 줄 주석
+        // 27건뿐이다(리눅스: 종전 실측 / Darwin: 2026-08-30 실측, 위 정정 블록 참조).
+        // 범위로 두면 트레일링 콤마가 갑자기 거부되기 시작해도(=플랫폼 거동 변화) 조용히 통과한다.
+        XCTAssertEqual(strictFails, 27, "엄격 파스가 실패하는 동봉 자산 수 — 줄 주석 27건뿐이다")
+        // 그 27건이 곧 줄 주석 집합이라는 것도 함께 잠근다 — 수만 맞고 구성이 달라지는 경우를 가른다.
+        XCTAssertEqual(strictFails, lineComment,
+                       "엄격 파스 실패 집합이 줄 주석 집합과 어긋났다 — 플랫폼 파서 거동이 바뀌었다")
+        XCTAssertEqual(trailingCommaOnlyStrictFails, 0,
+                       "트레일링 콤마만 가진 자산이 엄격 파스에서 깨졌다 — 두 플랫폼 모두 받는다는 실측이 무너졌다")
         XCTAssertEqual(recovered, strictFails, "엄격이 깨진 것은 **전부** 관용으로 복구돼야 한다")
     }
 

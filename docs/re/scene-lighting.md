@@ -12,7 +12,8 @@ WE 의 3D 씬 라이팅을 **셰이더 평문 + `wallpaper64.exe`(imagebase `0x1
   콤보 세터 `0x1401a5c40`–`0x1401a6c5d` · 유니폼 패커 `0x140190c80`–`0x1401964b8` ·
   라이트 프로퍼티 등록 `0x14025da80`–`0x14025e9da` · 라이트 생성자 `0x14018ff60`–`0x1401909b1` ·
   레거시 4슬롯 패커 `0x14025d1f0`–`0x14025d2fb` · `lightconfig` 파스 `0x140187732`–`0x140187D0A`
-- 코퍼스: 동봉 172 + 설치본 186 = 358 씬(전수 재스캔) · 워크샵 162 씬은
+- 코퍼스: 설치본 `wallpaper_engine/{assets,projects}` 단일 모집단 186 씬(전수 재스캔).
+  동봉 WEAssets 172 씬은 설치본 `assets/`의 사본이라 합산하지 않는다. 워크샵 162 씬은
   `spec/corpus/scene-schema.json` 실측치 인용
 
 > **방법론 메모.** `docs/re/volumetric-light.md` 머리말과 같은 결론이다 — **픽셀을 정하는 상수는 전부
@@ -42,7 +43,7 @@ WE 의 3D 씬 라이팅을 **셰이더 평문 + `wallpaper64.exe`(imagebase `0x1
 `mov byte [rdi+0x2c0], 5`)라 **미지 타입 = 레거시 `point` 레인**이다.
 
 ⚠️ Waple `Scene3DLightKind(type:)` 는 `"spot"`/`"tube"`/`"directional"` 도 받는다 — WE 에는 없는
-관용이다. 동봉 172 + 설치본 186 + 워크샵 162 전부에서 이 세 축약형 도달 **0건**이라 무해하지만,
+관용이다. 설치본 단일 모집단 186 + 워크샵 162 전부에서 이 세 축약형 도달 **0건**이라 무해하지만,
 "WE 가 받는다" 는 근거로 쓰면 안 된다.
 
 ### 1.2 종은 4 개가 아니라 **두 레인 4+1** 이다
@@ -694,18 +695,18 @@ directional 섀도우는 **항상 3 캐스케이드**다(§2.2 블록 #8, `S_pro
 
 ---
 
-## 6. 동봉 도달 실측 (2026-08-21)
+## 6. 설치본 도달 실측 (2026-08-31 재계수)
 
-### 6.1 동봉 172 + 설치본 186 = 358 씬 전수
+### 6.1 설치본 `assets/ + projects/` 단일 모집단 186 씬 전수
 
-라이트를 **쓰는 씬은 4개**(동봉 2 + 설치본 전용 2), 라이트 총 **6개**.
+라이트를 **쓰는 씬은 4개**(`assets/` 2 + `projects/` 2), 라이트 총 **6개**.
 
 | 씬 | 구분 | 라이트 | `lightconfig` | `version` |
 | --- | --- | --- | --- | --- |
-| `scenes/modeleditor` | 동봉 · non-preview | `lpoint` ×2 | `{"point": 2}` | 3 |
-| `scenes/particleelementpreviews/collisionmodel` | 동봉 · **preview** | `lpoint` ×1 (`castshadow:true`) | `{"point":1,"pointshadow":1}` | 0 |
-| `projects/defaultprojects/arsenal` | 설치본 전용 · non-preview | `point` ×2 | **없음** | 키 없음 |
-| `projects/defaultprojects/demon_core` | 설치본 전용 · non-preview | `point` ×1 | **없음** | 키 없음 |
+| `assets/scenes/modeleditor` | assets · non-preview | `lpoint` ×2 | `{"point": 2}` | 3 |
+| `assets/scenes/particleelementpreviews/collisionmodel` | assets · **preview** | `lpoint` ×1 (`castshadow:true`) | `{"point":1,"pointshadow":1}` | 0 |
+| `projects/defaultprojects/arsenal` | projects · non-preview | `point` ×2 | **없음** | 키 없음 |
+| `projects/defaultprojects/demon_core` | projects · non-preview | `point` ×1 | **없음** | 키 없음 |
 
 종류별: `lpoint` 3 · `point` 3 · **`lspot` 0 · `ltube` 0 · `ldirectional` 0**.
 
@@ -738,7 +739,7 @@ directional 섀도우는 **항상 3 캐스케이드**다(§2.2 블록 #8, `S_pro
 WE 에서도 읽히지 않고, Waple `DirectionalShadowMath.validCascades`(전 성분 > 0 · 엄격 상승)도
 `d.x = 0` 에서 탈락시킨다 — **양쪽 다 무해**, 도달 0.
 
-`lightconfig` 를 가진 씬은 **동봉 2건이 전부**이고, 둘 다 **저작 카운트 == 실제 라이트 수**다.
+`lightconfig` 를 가진 설치본 씬은 **2건이 전부**이고, 둘 다 **저작 카운트 == 실제 라이트 수**다.
 
 ### 6.2 워크샵 코퍼스 162 씬 (`spec/corpus/scene-schema.json` 인용)
 
@@ -757,9 +758,9 @@ WE 에서도 읽히지 않고, Waple `DirectionalShadowMath.validCascades`(전 �
 **`spotcookie`/`spotshadowcookie` 는 전 코퍼스에서 도달 0** 이므로 `LIGHTS_COOKIE` 경로(블록 #3/#4)는
 현재 어떤 실물도 타지 않는다.
 
-### 6.3 화면이 바뀌는 동봉 씬 — **0**
+### 6.3 화면이 바뀌는 설치본 씬 — **0**
 
-`lightconfig` 예산을 켜도 동봉 도달 2씬은 값이 그대로다:
+`lightconfig` 예산을 켜도 설치본 도달 2씬은 값이 그대로다:
 
 | 씬 | 실제 라이트 | 예산 | 예산 적용 후 | 화면 |
 | --- | --- | --- | --- | --- |
@@ -767,7 +768,7 @@ WE 에서도 읽히지 않고, Waple `DirectionalShadowMath.validCascades`(전 �
 | collisionmodel | `lpoint` 1, 캐스터 1 | point 1 / pointshadow 1 | 1 유지, 섀도우 1 | **불변** |
 
 설치본 `arsenal`/`demon_core` 는 `lightconfig` 미저작 → 폴백 경로라 **불변**.
-즉 **이번 배선으로 픽셀이 달라지는 동봉 씬은 0개다.** 워크샵 11씬은 원본 `scene.json` 이
+즉 **이번 배선으로 픽셀이 달라지는 설치본 씬은 0개다.** 워크샵 11씬은 원본 `scene.json` 이
 이 머신에 없어(`spec/corpus/*.json` 은 측정치만 보관) 대조 불가 — §9 `[미해결]`.
 
 ---
@@ -984,9 +985,10 @@ spotCookie = smoothstep(g_LSpot_Direction[l].w, g_LSpot_Origin[l].w, spotCookie)
 
 ### 10.5 값 대조 — 어느 산식이 저작값과 맞는가
 
-동봉 171 + 설치본 184 = **355 `scene.json` 전수에서 `innercone` 0건 · `"lspot"` 0건**이다
-(2026-08-21 재측정: `find … -name scene.json | wc -l` 로 분모를, `grep -rl … --include=*.json` 로
-분자를 셌다. 두 트리 다 `.pkg` 0개라 압축 안에 숨은 씬은 없다). 저작값 표본은
+설치본 **184 `scene.json` 전수에서 `innercone` 0건 · `"lspot"` 0건**이다
+(2026-08-31 재측정: `find … -name scene.json | wc -l` 로 분모를, `grep -rl … --include=*.json` 로
+분자를 셌다. 동봉 171개는 설치본 `assets/` 사본이라 합산하지 않으며, 설치본에 `.pkg` 는 0개다).
+저작값 표본은
 `spec/corpus/scene-schema.json`(워크샵 162 씬)뿐이고 거기서
 `innercone` 5건/2씬 범위 `[10.63, 20.0]`(distinct 2) · `outercone` 5건/2씬 범위 `[14.28, 30.0]`
 (distinct 2) — 즉 실제 저작 쌍은 **{10.63, 14.28}** 와 **{20.0, 30.0}** 둘이다. 뒤쪽은 WE 라이트
@@ -1019,7 +1021,7 @@ spotCookie = smoothstep(g_LSpot_Direction[l].w, g_LSpot_Origin[l].w, spotCookie)
   호출부(`resolveLights`)와 `Scene3DLightingTests` 를 위해 남긴다. 값이 바뀌지 않으므로 3D PBR
   레인은 무회귀다.
 - 화면이 바뀌는 것은 **콘을 저작한 spot 라이트가 있는 2D 포워드 레인과 갓레이 레인**뿐이다.
-  동봉 171 + 설치본 184 = 355 씬 도달 **0건**(위), 워크샵 코퍼스 162 씬 중 **2씬 5라이트** 도달.
+  설치본 184 씬 도달 **0건**(위), 워크샵 코퍼스 162 씬 중 **2씬 5라이트** 도달.
   `SyntheticPixelGoldenTests` 의 다섯 합성 씬에는 spot 라이트가 없다 — CI 픽셀 골든은 안 움직인다.
 
 ### 10.7 W-17 단계 1(볼류메트릭 씬 뎁스 클립)도 같이 닫았다
@@ -1102,11 +1104,10 @@ PY
 ```
 
 ```bash
-# 4) 동봉/설치본 라이트 전수 (§6.1 표를 그대로 재생성)
+# 4) 설치본 라이트 전수 (§6.1 표를 그대로 재생성; 동봉 assets 사본은 제외)
 python3 - <<'PY'
 import json, glob, collections
-roots = {'bundled': 'Sources/WapleRender/Resources/WEAssets',
-         'install': '/home/user/Waple-wallpaper-source/wallpaper_engine'}
+roots = {'install': '/home/user/Waple-wallpaper-source/wallpaper_engine'}
 for tag, root in roots.items():
     for p in glob.glob(root + '/**/scene.json', recursive=True):
         d = json.load(open(p, encoding='utf-8-sig'))

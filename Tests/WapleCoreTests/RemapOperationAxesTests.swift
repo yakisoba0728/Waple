@@ -291,7 +291,7 @@ final class RemapOperationAxesTests: XCTestCase {
                 outputChannel: s.outputChannel, operation: .remap,
                 outputComponent: s.outputComponent, inputComponent: s.inputComponent,
                 verb: s.verb, input: s.input, transform: s.transform, octaves: s.octaves,
-                inputScale: s.inputScale, outMin: s.outMin, outMax: s.outMax,
+                inputScale: s.inputScale, flags: s.flags, outMin: s.outMin, outMax: s.outMax,
                 blendInStart: s.blendInStart, blendInEnd: s.blendInEnd,
                 blendOutStart: s.blendOutStart, blendOutEnd: s.blendOutEnd,
                 inputCP0: s.inputCP0, inputCP1: s.inputCP1,
@@ -326,19 +326,22 @@ final class RemapOperationAxesTests: XCTestCase {
     /// **착지 2 의 실측.** `operation` 부재 기본을 `remap`→`multiply` 로 바꿨을 때
     /// **그림이 바뀌는 자산이 정확히 어느 것인지**를 자산별로 못박는다.
     ///
-    /// 실측 결과(2026-08-21, 동봉 트리 12파일):
+    /// 실측 결과(2026-08-31, 동봉 트리 12파일):
     ///   · `thunderbolt.json` · `previewthunderbolt/thunderbolt.json` — **바뀐다**.
     ///     `output:"opacity"` · `operation` 부재라 `setOpacity`(alphafade 를 밀어냄) →
     ///     `multiplyOpacity`(번개 깜빡임이 페이드 **위에** 얹힌다).
-    ///   · 나머지 10파일 — **비트동일**. rain 의 `output:"velocity"` 6건은 `operation:"remap"` 이
-    ///     명시돼 있고, `output:"speed"` 3건은 확장 키가 없어 레거시 `.remapValue(.speed)` 경로를
-    ///     타며(그쪽은 원래 곱하기였다 — **우연히 맞아 있었다**), 프리뷰 2건도 `remap` 명시거나
-    ///     `remapinitialvalue`(Waple 미파스)다.
-    func testBundledAssetsOnlyThunderboltOpacityChangesWithTheNewDefault() throws {
+    ///   · rain `output:"speed"` 3건도 **바뀐다**. 명시 `flags:3` 때문에 Ex 경로로 이관됐고,
+    ///     부재 operation 기본 multiply가 실제 속도 배수 산술을 고른다.
+    ///   · 나머지 7파일은 비트동일. velocity 6건은 `operation:"remap"` 명시이고 프리뷰는
+    ///     `remap` 명시 또는 `remapinitialvalue`(Waple 미파스)다.
+    func testBundledAssetsWithImplicitOperationUseMultiplyInsteadOfLegacyRemap() throws {
         let root = try XCTUnwrap(Self.bundledAssetsRoot(), "동봉 WEAssets 를 못 찾았다")
         let mustChange = Set([
             "presets/lightning/particles/presets/thunderbolt.json",
             "presets/lightning/previewthunderbolt/particles/presets/thunderbolt.json",
+            "presets/rain/particles/presets/rain_screen.json",
+            "presets/rain/particles/presets/rain_screen_4k.json",
+            "presets/rain/previewrainscreen/particles/presets/rain_screen.json",
         ])
         var changed: Set<String> = []
         for f in Self.remapAssetFiles {
@@ -371,20 +374,53 @@ final class RemapOperationAxesTests: XCTestCase {
         XCTAssertTrue(sawAlphaDiff, "알파가 한 번도 안 갈리면 이 자산이 도달하지 않는다는 뜻이다")
     }
 
-    /// `output:"speed"` 3건은 **레거시 경로**를 탄다 — 확장 키가 하나도 없기 때문이다.
-    /// 그래서 부재 기본을 바꿔도 이 셋은 무회귀다(이미 곱하기였다).
-    func testBundledSpeedRemapsStayOnTheLegacyPath() throws {
+    /// `output:"speed"` 3건은 명시 `flags:3`이 있으므로 flags-aware Ex 경로를 탄다.
+    /// operation 부재 기본은 multiply이고 bit1이 -5...7 결과를 [0,1]로 자른다.
+    func testBundledSpeedRemapsUseFlagsAwareExPath() throws {
         let root = try XCTUnwrap(Self.bundledAssetsRoot(), "동봉 WEAssets 를 못 찾았다")
-        var legacySpeed = 0
+        var exSpeed = 0, legacySpeed = 0
         for f in ["presets/rain/particles/presets/rain_screen.json",
                   "presets/rain/particles/presets/rain_screen_4k.json",
                   "presets/rain/previewrainscreen/particles/presets/rain_screen.json"] {
             let def = try XCTUnwrap(parsedDef(f, root: root))
             for op in def.operators {
+                if case let .remapValueEx(spec) = op, spec.outputChannel == .speed {
+                    XCTAssertEqual(spec.operation, .multiply)
+                    XCTAssertEqual(spec.flags, 3)
+                    XCTAssertEqual(spec.outMin.x, -5)
+                    XCTAssertEqual(spec.outMax.x, 7)
+                    exSpeed += 1
+                }
                 if case let .remapValue(output, _, _) = op, case .speed = output { legacySpeed += 1 }
             }
         }
-        XCTAssertEqual(legacySpeed, 3, "동봉 `output:\"speed\"` 3건은 확장 키가 없어 레거시 경로다")
+        XCTAssertEqual(exSpeed, 3)
+        XCTAssertEqual(legacySpeed, 0, "명시 flags를 담지 못하는 레거시 경로로 가면 안 된다")
+    }
+
+    /// rain의 실제 범위 -5...7에서 n=0.25면 매핑값은 -2다. flags bit1이 있으면 0으로
+    /// 잘려 빗속도는 멈추되 역전하지 않고, 없으면 -2배로 역전한다.
+    func testFlagsBitOneClampsRainSpeedMultiplierBeforeApplication() {
+        let setVelocity = constSpec(.velocity, .remap, Vec3(x: 10, y: 0, z: 0))
+        func xAfterOneSecond(flags: Int) -> Float {
+            let speed = RemapSpec(
+                outputChannel: .speed, operation: .multiply,
+                input: .lifetimeFraction, transform: nil, octaves: 3, inputScale: 1,
+                flags: flags,
+                outMin: Vec3(x: -5, y: -5, z: -5), outMax: Vec3(x: 7, y: 7, z: 7),
+                blendInStart: 0, blendInEnd: 0, blendOutStart: 1, blendOutEnd: 1,
+                inputCP0: 0, inputCP1: 1, outputCP0: 0, outputCP1: 1
+            )
+            var sim = ParticleSimulator(def: makeDef(lifetime: 4, maxCount: 1,
+                                                     operators: [.remapValueEx(spec: setVelocity),
+                                                                 .remapValueEx(spec: speed)]), seed: 7)
+            return sim.step(1)[0].pos.x
+        }
+
+        XCTAssertEqual(xAfterOneSecond(flags: 3), 0, accuracy: 1e-5,
+                       "bit1: -2 배수를 0으로 잘라 역전 방지")
+        XCTAssertEqual(xAfterOneSecond(flags: 1), -20, accuracy: 1e-5,
+                       "음성 대조: bit1이 없으면 -2배로 역전")
     }
 
     /// 동봉 `remapvalue` 의 (채널, 산술) 조합 도수 — 문서 §2.1 과 맞는지.
@@ -408,8 +444,9 @@ final class RemapOperationAxesTests: XCTestCase {
         XCTAssertEqual(census["velocity/remap"], 6, "rain velocity 6건(all)")
         XCTAssertEqual(census["opacity/multiply"], 2, "thunderbolt opacity 2건 — 부재 기본이 도달하는 자리")
         XCTAssertEqual(census["color/remap"], 1, "remapvalue 프리뷰 1건")
-        XCTAssertEqual(census["speed/legacy"], 3, "레거시 경로 3건")
+        XCTAssertEqual(census["speed/multiply"], 3, "rain speed 3건 — flags-aware Ex 경로")
         XCTAssertNil(census["velocity/legacy"], "velocity 는 전건 operation 명시라 Ex 경로다")
+        XCTAssertNil(census["speed/legacy"], "speed도 명시 flags 때문에 Ex 경로다")
         XCTAssertEqual(census.values.reduce(0, +), 12, "동봉 remapvalue all 12")
     }
 

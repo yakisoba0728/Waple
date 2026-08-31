@@ -1,0 +1,651 @@
+<title>Playback Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --ground: #f3f1ea;
+    --surface: #ebe8df;
+    --rule: #c8c3b3;
+    --rule-soft: #d8d3c2;
+    --ink: #1a2330;
+    --ink-soft: #3a4350;
+    --ink-mute: #6b7380;
+    --accent: #a05a1a;        /* ochre — disassembler address column */
+    --accent-soft: #b87a3d;
+    --verdict: #2d6966;       /* teal — verdict/output zone */
+    --verdict-soft: #4a8582;
+    --gap: #8a3a1c;           /* rust — unwired gap */
+    --gap-soft: #b5614a;
+    --code-bg: #e4e0d4;
+    --chip-bg: #ddd7c5;
+    --shadow: 0 1px 0 rgba(26,35,48,0.06);
+  }
+  :root:not([data-theme="light"]) @media (prefers-color-scheme: dark) { :root { --ground: #14181f; --surface: #1c2129; --rule: #2a3140; --rule-soft: #232a36; --ink: #e4e0d4; --ink-soft: #b8b3a3; --ink-mute: #8a8676; --accent: #d9a55f; --accent-soft: #e8b97a; --verdict: #7ccac4; --verdict-soft: #9ad9d4; --gap: #e0825a; --gap-soft: #f09872; --code-bg: #1f252f; --chip-bg: #2a313d; --shadow: 0 1px 0 rgba(0,0,0,0.4); } }
+  :root[data-theme="dark"] { --ground: #14181f; --surface: #1c2129; --rule: #2a3140; --rule-soft: #232a36; --ink: #e4e0d4; --ink-soft: #b8b3a3; --ink-mute: #8a8676; --accent: #d9a55f; --accent-soft: #e8b97a; --verdict: #7ccac4; --verdict-soft: #9ad9d4; --gap: #e0825a; --gap-soft: #f09872; --code-bg: #1f252f; --chip-bg: #2a313d; --shadow: 0 1px 0 rgba(0,0,0,0.4); }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size: 17px;
+    line-height: 1.6;
+    font-feature-settings: "kern", "liga", "onum";
+    text-rendering: optimizeLegibility;
+  }
+
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 56px 56px 96px;
+  }
+
+  /* ----- Header band ----- */
+  header.masthead {
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 28px;
+    margin-bottom: 56px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: end;
+    gap: 32px;
+  }
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 14px;
+  }
+  h1.title {
+    font-family: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    font-weight: 800;
+    font-size: clamp(38px, 5vw, 56px);
+    line-height: 0.98;
+    letter-spacing: -0.02em;
+    margin: 0;
+    text-wrap: balance;
+    color: var(--ink);
+  }
+  .subtitle {
+    font-family: "Source Serif 4", serif;
+    font-style: italic;
+    font-size: 17px;
+    color: var(--ink-soft);
+    margin: 16px 0 0;
+    max-width: 56ch;
+  }
+  .colophon {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--ink-mute);
+    text-align: right;
+    border-left: 1px solid var(--rule);
+    padding-left: 24px;
+  }
+  .colophon strong { color: var(--ink-soft); font-weight: 500; }
+
+  /* ----- Section structure ----- */
+  section.s {
+    margin: 64px 0;
+    scroll-margin-top: 32px;
+  }
+  .s-head {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    gap: 24px;
+    align-items: baseline;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 18px;
+    margin-bottom: 28px;
+  }
+  .s-num {
+    font-family: "Archivo", sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+  }
+  h2 {
+    font-family: "Archivo", sans-serif;
+    font-weight: 700;
+    font-size: 30px;
+    line-height: 1.1;
+    letter-spacing: -0.015em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: "Archivo", sans-serif;
+    font-weight: 600;
+    font-size: 19px;
+    line-height: 1.2;
+    margin: 32px 0 10px;
+    letter-spacing: -0.005em;
+  }
+  h4 {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    margin: 28px 0 10px;
+  }
+  p { margin: 0 0 14px; max-width: 68ch; }
+  ul, ol { margin: 0 0 16px; padding-left: 22px; max-width: 68ch; }
+  li { margin-bottom: 4px; }
+  strong { color: var(--ink); font-weight: 600; }
+  em { font-style: italic; }
+
+  /* ----- Inline code & chips ----- */
+  code {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.86em;
+    background: var(--code-bg);
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--ink);
+  }
+  pre {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    background: var(--code-bg);
+    color: var(--ink);
+    padding: 16px 20px;
+    border-radius: 4px;
+    border: 1px solid var(--rule-soft);
+    overflow-x: auto;
+    margin: 16px 0 22px;
+    max-width: 100%;
+  }
+  pre .com { color: var(--ink-mute); }
+  pre .add { color: var(--accent); }
+  .chip {
+    display: inline-block;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11.5px;
+    font-weight: 500;
+    background: var(--chip-bg);
+    color: var(--ink);
+    padding: 1px 7px;
+    border-radius: 2px;
+    white-space: nowrap;
+    border: 1px solid var(--rule-soft);
+  }
+  .chip.acc { background: transparent; color: var(--accent); border-color: var(--accent-soft); }
+  .chip.ver { background: transparent; color: var(--verdict); border-color: var(--verdict-soft); }
+  .chip.gap { background: transparent; color: var(--gap); border-color: var(--gap-soft); }
+  .kicker {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 36px 0 8px;
+  }
+
+  /* ----- Address gutter (disassembly listing) ----- */
+  .listing {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    margin: 18px 0 26px;
+    overflow: hidden;
+  }
+  .listing-head {
+    background: var(--ink);
+    color: var(--ground);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 8px 16px;
+    display: flex;
+    gap: 24px;
+  }
+  .listing-head .h-add { color: var(--accent-soft); }
+  .row {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 0;
+    border-top: 1px solid var(--rule-soft);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+  .row:first-child { border-top: none; }
+  .row .add {
+    padding: 10px 12px 10px 16px;
+    color: var(--accent);
+    font-weight: 500;
+    border-right: 1px solid var(--rule-soft);
+    background: var(--ground);
+    white-space: nowrap;
+  }
+  .row .body {
+    padding: 10px 16px;
+    color: var(--ink);
+  }
+  .row .body .op { color: var(--accent); font-weight: 500; }
+  .row .body .reg { color: var(--verdict); }
+  .row .body .cmt { color: var(--ink-mute); }
+
+  /* ----- Tables ----- */
+  table.t {
+    border-collapse: collapse;
+    width: 100%;
+    max-width: 100%;
+    margin: 14px 0 22px;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+  table.t th, table.t td {
+    text-align: left;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+  }
+  table.t th {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    border-bottom: 2px solid var(--rule);
+  }
+  table.t td.num { text-align: right; font-family: "IBM Plex Mono", monospace; }
+  table.t tr.swatch td:first-child { border-left: 3px solid var(--accent); }
+  table.t tr.vswatch td:first-child { border-left: 3px solid var(--verdict); }
+  table.t tr.gswatch td:first-child { border-left: 3px solid var(--gap); }
+
+  /* ----- Pipeline (chain) ----- */
+  .pipeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+    align-items: stretch;
+    margin: 22px 0 30px;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    background: var(--surface);
+    overflow: hidden;
+  }
+  .pipe {
+    flex: 1 1 0;
+    min-width: 150px;
+    padding: 14px 16px;
+    border-right: 1px solid var(--rule-soft);
+    position: relative;
+  }
+  .pipe:last-child { border-right: none; }
+  .pipe .label {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    margin-bottom: 6px;
+  }
+  .pipe .name {
+    font-family: "Archivo", sans-serif;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--ink);
+  }
+  .pipe .cite {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 10.5px;
+    color: var(--accent);
+    margin-top: 4px;
+  }
+  .pipe.acc { background: var(--ground); border-top: 3px solid var(--accent); }
+  .pipe.ver { border-top: 3px solid var(--verdict); }
+  .pipe.gap { border-top: 3px solid var(--gap); background: var(--ground); }
+
+  /* ----- Notes / callouts ----- */
+  .note {
+    border-left: 3px solid var(--accent);
+    background: var(--surface);
+    padding: 14px 18px;
+    margin: 20px 0;
+    font-size: 15.5px;
+    max-width: 68ch;
+  }
+  .note.verdict { border-left-color: var(--verdict); }
+  .note.gap { border-left-color: var(--gap); }
+  .note .lab {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+  .note.verdict .lab { color: var(--verdict); }
+  .note.gap .lab { color: var(--gap); }
+
+  /* ----- Two-column sub-grid for facts ----- */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin: 18px 0 24px;
+  }
+  .grid-2 > div { min-width: 0; }
+  @media (max-width: 760px) {
+    .grid-2 { grid-template-columns: 1fr; }
+    .row { grid-template-columns: 80px 1fr; }
+    .page { padding: 32px 22px 64px; }
+    .pipeline { flex-direction: column; }
+    .pipe { border-right: none; border-bottom: 1px solid var(--rule-soft); }
+    .pipe:last-child { border-bottom: none; }
+    header.masthead { grid-template-columns: 1fr; }
+    .colophon { text-align: left; border-left: none; padding-left: 0; border-top: 1px solid var(--rule); padding-top: 16px; }
+  }
+</style>
+
+<header class="masthead">
+  <div>
+    <p class="eyebrow">Waple · internal reference</p>
+    <h1 class="title">Playback Architecture</h1>
+    <p class="subtitle">A faithful port of Wallpaper Engine 2.8.42's three playback subsystems to Swift — the policy state machine, its runtime composition onto renderers, and the playlist driver. Every contract traces back to a function in <code>wallpaper64.exe</code> (imagebase <code>0x140000000</code>).</p>
+  </div>
+  <div class="colophon">
+    <strong>2026-08-27</strong><br>
+    Sources/WaplePolicy/<br>
+    Sources/Waple/<br>
+    Sources/WapleCore/<br>
+    Linux spec lane · verified
+  </div>
+</header>
+
+<section class="s" id="overview">
+  <div class="s-head">
+    <div class="s-num">00</div>
+    <h2>Three subsystems, three files, one chain</h2>
+  </div>
+
+  <p>The playback story splits into three layers. The first is <strong>pure</strong> — a stateless state machine and evaluator that live in <code>WaplePolicy</code> so they can be tested in seconds on Linux. The second is the <strong>app-side composition</strong> that reads user settings, samples the OS, and merges policy with the rest of the system (occlusion, manual pause, etc.). The third is the <strong>playlist driver</strong>, a thin orchestrator that owns elapsed time and delegates the actual scheduling math to <code>WapleCore.PlaylistRuntime</code>.</p>
+
+  <div class="pipeline">
+    <div class="pipe acc">
+      <div class="label">1s timer</div>
+      <div class="name">AppDelegate.applyPlaybackPolicy</div>
+      <div class="cite">AppDelegate.swift:910</div>
+    </div>
+    <div class="pipe">
+      <div class="label">pure</div>
+      <div class="name">PlaybackConditionsBuilder.make</div>
+      <div class="cite">PlaybackObservers.swift:104</div>
+    </div>
+    <div class="pipe">
+      <div class="label">per-project</div>
+      <div class="name">PlaybackPolicyResolver.verdict</div>
+      <div class="cite">PlaybackPolicyRuntime.swift:96</div>
+    </div>
+    <div class="pipe">
+      <div class="label">merge</div>
+      <div class="name">RenderPauseComposition.decideAll</div>
+      <div class="cite">PlaybackPolicyComposition.swift:119</div>
+    </div>
+    <div class="pipe ver">
+      <div class="label">edge</div>
+      <div class="name">PerRendererPauseState · AppliedFlag</div>
+      <div class="cite">PlaybackPolicyComposition.swift:148, 180</div>
+    </div>
+    <div class="pipe acc">
+      <div class="label">apply</div>
+      <div class="name">renderers[i].pause/resume/setPolicyMuted</div>
+      <div class="cite">AppDelegate.swift:950, 958</div>
+    </div>
+  </div>
+
+  <p>The playlist path is parallel: <code>AppDelegate</code> drives <code>PlaylistDriver</code> with a tick every second; the driver owns wall-clock and persistence; the actual accumulator and "what to play next" math lives in <code>WapleCore.PlaylistRuntime</code>.</p>
+</section>
+
+<section class="s" id="state-machine">
+  <div class="s-head">
+    <div class="s-num">01</div>
+    <h2>Policy state machine</h2>
+  </div>
+  <p>File: <span class="chip">Sources/WaplePolicy/PlaybackPolicy.swift</span> · 692 lines · imports <strong>only</strong> <code>Foundation</code>. The header comment (<code>PlaybackPolicy.swift:1–13</code>) explains the isolation: <code>WapleCore</code> imports <code>simd</code>, which kills the Linux runner, so the policy must not depend on it. Everything in this file is a pure function over <code>Sendable</code> value types and can be unit-tested in milliseconds.</p>
+
+  <h3>1.1 · The action ladder</h3>
+  <p>Five discrete actions form an intensity ladder; the evaluator's contract is that <em>higher on the ladder wins</em> when two axes disagree.</p>
+
+  <table class="t">
+    <tr class="swatch"><th>Case</th><th>rawValue</th><th>WE string</th><th>Meaning</th></tr>
+    <tr class="swatch"><td><code>run</code></td><td class="num">0</td><td><code>"run"</code></td><td>Renderer is doing work</td></tr>
+    <tr class="swatch"><td><code>mute</code></td><td class="num">1</td><td><code>"mute"</code></td><td>Render but silence</td></tr>
+    <tr class="swatch"><td><code>pause</code></td><td class="num">2</td><td><code>"pause"</code></td><td>Halt this monitor(s)</td></tr>
+    <tr class="swatch"><td><code>pauseAll</code></td><td class="num">3</td><td><code>"pauseall"</code></td><td>Halt every monitor</td></tr>
+    <tr class="swatch"><td><code>stop</code></td><td class="num">4</td><td><code>"stop"</code></td><td>Tear down the renderer</td></tr>
+  </table>
+
+  <p>Three things matter about this table. First, the unrecognised string falls silently to <code>run</code> — <code>PlaybackAction.init(weConfigValue:)</code> at <code>PlaybackPolicy.swift:46–54</code> — because the engine's mapper at <code>0x140141918</code> does the same; a typo is "no policy", not a crash. Second, <code>Comparable</code> is rawValue order and the engine is the same ladder (<code>PlaybackPolicy.swift:67–69</code>). Third, <code>stop</code> is the only one that releases resources, and we reduce it to a pause — see <a href="#composition">§2.3</a>.</p>
+
+  <h3>1.2 · The six axes</h3>
+  <p><code>PlaybackTrigger</code> at <code>PlaybackPolicy.swift:77–188</code> enumerates the six user-facing axes plus three derived booleans (<code>honorsMultiMonitor</code>, <code>allowsMute</code>, <code>allowsStop</code>) that drive the <code>allowedActions(multiMonitor:)</code> matrix at <code>PlaybackPolicy.swift:156–163</code>.</p>
+
+  <table class="t">
+    <tr class="swatch"><th>Axis</th><th>Config key</th><th>WE default</th><th>UI gives</th></tr>
+    <tr class="swatch"><td><code>focus</code></td><td><code>playbackfocus</code></td><td><code>run</code></td><td>run · mute · pause · (pauseAll if multi-monitor)</td></tr>
+    <tr class="swatch"><td><code>maximized</code></td><td><code>playbackmaximized</code></td><td><code>pause</code></td><td>run · mute · pause · (pauseAll) · stop</td></tr>
+    <tr class="swatch"><td><code>fullscreen</code></td><td><code>playbackfullscreen</code></td><td><code>pause</code></td><td>run · mute · pause · (pauseAll) · stop</td></tr>
+    <tr class="swatch"><td><code>audio</code></td><td><code>playbackaudio</code></td><td><code>run</code></td><td>run · mute · pause · (no pauseAll · no stop)</td></tr>
+    <tr class="swatch"><td><code>displaySleep</code></td><td><code>playbacksleep</code></td><td><code>stop</code></td><td>run · pause · stop</td></tr>
+    <tr class="swatch"><td><code>battery</code></td><td><code>playbackonbattery</code></td><td><code>run</code></td><td>run · pause · stop</td></tr>
+  </table>
+
+  <p>The "UI gives" column comes from <code>scripts.js</code>'s <code>k(e,t,a)</code> builder — first arg is "multimonitor", second is "mute", third is "stop". The non-obvious row is <strong>audio</strong>: the UI passes a literal <code>!1</code> (false) for the multimonitor argument, so it never offers <code>pauseAll</code> regardless of how many monitors the user has. We reproduced that mistake once; the test caught it (<code>PlaybackPolicy.swift:144–146</code>).</p>
+
+  <p>More importantly, <strong>the engine's dispatcher and the UI's offer list agree</strong>. Where the UI doesn't offer an action, the engine has no branch for it either — so picking one that's not on offer is a silent <code>run</code>. Two asymmetries matter: <code>focus</code> has no <code>stop</code> branch in the engine (<code>0x14006d1fe</code>), and <code>pauseAll</code> is engine-handled regardless of monitor count even though only multi-monitor configs see it in the UI.</p>
+
+  <h3>1.3 · <code>PlaybackPolicy</code> value type</h3>
+  <p>Six axes plus <code>pauseVRAM: Bool</code> at <code>PlaybackPolicy.swift:193–284</code>. The two named constants — <code>weDefault</code> at <code>PlaybackPolicy.swift:226–234</code> and <code>allRun</code> at <code>PlaybackPolicy.swift:241–249</code> — duplicate <code>init</code>'s default arguments on purpose: the spec checker (<code>scripts/spec/check_playback_policy.py</code>) greps for these by name. <code>allRun</code> is "policy absent" — the renderer should be doing work — and is what <code>PlaybackPolicyResolver</code> passes when a wallpaper declares nothing.</p>
+
+  <p>The subscript at <code>PlaybackPolicy.swift:262–283</code> lets the resolver write <code>policy[trigger] = ...</code> without enumerating the switch in two places.</p>
+
+  <h3>1.4 · Inputs and outputs</h3>
+  <p><code>PlaybackConditions</code> at <code>PlaybackPolicy.swift:317–392</code> takes 14 fields. The four mask fields (<code>unfocusedMask</code>, <code>maximizedMask</code>, <code>fullscreenMask</code>, <code>allMonitorsMask</code>) all use the <strong>bit = <code>1 &lt;&lt; monitorIndex</code></strong> convention; the helper <code>PlaybackConditions.mask(monitorIndices:)</code> at <code>PlaybackPolicy.swift:385–391</code> builds one from an array. The engine's <code>shl r8d, cl</code> at <code>0x140074d50</code> and <code>bt eax, ecx</code> at <code>0x140073a64</code> use the same fold, so a 5-bit reduction in the helper is intentional.</p>
+
+  <p><code>PlaybackVerdict</code> at <code>PlaybackPolicy.swift:397–425</code> has exactly three outputs:</p>
+  <ul>
+    <li><code>stop: Bool</code> — release the renderer. The comment at <code>PlaybackPolicy.swift:398–399</code> is explicit that it shadows the other two.</li>
+    <li><code>muted: Bool</code> — <strong>global</strong>, not per-monitor. The engine's applier at <code>0x140073a7b–0x140073a85</code> writes the same value into every instance, and we do the same.</li>
+    <li><code>pauseMask: UInt32</code> — bit per monitor, <code>UInt32.max</code> = all of them.</li>
+  </ul>
+
+  <h3>1.5 · The evaluator's nine-step pipeline</h3>
+  <p><code>PlaybackEvaluator.evaluate</code> at <code>PlaybackPolicy.swift:443–555</code> is the load-bearing function. The nine numbered steps in the source are a <strong>contract</strong> — reordering any of them changes what the system does, because masks get OR'd, then later axes overwrite them, then the result-folding section collapses the lot.</p>
+
+  <div class="listing">
+    <div class="listing-head">
+      <span class="h-add">0x14006d…</span>
+      <span>Disassembly ↔ Swift contract</span>
+    </div>
+    <div class="row"><div class="add">d103 · d108</div><div class="body">① If <code>layout.spansAllMonitors</code>, <code>maximizedMask |= fullscreenMask</code>. One-shot merge, not OR-across-calls.</div></div>
+    <div class="row"><div class="add">d111–d176</div><div class="body">② <span class="op">applyWindowStateAxis</span> for <code>fullscreen</code>. The mask is <code>0</code> at this point, so the engine's <code>mov</code> and our <code>|=</code> agree.</div></div>
+    <div class="row"><div class="add">d176–d1e4</div><div class="body">③ <span class="op">applyWindowStateAxis</span> for <code>maximized</code>. OR onto the mask built in ②.</div></div>
+    <div class="row"><div class="add">d1e4–d21f</div><div class="body">④ <code>focus</code> — gated on <code>unfocusedMask != 0</code>. No <code>stop</code> branch exists in the engine. <code>pauseAll</code> → mask = <code>.max</code>. <code>pause</code> → <code>.max</code> if layout spans; else OR <code>unfocusedMask</code>.</div></div>
+    <div class="row"><div class="add">d21f–d26c</div><div class="body">⑤ <code>audio</code> — only <code>mute</code> and <code>pause</code> get a branch. <code>pause</code> writes <code>.max</code> regardless of layout (engine loads <code>r11d = -1</code>).</div></div>
+    <div class="row"><div class="add">d26c–d288</div><div class="body">⑥ <strong>Flag overrides between the audio and battery axes.</strong> <code>unpauseAero</code> zeros the mask; <code>forcePauseAll</code> sets it to <code>.max</code>. They run <em>before</em> battery so battery's <code>pause</code> can clobber <code>unpauseAero</code>. The order is the contract.</div></div>
+    <div class="row"><div class="add">d28c–d2b4</div><div class="body">⑦ <code>battery</code> — only <code>stop</code> and <code>pause</code> get a branch. <code>stop</code> sets the local stop flag; <code>pause</code> writes <code>.max</code>.</div></div>
+    <div class="row"><div class="add">ed90–edc8</div><div class="body">⑧ Compute <code>sleepLatched</code> = <code>displayAsleep</code> ∧ (<code>displaySleep</code> is <code>pause</code> or <code>stop</code>). The latch bit is set outside the evaluator; the action is <code>run</code>/<code>mute</code>/<code>pauseAll</code> when asleep means the latch never bit-set and other axes evaluate normally.</div></div>
+    <div class="row"><div class="add">d403–d4a6</div><div class="body">⑨ Fold to a <code>PlaybackVerdict</code>. <code>stop || externalStop || vramPressure || (sleepLatched && sleep==stop)</code> → <code>stop: true, paused: false, mute: false</code>. Else if <code>sleepLatched</code> → <code>pauseMask: .max</code>. Else OR the external pause/mute requests in.</div></div>
+  </div>
+
+  <div class="note verdict">
+    <div class="lab">Priority contract</div>
+    <p><strong>stop ≻ displaySleep ≻ (pauseMask, mute).</strong> Stop is the strongest signal and shadows the other two. Sleep is second and forces <code>pauseMask = .max</code> (or <code>stop</code> if the axis was <code>stop</code>). Everything else is OR'd together at the end.</p>
+  </div>
+
+  <p>The shared <code>applyWindowStateAxis</code> at <code>PlaybackPolicy.swift:559–589</code> is the same body for both ② and ③. Two subtleties: <code>pause</code> with a "spans" layout only writes <code>.max</code> if <em>every</em> monitor is covered (<code>0x14006d162 / 0x14006d1c5</code>); partial coverage is "the wallpaper is still visible somewhere", so it pauses nothing. <code>pauseAll</code>, by contrast, writes <code>.max</code> on <em>any</em> coverage (<code>0x14006d145 / 0x14006d1a7</code>).</p>
+
+  <h3>1.6 · VRAM hysteresis</h3>
+  <p><code>VRAMHysteresis</code> at <code>PlaybackPolicy.swift:614–692</code> is a separate state machine despite living in the same file. The trap to avoid: <strong>its output is stop, not pause</strong> (<code>PlaybackPolicy.swift:597–598</code>). The flag bit (10) is <code>cmovne</code>'d at the same <code>0x14006d407</code> site as the external stop request, and the verdict-folding step treats it identically. The name <code>pausevram</code> in WE is a misnomer we reproduce verbatim because the value lives in the same config key.</p>
+
+  <p>Thresholds are byte-for-byte copies of the floats at <code>0x1404926e4</code>, <code>0x1404926d4</code>, <code>0x1404926a0</code>, <code>0x140492888</code>. Enter at 80% of total, sustain for 15 seconds under 75% to release, immediate release under 35% regardless of time. Two pre-engagement gates reject the sample entirely (<code>sampleCount &lt; 2</code>, <code>total</code> outside <code>2049…131071 MB</code>); under either the hysteresis state is preserved unchanged. The NaN subtlety at <code>PlaybackPolicy.swift:665–668</code> is real: <code>comiss</code> sets CF on unordered, and we must use <code>used &gt;= x</code> not <code>!(used &lt; x)</code> to land in the release path that the engine does.</p>
+
+  <div class="note gap">
+    <div class="lab">Unwired</div>
+    <p><code>VRAMHysteresis</code> is a model with no feeder. The macOS side would need a <code>MTLDevice.currentAllocatedSize</code> poller — a separate, desktop-only change that hasn't been made. Until that lands, <code>PlaybackConditions.vramPressure</code> stays <code>false</code> by default (<code>PlaybackObservers.swift:128–131</code>).</p>
+  </div>
+</section>
+
+<section class="s" id="composition">
+  <div class="s-head">
+    <div class="s-num">02</div>
+    <h2>Runtime composition</h2>
+  </div>
+  <p>Three files cooperate at the app layer. <span class="chip">Sources/Waple/PlaybackPolicyRuntime.swift</span> holds the global settings and resolver; <span class="chip">Sources/Waple/PlaybackPolicyComposition.swift</span> holds the merge with the rest of the system and the edge trackers; <span class="chip">Sources/Waple/PlaybackObservers.swift</span> (referenced but not exhaustively covered) is where the OS-sampling logic for the conditions builder lives.</p>
+
+  <h3>2.1 · The two policy planes</h3>
+  <p>The fundamental shift from stage 1 to stage 2 — documented in the file header at <code>PlaybackPolicyRuntime.swift:7–33</code> — is recognising that the <strong>actual source of the policy is the global user setting</strong>, not <code>project.json</code>. A grep of the local corpus of 191 wallpapers found zero that declared any of the six axes; the values WE itself ships with in <code>config.json</code> match <code>PlaybackPolicy.weDefault</code> exactly. The per-wallpaper <code>playbackProperties</code> dict is a <em>layered override</em> on top, not the primary declaration.</p>
+
+  <p><code>GlobalPlaybackSettings</code> at <code>PlaybackPolicyRuntime.swift:39–75</code> wraps <code>UserDefaults</code> with a <code>waple.playback.</code> prefix and reuses the WE key names (<code>PlaybackPolicyRuntime.swift:37–38</code>) so a future import path doesn't need a mapping table. The crucial detail is at <code>PlaybackPolicyRuntime.swift:60</code>: <code>object(forKey:)</code>, not <code>bool(forKey:)</code>, because the latter collapses "unset" and <code>false</code>, which silently rots if the default ever flips.</p>
+
+  <p><code>PlaybackPolicyResolver</code> at <code>PlaybackPolicyRuntime.swift:79–101</code> is the merge. <code>effective(global:declaring:)</code> at <code>PlaybackPolicyRuntime.swift:86–93</code> takes the global policy and overlays only axes the wallpaper declared — empty strings and missing keys are skipped, which reproduces WE's <code>""</code>-injection behaviour. <code>verdict(for:conditions:global:)</code> at <code>PlaybackPolicyRuntime.swift:96–100</code> returns non-optional <code>PlaybackVerdict</code> because there is no longer a "policy absent" short-circuit — absence means "use the global", not "use <code>.running</code>".</p>
+
+  <h3>2.2 · Window-derived masks</h3>
+  <p><code>PlaybackMasks</code> at <code>PlaybackPolicyRuntime.swift:113–197</code> is pure: it consumes a snapshot of windows from <code>DesktopVisibilityMonitor.currentSnapshots()</code> and produces the three masks the conditions need. Three details matter.</p>
+  <ul>
+    <li><strong>Coverage with a tolerance</strong> — <code>covers(_:_:tolerance:)</code> at <code>PlaybackPolicyRuntime.swift:140–146</code> is bidirectional (the window can be larger or smaller by 4pt) because macOS shadow rendering and integer rounding shift window bounds by a few points. A one-sided <em>window contains target</em> check would over-trigger on multi-monitor windows.</li>
+    <li><strong>Foreign window filter</strong> — <code>isForeignWindow(_:currentProcessId:)</code> at <code>PlaybackPolicyRuntime.swift:130–133</code> shares the "another process" test with <code>DesktopVisibilityMonitor.isBlocking</code> but not the "is this blocking the desktop" intent; that's a separate question.</li>
+    <li><strong>Visible vs full frame</strong> — maximized uses <code>visibleFrame</code> (excludes menu bar and dock) and fullscreen uses <code>frame</code> (covers everything). The two masks are usually disjoint on a clean machine and merge only when the layout is non-per-monitor, in ① of the evaluator.</li>
+  </ul>
+
+  <h3>2.3 · The OR junction — and the stop→pause reduction</h3>
+  <p><code>RenderPauseComposition</code> at <code>PlaybackPolicyComposition.swift:23–140</code> is the merge point. The system has <strong>two independent stop paths</strong>: <code>PauseGate</code> (the occlusion/manual/system-sleep aggregator) and the playback policy. The decision was to keep both layers and OR them, confined to one file (<code>PlaybackPolicyComposition.swift:6–21</code>) so the rest of the code doesn't have to think about it.</p>
+
+  <p><code>Decision</code> at <code>PlaybackPolicyComposition.swift:25–40</code> is the per-renderer output. <code>paused</code> is the OR of the global pause and the per-monitor policy signal. <code>policyWantsStop</code> and <code>policyWantsMute</code> are <em>carried</em> so the edge trackers and the mute aggregator can consume them later.</p>
+
+  <p>The non-obvious decision is at <code>PlaybackPolicyComposition.swift:30–33</code> and the long block at <code>42–87</code>: <strong><code>verdict.stop</code> is reduced to a pause</strong> before it leaves the composition layer. Three alternatives were considered and rejected (<code>PlaybackPolicyComposition.swift:46–49</code>):</p>
+  <ol>
+    <li><strong>Full teardown + remount on stop.</strong> The dominant trigger is <code>displaySleep</code>, which the default policy sets to <code>stop</code>. Without the reduction, every sleep/wake cycle tears down the renderer and remounts it. The remount path is <code>throws</code> and has no recovery in a desktop-with-no-renderer scenario, so a single failure yields a black wallpaper that the library cannot restore on its own.</li>
+    <li><strong>Partial resource release (scene FBO pool, etc.).</strong> Sound in principle, but the pool is ordered to support motion-blur persistence across frames and we have no way to verify its behaviour from inside this container. We don't take speculative gains on a GPU path.</li>
+    <li><strong>The reduction we chose.</strong> Visually identical to a real <code>stop</code> (the screen is paused either way), loses only memory residency, and the lost memory is reclaimed for free by the OS during sleep.</li>
+  </ol>
+
+  <div class="note verdict">
+    <div class="lab">stopIsReducedToPause = true</div>
+    <p>This is named at <code>PlaybackPolicyComposition.swift:87</code> so the assertion can pin it. The settings UI tells the user "this option is currently a pause"; the saved value is still the WE string <code>"stop"</code> for future compatibility. Reverting this requires a measured pass on real hardware: 100 sleep/wake cycles with zero mount failures and a confirmed remount cost that doesn't degrade wake latency.</p>
+  </div>
+
+  <p>Two <code>decideAll</code> overloads at <code>PlaybackPolicyComposition.swift:105–127</code> differ in whether a single <code>verdict</code> is shared across all renderers or computed per-project. The per-project overload is what we use: per-screen wallpapers declare independently, so a single shared verdict would let wallpaper A's policy stop wallpaper B. Index = monitor index is a load-bearing invariant — <code>AppDelegate.renderers</code> is built in <code>screenViews</code> order (<code>PlaybackPolicyComposition.swift:102–104</code>).</p>
+
+  <p><code>wantsGlobalMute(_:)</code> at <code>PlaybackPolicyComposition.swift:137–139</code> is OR, not AND, because WE's mute is global: a single screen saying "be quiet" should silence everything, and a single screen saying "go ahead" doesn't override the others. The error direction matters: <em>wrong</em> means one screen plays its sound when it shouldn't, not "everything stopped when it shouldn't".</p>
+
+  <h3>2.4 · Edge trackers</h3>
+  <p>The conditions poll at 1 Hz, so calling <code>renderers[i].pause()</code> every tick would be an idempotent storm. <code>PerRendererPauseState</code> at <code>PlaybackPolicyComposition.swift:148–172</code> holds the last applied boolean per renderer and emits only the changes. The <code>reset()</code> method at <code>PlaybackPolicyComposition.swift:169</code> exists because a renderer set change (monitor hot-plug, project rebuild) breaks the index-to-screen correspondence — re-diffing is the only safe move.</p>
+
+  <p><code>AppliedFlag</code> at <code>PlaybackPolicyComposition.swift:180–196</code> is the same idea for the global mute bit, with one twist: its initial value is <code>nil</code>, not <code>false</code>. <code>change(to:)</code> at <code>PlaybackPolicyComposition.swift:186–190</code> returns the new value the first time regardless of what that value is. Starting at <code>false</code> would skip the first <code>setPolicyMuted(true)</code> on a fresh renderer swap, and the policy mute would silently vanish during a rebuild.</p>
+
+  <h3>2.5 · The composition call site</h3>
+  <p><code>AppDelegate.applyPlaybackPolicy</code> at <code>AppDelegate.swift:910–961</code> is the entire wiring. Worth tracing in order:</p>
+  <ol>
+    <li><strong>Renderer/project parity check</strong> at <code>AppDelegate.swift:913–917</strong> — if the two arrays are out of sync, <code>reset()</code> both edge trackers and exit. Acting on a mismatched index would apply policy to the wrong screen.</li>
+    <li><strong>Build conditions</strong> at <code>AppDelegate.swift:919–945</strong> — the comment at <code>AppDelegate.swift:940–944</code> documents the <code>isOtherAppPlaying</code> subtraction: CoreAudio's <code>kAudioDevicePropertyDeviceIsRunningSomewhere</code> can't filter out our own session, so when we're playing audio the axis is effectively disabled for that tick. The error direction is "didn't notice another app's audio", not "stopped ourselves" — the safe one.</li>
+    <li><strong>Resolve and decide</strong> at <code>AppDelegate.swift:944–949</strong> — global settings read, per-project verdicts computed, the OR with <code>pauseGate</code> happens here.</li>
+    <li><strong>Apply per-renderer pauses</strong> at <code>AppDelegate.swift:950–953</strong> — only the changed indices get the call.</li>
+    <li><strong>Apply global mute</strong> at <code>AppDelegate.swift:955–960</strong> — same idea via <code>AppliedFlag</code>. The setter is <code>setPolicyMuted(_:)</code>, added in stage 3①.</li>
+  </ol>
+</section>
+
+<section class="s" id="playlist">
+  <div class="s-head">
+    <div class="s-num">03</div>
+    <h2>Playlist driver</h2>
+  </div>
+  <p>File: <span class="chip">Sources/Waple/PlaylistDriver.swift</span> · 173 lines. The driver is the <em>app-side consumer</em> of <code>WapleCore.PlaylistRuntime</code>; the actual scheduling math (per-screen elapsed, "what's next", "should I advance") lives in core and is tested in the Linux lane. The driver owns wall-clock, persistence, and the four app-level concerns: bridging our schema to WE's, knowing which screens to drive, refusing to let a user pick get clobbered, and persisting at a sensible cadence.</p>
+
+  <h3>3.1 · The bridge</h3>
+  <p><code>PlaylistSettingsBridge</code> at <code>PlaylistDriver.swift:21–40</code> is the single translation point between <code>PlaylistStore</code> (our schema) and <code>PlaylistSettings</code> (WE's). The mapping is four rows:</p>
+
+  <table class="t">
+    <tr class="vswatch"><th>Our field</th><th>WE field</th><th>Note</th></tr>
+    <tr class="vswatch"><td><code>enabled == false</code></td><td><code>mode = .never</code></td><td>WE's parser zeros <code>delay</code> on <code>never</code>, tripping the 0.01min guard. Same observable behaviour as "auto-advance off".</td></tr>
+    <tr class="vswatch"><td><code>enabled == true</code></td><td><code>mode = .timer</code></td><td>Default mode id = 1.</td></tr>
+    <tr class="vswatch"><td><code>shuffle</code></td><td><code>order = .random | .sorted</code></td><td>WE's shuffled mode is also a draining shuffle-back.</td></tr>
+    <tr class="vswatch"><td><code>intervalMinutes</code></td><td><code>delay</code> (Float, min 0.01)</td><td>Our integer is a subset of WE's float. We clamp to 1 minimum.</td></tr>
+  </table>
+
+  <p>The comment at <code>PlaylistDriver.swift:30–31</code> documents the four WE keys we leave off: <code>videoSequence</code>, <code>beginFirst</code>, <code>playIntro</code>, and the <code>transition*</code> family. The reason is the same in each case: the spec layer models them, but the storage schema and UI to expose them don't exist yet. <code>videoSequence</code> is the one to watch — if it's ever enabled, the runtime will pause the timer when a video is current and notify nobody, so video wallpapers will never advance on their own. The <code>playIntro</code> value defaults to <code>false</code> for the same reason. Transitions are hard-disabled at the runtime level (<code>PlaylistDriver.swift:36</code>) because there is no transition renderer; the engine's <code>-1</code> = "no transition" is what actually happens on screen.</p>
+
+  <h3>3.2 · Time ownership</h3>
+  <p>The driver is the <em>only</em> place that knows "what time is it now". The runtime takes deltas; the driver feeds them in. The 5-second clamp in <code>PlaylistSettings.clampedTickDelta</code> (in core) handles sleep and clock skew — a 5-hour sleep would not advance a wall to its 5-hour mark — and the driver doesn't have to think about it.</p>
+
+  <h3>3.3 · Lifecycle</h3>
+  <p>Five public methods, called in this order by <code>AppDelegate</code>:</p>
+  <ul>
+    <li><strong><code>sync(enabled:intervalMinutes:shuffle:ids:screenKeys:currentEntryId:)</code></strong> at <code>PlaylistDriver.swift:91–110</code> — push the new store contents into the runtime, set the active screens, and detect user picks via <code>currentEntryId</code>. The <code>screenKeys</code> filter at <code>AppDelegate.swift:790–796</code> excludes screens the user pinned via <code>monitors.json</code>; we never touch those.</li>
+    <li><strong><code>tick(now:isPaused:isVideo:)</code></strong> at <code>PlaylistDriver.swift:118–128</code> — call every second. Computes the delta since the last tick, hands it to the runtime, and returns the screen keys that want to advance. <em>Doesn't advance anything</em>. The <code>isVideo</code> default is <code>{ _ in false }</code> because the two runtime gates that consult it (<code>0x140076d81</code> and <code>0x140076d87</code>) only activate when <code>videoSequence</code> or the intro latch is true, and the bridge disables both. When UI for those lands, this default needs to become a real value.</li>
+    <li><strong><code>advance(screenKey:now:apply:)</code></strong> at <code>PlaylistDriver.swift:137–151</code> — given a screen that wants to advance, walk the runtime's candidate list, hand each to the <code>apply</code> closure, and commit the first one that returns <code>true</code>. Bounded to one full lap of <code>entryIds</code> so a single deleted item doesn't permanently freeze the playlist. The <code>persist(now:)</code> call inside the success branch at <code>PlaylistDriver.swift:146</code> is the only time we persist in response to a change, because that's when elapsed resets to zero — and if we lose that state, restoration can't recover.</li>
+    <li><strong><code>adopt(entryId:screenKey:)</code></strong> at <code>PlaylistDriver.swift:154–156</code> — the user just picked a wallpaper, so reset the clock without advancing.</li>
+    <li><strong><code>persist(now:)</code></strong> at <code>PlaylistDriver.swift:162–165</code> and the throttled <code>persistIfDue(now:)</code> at <code>PlaylistDriver.swift:167–171</code> — write the per-screen elapsed map to <code>PlaylistStateTimeStore</code>. The 60-second throttle (<code>PlaylistDriver.swift:61</code>) balances disk wear against the worst-case loss window on a hard kill.</li>
+  </ul>
+
+  <h3>3.4 · The first-sync baseline</h3>
+  <p>The <code>hasSynced</code> flag at <code>PlaylistDriver.swift:73</code> and the guard at <code>PlaylistDriver.swift:105–107</code> exist because <code>runtime.restoreElapsed(stateTime.elapsedByScreen)</code> at <code>PlaylistDriver.swift:80</code> reloads the per-screen elapsed times from disk on startup. If the very first <code>sync</code> also called <code>adopt</code>, the restored values would be overwritten with zero and persistence would be useless. The first sync establishes the baseline; the second-and-later syncs detect user picks and adopt them.</p>
+
+  <h3>3.5 · Driver ↔ runtime ↔ AppDelegate</h3>
+  <p>The three-way split is by responsibility:</p>
+  <ul>
+    <li><strong><code>PlaylistRuntime</code></strong> (<code>WapleCore</code>) decides <em>whether</em> to advance, the next candidate index, and the elapsed accumulator. It's a value type; tests are deterministic.</li>
+    <li><strong><code>PlaylistDriver</code></strong> owns wall-clock, schema bridging, user-pick detection, and persistence. It translates between the runtime and the app.</li>
+    <li><strong><code>AppDelegate</code></strong> owns the I/O — calling <code>apply</code> with the new wallpaper id, calling <code>renderers[i].setWallpaper</code> or whatever the mount path is. It's the only file excluded from Linux typechecking, so the reasoning stays in the driver and the testable core.</li>
+  </ul>
+
+  <p>The call sites in <code>AppDelegate</code> confirm this split: <code>sync</code> at <code>AppDelegate.swift:785</code>, <code>tick</code> at <code>AppDelegate.swift:799</code>, <code>advance</code> at <code>AppDelegate.swift:806</code>, <code>advance</code> (on user pick) at <code>AppDelegate.swift:817</code>, <code>advance</code> (synchronous from a settings change) at <code>AppDelegate.swift:838</code>, and <code>persist</code> at <code>AppDelegate.swift:1582</code> on shutdown.</p>
+</section>
+
+<section class="s" id="gaps">
+  <div class="s-head">
+    <div class="s-num">04</div>
+    <h2>What isn't wired yet</h2>
+  </div>
+  <p>Six <code>PlaybackConditions</code> fields are always defaulted to <code>false</code> because the conditions builder doesn't pass them (<code>PlaybackObservers.swift:127–132</code>):</p>
+
+  <table class="t">
+    <tr class="gswatch"><th>Field</th><th>Flag bit</th><th>Would need</th></tr>
+    <tr class="gswatch"><td><code>vramPressure</code></td><td>10</td><td><code>MTLDevice.currentAllocatedSize</code> poller feeding <code>VRAMHysteresis.update</code></td></tr>
+    <tr class="gswatch"><td><code>externalStopRequest</code></td><td>3</td><td>Tray or IPC command channel</td></tr>
+    <tr class="gswatch"><td><code>externalPauseRequest</code></td><td>0</td><td>Same as above; shares flag with <code>displaySleep</code> in the engine</td></tr>
+    <tr class="gswatch"><td><code>externalMuteRequest</code></td><td>6</td><td>Same; shares flag with audio playing</td></tr>
+    <tr class="gswatch"><td><code>unpauseAero</code></td><td>1</td><td>Config key <code>unpauseaero</code> plumbing</td></tr>
+    <tr class="gswatch"><td><code>forcePauseAll</code></td><td>22</td><td>Config key plumbing</td></tr>
+  </table>
+
+  <p>Two more gaps are architectural, not just observational:</p>
+  <ul>
+    <li><strong><code>layout</code> is always <code>.perMonitor</code></strong> — the conditions builder hardcodes it at <code>PlaybackObservers.swift:115</code> because Waple doesn't yet have stretch/clone monitor configurations. When it does, that line is the only thing that needs to change to engage the layout branch in the evaluator.</li>
+    <li><strong>Audio subtraction is coarser than WE</strong> — documented at <code>AppDelegate.swift:940–944</code>. WE enumerates WASAPI sessions to filter out its own; CoreAudio's <code>isRunningSomewhere</code> is one bit per device, so when we're playing audio the entire axis is suppressed for that tick. The error direction is the safe one, but the gap is real.</li>
+  </ul>
+
+  <h3>Invariants not to break</h3>
+  <ul>
+    <li><strong>Renderer index = monitor index.</strong> <code>PlaybackPolicyComposition.swift:102–104</code>. If the order changes, the per-renderer decisions land on the wrong screen.</li>
+    <li><strong>Evaluator step order.</strong> The nine steps in <code>PlaybackPolicy.swift:443–555</code> are a contract, not a refactor target. The disassembly anchors in the comments are the proof.</li>
+    <li><strong><code>AppliedFlag</code> initial <code>nil</code>.</strong> A <code>false</code> default would silently drop the first mute on a renderer swap.</li>
+    <li><strong>Playlist <code>screenKeys</code> excludes user-pinned screens.</strong> The driver's <code>screenKeys</code> parameter must remain a filtered subset (<code>AppDelegate.swift:790–796</code>). Including pinned screens lets the playlist override a user choice.</li>
+    <li><strong>First sync doesn't adopt.</strong> Otherwise the restored elapsed times are zeroed on the first tick after launch.</li>
+  </ul>
+</section>
+
+<footer style="margin-top: 80px; padding-top: 24px; border-top: 1px solid var(--rule); font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--ink-mute); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
+  <span>Citations: <code>file:line</code> · disassembly anchors from wallpaper64.exe 2.8.42 @ imagebase 0x140000000</span>
+  <span>Waple internal reference · 2026-08-27</span>
+</footer>

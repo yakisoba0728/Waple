@@ -46,7 +46,10 @@ public final class PlaylistStateTimeStore {
             NSLog("%@", "[Waple] \(Self.fileName) save skipped — earlier read failed transiently, avoiding clobber")
             return
         }
-        backupCorruptStoreFile(fileURL, &corrupt)   // 손상 원본을 덮어쓰기 전 1회 백업
+        guard backupCorruptStoreFile(fileURL, &corrupt) else {
+            NSLog("%@", "[Waple] \(Self.fileName) save skipped — corrupt original backup failed, avoiding clobber")
+            return
+        }
         // 두 라벨(`exactly:`/`clamping:`)로만 좁힌다 — 시스템 시계가 어디에 있든 트랩하지 않는다.
         let seconds = UInt32(clamping: Int64(exactly: now.timeIntervalSince1970.rounded()) ?? 0)
         do {

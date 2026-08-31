@@ -117,4 +117,36 @@ final class TextPointerTargetWiringTests: XCTestCase {
         XCTAssertEqual(q, expected)
         XCTAssertEqual(q.center, SIMD2<Float>(50, 180), "right → origin.x−hw · top → origin.y−hh")
     }
+
+    /// cursorEnter/Leave도 이름 사전이 아니라 thisLayer와 같은 descriptor index로 소유 객체를
+    /// 찾아야 한다. 이미지와 텍스트가 같은 이름이면 이름 기반 구현은 이미지 쿼드를 잘못 고른다.
+    func testTextHoverUsesDescriptorIdentityEvenWhenImageHasSameName() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[
+          {"id":1,"name":"dup","image":"models/x.json","origin":"20 30 0","size":"10 10"},
+          {"id":2,"name":"dup","text":"hi","font":"systemfont_arial","pointsize":32,
+           "origin":"100 200 0","scale":"1 1","horizontalalign":"center","verticalalign":"center"}]}
+        """
+        let d = try SceneDocument.parse(package: ScenePackage.assemble([
+            (name: "scene.json", data: Data(scene.utf8)),
+            (name: "models/x.json", data: Data(#"{"width":10,"height":10,"material":"materials/x.json"}"#.utf8)),
+            (name: "materials/x.json", data: Data(#"{"passes":[{"textures":["x"]}]}"#.utf8)),
+        ]))
+        XCTAssertEqual(d.layers.count, 1)
+        XCTAssertEqual(d.texts.count, 1)
+        let r = SceneRenderer()
+        r.textLayers = [gpuText(d.texts[0], uid: 0, w: 100, h: 40)]
+        r.sceneScript = try XCTUnwrap(SceneScriptContext(layers: SceneRenderer.sceneScriptLayers(from: d)))
+        _ = try XCTUnwrap(r.makeScriptEngine(
+            "export function cursorEnter(e) {}\nexport function cursorLeave(e) {}",
+            layerName: d.texts[0].name,
+            currentLayerIndex: d.layers.count))
+
+        r.buildHoverTargets(doc: d)
+
+        let target = try XCTUnwrap(r.hoverTargets.first)
+        XCTAssertEqual(target.quad.center, SIMD2<Float>(100, 200),
+                       "동명 이미지가 아니라 descriptor가 가리키는 텍스트 래스터 쿼드여야")
+    }
 }

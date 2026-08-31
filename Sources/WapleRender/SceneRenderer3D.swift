@@ -7,6 +7,13 @@ import WapleCore
 // camera3D + .mdl 메시 씬 — Node3D/Billboard3D/MeshRenderable 타입, build3D 리소스화,
 // encode3D/encodeBillboard 패스(뎁스·스키닝·카메라 스크립트), 메시 파이프라인/뎁스 상태 캐시.
 extension SceneRenderer {
+    struct ResolvedCamera3DFrame: Equatable {
+        let eye: SIMD3<Float>
+        let center: SIMD3<Float>
+        let up: SIMD3<Float>
+        let fov: Float
+    }
+
     /// 서브메시 1개 = 드로우콜 1개. vbuf 는 pos3+normal3+uv2 인터리브(8 float/정점), ibuf 는 u16.
     struct GPU3DMesh {
         let vbuf: MTLBuffer
@@ -59,7 +66,7 @@ extension SceneRenderer {
         var brightness: Float = 1
     }
     /// P⑥: 3D 커스텀 메시 셰이더 파이프라인 + 바인드 플랜(2D CustomLayerShader 와 동형 — 번역 셰이더는
-    /// buffer(1)에 EngineU(320B, engineUniform() 이 단일 정본)를 기대하지, MeshUniform(256B)이 아니다).
+    /// buffer(1)에 EngineU(336B, engineUniform() 이 단일 정본)를 기대하지, MeshUniform(256B)이 아니다).
     struct CustomMeshShader {
         let pipeline: MTLRenderPipelineState
         let material: [SIMD4<Float>]                 // materialParams slot values(constantshadervalues)
@@ -149,7 +156,7 @@ extension SceneRenderer {
 
     /// 3D 씬의 2D 이미지 레이어를 카메라-페이싱 쿼드로(빌보드). 로컬 변환 + 부모 계층 + per-frame 스크립트.
     final class Billboard3D {
-        /// F811: doc.layers 인덱스(= JS thisScene.layers 인덱스 — sceneScriptLayers 의 이미지 선행 순서).
+        /// F811: JS `thisScene.layers` descriptor 인덱스(image는 doc.layers, text는 그 뒤 uid).
         /// 빌보드 배열은 로드 실패 레이어를 걸러 인덱스가 어긋나므로 디스크립터 정합 키를 별도 보관한다.
         let layerIndex: Int
         /// E1(⑦): scene.json objects[] id(SceneLayer.id) — encode3D 의 nmap 룩업 키. 0 = 미지정(다른
@@ -157,9 +164,13 @@ extension SceneRenderer {
         let id: Int
         let texture: MTLTexture
         let size: SIMD2<Float>           // 씬 픽셀 크기(월드 반경 = size×scale×부모스케일)
+        /// 포인터 광선 상자 크기. 텍스트는 draw raster와 달리 활성 padding이 양쪽에 붙고,
+        /// 이미지는 nil/default로 draw size와 같다.
+        let interactionSize: SIMD2<Float>
         let parent: Int?
         let order: Int
         let additive: Bool               // 머티리얼 blending=additive → 가산 파이프라인(플레어/글로우)
+        let isSolid: Bool                 // 포인터 광선 순회 bit13 — false면 표시돼도 히트 대상 아님
         let depthTest: Bool
         let depthWrite: Bool
         let effects: [EffectGPU]
@@ -184,14 +195,18 @@ extension SceneRenderer {
         var angleZ: Float
         var tint: SIMD4<Float>
         var visible: Bool
-        init(texture: MTLTexture, size: SIMD2<Float>, parent: Int?, order: Int, additive: Bool,
+        init(texture: MTLTexture, size: SIMD2<Float>, interactionSize: SIMD2<Float>? = nil,
+             parent: Int?, order: Int, additive: Bool,
+             isSolid: Bool = true,
              depthTest: Bool, depthWrite: Bool, effects: [EffectGPU], texWidth: Int, texHeight: Int,
              isFrameBuffer: Bool, origin: SIMD3<Float>, scale: SIMD2<Float>, angleZ: Float,
              tint: SIMD4<Float>, visible: Bool, lighting: Bool,
              roughness: Float, metallic: Float, specularTint: SIMD3<Float>, layerIndex: Int = 0, id: Int = 0) {
             self.id = id
-            self.texture = texture; self.size = size; self.parent = parent; self.order = order
+            self.texture = texture; self.size = size; self.interactionSize = interactionSize ?? size
+            self.parent = parent; self.order = order
             self.additive = additive
+            self.isSolid = isSolid
             self.depthTest = depthTest; self.depthWrite = depthWrite; self.effects = effects
             self.texWidth = texWidth; self.texHeight = texHeight; self.isFrameBuffer = isFrameBuffer
             baseOrigin = origin; baseScale = scale; baseAngleZ = angleZ; baseTint = tint; baseVisible = visible
@@ -501,6 +516,7 @@ extension SceneRenderer {
             let bb = Billboard3D(texture: mtl, size: SIMD2(layer.size.x, layer.size.y),
                                  parent: layer.parent, order: layer.order,
                                  additive: layer.blendMode == "additive",
+                                 isSolid: layer.isSolid,
                                  depthTest: layer.depthTest, depthWrite: bbDepthWrite,
                                  effects: effects, texWidth: effW, texHeight: effH,
                                  isFrameBuffer: layer.isFrameBuffer,
@@ -513,7 +529,10 @@ extension SceneRenderer {
                                  metallic: layer.metallic,
                                  specularTint: SIMD3(layer.specularTint.x, layer.specularTint.y, layer.specularTint.z),
                                  layerIndex: bbLayerIndex, id: layer.id)
-            attachScripts(bb, sources: layer.propertyScripts)
+            attachScripts(bb, sources: layer.propertyScripts,
+                          layerName: layer.name.isEmpty ? nil : layer.name,
+                          currentLayerIndex: bbLayerIndex,
+                          scriptProps: layer.propertyScriptProps)
             billboards.append(bb)
             billboardDefs.append(layer)   // 록스텝(이벤트 마커 결속 — buildAnimationEventTargets)
             bbLoaded += 1
@@ -541,6 +560,7 @@ extension SceneRenderer {
         var controllerOf: [Int: Int] = [:]   // doc.texts 인덱스 → text3DControllers 인덱스
         for (uid, t) in doc.texts.enumerated() where !orthoHybrid {   // 감사 V06: ortho 하이브리드는 미빌드(2D buildTexts 가 담당)
             guard let src = t.script, let e = makeScriptEngine(src, layerName: t.name.isEmpty ? nil : t.name,
+                                                               currentLayerIndex: doc.layers.count + uid,
                                                                scriptPropsJSON: t.scriptProps) else { continue }
             // makeScriptEngine 생성 시 top-level 실행(shared 초기화) — update 보유분만 per-frame 재평가 대상.
             if e.hasUpdate {
@@ -593,14 +613,40 @@ extension SceneRenderer {
             // true 면 사각형 전체가 뎁스를 채워 그 뒤에 그려질 콘텐츠(장면 순서상 더 늦은 order)를 사각형
             // 형태로 가려버린다(실측: 3509243656 id=2054 — 투명 배경 영역이 불투명 검은 사각형으로 보임).
             // depthTest 는 유지(다른 메시/빌보드에 정상적으로 가려지는 건 맞는 동작).
+            let textInteractionSize = PointerHit.textHitSize(
+                inkBox: SIMD2(Float(r.width), Float(r.height)),
+                padding: SIMD2(t.padding.x, t.padding.y),
+                paddingActive: PointerHit.textPaddingActive(
+                    hasEffects: !t.effects.isEmpty,
+                    opaqueBackground: t.opaqueBackground,
+                    colorBlendMode: t.colorBlendMode))
             let bb = Billboard3D(texture: mtl, size: SIMD2(Float(r.width), Float(r.height)),
-                                 parent: t.parent, order: t.order, additive: false, depthTest: true, depthWrite: false,
+                                 interactionSize: textInteractionSize,
+                                 parent: t.parent, order: t.order, additive: false, isSolid: t.isSolid,
+                                 depthTest: true, depthWrite: false,
                                  effects: [], texWidth: r.width, texHeight: r.height, isFrameBuffer: false,
                                  origin: SIMD3(t.origin.x, t.origin.y, t.originZ), scale: SIMD2(t.scale.x, t.scale.y),
                                  angleZ: t.angleZ, tint: SIMD4(t.color.x, t.color.y, t.color.z, t.alpha),
                                  visible: t.initialVisible, lighting: false, roughness: 1, metallic: 0,
-                                 specularTint: SIMD3(1, 1, 1), layerIndex: -1, id: t.id)
-            attachScripts(bb, sources: t.propertyScripts.filter { ["origin", "scale", "angles", "visible"].contains($0.key) })
+                                 specularTint: SIMD3(1, 1, 1), layerIndex: doc.layers.count + uid, id: t.id)
+            attachScripts(bb,
+                          sources: t.propertyScripts.filter { ["origin", "scale", "angles", "visible"].contains($0.key) },
+                          layerName: t.name.isEmpty ? nil : t.name,
+                          currentLayerIndex: doc.layers.count + uid,
+                          scriptProps: t.propertyScriptProps)
+            // alpha/color update는 3D 텍스트의 알려진 시각 정책상 계속 미평가한다(위 W-① 주석).
+            // 하지만 그 프로퍼티 스크립트가 export한 커서 훅까지 인스턴스 생성 전에 버리면 native의
+            // "바인드 프로퍼티와 무관하게 소유 객체로 배달" 계약을 깨뜨린다. 커서 훅이 실제로 있는
+            // 소스만 hook 전용 엔진으로 만들고 bb.scripts에는 넣지 않는다.
+            let cursorHooks = ["cursorClick", "cursorDown", "cursorUp", "cursorMove",
+                               "cursorEnter", "cursorLeave"]
+            for key in ["alpha", "color"] {
+                guard let src = t.propertyScripts[key], cursorHooks.contains(where: src.contains) else { continue }
+                _ = makeScriptEngine(src,
+                                     layerName: t.name.isEmpty ? nil : t.name,
+                                     currentLayerIndex: doc.layers.count + uid,
+                                     scriptPropsJSON: t.propertyScriptProps[key])
+            }
             billboards.append(bb)
             // billboardDefs 는 의도적으로 미추가(SceneLayer internal init — 타 모듈 WapleRender 에서 생성 불가,
             // text 오브젝트엔 대응 SceneLayer 도 없음). SceneRenderer.swift:443 의 이벤트 마커 결속 루프가
@@ -648,6 +694,61 @@ extension SceneRenderer {
             }
             else { nodes3D[e.idx].evaluateScripts(time: time) }
         }
+    }
+
+    /// 카메라 프로퍼티 스크립트를 정확히 한 번 평가하고 exact world-space shake까지 얹는다.
+    /// node/text shared script는 `prepareCamera3DFrame`이 먼저 평가하며, encode3D는 이 결과만 소비한다.
+    func resolveCamera3DFrame(at time: Float) -> ResolvedCamera3DFrame? {
+        guard let cam = camera3D else { return nil }
+        var eye = SIMD3<Float>(cam.eye.x, cam.eye.y, cam.eye.z)
+        var center = SIMD3<Float>(cam.center.x, cam.center.y, cam.center.z)
+        var up = SIMD3<Float>(cam.up.x, cam.up.y, cam.up.z)
+        var fov = cam.fov
+
+        for script in cameraScripts {
+            script.engine.setRuntime(Double(time))
+            switch script.key {
+            case "eye":
+                if let v = script.engine.evaluateVec(current: [eye.x, eye.y, eye.z]), v.count >= 3 {
+                    eye = SIMD3(v[0], v[1], v[2])
+                }
+            case "center":
+                if let v = script.engine.evaluateVec(current: [center.x, center.y, center.z]), v.count >= 3 {
+                    center = SIMD3(v[0], v[1], v[2])
+                }
+            case "up":
+                if let v = script.engine.evaluateVec(current: [up.x, up.y, up.z]), v.count >= 3 {
+                    up = SIMD3(v[0], v[1], v[2])
+                }
+            case "fov":
+                if let v = script.engine.evaluateVec(current: [fov]), let value = v.first { fov = value }
+            default:
+                break
+            }
+        }
+
+        // 퇴화/비유한 스크립트 결과는 종전 encode3D와 같은 base pose 폴백을 쓴다.
+        let lookLength = simd_length(center - eye)
+        if !lookLength.isFinite || lookLength < 1e-4 {
+            eye = SIMD3(cam.eye.x, cam.eye.y, cam.eye.z)
+            center = SIMD3(cam.center.x, cam.center.y, cam.center.z)
+        }
+
+        if cameraShakeEnabled {
+            let delta = SceneCameraMath.shakeDelta(
+                time: time, speed: cameraShakeSpeed, amplitude: cameraShakeAmplitude,
+                roughness: cameraShakeRoughness, orthographic: false, orthoHeight: 0)
+            let worldDelta = SIMD3<Float>(delta.x, delta.y, delta.z)
+            eye += worldDelta
+            center += worldDelta
+        }
+        return ResolvedCamera3DFrame(eye: eye, center: center, up: up, fov: fov)
+    }
+
+    /// 한 프레임의 shared/object scripts → camera scripts → shake 순서를 한 곳에 고정한다.
+    func prepareCamera3DFrame(at time: Float) -> ResolvedCamera3DFrame? {
+        evaluate3DScripts(time: time)
+        return resolveCamera3DFrame(at: time)
     }
 
     /// 씬의 camera 의사-오브젝트를 3D 카메라로 승격한다(해당 없으면 nil → 호출부가 scene.camera 유지).
@@ -705,9 +806,13 @@ extension SceneRenderer {
             n.scripts.append(Script3D(key: key, engine: e))
         }
     }
-    func attachScripts(_ b: Billboard3D, sources: [String: String]) {
+    func attachScripts(_ b: Billboard3D, sources: [String: String], layerName: String?,
+                       currentLayerIndex: Int, scriptProps: [String: String]) {
         for key in ["visible", "origin", "angles", "scale", "color", "alpha"] {
-            guard let src = sources[key], let e = makeScriptEngine(src) else { continue }
+            guard let src = sources[key],
+                  let e = makeScriptEngine(src, layerName: layerName,
+                                           currentLayerIndex: currentLayerIndex,
+                                           scriptPropsJSON: scriptProps[key]) else { continue }
             b.scripts.append(Script3D(key: key, engine: e))
         }
     }
@@ -1516,14 +1621,18 @@ extension SceneRenderer {
     ///     코퍼스 3씬 전부 fov 50 이라 축 구분 실물 반례는 없음(표준 규약 채택)
     ///   • 오일러: Rz·Ry·Rx (Scene3DMath.modelMatrix 주석 — 짐벌 동치 실측)
     func encode3D(into target: MTLTexture, cb: MTLCommandBuffer, device: MTLDevice, time: Float,
-                  particleDelta: Float?) -> Bool {
+                  particleDelta: Float?, cameraFrame: ResolvedCamera3DFrame) -> Bool {
         guard let cam = camera3D, let over = meshPipelineOver,
               let depthTex = pooledDepth(target.width, target.height, device) else { return false }
-        // text 컨트롤러(shared 사이드이펙트) → eval3DOrder(노드/빌보드 트랜스폼) 순서로 평가. 씬 order 로는
-        // 소비자(예: Hollow Cylinder order 5)가 생산자(text id=181 order 24)보다 앞서 라이브만 1프레임
-        // 지연 후 정착하지만(정상 거동), build3D 말미의 1회 프라이밍(F309)이 이 첫 역전을 흡수해 두므로
-        // 이 첫 real 호출부터 이미 정착값이다 — 단일 프레임 캡처도 결정적. evaluate3DScripts 문서 참조.
-        evaluate3DScripts(time: time)
+        // 이번 프레임에 실제로 다시 투영되지 않은 대상은 직전 쿼드를 유지하면 안 된다(visible=false,
+        // 부모 비가시, NaN/near-plane 이탈). 우선 전부 닫고 성공적으로 인코드한 빌보드만 아래에서 승격한다.
+        pendingInteractionGeometry.removeAll(keepingCapacity: true)
+        for bb in billboards where bb.layerIndex >= 0 {
+            pendingInteractionGeometry[bb.layerIndex] = PresentedInteractionGeometry(
+                scope: .unhittable, parallaxOrigin: Vec2(x: 0, y: 0), parallaxDepth: Vec2(x: 0, y: 0))
+        }
+        // text/node/camera 스크립트와 shake는 호출부의 frame prepass에서 정확히 한 번 평가됐다.
+        // 여기서 재평가하면 stateful JS의 side effect가 한 프레임에 두 번 진행된다.
         // 현재 로컬 변환으로 계층 노드 맵 재구성(월드행렬 합성 입력).
         var nmap: [Int: Scene3DMath.Node] = [:]
         nmap.reserveCapacity(nodes3D.count + billboards.count)
@@ -1553,38 +1662,19 @@ extension SceneRenderer {
             }
             billboardTextures[i] = current
         }
+        // 원근 3D는 drawable aspect로 직접 투영해 target 전체를 채운다(2D fit/fill 후단 없음).
+        // 따라서 pointerSceneCoords도 stretch로 역매핑하고, 저장 hit quad에도 별도 scale을
+        // 나누지 않는다. 종전에는 draw에 없는 2D fit/zoom만 interaction에 적용해 가장자리 클릭을 잃었다.
         let aspect = Float(target.width) / Float(max(1, target.height))
-        // 카메라 프로퍼티 스크립트 per-frame 재평가(eye/center/up → Vec3, fov → 스칼라). 무스크립트면 base 고정.
-        var eye = SIMD3(cam.eye.x, cam.eye.y, cam.eye.z)
-        var ctr = SIMD3(cam.center.x, cam.center.y, cam.center.z)
-        var upv = SIMD3(cam.up.x, cam.up.y, cam.up.z)
-        var fov = cam.fov
-        for sc in cameraScripts {
-            sc.engine.setRuntime(Double(time))
-            switch sc.key {
-            case "eye":    if let v = sc.engine.evaluateVec(current: [eye.x, eye.y, eye.z]), v.count >= 3 { eye = SIMD3(v[0], v[1], v[2]) }
-            case "center": if let v = sc.engine.evaluateVec(current: [ctr.x, ctr.y, ctr.z]), v.count >= 3 { ctr = SIMD3(v[0], v[1], v[2]) }
-            case "up":     if let v = sc.engine.evaluateVec(current: [upv.x, upv.y, upv.z]), v.count >= 3 { upv = SIMD3(v[0], v[1], v[2]) }
-            case "fov":    if let v = sc.engine.evaluateVec(current: [fov]), let f = v.first, f > 0 { fov = f }
-            default: break
-            }
-        }
-        // eye/center 는 fov(f > 0)처럼 개별검증할 수 없다 — 둘 다 유효한 유한값이어도 조합(eye==center)이
-        // 퇴화할 수 있어 루프 종료 후 합쳐서 검사. 퇴화/비유한 시 lookAt 이 영벡터를 정규화해 NaN 이
-        // viewProj 전체로 전파(빈 프레임, 감사 C2) — 그 프레임만 스크립트 적용 전 베이스 카메라로 폴백.
-        let lookLen = simd_length(ctr - eye)
-        if !lookLen.isFinite || lookLen < 1e-4 {
-            eye = SIMD3(cam.eye.x, cam.eye.y, cam.eye.z)
-            ctr = SIMD3(cam.center.x, cam.center.y, cam.center.z)
-        }
+        let interactionScale = SIMD2<Float>(1, 1)
+        let eye = cameraFrame.eye
+        let ctr = cameraFrame.center
+        let upv = cameraFrame.up
+        let fov = cameraFrame.fov
         let view = Scene3DMath.lookAt(eye: eye, center: ctr, up: upv)
         let proj = Scene3DMath.perspective(fovYDegrees: fov, aspect: aspect,
                                            nearZ: cam.nearZ, farZ: cam.farZ)
-        var viewProj = proj * view
-        // camerashake 3D: 전역 지터를 clip-space 병진으로 viewProj 에 좌승 → 메시/빌보드/파티클 전역 동병진
-        // (depth 무관). 미보유/비활성 씬은 frameShakeOffset=.zero → clipTranslation=항등 → 비트동일 가드.
-        // shadow VP(광원공간)는 viewProj 미참조 → 월드 지오메트리·섀도우 불변, 화면만 흔들림.
-        if frameShakeOffset != .zero { viewProj = Scene3DMath.clipTranslation(frameShakeOffset) * viewProj }
+        let viewProj = proj * view
         // 빌보드 카메라-페이싱 축(월드): right/up(lookAt 과 동일 규약).
         let fwd = simd_normalize(ctr - eye)
         // F533: 퇴화 up(영/평행)은 lookAt 과 같은 기준축 폴백 — 뷰행렬과 빌보드 축 정합 유지 + NaN 방어.
@@ -1663,6 +1753,15 @@ extension SceneRenderer {
                     // 진입 전에 둬서 draw 뿐 아니라 endEncoding+풀타깃 blit+이펙트 체인 비용까지 함께
                     // 회피한다(비가시 fullscreenlayer 는 씬 전체를 재합성할 이유가 없다).
                     let parentVisible = bb.parent.map { Scene3DMath.worldMatrix(id: $0, nodes: nmap)?.visible ?? false } ?? true
+                    // native hit 순회는 `solid`만 참가 게이트로 쓰고 visible/조상 visible은
+                    // disablePropagation에만 쓴다. GPU draw 가드보다 먼저 논리 화면 범위를 게시한다.
+                    if bb.isSolid, bb.layerIndex >= 0 {
+                        pendingInteractionGeometry[bb.layerIndex] = PresentedInteractionGeometry(
+                            scope: .object(PointerHit.Quad(
+                                center: SIMD2(projW * 0.5, projH * 0.5),
+                                axisX: SIMD2(projW, 0), axisY: SIMD2(0, projH))),
+                            parallaxOrigin: Vec2(x: 0, y: 0), parallaxDepth: Vec2(x: 0, y: 0))
+                    }
                     if bb.visible && parentVisible {
                         enc.endEncoding()
                         var srcTex: MTLTexture? = nil
@@ -1701,6 +1800,7 @@ extension SceneRenderer {
                 } else {
                     encodeBillboard(bb, overrideTexture: billboardTextures[item.idx], viewProj: viewProj, eye: eye,
                                     right: right, up: camUp,
+                                    interactionScale: interactionScale,
                                     nmap: nmap, into: enc, device: device, over: over)
                 }
             } else {
@@ -1885,7 +1985,7 @@ extension SceneRenderer {
                     }
                     enc.setCullMode(mesh.cullBack ? .back : .none)
                     // P⑥: 커스텀 파이프라인(번역 셰이더)은 buffer 계약이 스톡 mf_main/mv_main 과 다르다
-                    // (buffer(1)=EngineU 320B — engineUniform() 이 단일 정본, MeshUniform 256B 오독 해소.
+                    // (buffer(1)=EngineU 336B — engineUniform() 이 단일 정본, MeshUniform 256B 오독 해소.
                     // 정점은 머티리얼 상수 p[[buffer(0)]] 와 충돌 회피 위해 buffer(4), 2D 커스텀 레이어
                     // 경로(SceneRendererFrameEncoder.swift:1094-1099)와 동일 계약).
                     if usedCustom, let custom = mesh.customShader {
@@ -2012,19 +2112,55 @@ extension SceneRenderer {
         return true
     }
 
+    /// 카메라-페이싱 쿼드의 월드 코너를 렌더와 같은 viewProj로 투영해 포인터 씬 픽셀 쿼드로 만든다.
+    /// 빌보드 평면은 항상 카메라 right/up 축에 놓여 네 코너의 view-space depth가 같으므로, 원근
+    /// 나눗셈 뒤에도 평행사변형이다. 따라서 실물 광선×평면 판정은 기존 `PointerHit.Quad`와 동치다.
+    static func projectedBillboardHitQuad(
+        tl: SIMD3<Float>, tr: SIMD3<Float>, br: SIMD3<Float>, bl: SIMD3<Float>,
+        viewProj: simd_float4x4, projW: Float, projH: Float,
+        interactionScale: SIMD2<Float>
+    ) -> PointerHit.Quad? {
+        let eps = PointerHit.determinantEpsilon
+        guard projW > 0, projH > 0,
+              interactionScale.x.isFinite, interactionScale.y.isFinite,
+              abs(interactionScale.x) > eps, abs(interactionScale.y) > eps else { return nil }
+
+        func project(_ p: SIMD3<Float>) -> SIMD2<Float>? {
+            let clip = viewProj * SIMD4<Float>(p.x, p.y, p.z, 1)
+            guard clip.x.isFinite, clip.y.isFinite, clip.z.isFinite, clip.w.isFinite,
+                  clip.w > eps, clip.z >= -eps, clip.z <= clip.w + eps else { return nil }
+            let ndc = SIMD2<Float>(clip.x / clip.w, clip.y / clip.w) / interactionScale
+            guard ndc.x.isFinite, ndc.y.isFinite else { return nil }
+            return SIMD2((ndc.x + 1) * 0.5 * projW,
+                         (ndc.y + 1) * 0.5 * projH)
+        }
+
+        guard let pTL = project(tl), let pTR = project(tr),
+              let pBR = project(br), let pBL = project(bl) else { return nil }
+        let quad = PointerHit.Quad(
+            center: (pTL + pTR + pBR + pBL) * 0.25,
+            axisX: pTR - pTL,
+            axisY: pTL - pBL)
+        let det = quad.axisX.x * quad.axisY.y - quad.axisX.y * quad.axisY.x
+        guard det.isFinite, abs(det) > eps else { return nil }
+        return quad
+    }
+
     /// 카메라-페이싱 빌보드 1장: 월드 위치 = (부모월드 · 로컬변환) 원점, 반경 = size/2 × 합성 스케일.
     /// 쿼드 4코너를 카메라 right/up 축으로 전개(월드 좌표) → mvp=viewProj. 뎁스 테스트 유지·미기록(투명),
     /// 양면, over(premult) 블렌드. 부모 서브트리 비가시/자기 비가시면 스킵.
     func encodeBillboard(_ bb: Billboard3D, overrideTexture: MTLTexture? = nil, viewProj: simd_float4x4,
                                  eye: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
+                                 interactionScale: SIMD2<Float>,
                                  nmap: [Int: Scene3DMath.Node],
                                  into enc: MTLRenderCommandEncoder, device: MTLDevice, over: MTLRenderPipelineState) {
         var pWorld = matrix_identity_float4x4
+        var parentVisible = true
         if let pid = bb.parent {
-            guard let pw = Scene3DMath.worldMatrix(id: pid, nodes: nmap), pw.visible else { return }
+            guard let pw = Scene3DMath.worldMatrix(id: pid, nodes: nmap) else { return }
             pWorld = pw.matrix
+            parentVisible = pw.visible
         }
-        if !bb.visible { return }
         // 로컬: 이동(origin) + 스케일(빌보드는 카메라-페이싱이라 로컬 회전은 무시). 부모월드가 나머지 계층 폴드.
         let local = Scene3DMath.modelMatrix(origin: bb.origin, angles: SIMD3<Float>(0, 0, 0),
                                             scale: SIMD3(bb.scale.x, bb.scale.y, 1))
@@ -2054,12 +2190,27 @@ extension SceneRenderer {
         let rollRight = right * ca + up * sa
         let rollUp = -right * sa + up * ca
         let r = rollRight * hw, u = rollUp * hh
+        let hitR = rollRight * (bb.interactionSize.x * 0.5 * sx)
+        let hitU = rollUp * (bb.interactionSize.y * 0.5 * sy)
         let receiverNormal: SIMD3<Float>
         let toEye = eye - center
         if simd_length_squared(toEye) > 1e-12 { receiverNormal = simd_normalize(toEye) }
         else { receiverNormal = -simd_normalize(simd_cross(rollRight, rollUp)) }
         // UV 상단 원점: 상단 = +up. TL(0,0) TR(1,0) BR(1,1) BL(0,1).
         let tl = center - r + u, tr = center + r + u, br = center + r - u, bl = center - r - u
+        if bb.isSolid, bb.layerIndex >= 0,
+           let hitQuad = Self.projectedBillboardHitQuad(
+               tl: center - hitR + hitU, tr: center + hitR + hitU,
+               br: center + hitR - hitU, bl: center - hitR - hitU,
+               viewProj: viewProj,
+               projW: projW, projH: projH, interactionScale: interactionScale) {
+            pendingInteractionGeometry[bb.layerIndex] = PresentedInteractionGeometry(
+                scope: .object(hitQuad), parallaxOrigin: Vec2(x: 0, y: 0),
+                parallaxDepth: Vec2(x: 0, y: 0))
+        }
+        // visibility는 GPU draw만 막는다. native 포인터 순회는 invisible solid도 위 기하에서
+        // 이벤트를 발화하고, visible은 disablePropagation 여부를 판단할 때만 본다.
+        guard bb.visible, parentVisible else { return }
         func vtx(_ p: SIMD3<Float>, _ uu: Float, _ vv: Float) -> [Float] {
             [p.x, p.y, p.z, receiverNormal.x, receiverNormal.y, receiverNormal.z, uu, vv]
         }

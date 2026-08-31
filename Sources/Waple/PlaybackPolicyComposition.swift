@@ -99,9 +99,33 @@ enum RenderPauseComposition {
                         policyWantsMute: verdict.muted)
     }
 
-    /// 렌더러 배열 전체분(판정 하나를 공유). 인덱스가 곧 모니터 인덱스다 —
-    /// `AppDelegate.renderers` 가 `desktopController.screenViews` 와 같은 순서로 만들어지기
-    /// 때문이고, 그 불변식이 깨지면 여기 결정이 엉뚱한 화면에 간다.
+    /// 렌더러 배열 전체분(판정 하나를 공유). 여기서는 **배열 위치를 그대로 모니터 인덱스로 쓴다** —
+    /// 판정이 하나뿐이라 호출자가 "0..<n 번 모니터에 대해 이 판정을 풀어라" 를 요구한 것으로 읽는다.
+    ///
+    /// > ~~인덱스가 곧 모니터 인덱스다 — `AppDelegate.renderers` 가 `desktopController.screenViews`
+    /// > 와 같은 순서로 만들어지기 때문이고, 그 불변식이 깨지면 여기 결정이 엉뚱한 화면에 간다.~~
+    ///
+    /// **[정정 2026-08-30] 위 문장이 근거로 든 사실이 틀렸고, 그래서 예고한 실패가 실제로 났다.**
+    /// `renderers` 는 `screenViews` 순서가 아니라 **`screenViews` 를 nil 슬롯에서 떨어뜨린
+    /// `screenProjects` 순서**로 만들어졌다(`AppDelegate.applyResolved` 의 `compactMap`).
+    /// 즉 빈 슬롯이 하나라도 앞에 있으면 renderers 인덱스는 모니터 인덱스보다 작아지고,
+    /// 마스크 쪽은 `NSScreen.screens` 위치로 만들어지므로(`AppDelegate` 의
+    /// `screenFrames: screens.map(\.frame)`) 첫 빈 슬롯 이후 모든 화면이 **다른 화면의 pause
+    /// 결정**을 받았다. 주석이 예고한 "엉뚱한 화면에 간다" 가 곧 당시의 실동작이었다.
+    ///
+    /// **전제조건(좁다 — 넓게 적으면 그것이 다음 세션의 거짓이 된다):** 스큐는 `global == nil`,
+    /// 즉 **전역 선택 없이 화면별 할당만으로 적용하는 모드**에서만 났다. `MonitorMapping.
+    /// resolveProjectSlots` 는 global 이 nil 일 때만 nil 슬롯을 낸다(다른 실패 경로는 전부
+    /// `return global`). 전역 벽지가 걸려 있으면 슬롯이 전부 채워져 compactMap 이 아무것도
+    /// 떨어뜨리지 않고 두 인덱스가 일치했다. 그 모드는 `AppDelegate.applyCurrentSelection` 이
+    /// `applyResolved(global: nil, folderURL: nil)` 로 도달하는 **공식 지원 경로**다(F029).
+    ///
+    /// **이제는 관례가 아니라 타입이 강제한다.** 프로덕션이 부르는 것은 아래
+    /// `decideAll(globallyPaused:projects:conditions:global:)` 하나뿐이고(이 오버로드의
+    /// 프로덕션 호출부는 0건 — 테스트 전용이다), 그 오버로드는 배열 위치를 쓰지 않고
+    /// **호출자가 실제 모니터 인덱스를 함께 넘기게** 시그니처로 요구한다. 실측 오라클은
+    /// `PlaybackPolicyCompositionTests.testPerProjectDecideAllUsesRealMonitorIndexNotArrayPosition`
+    /// (빈 슬롯 레이아웃 — 화면 2개 중 1번만 마운트, `fullscreenMask: 0b10` → 그 렌더러가 정지).
     static func decideAll(globallyPaused: Bool,
                           verdict: PlaybackVerdict,
                           rendererCount: Int) -> [Decision] {
@@ -116,13 +140,22 @@ enum RenderPauseComposition {
     ///
     /// 전역 정책은 하나이고(사용자 설정), 조건도 하나다(시스템 상태). 갈리는 것은
     /// **벽지가 선언한 덮어쓰기**뿐이라 여기서 프로젝트별로 접는다.
+    ///
+    /// **[2026-08-30] `monitorIndex` 를 호출자가 명시한다 — 배열 위치를 쓰지 않는다.**
+    /// 종전에는 `projects.enumerated()` 의 오프셋을 그대로 `monitorIndex` 로 먹였는데,
+    /// 그 전제("렌더러 배열 위치 == 모니터 인덱스")가 빈 슬롯 레이아웃에서 깨져 있었다
+    /// (위 오버로드의 [정정 2026-08-30] 에 전말과 전제조건을 적었다). 위치를 못 쓰게
+    /// **시그니처로 막는다** — 마스크가 `NSScreen.screens` 위치로 만들어지므로 여기 인덱스도
+    /// 같은 기준이어야 하고, 그 기준을 아는 것은 렌더러를 만든 쪽(`AppDelegate`)뿐이다.
+    /// 반환 배열의 순서·길이는 `projects` 그대로다 — 적용부(`PerRendererPauseState`)가
+    /// 렌더러 배열 위치로 짝짓기 때문이다(그쪽은 양변이 같은 배열이라 자기정합적이다).
     static func decideAll(globallyPaused: Bool,
-                          projects: [WallpaperProject],
+                          projects: [(monitorIndex: Int, project: WallpaperProject)],
                           conditions: PlaybackConditions,
                           global: PlaybackPolicy) -> [Decision] {
-        projects.enumerated().map { index, project in
-            let verdict = PlaybackPolicyResolver.verdict(for: project, conditions: conditions, global: global)
-            return decide(globallyPaused: globallyPaused, verdict: verdict, monitorIndex: index)
+        projects.map { entry in
+            let verdict = PlaybackPolicyResolver.verdict(for: entry.project, conditions: conditions, global: global)
+            return decide(globallyPaused: globallyPaused, verdict: verdict, monitorIndex: entry.monitorIndex)
         }
     }
 

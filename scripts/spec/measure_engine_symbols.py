@@ -81,23 +81,42 @@ def table_count(data, secs):
     return struct.unpack_from("<I", data, off + len(TABLE_DTOR_PREFIX))[0]
 
 
+def collect_symbols(data, secs, rx):
+    """문자열 심볼과 VA를 모으되 NUL 종료 **맨 이름** 좌표를 우선한다.
+
+    같은 이름이 셰이더 선언 조각(`g_Bones[`)과 엔진 등록 테이블의 C 문자열
+    (`g_Bones\0`) 양쪽에 존재한다. 종전의 "첫 등장" 규칙은 배열 유니폼 16종을 전부
+    선언 조각으로 보냈다. 맨 이름이 없는 `g_Texture([\\d]+)` 한 건만 embeddedToken 으로
+    명시해, 좌표 의미가 나머지 143종과 다른 사실을 숨기지 않는다.
+    """
+    chosen = {}
+    for match in rx.finditer(data):
+        name = match.group().decode("ascii")
+        exact = data[match.end():match.end() + 1] == b"\0"
+        previous = chosen.get(name)
+        if previous is not None and (previous[0] or not exact):
+            continue
+        va, section = va_of(match.start(), secs)
+        chosen[name] = (exact, va, section)
+
+    out = {}
+    for name, (exact, va, section) in chosen.items():
+        row = {"va": hex(va) if va else None, "section": section}
+        if not exact:
+            row["coordinateKind"] = "embeddedToken"
+        out[name] = row
+    return out
+
+
 def main():
+    specfmt.require_inputs("measure_engine_symbols",
+                           ("file", BIN, "WE_ROOT", "wallpaper64.exe"))
     with open(BIN, "rb") as fh:
         data = fh.read()
     secs = section_map(data)
 
-    def collect(rx):
-        out = {}
-        for m in rx.finditer(data):
-            s = m.group().decode("ascii")
-            if s in out:
-                continue
-            va, sec = va_of(m.start(), secs)
-            out[s] = {"va": hex(va) if va else None, "section": sec}
-        return out
-
-    uniforms = collect(UNIFORM)
-    rts = collect(RT)
+    uniforms = collect_symbols(data, secs, UNIFORM)
+    rts = collect_symbols(data, secs, RT)
     n_table = table_count(data, secs)
 
     src = specfmt.ev("binary", "wallpaper64.exe 문자열 전수 스캔 (PE 섹션 매핑 포함)")
@@ -119,6 +138,9 @@ def main():
                             "**엔진 유니폼 테이블의 원소 수가 아니다** — 자산(셰이더)이 선언한 "
                             "이름까지 쓸어온다.",
             "테이블과의 차": len(uniforms) - n_table,
+            "VA 좌표 규약": "같은 이름의 후보가 여럿이면 NUL 종료 맨 이름 문자열을 우선한다. "
+                         "맨 이름이 바이너리에 없는 g_Texture 한 건만 정규식 소스 조각 좌표이며 "
+                         "coordinateKind=embeddedToken 으로 표시한다.",
             "자산 쪽으로 확인된 이름": asset_side,
             "확인 근거": "g_Texture0MipMapped / g_Texture1Noise / g_Texture2Clouds 는 "
                         "assets/shaders/HLSL/dx11playlisttransition.frag:18-20 의 "

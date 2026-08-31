@@ -5,7 +5,7 @@
   {
    "id": "mul.shim",
    "value": {
-    "weDialect": "GLSL 문법 + HLSL 네이티브 함수(엔진 프롤로그가 `mul` 을 정의하지 않는다)",
+    "weDialect": "GLSL 문법의 동봉 셰이더가 HLSL 네이티브 이름 `mul` 을 호출한다",
     "hlslSemantics": "mul(v, M) = 행벡터 v·M, m[행][열]",
     "portedShim": "#define mul(a,b) ((b)*(a))  // GLSL/MSL 은 m[열][행] — 같은 대입문이 만드는 행렬이 전치라 순서를 뒤집어야 등가",
     "translatorEmits": "(b * a)",
@@ -20,10 +20,6 @@
     {
      "kind": "file",
      "ref": "Sources/WapleCore/GLSLTranslator.swift translateBody ①"
-    },
-    {
-     "kind": "doc",
-     "ref": "wallpaper_dev/references/…/analysis/deep/lanes/A4-headers-blending-fog.md §1.4 — wallpaper64.exe strings 의 매크로 프롤로그에 `mul` 정의 0건, 포팅 시 `((b)*(a))` 필요"
     },
     {
      "kind": "script",

@@ -5,11 +5,9 @@ import simd
 @testable import WapleRender
 
 /// F200 배치 P: 파티클 오브젝트의 parallaxDepth 가 GPUParticleSystem 까지 배선되고, pv_main 셰이더가
-/// 실제로 cameraOffset×parallaxDepth 를 소비해 정점을 오프셋하는지(레이어 QuadShaders.v_main 과 동형
-/// 규약) GPU 렌더 + 픽셀 판독으로 실증한다. 수정 전 상태(검증자 확정 결함): ParticleShaders.swift 의
-/// pv_main 이 곱셈 없이 (pos + cameraOffset + shakeOffset) 만 쓰고 GPUParticleSystem 에 필드 자체가
-/// 없어 파스값(SceneParticle.parallaxDepth)이 렌더에 전혀 소비되지 않았다 — 이 파일의 세 테스트가
-/// 그 상태에서 컴파일 실패/assert 실패(RED)한다.
+/// parallaxDepth 파스와, 실제 draw가 공통 object root의 origin/depth로 계산한 이동을 파티클에도
+/// 적용하는지 GPU 픽셀로 실증한다. cameraOffset은 더 이상 포인터에서 만든 전역 gain이 아니라
+/// root별로 이미 해소된 NDC 이동이며, vertex ABI의 depth 슬롯에는 단위값이 들어간다.
 final class ParticleParallaxDepthRenderTests: XCTestCase {
     /// 씬 100×100, 파티클 오브젝트 origin=중앙(50,50) + parallaxDepth=0.6(비-기본값, 비-영값).
     private func dotPkg(parallaxDepth: String? = "0.6 0.6 0") -> ScenePackage {
@@ -52,7 +50,7 @@ final class ParticleParallaxDepthRenderTests: XCTestCase {
         XCTAssertEqual(built.first?.parallaxDepth, SIMD2<Float>(1, 1))
     }
 
-    // MARK: - GPU 픽셀 판독: cameraOffset×parallaxDepth 오프셋 실증
+    // MARK: - GPU 픽셀 판독: root origin/depth 오프셋 실증
 
     private func readRGBA(_ texture: MTLTexture) -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: texture.width * texture.height * 4)
@@ -74,15 +72,17 @@ final class ParticleParallaxDepthRenderTests: XCTestCase {
         return false
     }
 
-    /// 정점 오프셋 실증: 동일 cameraOffset 하에서 parallaxDepth=0 은 원위치에 정지(무가중), parallaxDepth=1
-    /// 은 cameraOffset 만큼 완전히 이동해야 한다 — 레이어(QuadShaders.v_main)와 동일한 depth-가중 병진을
-    /// 파티클(pv_main)도 따르는지 실제 GPU 렌더 + 픽셀 판독으로 확인(F200 배치 P, 코드가 아닌 실측 근거).
-    func testParticleShiftsWithCameraOffsetWeightedByParallaxDepth() throws {
+    /// focus=(100,100), root origin=(160,100), amount=1이면 depth=1의 이동은 +60px=NDC +0.6이다.
+    /// depth=0은 고정되어야 하며, 이 계산은 파티클 leaf 필드가 아니라 objects[] root 표에서 와야 한다.
+    func testParticleShiftsWithRootOffsetWeightedByParallaxDepth() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
         let p = dotPkg()
         let doc = try SceneDocument.parse(package: p)
         let renderer = SceneRenderer()
         renderer.projW = 200; renderer.projH = 200
+        renderer.parallaxEnabled = true
+        renderer.parallaxAmount = 1
+        renderer.parallaxFocus = SIMD2<Float>(100, 100)
         let built = renderer.buildParticles(doc: doc, package: p, device: device)
         guard var sys = built.first, let pipe = renderer.particlePipeline(additive: false, device: device) else {
             XCTFail("파티클 시스템/파이프라인 빌드 실패")
@@ -100,7 +100,7 @@ final class ParticleParallaxDepthRenderTests: XCTestCase {
         particle.color = SIMD3<Float>(1, 1, 1)
 
         let width = 20, height = 20  // pixel_x = (ndc+1)*10 — 원위치 NDC[-0.2,0.2] → col[8,12], 여유 포함 판정은 7...12
-        func render(depth: SIMD2<Float>, camOffset off: SIMD2<Float>) throws -> [UInt8] {
+        func render(depth: SIMD2<Float>, enabled: Bool = true) throws -> [UInt8] {
             let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
             desc.usage = [.renderTarget, .shaderRead]
             desc.storageMode = .shared
@@ -114,37 +114,39 @@ final class ParticleParallaxDepthRenderTests: XCTestCase {
             rpd.colorAttachments[0].storeAction = .store
             let enc = try XCTUnwrap(cb.makeRenderCommandEncoder(descriptor: rpd))
             sys.parallaxDepth = depth
-            var camOffset = off
+            renderer.parallaxEnabled = enabled
+            renderer.cameraParallaxRootByOrder[sys.order] = SceneObjectParallaxDescriptor(
+                order: sys.order, id: 1, parent: nil,
+                origin: Vec2(x: 160, y: 100), depth: Vec2(x: depth.x, y: depth.y)
+            )
             var aspectScale = SIMD2<Float>(1, 1)
             renderer.encodeParticle(sys, snapshot: [particle], into: enc, device: device,
-                                    camOffset: &camOffset, aspectScale: &aspectScale)
+                                    aspectScale: &aspectScale)
             enc.endEncoding()
             cb.commit(); cb.waitUntilCompleted()
             return readRGBA(tex)
         }
 
-        // camOffset NDC 0.6 병진 → 이동 목적지 NDC[0.4,0.8] → col[14,18]. 원위치 col[8,12] 와 완전 분리.
-        let camOffset = SIMD2<Float>(0.6, 0)
+        // 루트/초점/amount가 만든 +60px 병진 → col[14,18]. 원위치 col[8,12] 와 완전 분리.
         let originalCols = 8...12
         let shiftedCols = 14...18
 
-        let pinned = try render(depth: SIMD2(0, 0), camOffset: camOffset)
+        let pinned = try render(depth: SIMD2(0, 0))
         XCTAssertTrue(columnsOpaque(pinned, width: width, height: height, cols: originalCols),
-                     "parallaxDepth=0 은 cameraOffset 과 무관하게 원위치에 그려져야(무가중)")
+                     "root parallaxDepth=0 은 원위치에 그려져야")
         XCTAssertFalse(columnsOpaque(pinned, width: width, height: height, cols: shiftedCols),
-                      "parallaxDepth=0 은 cameraOffset 만큼 이동하면 안 됨")
+                      "root parallaxDepth=0 은 계산된 루트 시차만큼 이동하면 안 됨")
 
-        let shifted = try render(depth: SIMD2(1, 1), camOffset: camOffset)
+        let shifted = try render(depth: SIMD2(1, 1))
         XCTAssertFalse(columnsOpaque(shifted, width: width, height: height, cols: originalCols),
                       "parallaxDepth=1 은 원위치에 남아있으면 안 됨(미배선이면 여기서 fail = RED)")
         XCTAssertTrue(columnsOpaque(shifted, width: width, height: height, cols: shiftedCols),
-                     "parallaxDepth=1 은 cameraOffset 만큼 완전히 이동해야")
+                     "root parallaxDepth=1 은 계산된 +60px만큼 이동해야")
 
-        // 무회귀 가드: cameraOffset=0(헤드리스 captureFrames 항상 이 값 — draw() 참조)이면 depth 값과
-        // 무관하게 원위치 그대로(코드 근거는 draw()/captureFrames 의 camOffset 초기값 자체가 항상 .zero).
-        let noMouse = try render(depth: SIMD2(1, 1), camOffset: SIMD2(0, 0))
+        // 시차 게이트가 꺼지면 authored depth와 무관하게 원위치다.
+        let noMouse = try render(depth: SIMD2(1, 1), enabled: false)
         XCTAssertTrue(columnsOpaque(noMouse, width: width, height: height, cols: originalCols),
-                     "cameraOffset=0 이면 parallaxDepth 와 무관하게 원위치(무회귀)")
+                     "cameraparallax=false이면 parallaxDepth와 무관하게 원위치")
         XCTAssertFalse(columnsOpaque(noMouse, width: width, height: height, cols: shiftedCols))
     }
 }

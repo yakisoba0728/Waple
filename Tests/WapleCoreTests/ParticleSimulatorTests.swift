@@ -102,6 +102,20 @@ final class ParticleSimulatorTests: XCTestCase {
         XCTAssertEqual(last[0].alpha, 0.5, accuracy: 0.02)
     }
 
+    /// WE 의 `fadeouttime` 은 말미 지속시간이 아니라 정규화 수명상의 페이드 시작점이다.
+    /// 따라서 0.8이면 n=0.8 전까지 1을 유지하고, 남은 0.2 동안 1→0으로 내려간다.
+    func testAlphaFadeOutTimeIsStartPoint() {
+        var sim = ParticleSimulator(def: linearDef(
+            velocity: Vec3(x: 0, y: 0, z: 0), lifetime: 10, maxCount: 1,
+            operators: [.alphaFade(fadeInTime: 0, fadeOutTime: 0.8)]), seed: 5)
+
+        let before = sim.step(7)[0]
+        XCTAssertEqual(before.alpha, 1, accuracy: 1e-5, "fade 시작점 전에는 완전 불투명")
+
+        let halfway = sim.step(2)[0]
+        XCTAssertEqual(halfway.alpha, 0.5, accuracy: 1e-5, "0.8→1.0 구간의 절반")
+    }
+
     func testSizeChange() throws {
         // initialSize 5, startValue 0.2 → endValue 1.0 over life(10). n=0.5 → mult 0.6 → size 3.
         var sim = ParticleSimulator(def: linearDef(velocity: Vec3(x: 0, y: 0, z: 0), lifetime: 10, maxCount: 1,
@@ -737,8 +751,31 @@ final class ParticleSimulatorTests: XCTestCase {
 
     // MARK: - oscillatealpha (F184/F189/F190)
 
-    /// 자매 oscillateSize 와 동형 직접보간 — peak=scaleMax, trough=scaleMin(구 감산식
-    /// "1-scale*osc" 대비: peak 는 항상 1 로 고정되고 trough 만 scale 로 눌리는 비대칭 수식이었다).
+    /// WE 는 공용 파티클 난수 r을 주파수·위상뿐 아니라 alpha/size 진폭에도 사용한다.
+    /// θ=0이면 factor = scaleMin + r·(scaleMax-scaleMin)·0.5 이다.
+    func testOscillateAlphaAndSizeScaleAmplitudeBySharedRandom() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0),
+                            rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 20, max: 20),
+                           .sizeRandom(min: 5, max: 5),
+                           .alphaRandom(min: 1, max: 1, exponent: 1)],
+            operators: [
+                .oscillateAlpha(frequencyMin: 0, frequencyMax: 0,
+                                scaleMin: 0.2, scaleMax: 0.8, phaseMin: 0, phaseMax: 0),
+                .oscillateSize(frequencyMin: 0, frequencyMax: 0,
+                               scaleMin: 0.5, scaleMax: 1.5, phaseMin: 0, phaseMax: 0),
+            ],
+            renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 23)
+
+        let p = sim.step(0.01)[0]
+        XCTAssertEqual(p.alpha, 0.2 + p.sharedRandom * 0.3, accuracy: 1e-6)
+        XCTAssertEqual(p.size, 5 * (0.5 + p.sharedRandom * 0.5), accuracy: 1e-6)
+    }
+
+    /// 자매 oscillateSize 와 동형 — trough=scaleMin, peak=scaleMin+r·span.
+    /// 구 감산식 "1-scale*osc" 대비: peak 는 항상 1 로 고정되고 trough 만 scale 로 눌렸다.
     func testOscillateAlphaLerpsBetweenScaleMinAndMax() {
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
@@ -747,14 +784,19 @@ final class ParticleSimulatorTests: XCTestCase {
             renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
         var sim = ParticleSimulator(def: def, seed: 3)
         var minA: Float = 1, maxA: Float = 0
+        var sharedRandom: Float = 0
         // freq 는 rad/s 다(F832 반증). f=1 이면 마루가 age=π/2≈1.57s, 골이 3π/2≈4.71s 이므로
         // 극값을 둘 다 훑으려면 6s 가 필요하다(종전 1.5s 는 마루 직전까지밖에 못 갔다).
         for _ in 0..<600 {
             let ps = sim.step(0.01)
-            if let a = ps.first?.alpha { minA = min(minA, a); maxA = max(maxA, a) }
+            if let p = ps.first {
+                sharedRandom = p.sharedRandom
+                minA = min(minA, p.alpha); maxA = max(maxA, p.alpha)
+            }
         }
         XCTAssertEqual(minA, 0.2, accuracy: 0.02, "trough 는 scaleMin")
-        XCTAssertEqual(maxA, 0.9, accuracy: 0.02, "peak 는 scaleMax")
+        XCTAssertEqual(maxA, 0.2 + sharedRandom * 0.7, accuracy: 0.02,
+                       "peak 는 공용 난수로 줄인 scale span")
     }
 
     /// F189 종단검증: 파서 기본값(scalemin 0, scalemax 1)이 시뮬까지 살아남아 0..1 전 구간을
@@ -767,16 +809,20 @@ final class ParticleSimulatorTests: XCTestCase {
             renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
         var sim = ParticleSimulator(def: def, seed: 4)
         var minA: Float = 1, maxA: Float = 0
+        var sharedRandom: Float = 0
         for _ in 0..<600 {   // 6s 스윕 — 마루 π/2·골 3π/2 를 모두 지난다(상기 동일)
             let ps = sim.step(0.01)
-            if let a = ps.first?.alpha { minA = min(minA, a); maxA = max(maxA, a) }
+            if let p = ps.first {
+                sharedRandom = p.sharedRandom
+                minA = min(minA, p.alpha); maxA = max(maxA, p.alpha)
+            }
         }
         XCTAssertLessThan(minA, 0.05, "0 근접까지 어두워져야")
-        XCTAssertGreaterThan(maxA, 0.95, "1 근접까지 밝아져야")
+        XCTAssertEqual(maxA, sharedRandom, accuracy: 0.02, "기본 span 0...1도 r로 줄인 peak")
     }
 
-    /// phasemin=phasemax=0(기본, 미지정) → 전 파티클 동위상(fireworks 근동기 의도) — 종전엔 위상이
-    /// 항상 rng.nextFloat()*2π 완전 랜덤이라 phasemin/max 를 0으로 지정해도 개별 파티클이 어긋났다.
+    /// phasemin=phasemax=0이면 파형의 위상은 같지만, 공용 난수 r이 진폭을 파티클별로 가른다.
+    /// 종전엔 위상까지 rng.nextFloat()*2π로 갈라져 이 둘을 구분하지 못했다.
     func testOscillateAlphaPhaseRangeZeroSyncsParticles() {
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
@@ -787,8 +833,13 @@ final class ParticleSimulatorTests: XCTestCase {
         var sim = ParticleSimulator(def: def, seed: 5)
         let ps = sim.step(0.2)
         XCTAssertGreaterThan(ps.count, 4, "테스트 유효성 전제(다수 스폰)")
-        let first = ps[0].alpha
-        for p in ps { XCTAssertEqual(p.alpha, first, accuracy: 1e-5, "동일 위상 range 면 전 파티클 alpha 동일") }
+        let osc01 = 0.5 * (1 + sin(Float(0.2)))
+        for p in ps {
+            XCTAssertEqual(p.alpha, p.sharedRandom * osc01, accuracy: 1e-5,
+                           "동일 위상, 파티클별 r 진폭")
+        }
+        XCTAssertGreaterThan(Set(ps.map { ($0.alpha * 1000).rounded() }).count, 1,
+                             "위상은 같아도 r 진폭은 파티클마다 달라야")
     }
 
     /// 명시적 phasemin/max 범위가 있으면 파티클별로 위상이 갈라져야(데스싱크).

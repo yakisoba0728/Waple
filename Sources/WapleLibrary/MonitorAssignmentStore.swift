@@ -2,8 +2,8 @@ import Foundation
 
 /// 손상된 스토어 JSON 을 덮어쓰기 전 1회 백업(rename). 복구 가능한 사용자 설정의 무음 파괴를 막는다.
 /// Library/Playlist/Monitor 스토어가 공유한다.
-func backupCorruptStoreFile(_ url: URL, _ corrupt: inout Bool) {
-    guard corrupt else { return }
+func backupCorruptStoreFile(_ url: URL, _ corrupt: inout Bool) -> Bool {
+    guard corrupt else { return true }
     // ms 해상도: 같은 초 내 재손상 시 백업 파일명 충돌 → moveItem 실패 → 원본 유실 방지.
     let backup = url.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970 * 1000))")
     do {
@@ -13,8 +13,10 @@ func backupCorruptStoreFile(_ url: URL, _ corrupt: inout Bool) {
         // 사용자 설정을 무음 파괴하고, 다음 save() 의 백업 재시도(새 ms 타임스탬프)까지 영구히 막았다.
         corrupt = false
         NSLog("%@", "[Waple] backed up corrupt \(url.lastPathComponent) to \(backup.path)")
+        return true
     } catch {
         NSLog("%@", "[Waple] failed to back up corrupt \(url.lastPathComponent): \(error)")
+        return false
     }
 }
 
@@ -36,14 +38,21 @@ func readStoreFile(_ url: URL, what: String, note: String, loadFailed: inout Boo
 /// 화면 키는 CGDirectDisplayID 문자열(앱 쪽에서 생성) — 디스플레이 재연결에도 안정적.
 public final class MonitorAssignmentStore {
     private let fileURL: URL
+    private let backupCorruptFile: (URL, inout Bool) -> Bool
     private var map: [String: String] = [:]
     /// 로드 시 손상(파일은 있으나 디코드 실패) 발견 → 다음 save() 가 덮어쓰기 전에 백업(데이터 손실 방지).
     private var corrupt = false
     /// 로드 시 읽기 자체가 실패(권한·잠금 등 일시적) → 원본이 멀쩡할 수 있어 save() 를 건너뛴다.
     private var loadFailed = false
 
-    public init(baseDirectory: URL) {
+    public convenience init(baseDirectory: URL) {
+        self.init(baseDirectory: baseDirectory, backupCorruptFile: backupCorruptStoreFile)
+    }
+
+    /// 백업 실패 호출자 경계를 결정적으로 검증하기 위한 내부 주입점. 공개 API 는 위 convenience init 하나다.
+    init(baseDirectory: URL, backupCorruptFile: @escaping (URL, inout Bool) -> Bool) {
         fileURL = baseDirectory.appendingPathComponent("monitors.json")
+        self.backupCorruptFile = backupCorruptFile
         guard let data = readStoreFile(fileURL, what: "monitors.json", note: "starting empty", loadFailed: &loadFailed) else { return }
         do { map = try JSONDecoder().decode([String: String].self, from: data) }
         catch { NSLog("%@", "[Waple] monitors.json corrupt — preserving, starting empty: \(error)"); corrupt = true }
@@ -72,7 +81,10 @@ public final class MonitorAssignmentStore {
             NSLog("%@", "[Waple] monitors.json save skipped — earlier read failed transiently, avoiding clobber")
             return
         }
-        backupCorruptStoreFile(fileURL, &corrupt)  // 손상 원본을 덮어쓰기 전 1회 백업
+        guard backupCorruptFile(fileURL, &corrupt) else {
+            NSLog("%@", "[Waple] monitors.json save skipped — corrupt original backup failed, avoiding clobber")
+            return
+        }
         do {
             let data = try JSONEncoder().encode(map)
             try data.write(to: fileURL, options: .atomic)

@@ -158,7 +158,7 @@ public enum WallpaperProperties {
             var options: [WallpaperProperty.Option]? = nil
             if let opts = dict["options"] as? [[String: Any]] {
                 options = opts.map { WallpaperProperty.Option(label: localizedString(($0["label"] as? String) ?? "", table: localized) ?? "",
-                                                              value: parseValue($0["value"], type: "")) }
+                                                              value: parseValue($0["value"], type: type)) }
             }
             result.append(WallpaperProperty(
                 key: key,
@@ -196,9 +196,13 @@ public enum WallpaperProperties {
             if let s = raw as? String, let f = lenientFloat(s) { return .number(Double(f)) }
             return .number(0)
         default:
+            // JSONSerialization 의 NSNumber(0/1)은 `as? Bool`도 성공한다. parseNumber가
+            // CFBoolean을 명시적으로 배제하므로 숫자를 먼저 가르면 원래 JSON 타입 태그가
+            // 보존된다. 특히 combo 기본값/option tag가 .bool로 오타입되면 숫자 preset
+            // override(.number)와 달라져 SwiftUI Picker가 무선택 상태가 된다.
             if let s = raw as? String { return .string(s) }
-            if let b = raw as? Bool { return .bool(b) }
             if let n = parseNumber(raw) { return .number(n) }
+            if let b = raw as? Bool { return .bool(b) }
             return .none
         }
     }

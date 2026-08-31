@@ -7,6 +7,25 @@ import AVFoundation
 /// 그 타입은 원래부터 "상태가 메인 큐 한정"(파일 머리말)이었고 이제 타입이 그걸 말한다.
 @MainActor
 final class VideoRendererLifecycleTests: XCTestCase {
+    func testPreparedConversionMountsSynchronouslyThroughRendererFactory() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data([0x01]).write(to: dir.appendingPathComponent("movie.webm"))
+        let prepared = dir.appendingPathComponent("movie-converted.mp4")
+        try makeTinyMP4(at: prepared)
+        let project = project(id: "prepared", fileName: "movie.webm", dir: dir)
+
+        let renderer = try XCTUnwrap(
+            RendererFactory.makeRenderer(for: project, preparedVideoURL: prepared) as? VideoRenderer)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64))
+        try renderer.mount(in: container, project: project)
+
+        XCTAssertNotNil(renderer.player, "prepared mp4는 mount 반환 전에 장착돼야 RendererSwap이 성공을 커밋할 수 있다")
+        XCTAssertEqual(playerLayers(in: container).count, 1)
+        XCTAssertNil(renderer.lastError)
+        renderer.teardown()
+    }
+
     func testMountingAgainReplacesExistingPlayerLayer() throws {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }

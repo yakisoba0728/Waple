@@ -122,14 +122,23 @@ jobs:
       # 경고는 빌드를 세우지 않으므로 그냥 두면 수천 줄 로그에 묻힌다 — 파일:행 단위로
       # 세어 요약에 남기고, 전문은 아티팩트로 올려 다음 작업의 입력으로 쓴다.
       # 이 숫자가 0 이 되면 언어 모드를 .v6 로 올릴 수 있다.
+      #
+      # [2026-08-31] 깨끗한 Xcode 27/Swift 6.4 빌드에서 Sources 고유 진단은 25자리다
+      # (전부 SceneRenderer — 별도 격리 재설계 대상). 계획만 있고 현재값/상한이
+      # 없으면 새 위반이 들어와도 계속 초록이므로, 이 실측치를 **증가 금지 ceiling**으로 둔다.
+      # 진단을 고친 커밋은 아래 상한도 함께 낮춘다. 테스트 타깃 경고는 이 소스 전환 게이트와
+      # 섞지 않는다(`swift build` 로그라 현재도 들어오지 않는다).
       - name: Concurrency diagnostics census
         if: always() && matrix.configuration == 'debug'
         run: |
           [ -f build-output.log ] || { echo "빌드 로그 없음"; exit 0; }
           TOTAL=$(grep -c "warning:" build-output.log || true)
+          SOURCE_WARNINGS=$(grep -E '(^|/)Sources/.*:[0-9]+:[0-9]+: warning:' build-output.log \
+            | sed -E 's|^.*(/Sources/)|Sources/|' | sort -u | wc -l | tr -d ' ')
           echo "### 엄격 동시성 진단 (${{ matrix.configuration }})" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "총 warning: \`${TOTAL:-0}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Sources 고유 진단: \`${SOURCE_WARNINGS:-0}\` (상한 25)" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| 건수 | 파일 |" >> "$GITHUB_STEP_SUMMARY"
           echo "| ---: | --- |" >> "$GITHUB_STEP_SUMMARY"
@@ -146,6 +155,10 @@ jobs:
             | sort | uniq -c | sort -rn | head -25 >> "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${SOURCE_WARNINGS:-0}" -gt 25 ]; then
+            echo "::error::Sources warning ${SOURCE_WARNINGS}자리 — Swift 6 전환 기준선 25 초과."
+            exit 1
+          fi
 
       # release 빌드 로그도 올린다 — 이 레인의 존재 이유가 최적화 의존 결함인데
       # 종전엔 debug 것만 올라와 정작 필요한 쪽 로그가 없었다.
@@ -193,9 +206,10 @@ jobs:
         id: test
         continue-on-error: ${{ matrix.configuration == 'release' }}
         env:
-          # 평소엔 0 — 기준선이 없으면 SyntheticPixelGoldenTests 가 **실패**한다(도장이 되지 않게).
-          # workflow_dispatch 로 golden_bootstrap 을 켤 때만 기준선을 다시 뜬다.
-          WAPLE_GOLDEN_BOOTSTRAP: ${{ inputs.golden_bootstrap && '1' || '0' }}
+          # 매트릭스 잡은 서로 파일시스템을 공유하지 않는다. 여기서 bootstrap 을 켜면 debug 와
+          # release 가 **각자 자기 기준선**을 만들고 자기 픽셀로 통과한다. 평소 검증은 항상 0,
+          # 재생성은 아래 직렬 `golden-bootstrap` 잡 하나가 debug→release 순서로 맡는다.
+          WAPLE_GOLDEN_BOOTSTRAP: "0"
         run: |
           set -o pipefail
           swift test --skip-build -c ${{ matrix.configuration }} ${{ matrix.testFlags }} 2>&1 | tee test-output.log
@@ -256,20 +270,68 @@ jobs:
       # 오판했다 — `--parallel` 은 전부 통과하면 XCTest 의 `Executed N tests` 줄을 안 찍는데
       # 그걸 "필터가 0건 매치" 로 읽어 통과한 클래스를 실패로 보고했다. 이 리포가 반복해서
       # 당한 "검사하는 척하는 검사" 를 내가 그대로 만든 셈이라, 기계가 읽는 형식으로 바꾼다.
+      #
+      # ══════════════════════════════════════════════════════════════════════
+      # [2026-08-30] **그 스킵 방어가 죽어 있었다 — 구조적으로 항상 0 이었다.**
+      #
+      # 아래 `run:` 안 [2026-08-20] 블록이 "스킵을 통과로 세면 안 된다" 고 선언하고
+      # 실행 로그에서 `' skipped ('` 를 세게 만들어 뒀는데, **그 로그는 `--parallel` 이
+      # 찍은 것이고 병렬 러너는 XCTest 의 스킵 줄을 아예 안 찍는다.** 즉 카운터는
+      # 세는 척만 하고 언제나 0 이었다.
+      #
+      # 실측(2026-08-30, 이 트리 · Swift 6.4 / arm64):
+      #   swift test -c debug --skip-build --parallel --num-workers 6 \
+      #     --filter SceneCompositeConventionTests --xunit-output /tmp/pv_par.xml > /tmp/pv_par.log
+      #   grep -c "' skipped (" /tmp/pv_par.log  ->  0
+      #   grep -ci skip        /tmp/pv_par.log   ->  0     (로그 전체에 skip 이라는 글자가 없다)
+      #   grep -o 'tests="[0-9]*"' /tmp/pv_par.xml -> tests="16"
+      #   grep -c skipped      /tmp/pv_par.xml   ->  0     (`<skipped/>` 도 없다)
+      # 폴백이던 XML 도 스킵을 통과로 센다(위 [2026-08-20] 이 적은 그대로 —
+      # XUnitGenerator 는 `tests` 에 스킵을 포함하고 `<skipped/>` 를 안 쓴다).
+      # 그래서 스킵을 볼 수 있는 채널이 **하나도 없었다.**
+      #
+      # 어떤 실패가 여기를 그냥 통과하나 — 교정된 형태로 적는다. 러너에서 Metal 이
+      # 통째로 사라지는 양상은 이 게이트가 아니라 아래 census 의 **상한 100** 이 잡는다
+      # (Metal 가드가 걸린 파일에 거주하는 테스트가 575건이라 기준선 63 을 훌쩍 넘긴다).
+      # 여기를 빠져나가는 것은 **좁은 쪽**이다: 이 두 클래스의 가드만 넓히면
+      # (예: `XCTSkipUnless(hasMetal && hasDisplay)`) 스킵이 16 늘어 63+16=79 로 상한
+      # 아래에 머물고, `Executed` 는 스킵을 포함하므로 하한도 못 본다. 즉 이 게이트는
+      # **아무것도 증명하지 못한 채 "16건 실행·통과(스킵 0)" 를 적극적으로 거짓 출력**하고,
+      # `AGENTS.md` 는 그 초록을 `--parallel` 을 판정에 써도 되는 근거로 인용한다.
+      #
+      # 고친 방법 — 스킵 신호를 **볼 수 있는 실행**에서 가져온다:
+      #   ① 클래스당 **순차 1회**를 스킵 오라클로 돌린다. 순차 러너는 스킵을 찍는다.
+      #      `--parallel` 은 경합 반복(3회)에만 쓴다 — 경합을 보는 것이 원래 목적이므로
+      #      그 성질은 그대로 남는다.
+      #   ② 판정을 개수의 **양성 대조**로 바꾼다. 정적으로 센 기대값(그 클래스가 선언한
+      #      `func test` 수)과 xunit `tests` 를 맞춘다. 종전엔 `tests > 0` 만 봤으므로
+      #      테스트가 조용히 줄어도 통과했다.
+      #
+      # **`Executed N tests, with 0 tests skipped` 같은 리터럴을 요구하면 안 된다** —
+      # XCTest 는 스킵이 0 이면 그 절을 아예 안 찍는다(실측: 순차 16건 전부 통과 시
+      # `Executed 16 tests, with 0 failures (0 unexpected)`, `tests skipped` 문자열 없음).
+      # 그러니 요구할 것은 "스킵 줄이 **없다**" 이지 "0 이라고 적혀 있다" 가 아니다.
+      # ══════════════════════════════════════════════════════════════════════
       - name: Parallel isolation gate
         if: matrix.configuration == 'debug'
         run: |
           set -uo pipefail
           fail=0
           for cls in SceneRenderSettingsTests SceneCompositeConventionTests; do
+            # 스킵 오라클 — **순차 1회.** 병렬 로그에는 스킵 줄이 없다(위 [2026-08-30] 실측).
+            seqlog="parallel-$cls-seq.log"
+            swift test -c debug --filter "$cls" > "$seqlog" 2>&1 || true
+            # 기대 개수는 소스에서 센다 — 이름을 하드코딩하지 않는 이 파일의 관례대로
+            # (아래 타깃 존재 게이트와 같은 이유: 하드코딩은 rename 마다 거짓 실패한다).
             for i in 1 2 3; do
               xml="parallel-$cls-$i.xml"
               log="parallel-$cls-$i.log"
               swift test -c debug --parallel --num-workers 6 --filter "$cls" \
                 --xunit-output "$xml" > "$log" 2>&1 || true
-              python3 - "$xml" "$log" "$cls" "$i" <<'PYEOF' || fail=1
-          import re, sys, xml.etree.ElementTree as ET
+              python3 - "$xml" "$log" "$cls" "$i" "$seqlog" <<'PYEOF' || fail=1
+          import pathlib, re, sys, xml.etree.ElementTree as ET
           path, logpath, cls, run = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+          seqpath = sys.argv[5]
           try:
               root = ET.parse(path).getroot()
           except Exception as e:
@@ -287,18 +349,57 @@ jobs:
           # (SceneCompositeConventionTests 는 func test 16 / XCTSkip 16)라, GPU 없는 러너에서
           # 16건 전부 스킵돼도 종전 판정은 "16건 통과" 를 **적극적으로 거짓 출력**했다.
           # 이 게이트의 초록이 AGENTS.md 의 `--parallel` 허용 근거이므로 그건 도장이다.
-          # 그래서 실행 로그에서 스킵을 직접 센다(census 스텝과 같은 신호). 스킵이 하나라도
+          # ~~그래서 실행 로그에서 스킵을 직접 센다(census 스텝과 같은 신호).~~
+          #
+          # **[정정 2026-08-30] 그 "실행 로그" 가 병렬 로그였고, 병렬 러너는 스킵 줄을
+          # 안 찍는다 — 카운터는 구조적으로 언제나 0 이었다.** 위 의도는 맞았고 신호를
+          # 잘못 골랐다. 근거·실측은 이 스텝 위 YAML 주석의 [2026-08-30] 블록에 있다.
+          # 이제 스킵은 **순차 실행 로그**에서 본다(그쪽은 찍는다). 스킵이 하나라도
           # 있으면 이 게이트는 **아무것도 증명하지 못한 것**이므로 통과시키지 않는다.
           try:
-              logtext = open(logpath, encoding="utf-8", errors="replace").read()
+              seqtext = pathlib.Path(seqpath).read_text(encoding="utf-8", errors="replace")
           except OSError as e:
-              print(f"::error::{cls} #{run}: 실행 로그를 못 읽었다 ({e}) — 스킵 여부를 판정할 수 없다")
+              print(f"::error::{cls} #{run}: 순차 실행 로그를 못 읽었다 ({e}) — 스킵 여부를 판정할 수 없다")
               raise SystemExit(1)
-          skipped = len(re.findall(r"' skipped \(", logtext))
+          skipped = len(re.findall(r"' skipped \(", seqtext))
           if skipped:
-              print(f"::error::{cls} #{run}: {tests}건 중 {skipped}건이 **스킵**됐다 — "
+              print(f"::error::{cls} #{run}: 순차 실행에서 {skipped}건이 **스킵**됐다 — "
                     f"이 게이트는 공유 자원 격리를 증명하지 못했다(GPU 부재 러너로 보인다). "
                     f"스킵을 통과로 세지 않는다.")
+              raise SystemExit(1)
+          # 순차 쪽이 실제로 돌았는지도 본다 — 0건이면 스킵 오라클 자체가 도장이다.
+          seq_exec = [int(m) for m in re.findall(r"Executed (\d+) test", seqtext)]
+          if not seq_exec or max(seq_exec) == 0:
+              print(f"::error::{cls} #{run}: 순차 실행이 0건이다 — 스킵 오라클이 아무것도 재지 못했다")
+              raise SystemExit(1)
+          # 양성 대조: 소스가 선언한 `func test` 수와 실행 수를 맞춘다. 종전엔 `tests > 0`
+          # 만 봐서 테스트가 조용히 줄어도 통과했다. 레시피는 AGENTS.md 「빌드와 테스트」 정본.
+          #
+          # 세는 단위는 **파일**이다 — 대상 클래스를 담은 파일의 `func test` 를 센다.
+          # 그래서 그 파일에 XCTestCase 클래스가 둘 이상이면 수가 클래스에 귀속되지 않는다.
+          # 지금은 둘 다 1클래스 1파일이고(실측 2026-08-30: 두 파일 각각 클래스 1개,
+          # extension 0개), 그 전제가 깨지면 조용히 어긋나는 대신 **여기서 실패**한다.
+          decl = 0
+          for f in pathlib.Path("Tests").rglob("*.swift"):
+              src = f.read_text(encoding="utf-8", errors="replace")
+              if not re.search(r"class\s+%s\s*:\s*XCTestCase" % re.escape(cls), src):
+                  continue
+              here = re.findall(r"class\s+([A-Za-z0-9_]+)\s*:\s*XCTestCase", src)
+              if len(here) != 1:
+                  print(f"::error::{cls} #{run}: `{f}` 에 XCTestCase 클래스가 {len(here)}개 "
+                        f"({here}) — 파일 단위로 센 수를 클래스에 귀속시킬 수 없다. "
+                        f"이 게이트의 세는 단위를 클래스로 바꿔라.")
+                  raise SystemExit(1)
+              decl += len(re.findall(
+                  r"(?m)^\s*(?:@\w+(?:\([^)]*\))?\s+|(?:private|fileprivate|internal|public|open|"
+                  r"final|static|class|nonisolated|override|mutating)\s+)*func test", src))
+          if decl == 0:
+              print(f"::error::{cls} #{run}: 소스에서 `func test` 를 0개 뽑았다 — "
+                    f"클래스가 사라졌거나 이 게이트의 대상 이름이 낡았다")
+              raise SystemExit(1)
+          if tests != decl:
+              print(f"::error::{cls} #{run}: 실행 {tests}건 vs 소스 선언 {decl}건 — "
+                    f"테스트가 사라졌거나 필터가 일부만 잡았다")
               raise SystemExit(1)
           if fails or errors:
               print(f"::error::{cls} #{run}: {tests}건 중 실패 {fails} 오류 {errors} — 공유 자원이 남아 있다")
@@ -306,7 +407,8 @@ jobs:
                   if list(tc):
                       print(f"    ✗ {tc.get('classname')}.{tc.get('name')}")
               raise SystemExit(1)
-          print(f"  {cls} #{run}: {tests}건 실행·통과(스킵 0)")
+          print(f"  {cls} #{run}: {tests}건 실행·통과 — 소스 선언 {decl}건과 일치, "
+                f"순차 대조에서 스킵 0")
           PYEOF
             done
           done
@@ -499,7 +601,7 @@ jobs:
       # 지금 정상치 63~64 에서는 1.56배다. **실효 여유는 36 이고, 오디오 출력이 죽은 머신에서는
       # 78~79 까지 올라가 여유가 21 로 줄어든다.** 상한을 다시 잡을 때 이 여유부터 보라.
       #
-      # ── 하한 3774 — 실행 수 래칫과 그 이력 ───────────────────────────────
+      # ── 하한 3875 — 실행 수 래칫과 그 이력 ───────────────────────────────
       # 테스트 수는 늘기만 한다(줄면 파일이 빠졌거나 번들이 안 실렸다는 뜻).
       #
       # 하한은 **초록 실행이 실제로 잰 값**에서만 올린다(추정 금지). 갱신 이력:
@@ -545,7 +647,39 @@ jobs:
       # debug·release 두 잡 성공)에서 `executed=3774 skipped=64`. 정적 개수도 정확히 3,774 라
       # **열두 번째로** 어긋나지 않았다.
       #
+      # [2026-08-30 래칫] 3774 → **3875** — 위 미이행분을 갚는다. 여유 101 → 0.
+      #
+      # 실측(2026-08-30 · 이 맥 · macOS · Swift 6.4 / arm64 · `swift test` 순차):
+      #   커밋 `70a8a708`(HEAD)의 정적 개수 = **3,875** — 정본 레시피(AGENTS.md
+      #   「빌드와 테스트」)를 **커밋된 파일에만** 적용해 git 오브젝트에서 직접 셌다:
+      #     git ls-tree -r HEAD --name-only | grep '^Tests/.*\.swift$' \
+      #       | while read -r f; do git show "HEAD:$f"; done | grep -cE '<정본 레시피>'
+      #   같은 세션의 전 스위트 실행 = **실패 0 / 스킵 63**.
+      #
+      # **워킹트리가 이미 3,883 이었다는 점을 그대로 적는다** — 이 라운드가 여러 레인을
+      # 동시에 돌려서 다른 레인이 오라클 8개를 얹었다(번들별 실측 26·1166·74·52·2076·28·461
+      # = 3,883, 실패 0, 스킵 31+32=63. 파일별 실측: PlaybackPolicyCompositionTests +3 ·
+      # PlaybackPolicyWiringTests +1 · Model3DVertexLayoutTests +4 = 8). 하한은 그 3,883 이
+      # 아니라 **HEAD 의 3,875** 로 박는다 — 위 [2026-08-21 다섯 번째] 가 정확히 같은 상황에서
+      # ("워킹트리는 이미 3119 였다 … 안 재 본 숫자를 하한으로 박으면 그게 곧 근거 없는
+      # 게이트다") 세운 판단을 따른다. 하한은 최소값이라 실측이 더 커도 초록은 유지된다.
+      #
+      # 증분 101 의 출처는 아래 [2026-08-27] 이 커밋별로 이미 적어 둔 그 셋이다
+      # (`a9f271b` +33 · `6a0e389` +6 · `4c58826` +62 = 101). 새로 잰 것이 아니라
+      # 그 미이행분이 이제 하한에 반영된 것이다.
+      #
+      # **규약과의 차이를 숨기지 않는다.** 아래 [2026-08-27] 은 "정적 3,875 를 알고 있어도
+      # 손으로 박지 마라 — 래칫 규약은 그린 CI 실측이다" 라고 적었고, 이 값의 출처는
+      # 그린 CI 가 아니라 **이 맥의 실행**이다. 규약의 목적(재지 않은 숫자를 게이트로 쓰지
+      # 않는 것)은 지켰지만 — 추정이 아니라 실행해서 잰 값이다 — **측정 환경은 규약이
+      # 요구한 그것이 아니다.** 그래서 이 문단에 런 id 가 없다. 다음 그린 CI 가
+      # `executed=3875` 이상을 확인하면 여기에 런 id 를 덧붙여 근거를 규약대로 마감해라.
+      # 러너 스킵이 63 에서 흔들려도 이 수는 안 바뀐다 — `executed` 는 스킵을 포함한다
+      # (위 표에서 스킵 64/65 로 갈려도 executed 는 둘 다 3,686 이었다).
+      #
       # ⚠️ **[2026-08-27] 래칫 미이행 — 지금 여유는 101 이다. 다음 그린에서 반드시 올려라.**
+      # (**[정정 2026-08-30]** 위 [2026-08-30 래칫] 에서 이행했다. 아래 근거는 그대로 둔다 —
+      #  증분 101 의 커밋별 출처가 여기 적혀 있고, 그것이 새 하한의 근거다.)
       # `e48bd3b` 이후 세 커밋이 하한을 안 올린 채 테스트를 얹었다(커밋별 정적 실측):
       #   `a9f271b` 3807  +33  재생정책 stage 3
       #   `6a0e389` 3813  +6   캡처 하네스
@@ -587,6 +721,24 @@ jobs:
       #      의도적으로 늘리거나 줄일 때만 바뀐다.
       #   ② `Test` 스텝이 중간에 죽으면 뒤쪽 타깃이 로그에 없어 여기가 빨개진다. 그건 오탐이
       #      아니라 "스위트가 안 끝났다" 는 같은 신고다 — 다만 **`Test` 스텝의 실패를 먼저 읽어라**.
+      #
+      # **[정정 2026-08-30] 한계 ① 보다 싼 구멍이 있었다 — `.swift` 만 지우면 됐다.**
+      # 종전 이 게이트는 `XCTestCase` 클래스를 0개 낸 디렉터리를 `continue` 로 넘겼다
+      # ("클래스가 없는 지원 전용 디렉터리는 대상이 아니다"). 그 예외가 **선언된
+      # 테스트 타깃까지 덮었다**: `Tests/WaplePolicyTests/*.swift` 를 지우고 디렉터리만
+      # 남기면 ⓐ 존재 게이트는 `continue` 로 넘어가고, ⓑ 디렉터리 수는 그대로 7 이고,
+      # ⓒ `swift build --build-tests` 는 소스 없는 선언 타깃에도 성공한다. 즉 그 타깃의
+      # 오라클 74건이 통째로 사라진 채 세 게이트가 전부 초록이었다.
+      # (하한도 못 잡았다 — 그때 여유가 101 이라 3,875-74=3,801 이 3,774 를 넘겼다.
+      #  그 여유는 위 [2026-08-30 래칫] 이 0 으로 닫았지만, 오라클을 더하는 순간 여유가
+      #  다시 벌어지므로 개수 게이트로는 이 구멍이 **원리적으로** 안 닫힌다 — 위 문단들이
+      #  이미 그렇게 논증했다.)
+      #
+      # 그래서 판정 기준을 `Tests/` 디렉터리 순회에서 **`Package.swift` 의 `.testTarget`
+      # 선언**으로 바꾼다. 선언된 타깃이 `XCTestCase` 를 0개 내면 그건 지원 디렉터리가
+      # 아니라 **사고**이므로 실패다. `continue` 자체는 남긴다 — 선언되지 않은 디렉터리
+      # (진짜 지원 전용)가 거짓 실패를 내지 않게 하는 것이 그 예외의 원래 목적이었다.
+      # 선언 목록을 소스에서 뽑는 것은 위 "이름을 하드코딩하지 않는 이유" 와 같은 이유다.
       # ══════════════════════════════════════════════════════════════════════
       - name: Skip / execution census
         if: always()
@@ -599,7 +751,10 @@ jobs:
             exit 0
           fi
           SKIPPED=$(grep -c "' skipped (" test-output.log || true)
-          EXECUTED=$(grep -oE "Executed [0-9]+ test" test-output.log | tail -1 | grep -oE "[0-9]+" || echo 0)
+          # Swift 툴체인에 따라 xctest 번들이 하나이거나 타깃별 여러 개다. 마지막 `Executed`
+          # 줄은 마지막 번들(필터 실행에서는 0건 번들)일 뿐이므로, 최상위 `*.xctest` 완료
+          # 요약만 합산한다. 클래스/`All tests` 중첩 요약은 helper 가 제외한다.
+          EXECUTED=$(python3 scripts/dev/xctest-census.py test-output.log)
           echo "- executed: \`${EXECUTED}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- skipped:  \`${SKIPPED}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "executed=${EXECUTED} skipped=${SKIPPED}"
@@ -610,10 +765,10 @@ jobs:
             echo "::error::스킵 ${SKIPPED}건 — 상한 100 초과. GPU/코퍼스 없이 대량 스킵되고 있을 가능성이 크다."
             exit 1
           fi
-          # (하한 3774 — 실행 수 래칫과 그 이력) — 근거는 이 스텝 위 YAML 주석에 있다.
+          # (하한 3875 — 실행 수 래칫과 그 이력) — 근거는 이 스텝 위 YAML 주석에 있다.
           # run 블록 밖으로 옮긴 이유도 거기 적었다(21,000바이트 한도).
-          if [ "${EXECUTED:-0}" -lt 3774 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 3774 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
+          if [ "${EXECUTED:-0}" -lt 3875 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 3875 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
             exit 1
           fi
 
@@ -626,19 +781,39 @@ jobs:
           ran = set(re.findall(r"Test Suite '([A-Za-z0-9_]+)'", log))
           ran |= set(re.findall(r"Test Case '-\[[A-Za-z0-9_]+\.([A-Za-z0-9_]+) ", log))
 
+          # 기대 목록의 정본은 `Package.swift` 의 `.testTarget` 선언이다 — `Tests/` 순회가
+          # 아니다. 근거는 위 [정정 2026-08-30]. 뽑기 자체가 실패하면 그것도 사고다.
+          manifest = pathlib.Path("Package.swift").read_text(encoding="utf-8")
+          declared = sorted(set(re.findall(
+              r'\.testTarget\(\s*name:\s*"([A-Za-z0-9_]+)"', manifest)))
+          if len(declared) < 7:
+              print(f"::error::Package.swift 의 .testTarget 선언이 {len(declared)}개 — 하한 7 미만. "
+                    f"타깃 선언이 사라졌거나 파싱이 낡았다: {declared}")
+              raise SystemExit(1)
+
           targets = sorted(d for d in pathlib.Path("Tests").iterdir() if d.is_dir())
           if len(targets) < 7:
               print(f"::error::테스트 타깃 디렉터리가 {len(targets)}개 — 하한 7 미만. "
                     f"타깃이 통째로 사라졌다: {[d.name for d in targets]}")
               raise SystemExit(1)
 
-          missing, rows = [], []
+          # 선언됐는데 디렉터리가 없는 것도 사고다(종전엔 순회 기준이라 보이지 않았다).
+          have = {d.name for d in targets}
+          absent = [n for n in declared if n not in have]
+          if absent:
+              print(f"::error::Package.swift 가 선언한 테스트 타깃의 디렉터리가 없다: {absent}")
+              raise SystemExit(1)
+
+          missing, empty, rows = [], [], []
           for d in targets:
               classes = set()
               for f in d.rglob("*.swift"):
                   classes |= set(re.findall(r"class\s+([A-Za-z0-9_]+)\s*:\s*XCTestCase",
                                             f.read_text(encoding="utf-8", errors="replace")))
               if not classes:
+                  # 선언된 타깃이 XCTestCase 를 0개 내면 **사고다** — 넘기지 않는다.
+                  if d.name in declared:
+                      empty.append(d.name)
                   continue                      # 클래스가 없는 지원 전용 디렉터리는 대상이 아니다
               hit = classes & ran
               rows.append((d.name, len(classes), len(hit)))
@@ -647,31 +822,20 @@ jobs:
 
           for name, total, hit in rows:
               print(f"  {name}: 선언 {total} · 로그에서 확인 {hit}")
+          if empty:
+              for name in empty:
+                  print(f"::error::타깃 `{name}` 은 Package.swift 가 `.testTarget` 으로 선언했는데 "
+                        f"`Tests/{name}/` 에서 `XCTestCase` 클래스를 **0개** 냈다 — "
+                        f"소스가 지워졌다. 선언된 타깃에는 지원 전용 예외를 적용하지 않는다.")
+              raise SystemExit(1)
           if missing:
               for name, sample in missing:
                   print(f"::error::타깃 `{name}` 의 테스트 클래스가 실행 로그에 **하나도** 없다 — "
                         f"번들이 안 실렸거나 타깃이 빠졌다. 예: {sample}")
               raise SystemExit(1)
-          print(f"타깃 존재 게이트 통과 — {len(rows)}개 타깃 전부 실행 로그에 나타난다.")
+          print(f"타깃 존재 게이트 통과 — 선언 {len(declared)}개 · 검사 {len(rows)}개 타깃 "
+                f"전부 실행 로그에 나타난다.")
           PYEOF
-
-      # 합성 픽셀 골든 기준선을 아티팩트로 올린다 — `workflow_dispatch` 의 `golden_bootstrap`
-      # 을 켰을 때만. (앞머리에 얹혀 있던 `Show failure summary` 의 근거 두 줄은 2026-08-21 에
-      # 제 스텝으로 돌려보냈다 — 아래 그 스텝의 정정 주석 참조. 이 문단은 이제 이 스텝만의 것이다.)
-      #
-      # debug 구성에서만 뜬다. 이건 **구조적 위험이 아니라 검증된 선택**이다:
-      # 기준선은 한 벌이어야 하는데(두 구성이 각자 뜨면 어느 쪽이 정본인지 사라진다),
-      # debug 로 뜬 그 한 벌을 **release 레인이 매 실행 검증한다** — 위 `Test` 스텝은 두 구성
-      # 모두에서 `SyntheticPixelGoldenTests` 를 돌리고, 기준선이 구성에 의존했다면 release 가
-      # 어긋나 실패한다. 즉 "debug 전용 캡처" 의 위험은 이미 상시 게이트로 덮여 있다.
-      # (2026-08-19 스윕 §3-19 판정 — 근거 없는 구조적 우려로 남아 있던 항목이다.)
-      - name: Upload synthetic golden baseline
-        if: always() && inputs.golden_bootstrap && matrix.configuration == 'debug'
-        uses: actions/upload-artifact@v4
-        with:
-          name: synthetic-golden-baseline
-          path: spec/golden/synthetic/
-          if-no-files-found: warn
 
       # [주석 정정 2026-08-21] **고아 주석 회수 — `1fb7ad2` 가 잡은 것과 같은 부류의 세 번째 건.**
       # 아래 두 줄(grep 패턴의 근거)은 `978c9dd` 에서 이 스텝 바로 위에 적혔는데, 그 뒤
@@ -702,3 +866,43 @@ jobs:
           grep -E "error: .*(type-check|cannot|unable)" test-output.log | head -20 || true
           echo "--- tail ---"
           tail -60 test-output.log
+
+  # 수동 재생성은 한 잡의 같은 checkout 에서 **직렬**로 돈다. debug 가 만든 파일을 release 가
+  # 그대로 읽어 검증한 뒤에만 아티팩트를 올린다. 매트릭스 두 잡에 bootstrap=1 을 주면 서로
+  # 격리된 기준선을 각자 만들어 비교가 자기참조가 되므로 이 흐름을 대신할 수 없다.
+  golden-bootstrap:
+    if: github.event_name == 'workflow_dispatch' && inputs.golden_bootstrap
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build synthetic golden tests (debug)
+        run: swift build --build-tests -c debug
+
+      - name: Capture synthetic golden baseline (debug)
+        env:
+          WAPLE_GOLDEN_BOOTSTRAP: "1"
+        run: |
+          # 기존 PNG 를 지워 Metal 부재/조기 스킵이 기존 파일을 새 산출물처럼 올리지 못하게 한다.
+          find spec/golden/synthetic -type f -name '*.png' -delete
+          swift test --skip-build -c debug --filter SyntheticPixelGoldenTests
+          test -n "$(find spec/golden/synthetic -type f -name '*.png' -print -quit)" || {
+            echo "::error::debug 부트스트랩이 PNG 를 하나도 만들지 않았다"
+            exit 1
+          }
+
+      - name: Build synthetic golden tests (release)
+        run: swift build --build-tests -c release -Xswiftc -enable-testing
+
+      - name: Validate synthetic golden baseline (release)
+        env:
+          WAPLE_GOLDEN_BOOTSTRAP: "0"
+        run: swift test --skip-build -c release -Xswiftc -enable-testing --filter SyntheticPixelGoldenTests
+
+      - name: Upload synthetic golden baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-golden-baseline
+          path: spec/golden/synthetic/
+          if-no-files-found: error

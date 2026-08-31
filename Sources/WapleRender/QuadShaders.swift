@@ -1,5 +1,8 @@
 enum QuadShaders {
     // verts buffer: float4 per vertex = (ndc.x, ndc.y, uv.x, uv.y)
+    // projectiveDepth = (a,b,c,enabled), camera depth w(u,v)=a*u+b*v+c. CPU perspective
+    // 정점은 이미 NDC로 나뉘어 있으므로 clip position을 (ndc*w, 0, w)로 되돌려야 UV가
+    // perspective-correct 보간된다. orthographic/균일-depth는 enabled=0, w=1(종전 비트동일).
     static let source = """
     #include <metal_stdlib>
     using namespace metal;
@@ -11,11 +14,15 @@ enum QuadShaders {
                        constant float2& cameraOffset [[buffer(1)]],
                        constant float2& parallaxDepth [[buffer(2)]],
                        constant float2& aspectScale [[buffer(3)]],
-                       constant float2& shakeOffset [[buffer(4)]]) {
+                       constant float2& shakeOffset [[buffer(4)]],
+                       constant float4& projectiveDepth [[buffer(5)]]) {
         float4 v = verts[vid];
         // shakeOffset = camerashake 전역 지터 — parallaxDepth 무관(전역 카메라 병진). 미보유 씬 = 0 → 비트동일.
         float2 p = (v.xy + cameraOffset * parallaxDepth + shakeOffset) * aspectScale;
-        VOut o; o.pos = float4(p.x, p.y, 0.0, 1.0); o.uv = float2(v.z, v.w); return o;
+        float w = projectiveDepth.w > 0.5
+            ? projectiveDepth.x * v.z + projectiveDepth.y * v.w + projectiveDepth.z
+            : 1.0;
+        VOut o; o.pos = float4(p.x * w, p.y * w, 0.0, w); o.uv = float2(v.z, v.w); return o;
     }
     fragment float4 f_main(VOut in [[stage_in]],
                            texture2d<float> tex [[texture(0)]],

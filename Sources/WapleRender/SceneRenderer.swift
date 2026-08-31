@@ -7,8 +7,14 @@ import WapleCore
 /// 스페이스 전이 등)에 mount 1회 대입이 유실될 수 있어, 이 뷰가 창에 (재)부착될 때마다 멱등 재확인한다
 /// (draw(in:) 진입부의 매 프레임 재확인과 이중 방어 — 여기는 정지(paused) 상태에서도 즉시 반응).
 final class WapleMTKView: MTKView {
+    /// `captureFrames`는 headless 큐에서도 호출되므로 거기서 AppKit의 actor-isolated `window`를
+    /// 직접 읽지 않는다. view lifecycle이 메인에서 갱신하고, renderer의 인스턴스-단일-스레드
+    /// 계약 아래 현재 attachment 스냅샷만 읽는다.
+    nonisolated(unsafe) private(set) var wapleIsAttachedToWindow = false
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        wapleIsAttachedToWindow = window != nil
         let want = SceneLivePresentationFix.needsDesktopFlipY
         if layer?.isGeometryFlipped != want {
             layer?.isGeometryFlipped = want
@@ -97,7 +103,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         let texFilter: [Float]                       // 8 × 1=nearest / 0=linear
         var scripts: [(slot: Int, engine: TextScriptEngine)]  // constant scripts
     }
-    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; let blendAdditive: Bool /* material passes[0].blending == "additive" */; var isFrameBuffer: Bool = false; var copyBackground: Bool = true /* B2-effects④: WE 컴포지션 레이어의 "배경 복사"(shim 기본 true, L1-project-scene-model.md:230) — false 면 runFrameBufferLayer 가 이펙트 체인 *입력*(chain src)만 acc(기존 누적 화면) 블릿 대신 투명에서 시작(Waple 은 compose 레이어별 자식 RT 가 없어 "자식 RT 대신 무(無)" 로 근사 — 필터형 체인엔 타당, 생성형 체인의 콘텐츠 손실까지 보장하진 않음, BACKLOG.md 참고). `_rt_FullFrameBuffer` aux 슬롯(godrays/shine COPYBG)은 이와 별개로 항상 실제 acc 스냅샷을 받는다(runFrameBufferLayer 의 fullFrame 분리) */; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var animLayerScripts: [(layerIndex: Int, key: String, engine: TextScriptEngine)] = [] /* animationlayers blend/visible/rate 바인딩 스크립트 — encodeLayer 가 per-frame 재평가해 캐스케이드에 반영. 훅 등록(buildAnimationEventTargets)도 이 인스턴스 재사용(중복 IIFE 방지) */; var materialScripts: [(key: String, engine: TextScriptEngine)] = [] /* material.constantshadervalue.scripted (roughness/metallic/speculartint) per-frame evaluation */; var initialVisible: Bool = true; var hiddenByAncestor: Bool = false /* SceneLayer.hiddenByAncestor — 영구 비가시 조상 상속. 스크립트 평가 **뒤** 드로우만 스킵(사이드이펙트 보존) */; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; let pbrMaterial: PBRMaterialUniforms; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; var video: SceneVideoLayer? = nil /* 비디오-텍스처 레이어면 프레임 공급자(그 외 nil) — buildDisplayTextures 가 프레임별 비디오 텍스처를 이 레이어에 공급 */; var attach: PuppetAttach? = nil /* attachment(이름 본-슬롯 부착) — 부모 퍼펫 부착점 프레임을 per-frame 씬 델타로 합성 */; var mediaArtwork: MediaArtworkKind = .none /* F722: 시스템 미디어 아트워크 요청 레이어 — buildDisplayTextures 가 base 교체(미수신 시 정적 placeholder 유지, 무회귀) */; var noInterp: Bool = false /* 감사 V07: 베이스 텍스처 NoInterpolation(TexImage flags bit0) — 무효과 레이어는 encodeLayer 가 nearest 변형 파이프라인으로 드로우 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */; var customShader: CustomLayerShader? = nil /* H1: 커스텀 머티리얼 셰이더 — nil = QuadShaders 경로 */; var refract: LayerRefract = LayerRefract() /* H4: REFRACT 굴절 */ }
+    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; var vertexCount: Int = 6; var projectiveDepth = SIMD4<Float>(0, 0, 1, 0); let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; let blendAdditive: Bool /* material passes[0].blending == "additive" */; var isFrameBuffer: Bool = false; var copyBackground: Bool = true /* B2-effects④: WE 컴포지션 레이어의 "배경 복사"(shim 기본 true, L1-project-scene-model.md:230) — false 면 runFrameBufferLayer 가 이펙트 체인 *입력*(chain src)만 acc(기존 누적 화면) 블릿 대신 투명에서 시작(Waple 은 compose 레이어별 자식 RT 가 없어 "자식 RT 대신 무(無)" 로 근사 — 필터형 체인엔 타당, 생성형 체인의 콘텐츠 손실까지 보장하진 않음, BACKLOG.md 참고). `_rt_FullFrameBuffer` aux 슬롯(godrays/shine COPYBG)은 이와 별개로 항상 실제 acc 스냅샷을 받는다(runFrameBufferLayer 의 fullFrame 분리) */; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var animLayerScripts: [(layerIndex: Int, key: String, engine: TextScriptEngine)] = [] /* animationlayers blend/visible/rate 바인딩 스크립트 — encodeLayer 가 per-frame 재평가해 캐스케이드에 반영. 훅 등록(buildAnimationEventTargets)도 이 인스턴스 재사용(중복 IIFE 방지) */; var materialScripts: [(key: String, engine: TextScriptEngine)] = [] /* material.constantshadervalue.scripted (roughness/metallic/speculartint) per-frame evaluation */; var initialVisible: Bool = true; var hiddenByAncestor: Bool = false /* SceneLayer.hiddenByAncestor — 영구 비가시 조상 상속. 스크립트 평가 **뒤** 드로우만 스킵(사이드이펙트 보존) */; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; let pbrMaterial: PBRMaterialUniforms; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; var video: SceneVideoLayer? = nil /* 비디오-텍스처 레이어면 프레임 공급자(그 외 nil) — buildDisplayTextures 가 프레임별 비디오 텍스처를 이 레이어에 공급 */; var attach: PuppetAttach? = nil /* attachment(이름 본-슬롯 부착) — 부모 퍼펫 부착점 프레임을 per-frame 씬 델타로 합성 */; var mediaArtwork: MediaArtworkKind = .none /* F722: 시스템 미디어 아트워크 요청 레이어 — buildDisplayTextures 가 base 교체(미수신 시 정적 placeholder 유지, 무회귀) */; var noInterp: Bool = false /* 감사 V07: 베이스 텍스처 NoInterpolation(TexImage flags bit0) — 무효과 레이어는 encodeLayer 가 nearest 변형 파이프라인으로 드로우 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */; var customShader: CustomLayerShader? = nil /* H1: 커스텀 머티리얼 셰이더 — nil = QuadShaders 경로 */; var refract: LayerRefract = LayerRefract() /* H4: REFRACT 굴절 */ }
     var hasAnimations = false
     /// H4: REFRACT(스크린 굴절) 레이어 데이터 — 파티클 GPUParticleSystem.refract 와 동형.
     struct LayerRefract {
@@ -110,14 +116,19 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         var sim: ParticleSimulator
         let def: ParticleSystemDef
         let seed: UInt64
+        /// 루트 씬 오브젝트의 instanceoverride 애니메이션. 자식 GPU 항목은 더미 sim이므로 비운다.
+        /// 최초 생성뿐 아니라 2D/3D 캡처·seek 재생성도 `freshSimulator()` 한 경로로 전달한다.
+        var instanceOverrideAnimations: [String: PropertyAnimation] = [:]
+        func freshSimulator() -> ParticleSimulator {
+            ParticleSimulator(def: def, seed: seed,
+                              instanceOverrideAnimations: instanceOverrideAnimations)
+        }
         let texture: MTLTexture
         let blendAdditive: Bool
         let origin: SIMD2<Float>
         let scale: SIMD2<Float>
-        /// 마우스 시차(parallax) 가중치(F200) — GPULayer.parallaxDepth/SceneParticle.parallaxDepth 와 동형,
-        /// 2D 경로 전용(3D 는 cameraOffset 채널이 없어 무영향). 기본 1(균일 시차, 무회귀). pv_main 이
-        /// cameraOffset×parallaxDepth 로 소비(encodeParticle/encodeRefractParticle 버퍼 2) — 헤드리스
-        /// captureFrames 는 cameraOffset 이 항상 .zero 라 값과 무관하게 무변화(라이브 마우스 이동 전용).
+        /// 마우스 시차(parallax) 가중치(F200) — 파스/디스크립터 보존값. 실제 2D draw 이동은
+        /// objects[] 공통 root 표의 origin/depth를 해소한 뒤 pv_main에 전달한다.
         var parallaxDepth: SIMD2<Float> = SIMD2<Float>(1, 1)
         let texRatio: Float   // texH/texW (스프라이트 세로 비율)
         let order: Int        // scene objects[] 인덱스 — 레이어와 인터리브 z-순서
@@ -190,6 +201,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         /// F741(S-13): 텍스트 effects[](F693 파스)의 GPU 체인 — buildTextDisplayTextures 가 래스터
         /// 텍스처에 applyEffect 체인을 적용(레이어 buildDisplayTextures 와 동일 경로). 비면 무회귀.
         var effects: [EffectGPU] = []
+        /// near/far 클립 후 실제로 그릴 삼각형 정점 수(0 또는 3의 배수).
+        var vertexCount: Int = 0
+        /// stock v_main이 clip-space w를 복원하는 `(du,dv,c,enabled)` 카메라-depth 평면.
+        var projectiveDepth = SIMD4<Float>(0, 0, 1, 0)
         /// 애니 쿼드 per-frame 정점 재사용(GPULayer.scratchQuad 와 동일 패턴).
         let scratchQuad = DynamicVertexBuffer()
     }
@@ -263,11 +278,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
 
         if !engine.hookNames.isEmpty {
             eventEngines.append(engine)
-            // cursorEnter/Leave 는 엔진이 바인드 레이어를 히트테스트(WE 규약 — 스크립트는 반응만).
-            // 레이어명을 기억했다가 mount 말미에 회전 히트 쿼드로 해석(buildHoverTargets).
-            if let layerName,
-               !engine.hookNames.isDisjoint(with: ["cursorEnter", "cursorLeave"]) {
-                hoverEngineLayers.append((engine, layerName))
+            // cursorEnter/Leave도 나머지 커서 훅처럼 이름이 아니라 thisLayer descriptor index로
+            // 소유 객체를 보존한다. 텍스트·무명·중복명도 같은 identity를 써야 한다.
+            if !engine.hookNames.isDisjoint(with: ["cursorEnter", "cursorLeave"]) {
+                hoverEngineOwners.append((engine, currentLayerIndex))
             }
             // U-W5b: 나머지 커서 훅 4종도 브로드캐스트가 아니다(§ pointerTargets 주석).
             // **이름이 아니라 디스크립터 인덱스로 잡는다** — 코퍼스에 무명 오브젝트가 흔하고
@@ -364,6 +378,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
             // W-V② 가 공통 오브젝트 디스크립터(`+0x170`, 태그 1 = vec2, 등록 `0x1401e082f`) 근거로
             // `SceneTextLayer.parallaxDepth` 를 파스한다. 워크샵 텍스트 1,597 중 956 이 저작한다.
             d.parallaxDepth = SIMD2<Float>(text.parallaxDepth.x, text.parallaxDepth.y)
+            d.perspective = text.perspective
             d.horizontalAlign = text.horizontalAlign
             d.verticalAlign = text.verticalAlign
             d.anchor = text.anchor
@@ -422,8 +437,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     /// (`0x14018a709`–`0x14018a714`, 5개 훅 전건 동형). 무바인딩(`inst[8] == 0`) 인스턴스만 예외다.
     /// **U(2026-08-21)에 배선했다** — Enter/Leave 는 `hoverTargets`, 나머지 4종은 `pointerTargets`.
     var eventEngines: [TextScriptEngine] = []
-    /// cursorEnter/Leave 훅을 export 한 (엔진, 바인드 레이어명) — mount 중 수집, buildHoverTargets 가 쿼드 해석.
-    var hoverEngineLayers: [(engine: TextScriptEngine, layerName: String)] = []
+    /// cursorEnter/Leave 훅을 export 한 (엔진, 소유 오브젝트 디스크립터 인덱스).
+    /// 이미지/텍스트와 무명·중복명을 모두 thisLayer와 같은 identity로 해석한다.
+    var hoverEngineOwners: [(engine: TextScriptEngine, descriptorIndex: Int?)] = []
 
     // ── U-W5b: 커서 훅 타겟팅 ────────────────────────────────────────────────
     /// `dispatchPointerEvent` 를 지나는 커서 훅. cursorEnter/Leave 는 여기 없다 — 그 둘은
@@ -435,9 +451,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     /// mount 말미에 해석한 배달 대상. `scope` 판정은 `WapleCore/PointerHit.DeliveryScope`.
     struct PointerTarget {
         let engine: TextScriptEngine
-        let scope: PointerHit.DeliveryScope
-        /// `.object` 일 때만 의미 있음 — 히트 판정 직전에 쿼드를 시차만큼 옮긴다(O-W7).
-        let parallaxDepth: Vec2
+        /// `thisScene.layers` 디스크립터 인덱스. nil은 진짜 unbound 스크립트다.
+        let descriptorIndex: Int?
+        var scope: PointerHit.DeliveryScope
+        /// `.object` 일 때만 의미 있음 — interaction 경로는 draw root가 아니라 현재 leaf의
+        /// 현재 origin/depth로 시차를 계산한다. 매 표시 프레임의 resolved geometry로 갱신된다.
+        var parallaxOrigin: Vec2
+        var parallaxDepth: Vec2
     }
     var pointerTargets: [PointerTarget] = []
     /// cursorClick 은 **뗄 때** + 누를 때 잡았던 대상에서만(W-9). 홀드 맵은 실물 `scene+0x2c0`.
@@ -446,11 +466,31 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     /// + 현재 내부 여부(경계 넘을 때만 발송).
     struct HoverTarget {
         let engine: TextScriptEngine
-        let quad: PointerHit.Quad
-        let parallaxDepth: Vec2
+        let descriptorIndex: Int
+        var scope: PointerHit.DeliveryScope
+        /// 기존 테스트/진단 seam. mount에서 object scope로만 생성되며 이후에도 resolved image/text
+        /// geometry가 이 값을 갱신한다.
+        var quad: PointerHit.Quad {
+            get {
+                if case .object(let q) = scope { return q }
+                return PointerHit.Quad(center: .zero, axisX: .zero, axisY: .zero)
+            }
+            set { scope = .object(newValue) }
+        }
+        var parallaxOrigin: Vec2
+        var parallaxDepth: Vec2
         var inside: Bool
     }
     var hoverTargets: [HoverTarget] = []
+    /// encodeLayer/encodeText가 스크립트·애니메이션·텍스트 재래스터를 한 번 평가한 뒤 남기는
+    /// 현재 프레임 interaction 상태. 프레임 끝에 targets로 승격해 다음 입력 판정이 실제 표시된
+    /// geometry를 보게 한다. 별도 prepass가 없어 stateful JS를 두 번 실행하지 않는다.
+    struct PresentedInteractionGeometry {
+        var scope: PointerHit.DeliveryScope
+        var parallaxOrigin: Vec2
+        var parallaxDepth: Vec2
+    }
+    var pendingInteractionGeometry: [Int: PresentedInteractionGeometry] = [:]
     var clickMonitor: Any?
     var mediaPoller: MediaPoller?
     /// F722: 라이브 미디어 아트워크 텍스처(MediaPoller onThumbnail 이 트랙 변경 시 갱신). current=현재 트랙,
@@ -492,16 +532,22 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         mtkView?.needsDisplay = true
     }
 
-    /// 대상 `i` 를 포인터가 덮는가 — 히트 판정 직전에 시차 오프셋을 **쿼드 중심**에 더한다(O-W7,
-    /// `0x14019dd79`. 광선이 아니라 쿼드가 움직인다 — 그래서 "그려진 자리 = 클릭되는 자리").
+    /// 대상 `i` 를 포인터가 덮는가 — 히트 판정 직전에 leaf 시차 오프셋을 **쿼드 중심**에 더한다
+    /// (O-W7, `0x14019dd79`). 광선이 아니라 쿼드가 움직이지만, parent가 있으면 draw는 root,
+    /// interaction은 leaf를 쓰므로 두 최종 위치가 같다고 가정하면 안 된다.
     func pointerTargetCovers(_ i: Int, _ p: SIMD2<Float>) -> Bool {
         let t = pointerTargets[i]
-        return PointerHit.delivers(Self.shiftedScope(t.scope, by: hoverParallaxShift(t.parallaxDepth)), to: p)
+        return PointerHit.delivers(
+            Self.shiftedScope(t.scope, by: hitCameraParallaxShift(origin: t.parallaxOrigin,
+                                                                  depth: t.parallaxDepth)),
+            to: p
+        )
     }
 
     static func shiftedScope(_ scope: PointerHit.DeliveryScope,
                              by d: SIMD2<Float>) -> PointerHit.DeliveryScope {
         if case .object(let quad) = scope { return .object(quad.translated(by: d)) }
+        if case .projected(let polygon) = scope { return .projected(polygon.translated(by: d)) }
         return scope
     }
 
@@ -524,8 +570,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     /// 좌표를 씬에서 되읽으라고 두는 seam 이다. 소유 오브젝트가 없거나(무바인딩) 기하 미확정이면 nil.
     public func pointerHookTargetCenter(hook: String) -> SIMD2<Float>? {
         for t in pointerTargets where t.engine.hookNames.contains(hook) {
-            guard case .object(let quad) = t.scope else { continue }
-            return quad.translated(by: hoverParallaxShift(t.parallaxDepth)).center
+            let shifted = Self.shiftedScope(
+                t.scope,
+                by: hitCameraParallaxShift(origin: t.parallaxOrigin, depth: t.parallaxDepth))
+            if case .object(let quad) = shifted { return quad.center }
+            if case .projected(let polygon) = shifted { return polygon.center }
         }
         return nil
     }
@@ -554,107 +603,109 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
                                      scale: SIMD2(scale.x, scale.y), angleZ: angleZ)
     }
 
-    /// mount 말미: 수집한 (엔진, 레이어명) → 레이어 히트 쿼드로 호버 타깃 구성(이름 매칭 레이어 없으면 드롭).
-    /// `parallaxDepth` 를 같이 들고 있어야 O-W7(시차 보정)을 호버 시점에 적용할 수 있다.
-    func buildHoverTargets(doc: SceneDocument) {
-        guard !hoverEngineLayers.isEmpty else { return }
-        var quads: [String: (quad: PointerHit.Quad, depth: Vec2)] = [:]
-        // O-W5: 실물 순회의 **첫 관문**이 `solid`(bit13)다 — `0x14018a00b` `mov r8d,0x2000` →
-        // `0x14018a02d` `test word [r15+0x120], r8w`, 아니면 `je` 로 다음 오브젝트. ctor 기본 true.
-        for l in doc.layers where !l.name.isEmpty && l.isSolid {
-            quads[l.name] = (Self.layerHitQuad(origin: l.origin, size: l.size, scale: l.scale,
-                                               angleZ: l.angleZ, alignment: l.alignment),
-                             l.parallaxDepth)
-        }
-        hoverTargets = hoverEngineLayers.compactMap { pair in
-            quads[pair.layerName].map {
-                HoverTarget(engine: pair.engine, quad: $0.quad, parallaxDepth: $0.depth, inside: false)
+    /// image/text 공용 interaction geometry. cursorEnter/Leave와 move/click/down/up이 이 조립부를
+    /// 공유하므로 텍스트 래스터·solid·정렬·leaf 시차가 두 경로에서 갈리지 않는다.
+    func interactionGeometry(descriptorIndex: Int?, doc: SceneDocument,
+                             texts: [GPUText],
+                             leafByOrder: [Int: SceneObjectParallaxDescriptor])
+        -> (scope: PointerHit.DeliveryScope, origin: Vec2, depth: Vec2) {
+        let none = Vec2(x: 0, y: 0)
+        guard let i = descriptorIndex else { return (.unbound, none, none) }
+        guard i >= 0 else { return (.geometryUnknown, none, none) }
+        guard i < doc.layers.count + doc.texts.count else { return (.geometryUnknown, none, none) }
+
+        // 원근 3D의 저작 origin/size는 월드 단위라 2D 씬 픽셀 상자로 해석할 수 없다. 첫 표시
+        // 프레임 전에는 닫아 두고 encodeBillboard가 실제 viewProj로 투영한 쿼드만 승격한다.
+        // `.geometryUnknown`은 의도적으로 쓰지 않는다 — 그 케이스는 전건 배달 폴백이라, 바인드된
+        // 3D 스크립트를 다시 브로드캐스트로 만드는 바로 그 결함을 재도입한다.
+        if !orthographicScene { return (.unhittable, none, none) }
+
+        if i >= doc.layers.count {
+            // 텍스트 디스크립터 인덱스 = doc.layers.count + uid(F743/S-34, buildTexts와 동일 규약).
+            let u = i - doc.layers.count
+            guard u < doc.texts.count else { return (.geometryUnknown, none, none) }
+            let t = doc.texts[u]
+            guard t.isSolid else { return (.unhittable, none, none) }
+            // x/y 회전·z 깊이·near/far clip이 있는 화면 영역은 raw XY quad가 아니다.
+            // 첫 encode가 raster hit-size를 같은 projection으로 투영할 때까지 닫아 둔다.
+            if t.perspective { return (.unhittable, none, none) }
+            // 래스터가 없으면(빈 텍스트/3D controller) 상자를 만들 근거가 없다.
+            guard u < texts.count,
+                  texts[u].rasterWidth > 0, texts[u].rasterHeight > 0 else {
+                return (.geometryUnknown, none, none)
             }
+            let g = texts[u]
+            // 실물 히트 순회의 첫 관문은 image/text 공통 solid(bit13)다(`0x14018a02d`).
+            let size = PointerHit.textHitSize(
+                inkBox: SIMD2<Float>(g.rasterWidth, g.rasterHeight),
+                padding: SIMD2<Float>(t.padding.x, t.padding.y),
+                paddingActive: PointerHit.textPaddingActive(hasEffects: !t.effects.isEmpty,
+                                                            opaqueBackground: t.opaqueBackground,
+                                                            colorBlendMode: t.colorBlendMode))
+            let align = Self.textAlignmentString(h: t.horizontalAlign, v: t.verticalAlign)
+            let quad = Self.layerHitQuad(origin: t.origin, size: Vec2(x: size.x, y: size.y),
+                                         scale: t.scale, angleZ: t.angleZ, alignment: align)
+            let leaf = leafByOrder[t.order]
+            return (.object(quad), leaf?.origin ?? t.origin, leaf?.depth ?? t.parallaxDepth)
+        }
+
+        let l = doc.layers[i]
+        guard l.isSolid else { return (.unhittable, none, none) }
+        if l.perspective { return (.unhittable, none, none) }
+        let quad = Self.layerHitQuad(origin: l.origin, size: l.size, scale: l.scale,
+                                     angleZ: l.angleZ, alignment: l.alignment)
+        let leaf = leafByOrder[l.order]
+        return (.object(quad), leaf?.origin ?? l.origin, leaf?.depth ?? l.parallaxDepth)
+    }
+
+    /// mount 말미: descriptor identity → image/text 호버 쿼드. 이름 사전을 쓰지 않으므로 무명·중복명과
+    /// 텍스트도 정확한 소유 객체를 찾는다. 3D 대상은 첫 표시 프레임 전까지 `.unhittable`로 보존했다가
+    /// `encodeBillboard`가 실제 투영 쿼드를 승격한다 — 여기서 드롭하면 cursorEnter/Leave가 영영 복구되지 않는다.
+    func buildHoverTargets(doc: SceneDocument) {
+        guard !hoverEngineOwners.isEmpty else { return }
+        let texts = textLayers
+        let leafByOrder = Dictionary(uniqueKeysWithValues: doc.parallaxObjects.map { ($0.order, $0) })
+        hoverTargets = hoverEngineOwners.compactMap { pair in
+            guard let descriptorIndex = pair.descriptorIndex else { return nil }
+            let g = interactionGeometry(descriptorIndex: pair.descriptorIndex, doc: doc,
+                                        texts: texts, leafByOrder: leafByOrder)
+            return HoverTarget(engine: pair.engine, descriptorIndex: descriptorIndex,
+                               scope: g.scope, parallaxOrigin: g.origin,
+                               parallaxDepth: g.depth, inside: false)
         }
     }
 
-    /// mount 말미: 수집한 (엔진, 디스크립터 인덱스) → 배달 범위(`PointerHit.DeliveryScope`).
-    ///
-    /// U-W5b(2026-08-21). 인덱스 규약은 `sceneScriptLayers(from:)` 의 배열 순서와 같다 —
-    /// `[0, doc.layers.count)` 가 이미지 오브젝트, 그 뒤가 텍스트 오브젝트.
-    ///
-    /// **범위별 근거**:
-    /// - `nil` 인덱스 → `.unbound`. 이펙트 상수/카메라/사운드 볼륨 스크립트처럼 오브젝트에 안 붙은
-    ///   것들이고, 실물 `inst[8] == 0` 예외와 같은 자리다. 종전과 동일하게 전건 배달된다.
-    /// - 이미지 오브젝트 → `solid`(bit13) 가 꺼졌으면 `.unhittable`(히트 순회의 첫 관문
-    ///   `0x14018a02d` 가 아예 통과시키지 않는다), 켜졌으면 `.object(회전 쿼드)`.
-    ///   쿼드 구성은 호버와 **같은** `layerHitQuad`(정렬 앵커 포함) — 두 경로가 갈리면 안 된다.
-    /// - 텍스트 오브젝트 → ~~`.geometryUnknown`. 실물 텍스트의 히트 상자는 **래스터된 픽셀 크기**인데
-    ///   `SceneTextLayer` 에는 그 값이 없다(`scene-script-api.md` §9.1 (b) `size` [미해결]).
-    ///   추측한 상자로 좁히면 텍스트 바인딩 스크립트가 통째로 죽으므로 종전 배달을 유지한다.~~
-    ///   **BD(2026-08-21) 배선함** — 아래 텍스트 분기. 규약은 `docs/re/text-layer.md` §8b/§11.2.
-    ///
-    /// **텍스트 분기 (BD, 2026-08-21 — G17)**. 새 수식을 만들지 않는다: 그리기 경로가 이미 쓰는
-    /// 세 부품(`GPUText.rasterWidth`/`rasterHeight` · `textAlignmentString` · `layerHitQuad`)을
-    /// 그대로 재사용하므로 회전·음수 스케일·9점 앵커가 이미지 경로와 자동으로 정합한다.
-    /// 실물 근거(2026-08-21 BD 재실측): 히트 순회가 타입 1(이미지)과 4(텍스트)를 같은 분기로 모아
-    /// (`0x14018a044`–`0x14018a050`) 상자 함수 `0x14019dbb0` 하나에 넘기고, 그 함수가 읽는 크기가
-    /// `mov rax, qword [rbx+0x2f0]`(`0x14019dd8a`)이다. 텍스트의 `+0x2f0` 은 vtable `0x140491950`
-    /// 슬롯 `+0x110` = `0x140258900` 이 매 레이아웃마다 "잉크박스 + 2·clamp(padding,512)" 로 덮는다.
-    /// 순수 산술은 `WapleCore/PointerHit.textHitSize` 로 뽑아 리눅스 테스트가 잠근다.
+    /// mount 말미: 수집한 descriptor identity를 포인터 배달 범위로 해석한다. nil은 실물
+    /// `inst[8] == 0`의 unbound 예외이며, image/text 기하는 `interactionGeometry` 한 곳에서 만든다.
     func buildPointerTargets(doc: SceneDocument) {
-        // buildTexts(mount: `textLayers = buildTexts(...)`)가 이 호출보다 **먼저** 돈다 — 그래서
-        // 여기서 래스터 크기를 읽을 수 있다. 3D 씬은 그 대입 자체가 `if !is3D` 안이라 비어 있고,
-        // 그때는 아래 count 가드가 종전 `.geometryUnknown`(전건 배달)로 떨어뜨린다(무회귀).
         let texts = textLayers
-        pointerTargets = pointerEngineOwners.map { pair -> PointerTarget in
-            let none = Vec2(x: 0, y: 0)
-            guard let i = pair.descriptorIndex else {
-                return PointerTarget(engine: pair.engine, scope: .unbound, parallaxDepth: none)
-            }
-            guard i >= 0 else {
-                return PointerTarget(engine: pair.engine, scope: .geometryUnknown, parallaxDepth: none)
-            }
-            if i >= doc.layers.count {
-                // 텍스트 디스크립터 인덱스 = doc.layers.count + uid(F743/S-34, buildTexts 와 동일 규약).
-                let u = i - doc.layers.count
-                // 래스터가 없으면(빈 텍스트 = 드로우 스킵) 상자를 만들 근거가 없다 → 종전 전건 배달 유지.
-                guard u < doc.texts.count, u < texts.count,
-                      texts[u].rasterWidth > 0, texts[u].rasterHeight > 0 else {
-                    return PointerTarget(engine: pair.engine, scope: .geometryUnknown, parallaxDepth: none)
-                }
-                let t = doc.texts[u], g = texts[u]
-                // 히트 순회의 첫 관문은 텍스트도 `solid`(bit13)다 — `0x14018a02d`
-                // `test word [r15+0x120], r8w`(r8d=0x2000, `0x14018a00b`)는 타입 가상함수 호출보다
-                // **앞**이라 타입을 가리지 않는다.
-                guard t.isSolid else {
-                    return PointerTarget(engine: pair.engine, scope: .unhittable, parallaxDepth: none)
-                }
-                let size = PointerHit.textHitSize(
-                    inkBox: SIMD2<Float>(g.rasterWidth, g.rasterHeight),
-                    padding: SIMD2<Float>(t.padding.x, t.padding.y),
-                    paddingActive: PointerHit.textPaddingActive(hasEffects: !t.effects.isEmpty,
-                                                                opaqueBackground: t.opaqueBackground,
-                                                                colorBlendMode: t.colorBlendMode))
-                let align = Self.textAlignmentString(h: t.horizontalAlign, v: t.verticalAlign)
-                let quad = Self.layerHitQuad(origin: t.origin, size: Vec2(x: size.x, y: size.y),
-                                             scale: t.scale, angleZ: t.angleZ, alignment: align)
-                // **시차 깊이는 `t.parallaxDepth` 가 아니라 (1,1) 이다.** `text-layer.md` §11.1 의
-                // 패치안은 `t.parallaxDepth` 를 넘기라고 적었는데, 그건 실물 규약(`+0x170` 을
-                // 히트에도 그대로 먹인다)이지 **지금 Waple 이 그리는 자리**가 아니다 —
-                // `encodeText` 는 정점 버퍼 2번 슬롯에 `var depth = SIMD2<Float>(1, 1)` 을
-                // 하드코딩해 넘긴다(`SceneTextLayer.parallaxDepth` 는 파스·보존 전용).
-                // 여기서 저작값을 쓰면 히트 상자만 시차만큼 밀려 **"그린 자리 ≠ 클릭되는 자리"**
-                // 가 된다. 두 코퍼스는 텍스트 `parallaxDepth` 가 전건 `"1.000 1.000"` 이라 값이
-                // 같지만(워크샵은 956/1,597 저작, range −5…25), 규약은 그리기 쪽에 맞춘다.
-                // 텍스트 시차 그리기를 배선할 때(`scene-object-model.md` §12.1.4) **여기도 같이**
-                // `t.parallaxDepth` 로 바꿔라 — 짝이다.
-                return PointerTarget(engine: pair.engine, scope: .object(quad),
-                                     parallaxDepth: Vec2(x: 1, y: 1))
-            }
-            let l = doc.layers[i]
-            guard l.isSolid else {
-                return PointerTarget(engine: pair.engine, scope: .unhittable, parallaxDepth: none)
-            }
-            let quad = Self.layerHitQuad(origin: l.origin, size: l.size, scale: l.scale,
-                                         angleZ: l.angleZ, alignment: l.alignment)
-            return PointerTarget(engine: pair.engine, scope: .object(quad), parallaxDepth: l.parallaxDepth)
+        let leafByOrder = Dictionary(uniqueKeysWithValues: doc.parallaxObjects.map { ($0.order, $0) })
+        pointerTargets = pointerEngineOwners.map { pair in
+            let g = interactionGeometry(descriptorIndex: pair.descriptorIndex, doc: doc,
+                                        texts: texts, leafByOrder: leafByOrder)
+            return PointerTarget(engine: pair.engine, descriptorIndex: pair.descriptorIndex, scope: g.scope,
+                                 parallaxOrigin: g.origin, parallaxDepth: g.depth)
         }
+    }
+
+    /// 이번 encode가 확정한 image/text geometry를 입력 타깃에 승격한다. hover의 `inside` 상태는
+    /// 보존해 새 쿼드가 커서를 가로지를 때 다음 updateHover가 정확히 enter/leave를 만든다.
+    func presentInteractionGeometry() {
+        guard !pendingInteractionGeometry.isEmpty else { return }
+        for i in pointerTargets.indices {
+            guard let key = pointerTargets[i].descriptorIndex,
+                  let g = pendingInteractionGeometry[key] else { continue }
+            pointerTargets[i].scope = g.scope
+            pointerTargets[i].parallaxOrigin = g.parallaxOrigin
+            pointerTargets[i].parallaxDepth = g.parallaxDepth
+        }
+        for i in hoverTargets.indices {
+            guard let g = pendingInteractionGeometry[hoverTargets[i].descriptorIndex] else { continue }
+            hoverTargets[i].scope = g.scope
+            hoverTargets[i].parallaxOrigin = g.parallaxOrigin
+            hoverTargets[i].parallaxDepth = g.parallaxDepth
+        }
+        pendingInteractionGeometry.removeAll(keepingCapacity: true)
     }
 
     /// 포인터가 바인드 레이어 경계를 넘을 때만 cursorEnter/Leave 발송(WE 규약 — 엔진이 히트테스트).
@@ -663,14 +714,22 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     /// O-W7(실측 2026-08-21): 실물은 히트 판정 전에 레이어 시차 오프셋을 **쿼드 중심에 더한다**
     /// (`0x14018a0b3`–`0x14018a115` 가 `(origin−focus)·amount·depth` 를 만들고 `0x14019dd79` 가
     /// 오브젝트 평행이동에 `addss` — 광선이 아니라 쿼드가 움직인다). 그래서 시차로 밀린 레이어도
-    /// **눈에 보이는 자리**에서 클릭된다. Waple 의 등가물은 그리기와 같은 식
-    /// `cameraOffset × parallaxDepth`(QuadShaders.swift:17)이며, 그 값은 NDC 단위라 씬 픽셀로 환산한다.
+    /// **눈에 보이는 자리**에서 클릭된다. 단, 실물은 렌더 경로처럼 최상위 루트를 찾지 않고
+    /// 현재 leaf의 `(origin−focus)·amount·depth`를 사용한다. 이 비대칭을 그대로 유지한다.
     @MainActor func updateHover(at p: SIMD2<Float>?) {
         guard !hoverTargets.isEmpty else { return }
         var changed = false
         for i in hoverTargets.indices {
-            let quad = hoverTargets[i].quad.translated(by: hoverParallaxShift(hoverTargets[i].parallaxDepth))
-            let inside = p.map { PointerHit.contains(quad, $0) } ?? false
+            let inside: Bool
+            let shifted = Self.shiftedScope(
+                hoverTargets[i].scope,
+                by: hitCameraParallaxShift(origin: hoverTargets[i].parallaxOrigin,
+                                            depth: hoverTargets[i].parallaxDepth))
+            switch shifted {
+            case .object(let quad): inside = p.map { PointerHit.contains(quad, $0) } ?? false
+            case .projected(let polygon): inside = p.map { PointerHit.contains(polygon, $0) } ?? false
+            default: inside = false
+            }
             guard inside != hoverTargets[i].inside else { continue }
             hoverTargets[i].inside = inside
             let pos = p ?? SIMD2<Float>(0, 0)
@@ -681,11 +740,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         if changed { mtkView?.needsDisplay = true }
     }
 
-    /// 레이어 시차 오프셋(NDC) → 씬 픽셀. 시차가 꺼져 있으면 0(실물 게이트 `0x140189f17`,
-    /// `scene[0xe0]` bit8 && bit3 = 시차 사용 && 2D 에 대응). 헤드리스 캡처는 cameraOffset 이 항상 0.
-    func hoverParallaxShift(_ depth: Vec2) -> SIMD2<Float> {
-        guard parallaxEnabled else { return .zero }
-        return SIMD2(cameraOffset.x * depth.x * projW * 0.5, cameraOffset.y * depth.y * projH * 0.5)
+    /// image/text interaction 전용 시차. draw와 수식 모양은 같지만 root walk 없이 현재 leaf의
+    /// raw local origin/depth를 사용한다(`FUN_140189e10` → `FUN_14019dbb0`).
+    func hitCameraParallaxShift(origin: Vec2, depth: Vec2) -> SIMD2<Float> {
+        guard parallaxEnabled, orthographicScene else { return .zero }
+        let offset = SceneCameraMath.parallaxLayerOffset(
+            origin: origin,
+            focus: Vec2(x: parallaxFocus.x, y: parallaxFocus.y),
+            amount: parallaxAmount,
+            depth: depth
+        )
+        return SIMD2(offset.x, offset.y)
     }
 
     /// cursorMove + cursorEnter/Leave 시뮬(테스트/헤드리스 — 씬 픽셀 좌표 직접 주입).
@@ -914,10 +979,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         let inWindow = win.convertPoint(fromScreen: NSEvent.mouseLocation)
         let inView = view.convert(inWindow, from: nil)
         guard view.bounds.contains(inView) else { return nil }
-        return SceneRenderer.sceneCoords(viewPoint: inView, viewSize: view.bounds.size,
-                                         projW: projW, projH: projH,
-                                         fitMode: SceneRenderSettings.fitMode,
-                                         zoom: currentCameraZoom)
+        return sceneCoordsForPresentedFrame(viewPoint: inView, viewSize: view.bounds.size)
+    }
+
+    /// 현재 표시 경로와 같은 view→scene 역매핑. 별도 seam으로 두어 2D aspect/zoom과
+    /// target aspect로 직접 투영하는 3D 경로가 입력에서도 같은 규약을 쓰는지 픽셀 없이 검증한다.
+    func sceneCoordsForPresentedFrame(viewPoint: CGPoint, viewSize: CGSize) -> SIMD2<Float>? {
+        SceneRenderer.sceneCoords(viewPoint: viewPoint, viewSize: viewSize,
+                                  projW: projW, projH: projH,
+                                  // 원근 3D는 drawable aspect로 직접 투영해 target 전체를 채운다.
+                                  // 2D fit/fill을 입력에만 역적용하면 보이는 대역을 nil로 잘라낸다.
+                                  fitMode: is3D ? .stretch : SceneRenderSettings.fitMode,
+                                  // 3D는 camera pose/FOV로 줌을 표현하며 2D camera/general zoom
+                                  // 채널을 draw에 적용하지 않는다. 입력만 stale 2D 줌을 역적용하면 안 된다.
+                                  zoom: is3D ? 1 : currentCameraZoom)
     }
 
     @MainActor func deliverGlobalMouse(isDown: Bool) {
@@ -1144,13 +1219,26 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     /// 첫 프레임 1회 클리어(trailAccPrimed)로 정의된 시작을 보장한다. 마운트/리사이즈 시 재확보.
     var trailAcc: MTLTexture? = nil
     var trailAccPrimed = false
-    var cameraOffset = SIMD2<Float>(0, 0)
-    /// 마우스가 지정한 목표 시차 오프셋. cameraOffset 는 delay 시상수로 여기로 프레임마다 수렴(WE 스무딩).
-    var targetCameraOffset = SIMD2<Float>(0, 0)
+    /// Wallpaper Engine `scene+0x340/+0x344`: 정사영 씬 픽셀 단위의 카메라 시차 초점.
+    /// 오브젝트 이동과 `g_ParallaxPosition`이 이 한 상태에서 갈라진다. 생성자/마운트 기본은 0.
+    var parallaxFocus = SIMD2<Float>(0, 0)
+    /// Wallpaper Engine renderState `+0x9c/+0xa0`: `clamp01(focus / projectionSize)`.
+    /// 포인터 UV(`pointerUV`)와 별도 슬롯이며, EngineU 마지막 float4의 xy로 패킹한다.
+    var parallaxPosition = SIMD2<Float>(0, 0)
+    /// objects[] order별 최상위 렌더 root. WE draw 경로는 leaf 자신의 origin/depth가 아니라
+    /// parent 포인터를 끝까지 따라간 root의 공통 슬롯을 사용한다. interaction은 이 표를 쓰지 않는다.
+    var cameraParallaxRootByOrder: [Int: SceneObjectParallaxDescriptor] = [:]
+    /// objects[] order별 현재 leaf 원본 슬롯. interaction의 leaf-depth와 동적 origin delta 기준이다.
+    var cameraParallaxLeafByOrder: [Int: SceneObjectParallaxDescriptor] = [:]
+    /// 이번 encode에서 평가된 object order별 현재 월드 origin. 보통 draw 순서대로 채우며,
+    /// child보다 뒤에 있는 image root의 순수 origin keyframe만 dependency prepass가 먼저 채운다.
+    var cameraParallaxFrameOriginByOrder: [Int: Vec2] = [:]
+    /// 저작 투영 플래그. `is3D`는 GPU 자원 로드 성공 여부라 시차 이동 규약의 근거가 아니다.
+    var orthographicScene = true
     var parallaxEnabled = false
     var parallaxAmount: Float = 1
     var parallaxMouseInfluence: Float = 1
-    /// WE cameraparallaxdelay(초). 0 = 즉시. >0 = 프레임 dt 기반 지수 스무딩.
+    /// WE cameraparallaxdelay. 0 이하는 즉시, 양수는 `10·(1−delay/3)·dt` 선형 보간 계수.
     var parallaxDelay: Float = 0
     let parallax = ParallaxController()
     /// WE 포인터 UV(0..1, 상단 원점). 마우스 미구동/헤드리스 = **`(0,0)`**.
@@ -1218,6 +1306,51 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         SIMD2(Float(off.x + 1) / 2, 1 - Float(off.y + 1) / 2)
     }
 
+    /// 현재 포인터에서 WE 시차 초점을 한 프레임 전진한다. 산술 정본은 WapleCore의
+    /// `SceneCameraMath`이고, 이 함수는 렌더러 상태와 EngineU 슬롯을 연결하는 production bridge다.
+    /// `eye`는 shake가 이미 더해진 runtime 카메라 좌표여야 한다. 기본값을 두지 않아
+    /// live/capture 호출부가 정적 camera와 shake를 조용히 누락하지 못하게 한다.
+    @discardableResult
+    func advanceCameraParallax(dt: Float, eye: SIMD2<Float>) -> Bool {
+        guard parallaxEnabled else { return false }
+        let target = SceneCameraMath.parallaxFocus(
+            pointer: Vec2(x: pointerUV.x, y: pointerUV.y),
+            mouseInfluence: parallaxMouseInfluence,
+            projW: projW, projH: projH,
+            eye: Vec2(x: eye.x, y: eye.y)
+        )
+        let next = SceneCameraMath.parallaxSmoothed(
+            current: Vec2(x: parallaxFocus.x, y: parallaxFocus.y),
+            target: target, dt: dt, delay: parallaxDelay
+        )
+        parallaxFocus = SIMD2(next.x, next.y)
+        let uniform = SceneCameraMath.parallaxUniform(focus: next, projW: projW, projH: projH)
+        parallaxPosition = SIMD2(uniform.x, uniform.y)
+        let dx = target.x - next.x, dy = target.y - next.y
+        return parallaxDelay > 0 && dx * dx + dy * dy > 1e-6
+    }
+
+    /// 헤드리스 캡처의 0→t 결정적 전진. delay>0이면 파티클과 같은 30Hz 소스 스텝으로 밟고,
+    /// delay<=0도 t=0에서 한 번 호출해 포인터 기반 즉시 초점을 만든다.
+    func advanceCaptureCameraParallax(to targetTime: Float, clock: inout Float,
+                                      step: Float = 1.0 / 30.0,
+                                      eyeAt: (Float) -> SIMD2<Float>) {
+        guard parallaxEnabled else { return }
+        if parallaxDelay <= 0 {
+            advanceCameraParallax(dt: 0, eye: eyeAt(targetTime))
+            clock = max(clock, targetTime)
+            return
+        }
+        while clock < targetTime - 1e-4 {
+            let dt = min(step, targetTime - clock)
+            let sampleTime = clock + dt
+            advanceCameraParallax(dt: dt, eye: eyeAt(sampleTime))
+            clock = sampleTime
+        }
+        // targetTime==0도 renderState 슬롯을 현재(생성자 0) focus에서 명시적으로 산출한다.
+        if targetTime <= 0 { advanceCameraParallax(dt: 0, eye: eyeAt(0)) }
+    }
+
     /// 프레임 dt(초) 계산(순수, F291). 정지 중(isPaused) 재드로는 완전 동결(0) — 종전엔 직전 라이브
     /// 프레임→pause 시점 간의 잔여 간격이 그대로 dt 가 돼, 정지 후 첫 재드로(호버/리사이즈)에서
     /// dt 구동 시뮬(파티클 sim.step 등)이 최대 50ms 전진했다("시간 동결" 재렌더 의도 위반). 아니면
@@ -1241,6 +1374,30 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         }
     }
 
+    /// 정사영 드로우에 더할 root 기준 시차 이동(NDC, aspect 보정 전).
+    /// `parallaxDepth`는 여기서 이미 곱하므로 stock/custom vertex 경로에는 단위 depth를 넘긴다.
+    func renderCameraParallaxOffsetPixels(order: Int, currentOrigin: Vec2? = nil) -> SIMD2<Float> {
+        guard parallaxEnabled, orthographicScene,
+              let root = cameraParallaxRootByOrder[order] else { return .zero }
+        if let currentOrigin { cameraParallaxFrameOriginByOrder[order] = currentOrigin }
+        // root 자체가 이번 프레임 평가를 마쳤으면 그 값을 즉시 쓴다. child는 drawPlan에서 앞서
+        // 평가된 root 값을 재사용하며, 동적 상태가 없는/non-rendering root는 raw 슬롯으로 폴백한다.
+        let rootOrigin = cameraParallaxFrameOriginByOrder[root.order] ?? root.origin
+        let offset = SceneCameraMath.parallaxLayerOffset(
+            origin: rootOrigin,
+            focus: Vec2(x: parallaxFocus.x, y: parallaxFocus.y),
+            amount: parallaxAmount,
+            depth: root.depth
+        )
+        return SIMD2<Float>(offset.x, offset.y)
+    }
+
+    func renderCameraParallaxOffset(order: Int, currentOrigin: Vec2? = nil) -> SIMD2<Float> {
+        guard projW != 0, projH != 0 else { return .zero }
+        let offset = renderCameraParallaxOffsetPixels(order: order, currentOrigin: currentOrigin)
+        return SIMD2<Float>(2 * offset.x / projW, 2 * offset.y / projH)
+    }
+
     /// 뷰 좌표(AppKit 하단원점) → 씬 픽셀(W1-yaxis: WE 도 하단원점/y-up — pxToNDC 의 역).
     /// aspectScale 역적용으로 fit 레터박스/fill 크롭 보정 — fit 레터박스 밖 클릭은 nil(대응하는
     /// 씬 좌표가 없음). **주의**: 이 좌표는 pointerSceneCoords()(스크립트 cursorMove/hover 히트
@@ -1258,10 +1415,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         guard abs(nx) <= 1, abs(ny) <= 1 else { return nil }
         return SIMD2((nx + 1) / 2 * projW, (ny + 1) / 2 * projH)
     }
-    let maxShift: Float = 0.1
     var projAspect: Float = 16.0 / 9.0
     var projW: Float = 1920
     var projH: Float = 1080
+    /// W-7/W-8: 정사영 씬의 `perspective:true` 레이어가 쓰는 실효 FOV(도).
+    /// `buildLayers`가 문서의 `general.perspectiveoverridefov`를 매 마운트마다 싣고, 실제 정점
+    /// 소비부가 `CameraMotion.clampedFovDegrees`로 바이너리의 `[0.1, 179.9]` 규약을 적용한다.
+    var layerPerspectiveFov: Float = 95
 
     // ── camera 의사-오브젝트(P0-2 파스)의 2D 뷰 줌 ─────────────────────────────
     // WE 시맨틱(클린룸 L19 봉인 + 코퍼스 37씬 실측): 2D 씬 투영은 orthogonalprojection dict 가
@@ -1285,10 +1445,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     /// origin 이 스크립트 바인딩({"script":…} — 실측 19씬, value.x=slider×canvasSize=화면중심)이면 팬 미발화:
     /// 렌더러는 카메라 origin 스크립트를 평가하지 않아 base(직렬화 stale)가 무의미 → 중립 처리(회귀 방지).
     var cameraOriginIsScript = false
+    /// camera 의사-오브젝트가 없을 때 쓰는 `scene.camera.eye.xy`. 정사영 파서가 보존한 값이며
+    /// view 이동과 parallax focus가 같은 runtime eye를 공유한다.
+    var sceneCameraEye2D = SIMD2<Float>(0, 0)
+    var hasCameraObject2D = false
 
     /// mount: 씬 camera 의사-오브젝트 → 뷰 줌/origin 팬 상태. 카메라 없으면 중립 리셋(마운트 재사용 무회귀).
-    func applyCameraObjects(_ cams: [SceneCameraObject]) {
+    func applyCameraObjects(_ cams: [SceneCameraObject], sceneCameraEye: SIMD2<Float> = .zero) {
         let cam = cams.first
+        self.sceneCameraEye2D = sceneCameraEye
+        hasCameraObject2D = cam != nil
         cameraZoomBase = cam?.zoom ?? 1
         cameraZoomAnim = cam?.zoomAnimation
         currentCameraZoom = cameraZoomBase
@@ -1311,67 +1477,41 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
                             a.value(component: 1, atTime: time, base: cameraOriginBase.y))
     }
 
-    /// origin.xy(중심원점 씬픽셀) → 전역 투영-NDC 병진(shakeOffset 과 동일 공간: 씬 = −1..1, aspectScale×zoom
-    /// 후단곱). 카메라 +x 이동 = 콘텐츠 −x. 2px 데드존(정착 잔차 3552064521≈(1,1)px·서브픽셀 저작오차 흡수
-    /// → A/B t=6·정적·스크립트·카메라부재 씬 전수 .zero = 비트동일 가드).
-    /// ponytail: y 부호는 캘리브 노브 — WE 팬 방향 실측 부재(클린룸; 게이트 t=6 중립이라 검증 불가). 인트로
-    ///   t<3 병진 방향만 좌우하고, .zero 우회 씬엔 무영향. 교체 조건: WE 팬 부호 실측 확정 시 이 함수만 수정.
-    /// W1-yaxis(pxToNDC 전역 y-up 반전) 재검토: 이 +2·y/projH 부호는 구 y-down pxToNDC 체제에서
-    ///   유도됐으므로 산술적으로는 −2·y/projH 로 동반 반전해야 내부 일관 — 그러나 위 캘리브 노브 사유가
-    ///   먼저 존재해 원래도 WE 실측 없이는 부호를 확정할 수 없었던 값이다. 실측 없이 방향만 뒤집는
-    ///   추측 반전은 의도적으로 보류(2px 데드존 + 게이트 씬 전수 .zero 라 현재 실피해 없음 — 확인됨).
-    ///   교체 조건은 위와 동일(WE 팬 부호 실측 확정 시 이 함수만 수정), y-up 전환은 별도 트리거 아님.
-    static func cameraOriginPanOffset(originXY: SIMD2<Float>, projW: Float, projH: Float) -> SIMD2<Float> {
-        if abs(originXY.x) < 2 && abs(originXY.y) < 2 { return .zero }
-        return SIMD2<Float>(-2 * originXY.x / max(1, projW), 2 * originXY.y / max(1, projH))
+    /// runtime eye.xy(씬 픽셀) → 전역 투영-NDC 병진. lookAt translation과 같은
+    /// `(-2*x/W, -2*y/H)`이며 바이너리에는 서브픽셀 데드존이 없다.
+    static func cameraEyeNDCOffset(eye: SIMD2<Float>, projW: Float, projH: Float) -> SIMD2<Float> {
+        SIMD2<Float>(-2 * eye.x / max(1, projW), -2 * eye.y / max(1, projH))
     }
 
-    // ── camerashake 전역 지터(D 재감사 #16, 코퍼스 활성 13씬 — 2D 11/3D 2) ────────────────────
-    // 미보유 씬은 cameraShakeEnabled=false → frameShakeOffset 이 .zero 유지 → 셰이더 +0 = 비트동일(가드).
-    // parallax(camOffset×parallaxDepth) 채널은 depth=0 레이어(활성 씬 다수)에서 소실되므로 미사용 —
-    // 셰이더가 depth 무관 별도 항(shakeOffset)으로 전역 가산(v_main/pv_main 참조).
+    /// camera object가 있으면 그 runtime origin, 없으면 `scene.camera.eye.xy`를 쓴다.
+    func baseCameraEye2D(at time: Float) -> SIMD2<Float> {
+        hasCameraObject2D ? cameraOrigin(at: time) : sceneCameraEye2D
+    }
+
+    // ── runtime camera + exact shake ───────────────────────────────────────────────
     var cameraShakeEnabled = false
     var cameraShakeAmplitude: Float = 0.5
     var cameraShakeRoughness: Float = 1
     var cameraShakeSpeed: Float = 3
-    /// 이번 프레임 지터 오프셋(v.xy 공간, 깊이 무관 전역). draw/captureFrames 가 t 로 평가해
-    /// encodeLayer/encodeText/encodeParticle 이 셰이더 버퍼로 바인드. 비활성 = .zero.
+    /// 이번 2D 프레임의 최종 eye를 NDC로 바꾼 전역 view 오프셋. 3D는 eye/center 월드 자세에
+    /// 직접 shake를 더하므로 이 슬롯을 항상 0으로 둔다.
     var frameShakeOffset = SIMD2<Float>(0, 0)
 
-    /// 진폭 1.0 → NDC(v.xy) 피크 ≈ shakeNDCScale. 코퍼스 진폭 0.04..1.0(기본 0.5)은 무차원 상대값
-    /// (픽셀 아님 — 0.04px 는 비가시, 0.5 기본은 정규화 노브 특성). 잔잔한 앰비언스라 작게.
-    /// ponytail: 캘리브 노브 — A/B 에서 과/소 흔들리면 여기만 조정(수식·바인딩 불변).
-    static let shakeNDCScale: Float = 0.03
-
-    /// camerashake 전역 지터 오프셋(v.xy 공간). t 결정적 — 같은 t → 같은 값(Date/random 미사용).
-    /// ponytail: WE 확정 수식 부재(클린룸 — 바이너리 미열람; 문서 결론은 "전역 지터"만 §16). 코퍼스 13씬
-    ///   값분포 기반 근사. 교체 조건: WE camerashake 수식이 실측 확정되면 이 함수만 축자 대체(호출부·바인딩
-    ///   불변). 천장: 2주파 사인 합(진짜 Perlin/value-noise 아님) — 미세 규칙주기 잔존을 허용.
-    static func cameraShakeOffset(time t: Float, amplitude: Float, roughness: Float, speed: Float) -> SIMD2<Float> {
-        let w = speed
-        // 저주파 기저 드리프트: x/y 비공약 주파수·위상으로 탈동기(뻔한 대각 왕복 회피).
-        let baseX = sin(t * w * 1.00)
-        let baseY = sin(t * w * 1.37 + 1.7)
-        // roughness = 고주파 오버톤 혼합비(거칠기). 0=매끈 드리프트, ~1=지글거림.
-        let rough = max(0, roughness)
-        let roughX = sin(t * w * 5.30 + 0.6)
-        let roughY = sin(t * w * 6.10 + 2.9)
-        let norm = 1 / (1 + rough)   // 오버톤 추가해도 피크 ≈ amplitude 유지(발산 억제)
-        let x = (baseX + rough * roughX) * norm
-        let y = (baseY + rough * roughY) * norm
-        // 성분별 곱으로 명시 — 구형 컴파일러(Swift 5.10, CI macos-14)가 SIMD×스칼라 연산자를 오해상.
-        // (x,y)*s ≡ (x*s, y*s) 라 비트동일.
-        let s = amplitude * SceneRenderer.shakeNDCScale
-        return SIMD2<Float>(x * s, y * s)
+    /// 정사영 shake의 exact eye 델타. 단위는 NDC가 아니라 씬 픽셀이다.
+    func cameraShakeEyeDelta2D(at t: Float) -> SIMD2<Float> {
+        guard cameraShakeEnabled else { return .zero }
+        let d = SceneCameraMath.shakeDelta(time: t, speed: cameraShakeSpeed,
+                                           amplitude: cameraShakeAmplitude,
+                                           roughness: cameraShakeRoughness,
+                                           orthographic: true, orthoHeight: projH)
+        return SIMD2<Float>(d.x, d.y)
     }
 
-    /// 이번 프레임 지터 오프셋(비활성 = .zero → 비트동일 가드). cameraZoom(at:) 과 동형 디스패치.
-    func shakeOffset(at t: Float) -> SIMD2<Float> {
-        cameraShakeEnabled
-            ? SceneRenderer.cameraShakeOffset(time: t, amplitude: cameraShakeAmplitude,
-                                              roughness: cameraShakeRoughness, speed: cameraShakeSpeed)
-            : .zero
+    /// view와 parallax가 함께 소비하는 최종 2D eye.
+    func resolvedCameraEye2D(at t: Float) -> SIMD2<Float> {
+        baseCameraEye2D(at: t) + cameraShakeEyeDelta2D(at: t)
     }
+
     var startTime = CFAbsoluteTimeGetCurrent()
     var lastFrameTime = CFAbsoluteTimeGetCurrent()
     var shouldAnimate = false
@@ -1623,6 +1763,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
         teardown()
+        let mountWindow = container.window
         hasMissingRequiredSharedAssets = false
         scenePausedAt = nil
         drawGateOccludedSince = nil   // 마운트 재사용 대비 가림 게이트 추적 리셋(stale 시각으로 오보정 방지)
@@ -1860,8 +2001,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         releasePooledGPUTextures()
         projW = Float(max(1, doc.projectionWidth)); projH = Float(max(1, doc.projectionHeight))
         projAspect = projW / projH
-        // camera 의사-오브젝트 → 2D 뷰 줌(3D 는 미소비 — draw 3D 분기가 zoom 상태를 안 읽는다).
-        applyCameraObjects(doc.cameraObjects)
+        // camera 의사-오브젝트가 있으면 그것이 우선이고, 없으면 투영 종류와 무관하게 보존한
+        // scene.camera.eye를 쓴다. 2D/3D 경로 자체의 게이트는 doc.camera3D가 계속 맡는다.
+        let sceneEye2D = SIMD2<Float>(doc.sceneCamera?.eye.x ?? 0, doc.sceneCamera?.eye.y ?? 0)
+        applyCameraObjects(doc.cameraObjects, sceneCameraEye: sceneEye2D)
         sceneZoom = doc.zoom   // F744(S-18): 씬 전역 줌(사용 지점에서 >0 새니타이즈)
         // 씬 공유 JSContext — 3D 오브젝트/빌보드 스크립트와 2D buildLayers/buildTexts/효과 스크립트가 공유.
         // **build3D 보다 먼저** 생성해야 3D 스크립트가 shared 통신 컨텍스트에 로드된다(태양계 Main 컨트롤러가
@@ -1873,7 +2016,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         sceneScript = SceneScriptContext(layers: scriptLayerDescriptors,
                                          soundNames: doc.sounds.map { $0.name },
                                          width: projW, height: projH,
-                                         localStorageStore: container.window != nil
+                                         localStorageStore: mountWindow != nil
                                              ? ScriptLocalStorage(sceneId: project.id) : nil)
         sceneScriptBaseDescriptors = scriptLayerDescriptors  // F743(S-35): 라이브 갱신 기준 배열
         sceneScriptImageLayerCount = doc.layers.count  // F723: 텍스트 read-back 인덱스 오프셋(이미지→텍스트 순)
@@ -1912,7 +2055,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
                                       + text3DControllers.map(\.engine)).map { ObjectIdentifier($0) })
                 if !dupEngines.isEmpty {
                     eventEngines.removeAll { dupEngines.contains(ObjectIdentifier($0)) }
-                    hoverEngineLayers.removeAll { dupEngines.contains(ObjectIdentifier($0.engine)) }
+                    hoverEngineOwners.removeAll { dupEngines.contains(ObjectIdentifier($0.engine)) }
                     pointerEngineOwners.removeAll { dupEngines.contains(ObjectIdentifier($0.engine)) }
                 }
                 eval3DOrder = eval3DOrder.filter { !$0.bb }   // 빌보드 평가 항목 제거(아래서 billboards 를 비움)
@@ -2058,9 +2201,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         parallax.screenProvider = { [weak view] in view?.window?.screen }
 
         parallaxEnabled = doc.parallaxEnabled
+        orthographicScene = doc.orthographic
         parallaxAmount = doc.parallaxAmount
         parallaxMouseInfluence = doc.parallaxMouseInfluence
         parallaxDelay = doc.parallaxDelay
+        cameraParallaxRootByOrder = doc.cameraParallaxRootsByOrder()
+        cameraParallaxLeafByOrder = Dictionary(uniqueKeysWithValues: doc.parallaxObjects.map { ($0.order, $0) })
         cameraShakeEnabled = doc.cameraShake
         cameraShakeAmplitude = doc.cameraShakeAmplitude
         cameraShakeRoughness = doc.cameraShakeRoughness
@@ -2101,16 +2247,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         // 씬 이벤트 배선: cursorClick/Down/Up(전역 클릭 모니터) + cursorMove(마우스 모니터 공용,
         // 시차/효과 없어도 훅 있으면 기동) + 미디어(5초 폴링) — 소비 스크립트가 있을 때만.
         // buildAnimationEventTargets 가 animationlayers 스크립트 엔진을 새로 등록(eventEngines/
-        // hoverEngineLayers 경유)하므로 아래 배선 스캔들보다 먼저 호출(의존 리소스는 위에서 이미 완성).
+        // hoverEngineOwners 경유)하므로 아래 배선 스캔들보다 먼저 호출(의존 리소스는 위에서 이미 완성).
         buildAnimationEventTargets(doc: doc)  // 타임라인/퍼펫 마커 → animationEvent 발화 타깃(오브젝트 스코프)
         // 씬 sound 레이어 재생 — 라이브 한정. 헤드리스(캡처/테스트)는 container.window == nil → 스킵(결정성).
         // 음량은 VideoSettings(배경별) 재사용 → 동영상 설정 메뉴의 음소거/음량이 씬 오디오에도 적용.
         // F538(F-69): volume 프로퍼티 스크립트 엔진(makeScriptEngine)은 아래 이벤트 배선 스캔들과 오디오
-        // 프로바이더 기동 게이트(:1129)보다 먼저 생성되어야 훅 등록(eventEngines/hoverEngineLayers)과
+        // 프로바이더 기동 게이트(:1129)보다 먼저 생성되어야 훅 등록(eventEngines/hoverEngineOwners)과
         // scriptWantsAudio 승격이 반영된다 — 종전에는 mount 말미 생성이라 훅 배달이 누락됐다.
         // F535(F-50): 멀티모니터에서 동일 씬이 여러 화면에 마운트되면 화멻다 SceneAudioPlayer 가 생겨
         // 같은 사운드가 마운트 시차만큼 어긋나 N중 재생(에코) — 프라이머리(메뉴 바) 화멻만 재생.
-        if Self.isPrimaryScreenWindow(container.window), !doc.sounds.isEmpty {
+        if Self.isPrimaryScreenWindow(mountWindow), !doc.sounds.isEmpty {
             let audio = SceneAudioPlayer()
             // stage 3①: **start 보다 먼저** 먹인다. 나중에 먹이면 첫 곡이 소리부터 내고 꺼진다.
             audio.setMuted(policyMuted)
@@ -2148,7 +2294,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         // 있으면 프로세스 전체에서 provider 가 단 하나도 안 뜨는 최악의 경우까지 있었다). 형제
         // WebRenderer(:36,122)는 이 게이트 자체가 없이 마운트마다 무조건 provider 를 만든다 — 안전성의
         // 실증. window != nil 은 헤드리스(캡처/테스트, 위 sceneAudio 주석과 동일 계약) 배제 목적만 남긴다.
-        if hasAudio, container.window != nil {
+        if hasAudio, mountWindow != nil {
             let provider = SystemAudioSpectrumProvider()
             provider.onFrame = { [weak self] spec in
                 // spec = 128(64L+64R, 채널별 FFT).
@@ -2245,10 +2391,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         }
         pointerUV = SceneRenderer.pointerUV(fromNormalized: off)
         if parallaxEnabled {
-            let s = parallaxAmount * parallaxMouseInfluence * maxShift
-            targetCameraOffset = SIMD2<Float>(Float(off.x) * s, Float(off.y) * s)
-            // delay<=0 = 즉시(기존 동작 무회귀). delay>0 = draw() 가 프레임 dt 로 target 에 지수 수렴.
-            if parallaxDelay <= 0 { cameraOffset = targetCameraOffset }
+            // 별도 g_ParallaxPosition 상태는 포인터 이벤트 시점에도 즉시 갱신한다. delay>0은 draw/capture
+            // 프레임의 dt만 소비하므로 이벤트 빈도에 따라 수렴 속도가 달라지지 않는다.
+            if parallaxDelay <= 0 {
+                let now = scenePausedAt ?? CFAbsoluteTimeGetCurrent()
+                let time = Float(now - startTime)
+                advanceCameraParallax(dt: 0, eye: is3D ? .zero : resolvedCameraEye2D(at: time))
+            }
         }
         // cursorMove 훅 배달 — 30Hz 스로틀(웹 전달과 동일 규약, JS 평가 비용 절제).
         if hasCursorMoveHook {
@@ -2379,27 +2528,31 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         //    `if (s & 1) s |= 2; else s &= ~2;` 이것이 `.z` 를 한 프레임짜리 임펄스로 만든다.
         defer { pointerUVLast = pointerUV; pointerButton.endFrame() }
 
+        // 3D는 shared/object script → camera script → exact shake를 먼저 한 번만 평가한다.
+        // 같은 cached eye를 시차와 encode3D가 함께 소비해야 stateful JS 중복 실행과 한 프레임 지연이 없다.
+        let cameraFrame3D = is3D ? prepareCamera3DFrame(at: time) : nil
+        let frameEye2D = is3D ? SIMD2<Float>.zero : resolvedCameraEye2D(at: time)
+        let parallaxEye = cameraFrame3D.map { SIMD2<Float>($0.eye.x, $0.eye.y) } ?? frameEye2D
+        let cameraParallaxSettling = advanceCameraParallax(dt: dt, eye: parallaxEye)
+        if cameraParallaxSettling, dt > 0, !shouldAnimate { view.needsDisplay = true }
+        // interaction은 같은 focus 상태를 쓰되 leaf 기준이다. delay 수렴 중에도 경계를 매 프레임
+        // 다시 계산해야 보이는 시차와 hover/click 위치가 함께 움직인다.
+        if !hoverTargets.isEmpty {
+            MainActor.assumeIsolated { updateHover(at: pointerSceneCoords()) }
+        }
+
         // 애니메이션 이벤트 마커(라이브 재생 전용): 일시정지 중엔 발화 금지 —
         // pause() 후에도 needsDisplay 재드로(호버/리사이즈)가 여길 지나므로 명시 가드.
         if scenePausedAt == nil { tickAnimationEvents(time: time) }
 
-        // 시차 지연 스무딩(WE cameraparallaxdelay): cameraOffset 를 target 으로 프레임 dt 기반 지수 수렴.
-        // 온디맨드(비애니) 씬은 마우스 정지 후에도 정착 전까지 프레임을 스스로 요청(안 하면 lerp 중간 정지).
-        if parallaxEnabled, parallaxDelay > 0 {
-            cameraOffset = ParallaxController.smoothed(current: cameraOffset, target: targetCameraOffset,
-                                                       dt: dt, delay: parallaxDelay)
-            if !shouldAnimate {
-                let d = targetCameraOffset - cameraOffset
-                if d.x * d.x + d.y * d.y > 1e-10 { view.needsDisplay = true }
-            }
-        }
-
         // 3D 씬: 메시 + 빌보드 패스(뎁스, per-frame 스크립트) → scene-global finalizer.
         if is3D {
             beginFramePool()
-            frameShakeOffset = shakeOffset(at: time)  // camerashake 3D 전역 지터(encode3D 가 viewProj 에 좌승). 비활성=.zero → 항등.
-            guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true),
-                  encode3D(into: acc, cb: cb, device: device, time: time, particleDelta: dt) else {
+            frameShakeOffset = .zero  // 3D shake는 cached camera pose의 world eye/center에 이미 반영됨.
+            guard let cameraFrame3D,
+                  let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true),
+                  encode3D(into: acc, cb: cb, device: device, time: time,
+                           particleDelta: dt, cameraFrame: cameraFrame3D) else {
                 logDrawFailureOnce("3d-encode", "3D 오프스크린 확보 또는 encode3D 실패 — 프레임 스킵")
                 cb.commit(); return
             }
@@ -2413,6 +2566,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
                 cb.commit()
                 return
             }
+            // encodeBillboard가 실제 표시 코너를 같은 viewProj로 투영해 남긴 범위를 이제 승격한다.
+            // 첫 프레임 전의 `.unhittable` 또는 직전 프레임 쿼드로 입력을 판정하면 안 된다.
+            presentInteractionGeometry()
+            if !hoverTargets.isEmpty {
+                MainActor.assumeIsolated { updateHover(at: pointerSceneCoords()) }
+            }
             cb.present(drawable)
             cb.commit()
             return
@@ -2425,7 +2584,6 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         let displayTextures = buildDisplayTextures(device: device, time: time, cb: cb)
         let textTextures = buildTextDisplayTextures(device: device, time: time, cb: cb)  // F741(S-13)
 
-        var camOffset = cameraOffset
         // 종횡비 보정 — FitMode 설정에 따라(클릭 역매핑과 동일 공식 = sceneCoords 정합 보장).
         let ds = view.drawableSize
         let viewAspect = Float(ds.width / max(1, ds.height))
@@ -2441,8 +2599,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         let sceneZoomEff = sceneZoom > 0 ? sceneZoom : 1
         if sceneZoomEff != 1 { aspectScale *= sceneZoomEff }
         currentCameraZoom = camZoom * sceneZoomEff   // 클릭 역매핑(sceneCoords) 정합 — 합산 줌
-        frameShakeOffset = shakeOffset(at: time)  // camerashake 전역 지터(비활성 = .zero → 셰이더 +0 = 비트동일)
-        frameShakeOffset += SceneRenderer.cameraOriginPanOffset(originXY: cameraOrigin(at: time), projW: projW, projH: projH)  // camera origin.xy 팬(중립/스크립트/정적 = .zero 데드존 → 비트동일)
+        // 같은 final eye를 parallax focus와 2D view에 함께 사용한다. 정적 scene.camera, camera object,
+        // exact shake를 별도 NDC 항으로 나누면 둘의 위치가 갈라지므로 여기서 한 번만 변환한다.
+        frameShakeOffset = SceneRenderer.cameraEyeNDCOffset(eye: frameEye2D, projW: projW, projH: projH)
         // 누적(acc) 합성: 컴포지션(_rt_) 레이어가 "그 시점까지의 화면"을 샘플할 수 있도록
         // 오프스크린에 합성 후 마지막에 drawable 로 blit(뷰는 mount 에서 framebufferOnly=false).
         // clearenabled=false 면 전용 누적 버퍼(trailAcc — 풀 체크아웃 순서 변동/미정의 초기내용 회피,
@@ -2494,7 +2653,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
                                                 particleSystems[idx].sim.emissionPaused = scriptParticleEmissionPaused[idx] ?? false
                                                 return particleSystems[idx].sim.step(dt)
                                             },
-                                            camOffset: &camOffset, aspectScale: &aspectScale) else {
+                                            aspectScale: &aspectScale) else {
             logDrawFailureOnce("2d-drawplan", "encodeDrawPlan 실패 — 프레임 스킵")
             cb.commit(); return
         }
@@ -2508,6 +2667,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
             logDrawFailureOnce("2d-finalize", "2D finalizeScene 실패 — 프레임 스킵")
             cb.commit()
             return
+        }
+        // 표시 출력의 인코드가 확정된 프레임만 포인터/호버 기하로 승격한다. finalizer 실패 전에
+        // publish하면 drawable은 직전 픽셀인데 입력만 실패한 새 프레임 위치를 보게 된다.
+        presentInteractionGeometry()
+        if !hoverTargets.isEmpty {
+            MainActor.assumeIsolated { updateHover(at: pointerSceneCoords()) }
         }
         cb.present(drawable)
         cb.commit()
@@ -2564,6 +2729,33 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         // 비디오 레이어는 이제 일반 레이어로 합성된다(스왑 아님) — buildDisplayTextures 가 각 time 의
         // 비디오 프레임(헤드리스=AVAssetImageGenerator@scene-time, 결정적)을 형제 레이어와 함께 렌더한다.
         guard let device, let queue, pipeline != nil, let target = makeOffscreenBGRA(width, height, device) else { return [] }
+        // 라이브 창에 붙은 인스턴스에서도 진단/썸네일용 캡처 API를 부를 수 있다. encode 경로는
+        // 공용이라 캡처의 별도 aspect/time 기하도 pending→presented로 승격하는데, 그대로 두면
+        // 다음 물리 입력이 화면에 보이는 프레임이 아니라 마지막 오프스크린 프레임을 히트한다.
+        // 헤드리스 인스턴스는 캡처가 유일한 presentation이므로 종전처럼 승격을 남긴다(스냅샷/호환성
+        // 진단과 테스트 seam). 실제 NSWindow에 붙은 경우만 세 배열을 값 복사해 정확히 복원한다.
+        // mount 시점에는 container.window가 nil이었다가 나중에 붙는 경로가 정식 지원된다. 따라서
+        // mount 스냅샷이 아니라 캡처를 시작하는 현재 시점의 presentation attachment를 판정한다.
+        let preserveLiveInteraction = (mtkView as? WapleMTKView)?.wapleIsAttachedToWindow == true
+        let savedPointerTargets: [PointerTarget]? = preserveLiveInteraction ? pointerTargets : nil
+        let savedHoverTargets: [HoverTarget]? = preserveLiveInteraction ? hoverTargets : nil
+        let savedPendingInteraction: [Int: PresentedInteractionGeometry]? = preserveLiveInteraction
+            ? pendingInteractionGeometry : nil
+        defer {
+            if let savedPointerTargets { pointerTargets = savedPointerTargets }
+            if let savedHoverTargets { hoverTargets = savedHoverTargets }
+            if let savedPendingInteraction { pendingInteractionGeometry = savedPendingInteraction }
+        }
+        // 캡처는 라이브 재생 상태를 읽거나 오염시키지 않고 focus=0에서 매 호출을 재현한다.
+        let savedParallaxFocus = parallaxFocus
+        let savedParallaxPosition = parallaxPosition
+        parallaxFocus = .zero
+        parallaxPosition = .zero
+        defer {
+            parallaxFocus = savedParallaxFocus
+            parallaxPosition = savedParallaxPosition
+        }
+        var captureParallaxClock: Float = 0
         frameDT = 1.0 / 30.0  // g_Frametime: 캡처는 시뮬 스텝과 동일 고정 dt(결정적 — 라이브 dt 오염 차단)
         // 3D 씬: 메시 + 빌보드 패스(뎁스). per-frame 스크립트 평가로 각 time 마다 갱신(궤도/인트로 애니).
         if is3D {
@@ -2572,7 +2764,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
             let savedSims = particleSystems.map { $0.sim }
             let savedClock = particle3DClock
             for i in particleSystems.indices {
-                particleSystems[i].sim = ParticleSimulator(def: particleSystems[i].def, seed: particleSystems[i].seed)
+                particleSystems[i].sim = particleSystems[i].freshSimulator()
             }
             particle3DClock = 0
             defer {
@@ -2581,9 +2773,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
             }
             var urls: [URL] = []
             for t in times.sorted() {
+                var cameraFrame3D: ResolvedCamera3DFrame?
+                // 30Hz replay의 각 substep에서 scripts/pose/shake를 한 번 평가하고, 마지막 결과를
+                // encode에 재사용한다. parallax가 꺼졌으면 아래 fallback이 요청 시각을 한 번 평가한다.
+                advanceCaptureCameraParallax(to: t, clock: &captureParallaxClock) { [self] sampleTime in
+                    let frame = prepareCamera3DFrame(at: sampleTime)
+                    cameraFrame3D = frame
+                    return frame.map { SIMD2<Float>($0.eye.x, $0.eye.y) } ?? .zero
+                }
+                if cameraFrame3D == nil { cameraFrame3D = prepareCamera3DFrame(at: t) }
                 guard let cb = queue.makeCommandBuffer() else { continue }
                 beginFramePool()
-                frameShakeOffset = shakeOffset(at: t)  // 라이브 draw 동형: A/B 캡처가 3D 지터 오프셋을 판독(비활성=.zero)
+                frameShakeOffset = .zero
                 // HDR bloom/LDR bloom 모두 readback(target)과 분리된 불변 소스 필요.
                 // HDR 은 pooledOffscreen(bgra:true) 이 hdrActive 로 float(rgba16Float) 승격 → >1 보존해 골든 대조.
                 // F531(F-5): HDR 씬에서 float 소스 할당 실패 시 target(bgra8) 폴백은 씬 파이프라인(accPixelFormat=
@@ -2596,7 +2797,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
                 } else {
                     source = sceneWantsLDRBloom ? (pooledOffscreen(width, height, device, bgra: true) ?? target) : target
                 }
-                guard encode3D(into: source, cb: cb, device: device, time: t, particleDelta: nil) else { continue }
+                guard let cameraFrame3D,
+                      encode3D(into: source, cb: cb, device: device, time: t,
+                               particleDelta: nil, cameraFrame: cameraFrame3D) else { continue }
                 pushLiveSceneLayers()  // F811(S-35): 라이브 draw 와 동일 — 캡처 프레임 간 스크립트 연속성(2D F743 과 동형)
                 guard finalizeScene(
                     source: source,
@@ -2606,6 +2809,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
                     cb.commit()
                     continue
                 }
+                presentInteractionGeometry()
                 cb.commit()
                 cb.waitUntilCompleted()
                 let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
@@ -2613,11 +2817,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
             }
             return urls
         }
-        var sims = particleSystems.map { ParticleSimulator(def: $0.def, seed: $0.seed) }
+        var sims = particleSystems.map { $0.freshSimulator() }
         var simTime: Float = 0
         let dt: Float = 1.0 / 30.0
         var urls: [URL] = []
-        var camOff = SIMD2<Float>(0, 0)
         let aspBase = SceneRenderer.aspectScale(projAspect: projAspect,
                                                 viewAspect: Float(width) / Float(max(1, height)),
                                                 fitMode: SceneRenderSettings.fitMode)
@@ -2627,6 +2830,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         // 항상 클리어해 정의된 상태에서 시작(결정론 계약 — 누적 시작점이 미정의 내용이면 A/B 발산).
         var captureAccPrimed = false
         for t in times.sorted() {
+            advanceCaptureCameraParallax(to: t, clock: &captureParallaxClock) { [self] sampleTime in
+                resolvedCameraEye2D(at: sampleTime)
+            }
             // 파티클 visible 스크립트를 **웜업 스텝 앞에서** t 로 1회 평가한다 — 그 스크립트가 같이
             // 남기는 WE thisLayer.play/pause 방출 게이트가 0→t 리플레이에 반영돼야 하기 때문이다.
             // (라이브 draw 는 encodeDrawPlan 이 시스템별로 "평가 → 스텝" 순이라 이미 같은 순서다.
@@ -2662,12 +2868,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
             if capZoom != 1 { asp *= capZoom }
             let capSceneZoom = sceneZoom > 0 ? sceneZoom : 1  // F744(S-18): 라이브 draw 와 동일 채널
             if capSceneZoom != 1 { asp *= capSceneZoom }
-            frameShakeOffset = shakeOffset(at: t)  // 라이브 draw 와 동일: A/B 캡처가 t=6 지터 오프셋을 판독
-            frameShakeOffset += SceneRenderer.cameraOriginPanOffset(originXY: cameraOrigin(at: t), projW: projW, projH: projH)  // origin 팬(t=6 정착 중립·정적/스크립트 = .zero → A/B 비트동일)
+            frameShakeOffset = SceneRenderer.cameraEyeNDCOffset(
+                eye: resolvedCameraEye2D(at: t), projW: projW, projH: projH)
             if ortho3DHybrid { evaluate3DScripts(time: t) }  // F721: 라이브 draw 와 동일 — t 시점 노드 스크립트 평가
             // 라이브 draw 와 동일한 씬-순서 인터리브(encodeDrawPlan 공용 — 복제 루프 발산 방지).
             // 파티클은 로컬 sims 의 현재 스냅샷(step(0)) 사용.
-            // (camOff=0 이라 parallaxDepth 는 무영향 — encodeLayer 공용 사용 가능.)
+            // encodeDrawPlan이 라이브와 같은 root-parallax helper를 사용하므로 캡처도 시차를 보존한다.
             // target 이 곧 누적(acc) — 컴포지션 레이어는 스냅샷 경유(runFrameBufferLayer).
             guard let finalEnc = encodeDrawPlan(startingWith: enc, acc: acc, cb: cb, device: device, time: t,
                                                 displayTextures: displayTextures,
@@ -2682,7 +2888,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
                                                 particleVisible: { idx in
                                                     idx < capturedVisible.count ? capturedVisible[idx] : true
                                                 },
-                                                camOffset: &camOff, aspectScale: &asp) else { cb.commit(); continue }
+                                                aspectScale: &asp) else { cb.commit(); continue }
             finalEnc.endEncoding()
             pushLiveSceneLayers()  // F743(S-35): 라이브 draw 와 동일 — 캡처 프레임 간 스크립트 연속성
             guard finalizeScene(
@@ -2693,6 +2899,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
                 cb.commit()
                 continue
             }
+            // PNG target까지 갈 수 있는 프레임만 표시 기하로 승격(라이브 2D와 같은 순서 계약).
+            presentInteractionGeometry()
             cb.commit()
             cb.waitUntilCompleted()
             let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
@@ -2776,20 +2984,26 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         hasVideoLayer = false; videoLayersLive = false
         sceneAudio?.teardown(); sceneAudio = nil
         parallax.stop()
-        cameraOffset = .zero; targetCameraOffset = .zero  // 마운트 재사용 대비 시차 리셋(mount :656 과 일관)
+        parallaxFocus = .zero; parallaxPosition = .zero   // WE focus/renderState 슬롯도 다음 씬으로 누출 금지
+        cameraParallaxRootByOrder.removeAll(keepingCapacity: false)
+        cameraParallaxLeafByOrder.removeAll(keepingCapacity: false)
+        cameraParallaxFrameOriginByOrder.removeAll(keepingCapacity: false)
         frameShakeOffset = .zero; cameraShakeEnabled = false  // 지터 리셋(mount 가 무조건 덮음 — 재사용 무회귀·stale 애니게이트 방지)
+        layerPerspectiveFov = 95  // W-7: 다음 씬 buildLayers 전까지 저작 FOV가 새지 않게 생성자 기본으로.
         parallaxEnabled = false  // teardown 후 resume(:1172 게이트)이 stale parallaxEnabled 로 monitor 를 재기동하지 않도록. mount(:836)이 무조건 덮으므로 재사용 무회귀.
+        orthographicScene = true
         if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
         mediaPoller?.stop(); mediaPoller = nil
         mediaArtworkTexture = nil; mediaPreviousArtworkTexture = nil  // F722: 마운트 재사용 시 이전 씬 아트워크 잔류 방지
         eventEngines = []
-        hoverEngineLayers = []; hoverTargets = []
+        hoverEngineOwners = []; hoverTargets = []; pendingInteractionGeometry.removeAll()
         pointerEngineOwners = []; pointerTargets = []; clickLatch.cancel()
         animEventTargets = []
         hasCursorMoveHook = false
         audioProvider?.stop(); audioProvider = nil; hasAudio = false; hasEffects = false
         mtkView?.removeFromSuperview()
-        mtkView = nil; layers = []; particleSystems = []; hasParticles = false
+        mtkView = nil
+        layers = []; particleSystems = []; hasParticles = false
         particle3DAdditive = nil; particle3DTranslucent = nil; particle3DClock = 0  // 3D 파티클 상태 리셋(마운트 재사용)
         particle3DFogAdditive = nil; particle3DFogTranslucent = nil   // M(④)
         forwardLit = false; litPipeline = nil; spriteFramePipeline = nil  // 라이트/스프라이트 추출 상태 리셋(마운트 간 스테일 방지)

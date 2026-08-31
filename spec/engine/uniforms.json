@@ -20,6 +20,7 @@
     "count": 144,
     "무엇을 재는가": "바이너리 어디든 나타나는 `g_[A-Z]…` 문자열의 고유 개수. **엔진 유니폼 테이블의 원소 수가 아니다** — 자산(셰이더)이 선언한 이름까지 쓸어온다.",
     "테이블과의 차": 4,
+    "VA 좌표 규약": "같은 이름의 후보가 여럿이면 NUL 종료 맨 이름 문자열을 우선한다. 맨 이름이 바이너리에 없는 g_Texture 한 건만 정규식 소스 조각 좌표이며 coordinateKind=embeddedToken 으로 표시한다.",
     "자산 쪽으로 확인된 이름": [
      "g_Texture",
      "g_Texture0MipMapped",
@@ -90,7 +91,7 @@
      "section": ".rdata"
     },
     "g_Bones": {
-     "va": "0x1404875f3",
+     "va": "0x14048daf8",
      "section": ".rdata"
     },
     "g_BonesAlpha": {
@@ -158,63 +159,63 @@
      "section": ".rdata"
     },
     "g_LDirectional_Color": {
-     "va": "0x14048780d",
+     "va": "0x14048dc10",
      "section": ".rdata"
     },
     "g_LDirectional_Direction": {
-     "va": "0x1404877ad",
+     "va": "0x14048dcc8",
      "section": ".rdata"
     },
     "g_LFeature_ShadowPointProjection": {
-     "va": "0x1404878b5",
+     "va": "0x14048dc58",
      "section": ".rdata"
     },
     "g_LFeature_ShadowPointProjectionTransform": {
-     "va": "0x1404878e5",
+     "va": "0x14048dd30",
      "section": ".rdata"
     },
     "g_LFeature_ShadowProjection": {
-     "va": "0x140487857",
+     "va": "0x14048dca8",
      "section": ".rdata"
     },
     "g_LFeature_ShadowProjectionTransform": {
-     "va": "0x14048791d",
+     "va": "0x14048dc80",
      "section": ".rdata"
     },
     "g_LPoint_Color": {
-     "va": "0x140487695",
+     "va": "0x14048db80",
      "section": ".rdata"
     },
     "g_LPoint_Origin": {
-     "va": "0x140487665",
+     "va": "0x14048db70",
      "section": ".rdata"
     },
     "g_LSpot_Color": {
-     "va": "0x1404876fd",
+     "va": "0x14048dc00",
      "section": ".rdata"
     },
     "g_LSpot_Direction": {
-     "va": "0x1404876bd",
+     "va": "0x14048dbd8",
      "section": ".rdata"
     },
     "g_LSpot_Exponent": {
-     "va": "0x1404876dd",
+     "va": "0x14048dbc0",
      "section": ".rdata"
     },
     "g_LSpot_Origin": {
-     "va": "0x14048771d",
+     "va": "0x14048dbf0",
      "section": ".rdata"
     },
     "g_LTube_Color": {
-     "va": "0x14048778d",
+     "va": "0x14048dc48",
      "section": ".rdata"
     },
     "g_LTube_OriginA": {
-     "va": "0x14048773d",
+     "va": "0x14048dc38",
      "section": ".rdata"
     },
     "g_LTube_OriginB": {
-     "va": "0x14048775d",
+     "va": "0x14048dc28",
      "section": ".rdata"
     },
     "g_LayerModelMatrix": {
@@ -339,7 +340,8 @@
     },
     "g_Texture": {
      "va": "0x14048d120",
-     "section": ".rdata"
+     "section": ".rdata",
+     "coordinateKind": "embeddedToken"
     },
     "g_Texture0": {
      "va": "0x14048d440",

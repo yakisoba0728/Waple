@@ -173,6 +173,40 @@ enum RendererSwap {
     }
 }
 
+/// ffmpeg 선변환 집계. 같은 원본을 보는 모니터는 하나의 변환을 공유하고,
+/// 고유 소스 전부가 성공해야만 마운트 트랜잭션을 열 수 있다.
+struct VideoPreparationBatch {
+    enum Update {
+        case ignored
+        case pending
+        case ready([URL: URL])
+        case failed(URL)
+    }
+
+    let sources: [URL]
+    private var pending: Set<URL>
+    private var outputs: [URL: URL] = [:]
+
+    init(sources: [URL]) {
+        var seen = Set<URL>()
+        self.sources = sources.filter { seen.insert($0).inserted }
+        self.pending = Set(self.sources)
+    }
+
+    mutating func record(source: URL, output: URL?) -> Update {
+        guard pending.remove(source) != nil else { return .ignored }
+        guard let output else { return .failed(source) }
+        outputs[source] = output
+        return pending.isEmpty ? .ready(outputs) : .pending
+    }
+
+    /// 같은 apply 세대가 화면 세트를 재해석해 추가 소스를 발견했을 때 앞 배치 결과를 보존한다.
+    /// 새 결과가 같은 source를 포함하면 더 최신 변환 결과가 이긴다.
+    static func accumulated(existing: [URL: URL], newlyPrepared: [URL: URL]) -> [URL: URL] {
+        existing.merging(newlyPrepared) { _, newer in newer }
+    }
+}
+
 /// 재생목록 자동전환 스케줄링 결정.
 ///
 /// **[2026-08-27] 이 열거의 절반은 더 이상 프로덕션에서 불리지 않는다.** 전진 판정·순서·시계가
@@ -181,7 +215,7 @@ enum RendererSwap {
 /// | 여기 | 대체 |
 /// | --- | --- |
 /// | `shuffleNext` — 직전 1개만 회피 | `WapleCore.ShuffleBag` — 소진형이라 한 바퀴 안에 반복이 없다 |
-/// | `advance(from:count:next:apply:)` | `PlaylistDriver.advance(screenKey:now:apply:)` — 같은 "실패 후보 건너뛰기" 루프를 **화면별로** 돈다 |
+/// | `advance(from:count:next:apply:)` | `PlaylistDriver.requestAdvance(screenKey:now:apply:)` — 비동기 실패까지 같은 "실패 후보 건너뛰기" 루프를 **화면별로** 돈다 |
 /// | `shouldAdvanceNow(isPaused:)` | `PlaylistSettings.accumulatesElapsed(isPaused:)` — 정지 중엔 전진만 막는 게 아니라 **시계가 선다** |
 /// | `intervalSeconds(minutes:)` | 없음 — 틱이 1초 고정이고 간격은 `delayMinutes` 로 판정에 들어간다 |
 ///

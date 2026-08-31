@@ -73,7 +73,10 @@ public final class FolderStore {
             NSLog("%@", "[Waple] folders.json save skipped — earlier read failed transiently, avoiding clobber")
             return
         }
-        backupCorruptStoreFile(fileURL, &corrupt)
+        guard backupCorruptStoreFile(fileURL, &corrupt) else {
+            NSLog("%@", "[Waple] folders save skipped — corrupt original backup failed, avoiding clobber")
+            return
+        }
         do { try JSONEncoder().encode(folders).write(to: fileURL, options: .atomic) }
         catch { NSLog("%@", "[Waple] folders save failed: \(error)") }
     }

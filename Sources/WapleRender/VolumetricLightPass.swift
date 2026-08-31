@@ -38,7 +38,8 @@ import WapleCore
 ///   복원한 규칙 자체는 `lightBufferDivisor`/`blursLightBuffer` 에 남겨 둔다.
 ///
 /// ## 도달 수 (2026-08-21 실측)
-/// `castvolumetrics` — 동봉 172 + 설치본 186 = **358 씬에서 0건**(문자열 자체가 자산 JSON 어디에도
+/// `castvolumetrics` — 설치본 `assets/ + projects/` 단일 모집단 **186 씬에서 0건**
+/// (문자열 자체가 자산 JSON 어디에도
 /// 없다. 실행파일에만 있다). 워크샵 코퍼스 162 씬에서 3 씬 / 라이트 4개(전부 true,
 /// `spec/corpus/scene-schema.json`). `density` 27건/11씬 · `volumetricsexponent` 27건/11씬 —
 /// 다만 `castvolumetrics` 없이는 WE 도 이 패스를 켜지 않는다(기본값 false, `0x14019048d`).

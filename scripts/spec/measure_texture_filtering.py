@@ -559,6 +559,11 @@ def scan_our_shaders():
 
 # ── main ────────────────────────────────────────────────────────────────
 def main():
+    specfmt.require_inputs(
+        "measure_texture_filtering",
+        ("file", BIN, "WE_BIN", "wallpaper64.exe"),
+        ("dir", WS, "WE_WORKSHOP", "워크샵 코퍼스"),
+    )
     pe = PE(BIN)
     cache_body, cb0, cb1 = pe.body(FN_SAMPLER_CACHE)
     init_body, ib0, ib1 = pe.body(FN_DEVICE_INIT)

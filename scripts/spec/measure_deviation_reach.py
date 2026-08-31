@@ -52,6 +52,8 @@ def unwrap(v):
 
 
 def main():
+    specfmt.require_inputs("measure_deviation_reach",
+                           ("dir", WS, "WE_WORKSHOP", "워크샵 코퍼스"))
     hdr, model3d, lit, blend_nonzero = set(), set(), set(), set()
     blend_modes = collections.Counter()
     hdr_and_model, hdr_and_blend = set(), set()

@@ -109,17 +109,268 @@ final class UIConventionTests: XCTestCase {
     /// 그 안의 항목은 존재하지 않는 것과 같다. 실측(2026-08-17): 라이브러리 타일의 우클릭
     /// 메뉴 11개 중 5개(선택(속성 보기)·적용 + 조작 창 열기·폴더로 이동·Finder에서 보기·
     /// 폴더 삭제)는 다른 어떤 경로로도 도달할 수 없다.
+    /// **[정정 2026-08-30] 종전 판정은 `파일 단위`라 규약이 말하는 1:1 을 지키지 못했다.**
+    ///
+    /// 종전 술어: `text.contains(".contextMenu") && !text.contains(".accessibilityAction(")`.
+    /// 즉 **파일 어딘가에** `accessibilityAction` 이 한 번만 있으면 그 파일의 우클릭 메뉴 항목
+    /// **전부가 면제**됐다. `.contextMenu` 를 가진 두 파일(WallpaperGridView·Shell/SidebarView)이
+    /// 둘 다 이미 `accessibilityAction` 을 갖고 있어서, 사실상 **영구 면제**였다.
+    ///
+    /// 실측으로 재현했다(2026-08-30): `WallpaperGridView.contextMenu(for:supported:)` 에
+    /// 접근성 짝이 없는 파괴적 항목
+    /// `Button("폴더 삭제(항목은 유지)", role: .destructive)` 를 넣고 `swift test --filter UIConvention`
+    /// → **4건 전부 통과**. 우클릭으로만 닿는 파괴적 동작이 초록으로 실린다 — 이 테스트가 막으려던
+    /// 바로 그 §4.3 위반이다. (이미 번역된 라벨을 쓰면 `LocalizationCoverageTests` 도 안 걸린다.)
+    ///
+    /// 그래서 **항목 단위**로 좁힌다. 메뉴 항목의 라벨 리터럴을 뽑아, 같은 문구의
+    /// `accessibilityAction(named:)` 이 있는지 본다. 중첩 `Menu` 의 자식은 세지 않는다 —
+    /// §4.3:440-442 가 중첩 메뉴는 **대표 액션 하나**로 내라고 규정하므로(accessibilityAction 은
+    /// 중첩되지 않는다), 자식까지 세면 지금의 올바른 코드가 오탐으로 빨개진다.
     func testContextMenusHaveAccessibilityCounterpart() throws {
-        // 2026-08-17 기준 위반 1파일이었고, Unit B 가 라이브러리 개편에서 지웠다 — 목록은 비었다.
-        let pending: Set<String> = []
-        try assertConvention(
-            violates: { text in
-                text.contains(".contextMenu") && !text.contains(".accessibilityAction(")
-            },
-            pending: pending,
-            rule: "contextMenu 항목은 accessibilityAction 으로 1:1 대응돼야 한다.",
-            fix: "→ 메뉴 항목마다 .accessibilityAction(named: Text(\"…\")) { … } 를 붙여라. 규약은 §4.3."
-        )
+        let sources = try Self.uiSources()
+        XCTAssertGreaterThan(sources.count, 20, "소스 수집이 실패했다 — 경로 규약이 바뀌었나?")
+
+        // 판정 대상이 실제로 존재해야 한다 — 0건이면 이 오라클은 아무것도 안 본다.
+        let withMenus = sources.filter { $0.text.contains(".contextMenu") }
+        XCTAssertFalse(withMenus.isEmpty, "`.contextMenu` 를 가진 파일이 0건 — 스캔이 깨졌다")
+
+        var unmatched: [String] = []
+        var itemsChecked = 0
+        for source in withMenus {
+            let actions = Self.accessibilityActionLabels(source.text)
+            for item in Self.contextMenuItems(source.text) {
+                itemsChecked += 1
+                // 라벨이 삼항(선택 상태에 따라 두 문구)이면 **두 문구 중 하나**라도 짝이 있으면 된다 —
+                // 접근성 액션도 같은 삼항 `Text` 를 넘기는 것이 이 저장소의 형태다.
+                guard !item.labels.isEmpty else { continue }
+                if item.labels.allSatisfy({ !actions.contains($0) }) {
+                    unmatched.append("\(source.name): \(item.labels.joined(separator: " / "))")
+                }
+            }
+        }
+        // 파서가 항목을 하나도 못 뽑았으면 위 루프는 공짜로 통과한다 — 그 상태를 실패로 낸다.
+        XCTAssertGreaterThan(itemsChecked, 5,
+                             "우클릭 메뉴 항목을 \(itemsChecked)개만 뽑았다 — 파서가 메뉴 형태 변화를 못 따라갔다")
+        XCTAssertTrue(unmatched.isEmpty,
+                      "contextMenu 항목은 accessibilityAction 으로 1:1 대응돼야 한다.\n"
+                        + "짝 없는 항목 \(unmatched.count)건:\n"
+                        + unmatched.map { "  \($0)" }.joined(separator: "\n")
+                        + "\n→ 항목마다 .accessibilityAction(named: Text(\"…\")) { … } 를 붙여라. 규약은 §4.3.")
+    }
+
+    // MARK: - 메뉴/접근성 라벨 파스
+
+    /// 한 항목 = 우클릭 메뉴의 **최상위** `Button`/`Menu` 하나. `labels` 는 그 라벨의 문자열
+    /// 리터럴들(삼항이면 둘).
+    struct MenuItem {
+        let labels: [String]
+    }
+
+    /// `.contextMenu { … }` 의 항목을 뽑는다. 클로저가 로컬 빌더에 위임하면(이 저장소의 두 자리가
+    /// 다 그렇다 — `contextMenu(for:supported:)` · `folderRowMenu(_:)`) 그 함수 본문까지 따라간다.
+    static func contextMenuItems(_ text: String) -> [MenuItem] {
+        var bodies: [String] = []
+        var search = text.startIndex
+        while let hit = text.range(of: ".contextMenu", range: search..<text.endIndex) {
+            search = hit.upperBound
+            guard let body = braceBody(text, from: hit.upperBound) else { continue }
+            // 위임 형태(`{ someBuilder(...) }`)면 그 빌더 본문으로 갈아탄다.
+            let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let name = delegatedBuilderName(trimmed),
+               let resolved = builderBody(text, name: name) {
+                bodies.append(resolved)
+            } else {
+                bodies.append(body)
+            }
+        }
+        return bodies.flatMap { topLevelItems($0) }
+    }
+
+    /// `{ foo(a: b) }` 처럼 **호출 하나뿐**인 본문이면 그 함수 이름.
+    private static func delegatedBuilderName(_ body: String) -> String? {
+        guard let paren = body.firstIndex(of: "("), body.hasSuffix(")") else { return nil }
+        let name = String(body[body.startIndex..<paren])
+        guard name.range(of: "^[a-zA-Z_][a-zA-Z0-9_]*$", options: .regularExpression) != nil,
+              !name.hasPrefix("Button"), !name.hasPrefix("Menu") else { return nil }
+        return name
+    }
+
+    /// `private func <name>(…) -> some View {` 또는 `@ViewBuilder` 가 붙은 같은 선언의 본문.
+    private static func builderBody(_ text: String, name: String) -> String? {
+        let pattern = "func\\s+\(NSRegularExpression.escapedPattern(for: name))\\s*\\("
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let r = Range(m.range, in: text),
+              let open = text[r.upperBound...].firstIndex(of: "{") else { return nil }
+        return braceBody(text, from: open)
+    }
+
+    /// `from` 이후 첫 `{` 의 짝을 찾아 그 안을 돌려준다(중첩 계산).
+    private static func braceBody(_ text: String, from: String.Index) -> String? {
+        guard let open = text[from...].firstIndex(of: "{") else { return nil }
+        var depth = 0
+        var body = ""
+        for ch in text[open...] {
+            if ch == "{" {
+                depth += 1
+                if depth == 1 { continue }
+            }
+            if ch == "}" {
+                depth -= 1
+                if depth == 0 { return body }
+            }
+            body.append(ch)
+        }
+        return nil
+    }
+
+    /// 본문의 **최상위** `Button`/`Menu` 항목. 중첩 `{ … }`(= `Menu` 의 자식, `ForEach` 본문,
+    /// `label:` 클로저)은 건너뛴다 — 단 `label:` 클로저의 `Text` 리터럴은 그 항목의 라벨이므로
+    /// 항목에 귀속시킨다.
+    static func topLevelItems(_ body: String) -> [MenuItem] {
+        var items: [MenuItem] = []
+        var i = body.startIndex
+        while i < body.endIndex {
+            // 최상위에서 Button/Menu 키워드를 만나면 그 항목의 라벨을 모은다.
+            guard let kind = ["Button", "Menu"].first(where: { body[i...].hasPrefix($0) }) else {
+                i = body.index(after: i); continue
+            }
+            // 낱말 경계 — `ButtonStyle` 같은 접두 오탐을 막는다.
+            let after = body.index(i, offsetBy: kind.count, limitedBy: body.endIndex) ?? body.endIndex
+            if after < body.endIndex, body[after].isLetter || body[after].isNumber {
+                i = body.index(after: i); continue
+            }
+            // 이 항목의 텍스트 = 다음 최상위 Button/Menu 전까지(중첩 블록 포함).
+            let (chunk, next) = itemChunk(body, from: i)
+            items.append(MenuItem(labels: stringLiterals(labelRegion(chunk, kind: kind))))
+            i = next
+        }
+        return items
+    }
+
+    /// 항목 하나의 텍스트와 다음 탐색 위치. 중첩 중괄호를 세어 자식 블록을 통째로 삼킨다.
+    private static func itemChunk(_ body: String, from: String.Index) -> (String, String.Index) {
+        var depth = 0
+        var parens = 0
+        var chunk = ""
+        var i = from
+        var sawBody = false
+        while i < body.endIndex {
+            let ch = body[i]
+            if ch == "(" { parens += 1 }
+            if ch == ")" { parens -= 1 }
+            if ch == "{" { depth += 1; sawBody = true }
+            if ch == "}" {
+                depth -= 1
+                chunk.append(ch)
+                i = body.index(after: i)
+                if depth == 0 && sawBody { return (chunk, i) }
+                continue
+            }
+            // 중첩·괄호 밖에서 개행을 만나고 이미 인자 목록이 닫혔으면 항목이 끝난 것
+            // (`Button("x") { … }` 가 아니라 `Button("x", action:)` 한 줄 형태).
+            if depth == 0 && parens == 0 && ch.isNewline && !chunk.isEmpty
+                && chunk.contains("(") && !chunk.hasSuffix(",") {
+                return (chunk, i)
+            }
+            chunk.append(ch)
+            i = body.index(after: i)
+        }
+        return (chunk, i)
+    }
+
+    /// 항목 텍스트에서 **라벨이 있는 영역**만 남긴다 — 액션 클로저 안의 문자열(예:
+    /// `NSLocalizedString` 인자)을 라벨로 오인하지 않기 위해서다.
+    /// `Menu("제목") { … }` · `Button("제목") { … }` → 첫 인자 목록. `label:` 클로저가 있으면 그쪽.
+    private static func labelRegion(_ chunk: String, kind: String) -> String {
+        if let labelRange = chunk.range(of: "label:") {
+            return String(chunk[labelRange.upperBound...])
+        }
+        guard let open = chunk.firstIndex(of: "(") else { return "" }
+        var depth = 0
+        var out = ""
+        for ch in chunk[open...] {
+            if ch == "(" { depth += 1; if depth == 1 { continue } }
+            if ch == ")" { depth -= 1; if depth == 0 { break } }
+            out.append(ch)
+        }
+        return out
+    }
+
+    /// `accessibilityAction(named:)` 이 내는 문구 전부. 인자가 `Text("…")` 면 그 리터럴,
+    /// 식별자(`playlistLabel` 등)면 같은 파일에서 그 이름에 대입된 `Text` 리터럴들을 모은다.
+    static func accessibilityActionLabels(_ text: String) -> Set<String> {
+        var out: Set<String> = []
+        var search = text.startIndex
+        while let hit = text.range(of: ".accessibilityAction(named:", range: search..<text.endIndex) {
+            search = hit.upperBound
+            // 인자 목록 한 개 분량을 떼어낸다.
+            var depth = 1
+            var arg = ""
+            var i = hit.upperBound
+            while i < text.endIndex, depth > 0 {
+                let ch = text[i]
+                if ch == "(" { depth += 1 }
+                if ch == ")" { depth -= 1; if depth == 0 { break } }
+                arg.append(ch)
+                i = text.index(after: i)
+            }
+            let literals = stringLiterals(arg)
+            if !literals.isEmpty {
+                out.formUnion(literals)
+            } else {
+                // 식별자 경유 — `<name>: … Text("a") : Text("b")` 대입을 찾는다.
+                let name = arg.split(separator: ",").first.map {
+                    $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                } ?? ""
+                if name.range(of: "^[a-zA-Z_][a-zA-Z0-9_]*$", options: .regularExpression) != nil {
+                    out.formUnion(assignedTextLiterals(text, name: name))
+                }
+            }
+        }
+        return out
+    }
+
+    /// `name: <식>` 또는 `name = <식>` 의 우변에 든 `Text("…")` 리터럴들(줄 단위).
+    private static func assignedTextLiterals(_ text: String, name: String) -> Set<String> {
+        var out: Set<String> = []
+        let escaped = NSRegularExpression.escapedPattern(for: name)
+        guard let re = try? NSRegularExpression(pattern: "\\b\(escaped)\\s*[:=]\\s*([^\\n]*)") else {
+            return out
+        }
+        for m in re.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let r = Range(m.range(at: 1), in: text) else { continue }
+            let rhs = String(text[r])
+            guard rhs.contains("Text(") else { continue }
+            out.formUnion(stringLiterals(rhs))
+        }
+        return out
+    }
+
+    /// 이스케이프를 존중하는 문자열 리터럴 스캔. 보간(`\(…)`)이 든 리터럴은 문구 대조가
+    /// 불가능하므로 제외한다.
+    static func stringLiterals(_ s: String) -> [String] {
+        var out: [String] = []
+        var i = s.startIndex
+        while i < s.endIndex {
+            guard s[i] == "\"" else { i = s.index(after: i); continue }
+            var j = s.index(after: i)
+            var literal = ""
+            var closed = false
+            while j < s.endIndex {
+                let ch = s[j]
+                if ch == "\\" {
+                    let n = s.index(after: j)
+                    if n < s.endIndex { literal.append(ch); literal.append(s[n]); j = s.index(after: n); continue }
+                }
+                if ch == "\"" { closed = true; break }
+                literal.append(ch)
+                j = s.index(after: j)
+            }
+            if closed, !literal.isEmpty, !literal.contains("\\(") { out.append(literal) }
+            i = closed ? s.index(after: j) : j
+        }
+        return out
     }
 
     /// 탭으로 동작하는 커스텀 뷰는 자기가 무엇인지 보조기술에 알려야 한다.
@@ -128,25 +379,104 @@ final class UIConventionTests: XCTestCase {
     /// 이미지와 텍스트가 따로 읽히고, 누를 수 있다는 것도 선택 상태도 전달되지 않는다.
     /// 실측(2026-08-17): `Sources/Waple` 전체에서 `.accessibilityLabel`/`Value`/`Hint`/
     /// `Element`/`AddTraits`·`.focusable` 참조가 **전부 0건**이다.
+    /// **[정정 2026-08-30] 이 게이트도 `파일 단위`였다 — 같은 구멍이다.**
+    ///
+    /// 종전 술어: `text.contains("onTapGesture") && !text.contains("tileAccessibility")
+    /// && !text.contains(".accessibilityElement(")`. 파일 어딘가에 `tileAccessibility` 가
+    /// 한 번 있으면 그 파일의 **모든** 탭 구동 뷰가 면제됐다.
+    ///
+    /// 실측 재현(2026-08-30): 이미 준수하는 `WallpaperGridView` 에 접근성 표현이 없는 새 탭
+    /// 컨트롤(`Image(systemName: "trash").onTapGesture { … }`)을 넣었더니 **통과**했다.
+    ///
+    /// 그래서 **`onTapGesture` 자리마다** 판정한다. 그 자리가 속한 모디파이어 체인(같은 들여쓰기
+    /// 블록)에 접근성 표현이 있는지 본다 — 파일 전체가 아니라 그 뷰만 본다.
     func testTapDrivenViewsDeclareAccessibility() throws {
-        // 2026-08-17 기준 위반 2파일이 **둘 다** 마이그레이션을 끝냈다 —
-        // WallpaperGridView(Unit B, 타일)와 DisplaysView(Unit D, railTile·monitorBox)가
-        // 각자 tileAccessibility 로 옮기며 지웠다.
-        //
-        // 목록이 비었다고 이 테스트를 지우지 마라 — 이제부터는 **새 위반을 막는**
-        // 역할이다. 접근성 표현 없는 onTapGesture 뷰를 새로 만들면 여기서 빨개진다.
-        let pending: Set<String> = [
-        ]
-        try assertConvention(
-            violates: { text in
-                text.contains("onTapGesture")
-                    && !text.contains("tileAccessibility")
-                    && !text.contains(".accessibilityElement(")
-            },
-            pending: pending,
-            rule: "onTapGesture 로 동작하는 커스텀 뷰에는 접근성 표현이 있어야 한다.",
-            fix: "→ .tileAccessibility(label:value:isSelected:onActivate:) 를 붙여라. 표준 형태는 §4.1."
-        )
+        let sources = try Self.uiSources()
+        XCTAssertGreaterThan(sources.count, 20, "소스 수집이 실패했다 — 경로 규약이 바뀌었나?")
+
+        var violations: [String] = []
+        var sitesChecked = 0
+        for source in sources {
+            for site in Self.tapGestureSites(source.text) {
+                sitesChecked += 1
+                if !site.hasAccessibility {
+                    violations.append("\(source.name):\(site.line)")
+                }
+            }
+        }
+        // 실제 탭 구동 뷰가 존재해야 한다 — 0건이면 이 오라클이 아무것도 안 본다.
+        XCTAssertGreaterThan(sitesChecked, 3,
+                             "onTapGesture 자리를 \(sitesChecked)개만 찾았다 — 스캔이 깨졌다")
+        XCTAssertTrue(violations.isEmpty,
+                      "onTapGesture 로 동작하는 커스텀 뷰에는 접근성 표현이 있어야 한다.\n"
+                        + "접근성 표현 없는 자리 \(violations.count)건:\n"
+                        + violations.map { "  \($0)" }.joined(separator: "\n")
+                        + "\n→ .tileAccessibility(label:value:isSelected:onActivate:) 를 붙여라. 표준 형태는 §4.1.")
+    }
+
+    struct TapSite {
+        let line: Int
+        let hasAccessibility: Bool
+    }
+
+    /// `onTapGesture` 자리마다, **그 자리가 속한 모디파이어 체인**에 접근성 표현이 있는지.
+    ///
+    /// 체인 판정은 들여쓰기로 한다: `.onTapGesture` 는 언제나 `.` 로 시작하는 체인 줄이므로,
+    /// 같은 들여쓰기 깊이의 연속된 `.`-접두 줄이 한 뷰의 체인이다. 위아래로 그 블록을 훑어
+    /// `tileAccessibility`·`.accessibilityElement(`·`.accessibilityLabel(`·`.accessibilityAddTraits(`
+    /// 중 하나라도 있으면 준수로 본다.
+    static func tapGestureSites(_ text: String) -> [TapSite] {
+        let markers = ["tileAccessibility", ".accessibilityElement(",
+                       ".accessibilityLabel(", ".accessibilityAddTraits(",
+                       ".accessibilityValue(", ".accessibilityAction("]
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        func indent(_ s: String) -> Int { s.prefix { $0 == " " }.count }
+        func isChainLine(_ s: String) -> Bool {
+            s.trimmingCharacters(in: .whitespaces).hasPrefix(".")
+        }
+        // 체인 중간의 주석 줄은 체인을 끊지 않는다 — 이 저장소는 모디파이어 사이에 규약 근거를
+        // 길게 적는다(`DisplaysView.monitorBox` 가 `.onTapGesture` 와 `.tileAccessibility` 사이에
+        // 세 줄을 넣는다). 주석에서 끊으면 준수하는 코드가 오탐으로 빨개진다 — 실제로 그랬다.
+        func isCommentLine(_ s: String) -> Bool {
+            let t = s.trimmingCharacters(in: .whitespaces)
+            return t.hasPrefix("//") || t.hasPrefix("/*") || t.hasPrefix("*")
+        }
+        // 체인 모디파이어의 **트레일링 클로저를 닫는** 줄도 체인을 끊지 않는다 —
+        // `.overlay(…) {` … `}` 다음에 `.tileAccessibility(…)` 가 이어지는 형태가 그렇다.
+        // 같은 들여쓰기의 `}` 는 그 클로저의 끝이지 뷰의 끝이 아니다.
+        func isChainCloser(_ s: String) -> Bool {
+            s.trimmingCharacters(in: .whitespaces).hasPrefix("}")
+        }
+        var out: [TapSite] = []
+        for (i, line) in lines.enumerated() where line.contains("onTapGesture") {
+            let depth = indent(line)
+            // 체인 시작까지 위로, 끝까지 아래로 — 같은 들여쓰기의 `.`-접두 줄이 이어지는 범위.
+            var lo = i
+            while lo > 0 {
+                let prev = lines[lo - 1]
+                let sameChain = isChainLine(prev) && indent(prev) == depth
+                let comment = isCommentLine(prev) && indent(prev) >= depth
+                // 체인의 **수신자**(첫 뷰 식)까지는 올라가지 않는다 — 접근성 표현은 언제나
+                // 체인의 모디파이어로 붙으므로 체인 줄만 보면 충분하다.
+                guard sameChain || comment || indent(prev) > depth else { break }
+                lo -= 1
+            }
+            var hi = i
+            while hi + 1 < lines.count {
+                let next = lines[hi + 1]
+                let sameChain = isChainLine(next) && indent(next) == depth
+                let comment = isCommentLine(next) && indent(next) >= depth
+                let closer = isChainCloser(next) && indent(next) == depth
+                let continuation = indent(next) > depth
+                    || next.trimmingCharacters(in: .whitespaces).isEmpty
+                guard sameChain || comment || closer || continuation else { break }
+                hi += 1
+            }
+            let chain = lines[lo...hi].joined(separator: "\n")
+            out.append(TapSite(line: i + 1,
+                               hasAccessibility: markers.contains { chain.contains($0) }))
+        }
+        return out
     }
 
     // MARK: - notify 미러 (2026-08-25)

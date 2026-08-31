@@ -1296,8 +1296,8 @@ final class ParticleExtendedKeysTests: XCTestCase {
     }
 
     /// ④ `children[].controlpointstartindex`. 주입기 0x1401c1430 이 `xor r8d,r8d`(0x1401c1720) →
-    /// `H_INT`(0x1401c172d) 로 **기본 0** 을 심고, 리더는 0x1401d09c4 → `asInt`(0x1401d09d6) 다.
-    /// 동봉 도달 14건 중 **12건이 JSON `null`** — `asInt(null)=0` 이라 0 으로 접힌다.
+    /// `H_INT`(0x1401c172d) 로 **기본 0** 을 심고, 리더는 0x1401d09c4 → `asUInt`(0x1401d09d6) 다.
+    /// 동봉 도달 14건 중 **12건이 JSON `null`** — `asUInt(null)=0` 이라 0 으로 접힌다.
     func testChildControlPointStartIndexParsed() {
         let stub = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],"maxcount":2}
@@ -1312,7 +1312,7 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertEqual(def.children.count, 4)
         XCTAssertEqual(def.children[0].controlPointStartIndex, 1, "동봉 thunderbolt_child_spawner 와 같은 값")
         XCTAssertEqual(def.children[1].controlPointStartIndex, 0, "부재 기본 0 (0x1401c1720)")
-        XCTAssertEqual(def.children[2].controlPointStartIndex, 0, "null → asInt(null)=0 (동봉 12/14)")
+        XCTAssertEqual(def.children[2].controlPointStartIndex, 0, "null → asUInt(null)=0 (동봉 12/14)")
         XCTAssertEqual(def.children[3].controlPointStartIndex, 0, "문자열은 파티클 규약상 거부 → 0")
     }
 
@@ -1320,14 +1320,14 @@ final class ParticleExtendedKeysTests: XCTestCase {
     /// 그 정보가 파스 단계에서 통째로 소실됐다.
     ///
     /// 실측(이 저장소에서 직접 다시 떴다): 리더는 형제 키 **바로 앞** 자리다 —
-    /// 키 `lea "flags"` 0x1401d09a3 → `find` 0x1401d09aa → `asInt` 0x1401d09b2 →
+    /// 키 `lea "flags"` 0x1401d09a3 → `find` 0x1401d09aa → `asUInt` 0x1401d09b2 →
     /// 링크 `+0x64` 스토어 0x1401d09be (`controlpointstartindex` 는 `+0x68`, 0x1401d09db).
     /// 주입 기본 **0** — `xor r8d,r8d` 0x1401c1732 → `H_INT` 0x1401c173f (키 `lea` 0x1401c1735).
     /// **함정 16**: 인접 `lea` 로 귀속하면 `controlpointstartindex` 의 `xor` 0x1401c1720 을
     /// `flags` 것으로 잘못 읽는다 — 두 쌍을 각각 떠서 갈랐다.
     ///
-    /// 소비는 두 겹 게이트(0x14022cccb 스폰 / 0x14022a593 매 프레임)이고 **아직 미배선**이다.
-    /// 여기서는 값이 살아남는 것과 `feedsControlPoints` 판정만 잠근다.
+    /// 소비는 두 겹 게이트(0x14022cccb 스폰 / 0x14022a593 매 프레임)이며,
+    /// 현재 `ParticleSimulator.stepChildren`의 동적 CP 피드가 이 값을 사용한다.
     /// 동봉/설치 코퍼스 도달: bit0 이 선 링크 4건(부재 86 · 0:9 · 1:4 · 2:2).
     func testChildFlagsParsedAsControlPointFeedGate() {
         let stub = ParticleSystemDef.parse(json("""
@@ -1350,7 +1350,7 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertEqual(def.children[2].flags, 0)
         XCTAssertEqual(def.children[3].flags, 2, "동봉 2건 — bit1 은 실물이 안 읽지만 값은 보존한다")
         XCTAssertFalse(def.children[3].feedsControlPoints, "bit0 이 아니면 피드는 꺼진다")
-        XCTAssertEqual(def.children[4].flags, 0, "null → asInt(null)=0")
+        XCTAssertEqual(def.children[4].flags, 0, "null → asUInt(null)=0")
         XCTAssertEqual(def.children[5].flags, 0, "문자열은 파티클 규약상 거부 → 0")
         // 게이트가 두 값으로 갈리는 것이 이 키의 전부다 — startIndex 는 게이트와 독립으로 보존된다.
         XCTAssertEqual(def.children[0].controlPointStartIndex, 1)

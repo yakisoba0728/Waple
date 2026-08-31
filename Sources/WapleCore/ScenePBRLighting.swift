@@ -406,13 +406,13 @@ public extension SceneLight3D {
     /// | 키 | 오프셋 | WE 기본값 | Waple `SceneDocument.parseLight` 기본값 |
     /// |---|---|---|---|
     /// | `light`(타입 enum) | 0x2c0 | 5 = `"point"`(레거시 레인) | — (미지 타입은 드롭) |
-    /// | `color` | 0x2cc | (0,0,0) | (1,1,1) |
+    /// | `color` | 0x2cc | (0,0,0) | (0,0,0) ✓ |
     /// | `controlpoint` | 0x2d8 | (2,0,0) | 미파스 |
-    /// | `intensity` | 0x2e4 | 0 | 1 |
-    /// | `radius` | 0x2e8 | **1.0** | **0** |
-    /// | `exponent` | 0x2ec | **2.0** | **1** |
-    /// | `innercone` | 0x2f0 | **20.0** | **0** |
-    /// | `outercone` | 0x2f4 | **30.0** | **0** |
+    /// | `intensity` | 0x2e4 | 0 | 0 ✓ |
+    /// | `radius` | 0x2e8 | **1.0** | **1.0 ✓** |
+    /// | `exponent` | 0x2ec | **2.0** | **2.0 ✓** |
+    /// | `innercone` | 0x2f0 | **20.0** | **20.0 ✓** |
+    /// | `outercone` | 0x2f4 | **30.0** | **30.0 ✓** |
     /// | `density` | 0x2f8 | 2.0 | 2 ✓ |
     /// | `volumetricsexponent` | 0x2fc | 1.0 | 1 ✓ |
     /// | `cascadedistance0/1/2` | 0x300/0x304/0x308 | 3.0 / 10.0 / 100.0 | nil |
@@ -432,10 +432,8 @@ public extension SceneLight3D {
     /// `castvolumetrics` 는 **저작 키가 없으면 false** 이므로(`0x14019048d`
     /// `mov dword [rdi+0x2c4], 0`) 볼류메트릭 패스는 기본적으로 꺼져 있다.
     ///
-    /// 굵은 넷(`radius`/`exponent`/`innercone`/`outercone`)이 실제로 화면을 가른다. 특히
-    /// `exponent` 미저작 라이트는 WE 가 2 로 감쇠하는데 우리는 1 로 감쇠한다 — 동봉/설치본의
-    /// `modeleditor` 씬 lpoint 2개가 정확히 그 경우다(`exponent` 키 없음).
-    /// 파스는 `SceneDocument.swift` 소관이라 여기서는 **상수만 노출**한다(소비는 그 레인).
+    /// `radius`/`exponent`/`innercone`/`outercone`은 실제 화면을 가르므로
+    /// `SceneDocument.parseLight`는 별도 폴백 리터럴 대신 이 상수를 직접 소비한다.
     enum WEDefaults {
         public static let color = SIMD3<Float>(0, 0, 0)
         public static let controlPoint = SIMD3<Float>(2, 0, 0)

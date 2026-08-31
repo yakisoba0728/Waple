@@ -2,6 +2,7 @@ import XCTest
 import WebKit
 @testable import WapleRender
 
+@MainActor
 final class WallpaperSchemeHandlerTests: XCTestCase {
     private let root = URL(fileURLWithPath: "/tmp/wp", isDirectory: true)
 
@@ -107,11 +108,11 @@ final class WallpaperSchemeHandlerTests: XCTestCase {
         XCTAssertNil(WallpaperSchemeHandler.fileURL(forRequestPath: "/leak", root: realRoot))
     }
 
-    // MARK: - 감사 H 회귀 (didReceive 를 io 큐에서 직접 — main.sync 왕복 결합 해소)
+    // MARK: - Swift 6 WebKit 격리 회귀
 
-    /// 응답 헤더와 데이터 청크가 메인 스레드가 아닌 백그라운드 io 큐에서 전달돼야 한다.
-    /// main.sync 왕복이면 메인 큐가 바쁠 때 스트리밍 처리량이 같이 멈춘다.
-    func testSchemeHandlerDeliversResponseAndChunksOffMainThread() throws {
+    /// WKURLSchemeTask 콜백은 WebKit의 MainActor 격리 계약을 지키되, 파일 I/O는
+    /// 여전히 64KB 청크로 수행해 큰 미디어 응답을 통째로 메모리에 올리지 않아야 한다.
+    func testSchemeHandlerDeliversResponseAndChunksOnMainThread() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("wp-io-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
@@ -131,29 +132,29 @@ final class WallpaperSchemeHandlerTests: XCTestCase {
         XCTAssertEqual((task.response as? HTTPURLResponse)?.statusCode, 200)
         XCTAssertEqual(task.receivedData, payload)
         XCTAssertGreaterThan(task.dataEvents, 1)  // 청크 스트리밍 경로를 실제로 탔는지
-        XCTAssertEqual(task.responseOnMainThread, false)
-        XCTAssertFalse(task.anyDataOnMainThread)
+        XCTAssertEqual(task.responseOnMainThread, true)
+        XCTAssertTrue(task.allDataOnMainThread)
     }
 }
 
-/// didReceive 호출 스레드를 기록하는 WKURLSchemeTask 목 — 감사 H 회귀 테스트 전용.
+/// didReceive 호출 스레드를 기록하는 WKURLSchemeTask 목.
 private final class ThreadRecordingSchemeTask: NSObject, WKURLSchemeTask {
     let request: URLRequest
-    // 핸들러의 io 큐(쓰기)와 테스트 스레드(읽기)가 교차하므로 모든 상태 접근을 lock 으로 동기화한다.
+    // 테스트가 콜백과 완료 여부를 다른 룰룹에서 관찰하므로 상태 접근을 동기화한다.
     private let lock = NSLock()
     private var _response: URLResponse?
     private var _receivedData = Data()
     private var _dataEvents = 0
     private var _finished = false
     private var _responseOnMainThread: Bool?
-    private var _anyDataOnMainThread = false
+    private var _allDataOnMainThread = true
 
     var response: URLResponse? { lock.withLock { _response } }
     var receivedData: Data { lock.withLock { _receivedData } }
     var dataEvents: Int { lock.withLock { _dataEvents } }
     var finished: Bool { lock.withLock { _finished } }
     var responseOnMainThread: Bool? { lock.withLock { _responseOnMainThread } }
-    var anyDataOnMainThread: Bool { lock.withLock { _anyDataOnMainThread } }
+    var allDataOnMainThread: Bool { lock.withLock { _allDataOnMainThread } }
 
     init(url: URL) {
         self.request = URLRequest(url: url)
@@ -169,7 +170,7 @@ private final class ThreadRecordingSchemeTask: NSObject, WKURLSchemeTask {
 
     func didReceive(_ data: Data) {
         lock.withLock {
-            if Thread.isMainThread { _anyDataOnMainThread = true }
+            if !Thread.isMainThread { _allDataOnMainThread = false }
             _dataEvents += 1
             _receivedData.append(data)
         }

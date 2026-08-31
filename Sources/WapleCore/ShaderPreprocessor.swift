@@ -258,14 +258,40 @@ public enum ShaderPreprocessor {
                 // **아는 9종에만** 공백을 접는다. `# version 120` 같은 미지의 지시문은 실물도
                 // 지시문으로 취급하지 않고 본문에 그대로 남기므로(0x14016c1f8 → 0x14016bbb0) 손대면 안 된다.
                 // 동봉·설치본 자산에는 이 형태가 0건이다(실측) — 워크샵 셰이더 대비의 잠복 게이트.
-                if t.dropFirst().first == " " || t.dropFirst().first == "\t" {
-                    let rest = t.dropFirst().drop(while: { $0 == " " || $0 == "\t" })
-                    let isKnown = Self.engineDirectives.contains {
-                        guard rest.hasPrefix($0) else { return false }
-                        guard let n = rest.dropFirst($0.count).first else { return true }
-                        return !(n.isLetter || n.isNumber || n == "_")
+                //
+                // **[H1 2026-08-30] 같은 게이트가 한 글자 오른쪽에도 열려 있었다.** 위 G4 는 `#` 와
+                // 키워드 **사이**의 탭만 접었는데, 정작 키워드 **뒤**의 탭은 접지 않았다. 아래 인식
+                // 검사는 전부 `hasPrefix("#define ")` 류 리터럴 **한 칸 공백**이라
+                // (`#if`/`#ifdef`/`#ifndef` · `#elif` · `#else` · `#endif` · `#undef` · `#define`
+                // 분기) `#define\tMODE 2` 는 지시문으로 안 보이고 본문으로 흘렀다.
+                // 9종 중 `#require` 만 `hasPrefix("#require\t")` 로 탭을 명시 처리하고
+                // 있었던 것이 이 누락이 판단이 아니라 빠뜨림이라는 증거다.
+                // 실측(컴파일 프로브): `#define\tMODE 2` + `#if MODE == 2` → FALSE_BRANCH(공백형은
+                // TRUE_BRANCH) · `#undef\tK` 는 무동작(게다가 본문으로 흘러 `K`→`1` 매크로 치환까지
+                // 먹어 `#undef\t1` 이 된다) · `#if 0/DEAD/#endif\tx/…` 는 프레임이 안 닫혀 그 뒤
+                // **전부 소실**(공백형은 `EVERYTHING_AFTER MORE`).
+                // 실물 줄 인식 정규식 `^\s*#\s*([a-z]+)\b\s*(.*)` 의 `\b\s*` 는 키워드 뒤 임의 공백을
+                // 받으므로 탭 거부는 실물과의 이탈이다.
+                // 접는 범위는 **탭이 든 구분자뿐**이다 — 구분자가 비었거나(`#if(cond)`: 아래 무공백
+                // 기존 정규화 담당) 공백만이면 한 바이트도 건드리지 않는다. 동봉 WEAssets 502
+                // 셰이더 + 형제 코퍼스 전수에서 탭형 도달 0건(실측)이라 자산 번역 결과는 불변이다.
+                //   grep -rlE '^[ ]*#[ \t]*(if|ifdef|ifndef|elif|else|endif|define|undef|require)\t' → 0
+                let rest = t.dropFirst().drop(while: { $0 == " " || $0 == "\t" })
+                let known = Self.engineDirectives.first {
+                    guard rest.hasPrefix($0) else { return false }
+                    guard let n = rest.dropFirst($0.count).first else { return true }
+                    return !(n.isLetter || n.isNumber || n == "_")
+                }
+                if let kw = known {
+                    let after = rest.dropFirst(kw.count)
+                    let sep = after.prefix(while: { $0 == " " || $0 == "\t" })
+                    // 구분자에 탭이 없으면 종전 경로 그대로(`#if(` 는 sep 이 비어 여기 안 걸린다).
+                    if sep.contains("\t") {
+                        let arg = after.dropFirst(sep.count)
+                        t = arg.isEmpty ? "#" + kw : "#" + kw + " " + arg
+                    } else if t.dropFirst().first == " " || t.dropFirst().first == "\t" {
+                        t = "#" + rest
                     }
-                    if isKnown { t = "#" + rest }
                 }
             }
             // `#if(cond)`/`#elif(cond)` — `#if`/`#elif` 뒤 공백 없이 `(` 가 오면 아래 prefix 검사가 놓쳐
@@ -333,6 +359,10 @@ public enum ShaderPreprocessor {
             } else if t == "#endif" || t.hasPrefix("#endif ") || t.hasPrefix("#endif//") {
                 if !stack.isEmpty { stack.removeLast() }
             } else if t == "#require" || t.hasPrefix("#require ") || t.hasPrefix("#require\t") {
+                // [H1 2026-08-30] `#require\t` 는 위 키워드 뒤 탭 접기가 이미 `#require ` 로 정규화하므로
+                // 이 세 번째 검사는 지금 도달하지 않는다. 남겨 두는 것은 접기 범위가 좁아지더라도
+                // 이 지시문만은 종전대로 동작하게 하는 안전망이고(9종 중 유일하게 탭을 원래부터
+                // 다뤘다), 지우면 그 이력이 사라진다.
                 // G1 — `#require <Name>` 은 **지시문이 아니라 코드 생성기 호출**이다.
                 // 실물(`wallpaper64.exe`, imagebase 0x140000000):
                 //  · 지시문 인식 = 이름 길이 7 + `memcmp "require"`(0x14016c0ec).
@@ -599,9 +629,26 @@ public enum ShaderPreprocessor {
         return Int(v) ?? ExprEval.numericLiteral(v)
     }
 
+    /// 지시문 인자 이름 한 토큰 추출(`#ifdef`/`#ifndef`/`#undef`/`#require`).
+    ///
+    /// **[H2 2026-08-30] 종전에는 `split(separator: " ")` 로 리터럴 한 칸 공백만 구분자로 봤다.**
+    /// 그래서 `#ifdef HQ\tenable hq` 의 이름이 `"HQ\tenable"` 로 나와 어떤 define 키에도 안 맞고
+    /// `isDefined` 가 false — 지시문 인식은 성공했으므로 **아무 것도 새지 않고 조용히 반대 분기**를
+    /// 골랐다(실측 프로브: FALSE_BRANCH, 공백형은 TRUE_BRANCH. `#undef K\ttrailing` 은 무동작).
+    /// 위 :261 의 탭 접기(H1)로는 닫히지 않는다 — 그쪽은 **키워드 뒤** 구분자를 고치고, 이건
+    /// **인자 뒤** 구분자 문제라 접기 뒤에도 남는다. 같은 뿌리(공백)지만 실패 지점이 다르다.
+    /// 실물 줄 인식 정규식 `^\s*#\s*([a-z]+)\b\s*(.*)`(이 파일 :6-12)의 `\s*` 가 탭을 포함하므로
+    /// 임의 공백 분리가 실물 형태다.
+    ///
+    /// **범위 주의 — 이것은 트레일링 주석과 무관하다.** `#ifdef HQ\t// comment` 는 :251-252 의
+    /// 주석 절단이 먼저 돌아 종전에도 **올바른** 분기를 골랐다(실측 TRUE_BRANCH). 살아 있던 형태는
+    /// 탭 + 비주석 트레일러뿐이다. 동봉 WEAssets + 형제 코퍼스 전수 실측 도달 **0건** —
+    ///   grep -rlE '^[ ]*#[ \t]*(ifdef|ifndef|undef)[ \t]+[A-Za-z_][A-Za-z0-9_]*\t' → 0
+    /// 즉 오늘 시점 자산 번역 결과는 불변이고, 고치는 이유는 `#define`(:401 의 nameEnd 가 `\t` 포함)·
+    /// `#require` 와의 일관성이다.
     private static func token(after kw: String, _ line: String) -> String {
         line.dropFirst(kw.count).trimmingCharacters(in: .whitespaces)
-            .split(separator: " ").first.map(String.init) ?? ""
+            .split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
     }
     private static func firstQuoted(_ s: String) -> String? {
         guard let a = s.firstIndex(of: "\""), let b = s[s.index(after: a)...].firstIndex(of: "\"") else { return nil }

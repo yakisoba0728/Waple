@@ -219,7 +219,8 @@ public enum SceneCameraMath {
     ///
     /// `z = 0` 이면 `s = 1` 이라 정사영과 **픽셀 동일**이다 — 코퍼스의 유일한 저작 사례
     /// (`presets/clock/preview3dclock/scene.json`)가 `origin.z = 0` 이라 실피해가 0인 이유가 이것이다.
-    /// `z ≥ d` 는 카메라 평면 뒤라 실물도 클립된다(여기서는 방어하지 않고 그대로 발산시킨다).
+    /// `z ≥ d` 는 카메라 평면 뒤라 실물도 클립된다. 이 순수 배율 함수는 식 자체만 반환하고,
+    /// 실제 쿼드 소비자는 `layerPerspectiveClip`으로 near/far를 먼저 자른다.
     public static func layerPerspectiveScale(z: Float, orthoHeight: Float, fovDegrees: Float) -> Float {
         let d = layerPerspectiveDistance(orthoHeight: orthoHeight, fovDegrees: fovDegrees)
         return d / (d - z)

@@ -70,7 +70,8 @@ public struct SceneLayer: Equatable {
     /// origin/scale/angleZ 는 원래 로컬(부모 상대)값. 퍼펫 레이어는 parse 말미에 부모 체인을 합성한
     /// 월드(프로젝션 픽셀) 트랜스폼으로 덮어쓴다(정적 부모 한정) — 그래서 var.
     public var origin: Vec2
-    /// origin 의 3성분째(월드 z) — 2D 씬에선 무시(origin 은 씬 픽셀 xy). 3D 씬 빌보드가 월드 위치로 사용.
+    /// origin 의 3성분째(월드 z). 2D에서는 보통 무시하지만 `perspective:true` 이미지 레이어는
+    /// `perspectiveoverridefov`의 중심 원근 스케일에 사용한다. 3D 씬 빌보드는 월드 위치로 사용.
     public var originZ: Float = 0
     /// 부모 오브젝트 id(3D 씬 빌보드의 트랜스폼 계층 — 태양계 이미지는 대부분 그룹 노드에 붙는다). nil=루트.
     public var parent: Int? = nil
@@ -241,9 +242,8 @@ public struct SceneLayer: Equatable {
     public var normalTextureName: String? = nil
     public var refractAmount: Float = 0.05
     /// F692: 오브젝트 `perspective:true` — WE 는 이 레이어를 general.perspectiveoverridefov 의
-    /// 원근 침침으로 그린다(정사영 평면화 대신). 파스·보존 전용: 원근 투영 소비는 렌더 경로 책임.
-    /// 실측(전수): perspective:true 19씬 전부 x/y angles 0(z-회전만)이라 원근/정사영 출력이
-    /// 코퍼스 내에서는 동일 — 렌더 갭 실피해 0 확인 후 파스 보존으로 결정.
+    /// 중심 원근 스케일로 그린다(정사영 평면화 대신). 렌더러의 정적·동적 쿼드 경로가 originZ와
+    /// 문서 FOV를 소비하며, z==0은 정사영과 비트동일이다.
     public var perspective: Bool = false
     /// F696: 오브젝트 `dependencies`(명시 렌더 순서/RTT 선행 의존 id 목록 — 타깃은 image/text
     /// 오브젝트). 파스·보존 전용: depLater(타깃이 후순위 — 실물 3113287126 idx2→idx4 등)의
@@ -390,8 +390,9 @@ public struct SceneParticle: Equatable {
     /// `wallpaper_engine`(json 2,143)도 같은 6파일로 동수다. 종전엔 `vec3()`/`float()` 의 정적 `value`
     /// 언랩만 있어 이 트랙들이 파스에서 통째로 사라졌다.
     ///
-    /// **소비 0건(현재)** — 파스·보존 전용이라 그림은 바뀌지 않는다. 소비하려면 렌더 계층이
-    /// per-frame 으로 `def.controlPoints[i]` 를 이 트랙으로 갱신해야 한다(넘길 것 목록 참조).
+    /// `controlpointN`/`controlpointangleN` 트랙은 `ParticleSimulator`의 자체 시간축에서 매
+    /// 서브스텝 평가된다. 위치는 emitter/mapsequence/remap의 live CP와 파스 때 target을 굽는
+    /// attract/maintain/vortex/reduce에, 각도는 emitter/opid 13의 live 프레임에 도달한다.
     public var instanceOverrideAnimations: [String: PropertyAnimation] = [:]
 }
 
@@ -427,10 +428,13 @@ public struct SceneTextLayer: Equatable {
     /// E1: parent 체인 합성이 파스 말미에 월드(프로젝션 픽셀) 값으로 덮어쓴다(레이어와 동일 규약) — 그래서 var.
     /// (3D 씬은 composeTextParentTransforms 가 미실행 — camera3D!=nil 게이트 — 이라 origin.xy 는 로컬 그대로.)
     public var origin: Vec2
-    /// W-①: origin 의 3성분째(월드 z) — SceneLayer.originZ 와 동일 규약. 2D 씬에선 무시, 3D 씬 텍스트
-    /// 빌보드가 월드 위치로 사용(build3D). 코퍼스 3D 텍스트 실측: image 레이어와 동일 소수 단위(카메라
-    /// eye/center 스케일과 정합, 픽셀 스케일 아님) — "screen overlay" 가 아니라 world placement 가 정본.
+    /// W-①: origin 의 3성분째(월드 z) — SceneLayer.originZ 와 동일 규약. 2D에서는
+    /// `perspective:true` 텍스트의 원근 투영에 쓰이고, 3D 씬에서는 빌보드 월드 위치로 쓴다.
     public var originZ: Float = 0
+    /// 공통 오브젝트 플래그 bit7(`0x140184f0c`) — 이미지와 같은
+    /// `general.perspectiveoverridefov` 카메라를 소비한다. 동봉 preview3dclock은 이 플래그와
+    /// 스크립트 x/y 회전을 함께 쓰므로, 파서→디스크립터→렌더 전 구간에서 보존한다.
+    public var perspective: Bool = false
     public var scale: Vec2               // 배율은 "scale" 필드(실측 "2 2") — "size" 는 parseLayer 전용 레이아웃 박스(오독 시 거대 글리프)
     /// W3-⑤: 정적 angleZ(scene.json "angles" 의 z 성분, 라디안 — 레이어 SceneLayer.angleZ 와 동일 규약).
     /// 스크립트 바인딩(propertyScripts["angles"])이 있으면 그 결과가 매 프레임 이 값을 대체(encodeText).
@@ -439,7 +443,8 @@ public struct SceneTextLayer: Equatable {
     public var angleZ: Float = 0
     /// `scale`/`angles` 의 나머지 성분 — `SceneLayer.scaleZ`/`angleX` 와 **완전히 같은 규약**이다.
     /// d.ts 는 `ILayer extends ITextLayer`(:2020)라 텍스트 오브젝트도 같은 `origin`/`angles`/`scale`
-    /// Vec3 표면을 쓴다(:2028·:2033). 파스·보존 전용(소비처 0 — 2D 렌더 무영향).
+    /// Vec3 표면을 쓴다(:2028·:2033). `perspective:true` 텍스트는 x/y 각도까지 2D 원근 쿼드가
+    /// 소비한다. scaleZ는 여전히 파스·스크립트 상태 보존 전용이다.
     /// 도달: `scaleZ` 가 1 이 아닌 텍스트 오브젝트 동봉 **3** / 설치본 **5**,
     /// `angleX`/`angleY` 가 0 이 아닌 텍스트 오브젝트 **0 / 0**.
     public var scaleZ: Float = 1
@@ -1407,20 +1412,45 @@ public struct SceneLightConfig: Equatable {
     }
 }
 
+/// scene.json 공통 오브젝트 슬롯 중 camera-parallax가 요구하는 최소 그래프.
+/// 타입별 파서가 렌더 대상을 버려도 parent 체인의 root가 될 수 있으므로 raw objects[]에서 별도로 보존한다.
+public struct SceneObjectParallaxDescriptor: Equatable {
+    public let order: Int
+    public let id: Int
+    public let parent: Int?
+    public let origin: Vec2
+    public let depth: Vec2
+
+    public init(order: Int, id: Int, parent: Int?, origin: Vec2, depth: Vec2) {
+        self.order = order; self.id = id; self.parent = parent
+        self.origin = origin; self.depth = depth
+    }
+}
+
 public struct SceneDocument: Equatable {
     public let projectionWidth: Int
     public let projectionHeight: Int
+    /// `general.orthogonalprojection` 존재 여부. 3D 자원 로드 실패로 렌더 결과가 2D로 폴백해도
+    /// 카메라 시차의 오브젝트 평행이동 게이트는 이 저작 투영 플래그를 따라야 한다.
+    public var orthographic: Bool = false
     public let clearColor: Vec3
     public let parallaxEnabled: Bool
     public let parallaxAmount: Float
     public let parallaxMouseInfluence: Float
-    /// WE `cameraparallaxdelay` — 카메라 시차 지연 시상수(초). 렌더러가 프레임 dt 기반 지수 스무딩에 사용.
+    /// WE `cameraparallaxdelay` — 지연 시간이 아니라 선형 수렴률 파라미터다.
+    /// `delay<=0`은 즉시, 그 외 프레임 계수는 `min(1, 10·(1−delay/3)·dt)`다.
     /// 0 = 즉시 반영(스무딩 없음). 실측 기본 0.1, 범위 0.03..2.0(전 코퍼스 >0).
     public let parallaxDelay: Float
     public let layers: [SceneLayer]
     public let particles: [SceneParticle]
     public var texts: [SceneTextLayer] = []
-    /// 3D 씬 카메라 — orthogonalprojection 부재(null) + camera{eye,center,up} + fov 존재 시 세팅. 2D=nil.
+    /// 공통 오브젝트의 원본 local origin/parent/parallaxDepth. 렌더 root walk는 타입별 배열이 아니라
+    /// 이 표를 사용한다. root는 parent가 없으므로 그 local origin이 곧 scene origin이다.
+    public var parallaxObjects: [SceneObjectParallaxDescriptor] = []
+    /// 투영 종류와 무관한 `scene.camera` 원본 자세. WE는 정사영에서도 이 eye를 뷰와
+    /// cameraparallax focus에 사용한다. `camera3D`와 분리해 2D가 원근 렌더 경로로 잘못 들어가지 않게 한다.
+    public var sceneCamera: SceneCamera3D? = nil
+    /// 3D 씬 카메라 — orthogonalprojection 부재(null) + camera{eye,center,up} 시 세팅. 2D=nil.
     public var camera3D: SceneCamera3D? = nil
     /// 카메라 프로퍼티 스크립트(키: eye/center/up/fov → JS 소스). 렌더러가 per-frame 재평가(카메라 애니).
     /// 실물 젤다 fov 는 {"script":…,"value":50}; Sonic eye/center 는 정적 문자열(무스크립트). base 값은 camera3D.
@@ -1495,15 +1525,15 @@ public struct SceneDocument: Equatable {
     /// 업샘플 텐트 계수(레벨당 ×0.25×scatter, additive). 단일 레벨 구현은 미소비 — 피라미드 전용.
     public var bloomHDRScatter: Float = 1.619
 
-    /// `general.camerashake` — 전역 카메라 지터 enable(bool). 코퍼스 활성 13/168씬(그 외는 편집기 기본값을
-    /// 동반하되 비활성). 클린룸 확정 수식 부재(문서 결론은 "전역 지터" §16만) → 렌더러가 코퍼스 값분포 기반
-    /// 결정적 근사로 적용(SceneRenderer.cameraShakeOffset). 비활성 씬은 렌더 경로가 비켜가 비트동일.
+    /// `general.camerashake` — 전역 카메라 지터 enable(bool). 2026-08-21 재측정에서 동봉 자산은
+    /// 0/168씬, 설치본은 `ricepod` 1씬(3D)만 활성이다. exact 수식은
+    /// `SceneCameraMath.shakeDelta`가 보존한다(`docs/re/camera-motion.md` §6.6·7 C-7).
     public var cameraShake: Bool = false
-    /// 지터 진폭(무차원 상대값 — 코퍼스 0.04..1.0, 기본 0.5). 렌더러가 NDC 스케일 상수로 환산.
+    /// 지터 진폭(기본 0.5). 2D는 `amplitude·orthoHeight/100` 픽셀, 3D는 `amplitude·0.1` 월드 단위.
     public var cameraShakeAmplitude: Float = 0.5
-    /// 지터 거칠기(고주파 오버톤 혼합비 — 코퍼스 0.0..1.1, 기본 1.0).
+    /// 지터 거칠기. `roughness³`가 shake 벡터 크기의 지수가 된다(기본 1.0은 무연산).
     public var cameraShakeRoughness: Float = 1
-    /// 지터 속도(시간 진행 스케일 — 코퍼스 0.5..7.0, 기본 3.0).
+    /// 지터 속도. 위상은 `speed²·time`이다.
     public var cameraShakeSpeed: Float = 3
 
     /// 2D 포워드 라이팅 활성 조건: 2D 오르토 씬(camera3D==nil) + 라이트 존재. 3D(원근) 씬은 메시
@@ -1521,8 +1551,8 @@ public struct SceneDocument: Equatable {
     /// `Scene::updateCamera` 가 **정사영 씬일 때 실효 fov 로 이 값을 고른다**
     /// (`0x140189278`: `eax=0x144` · `edx=0x140` · `test r9b,8`(flags bit3=정사영) · `cmove eax,edx`).
     /// 즉 2D 씬의 실효 fov 는 `fov` 가 아니라 이 키다. 종전 `Float?`/nil 은 "미저작" 을 값이 없는 것으로
-    /// 표현해 렌더러가 리터럴 95 를 하드코딩하게 만들었고, 그래서 `90.760002` 를 저작한 동봉 6씬의
-    /// `perspective:true` 레이어 원근이 WE 와 어긋난다(렌더 소비는 별 레인 — 여기서는 값만 바로잡는다).
+    /// 표현해 렌더러가 리터럴 95 를 하드코딩하게 만들었다. **[2026-08-31]** 정적·동적 2D 쿼드가
+    /// 이 값을 소비하고, 소비 직전 `[0.1,179.9]` 클램프를 적용한다.
     public var perspectiveOverrideFov: Float = 95
 
     /// `general.clearenabled`(json-keys.txt:667 A 0x0048d558) — false 면 렌더러가 프레임 누적(acc)
@@ -1741,6 +1771,30 @@ public enum SharedAssetProbeResult {
 }
 
 extension SceneDocument {
+    /// 각 objects[] order가 렌더 시 사용할 최상위 root descriptor를 계산한다.
+    /// 오브젝트 id 충돌은 WE 로더와 같은 first-wins이고, id 0은 부모 주소 공간에 등록하지 않는다.
+    public func cameraParallaxRootsByOrder() -> [Int: SceneObjectParallaxDescriptor] {
+        var ownerByID: [Int: SceneObjectParallaxDescriptor] = [:]
+        for object in parallaxObjects.sorted(by: { $0.order < $1.order })
+            where object.id != 0 && ownerByID[object.id] == nil {
+            ownerByID[object.id] = object
+        }
+
+        var roots: [Int: SceneObjectParallaxDescriptor] = [:]
+        for object in parallaxObjects {
+            var current = object
+            var visited: Set<Int> = []
+            while true {
+                guard let parentID = current.parent, parentID != 0,
+                      !visited.contains(parentID), let parent = ownerByID[parentID] else { break }
+                visited.insert(parentID)
+                current = parent
+            }
+            roots[object.order] = current
+        }
+        return roots
+    }
+
     /// - assets: 공유(base-assets) 리졸버 — pkg 에 없는 모델/머티리얼 JSON(models/util/solidlayer.json 등)의
     ///   폴백. WapleCore 는 순수하므로 파일 IO 는 호출자가 클로저로 주입한다(렌더러: BaseAssetsSettings 디렉터리).
     /// - userProps: 유저 속성 오버라이드(키 → 값). scene.json 의 `{"user": "키", "value": 기본}` 바인딩을
@@ -1766,14 +1820,14 @@ extension SceneDocument {
         if !userProps.isEmpty {
             scene = (resolveUserBindings(scene, userProps: userProps, depth: 0) as? [String: Any]) ?? scene
         }
-        // scene.json `version` 기능 게이트 — 게이트 판정은 최상위 version 하나를 미리 읽고,
-        // 아래에서 general 사본을 만들어 이후의 **모든** general 소비(프롤로그 hdr/bloom · parseCamera ·
-        // parse 말미 applyGeneralSettings)가 한 번만 게이트를 통과하게 한다(`scene["general"]` 의
-        // 유일한 읽기 자리가 여기다 — 그래서 사본 갈아끼우기만으로 전파가 끝난다).
-        // `numericInt`(JSONNumerics.numericInt)는 불리언을 수로 안 세는 엄격 판이라 `{"version":true}`
-        // 같은 비정수는 "누락과 동일" 취급한다(아래 헬퍼 주석의 보수 원칙과 같은 방향).
-        let schemaVersion = numericInt(scene["version"])
-        let general = Self.versionGatedGeneral(scene["general"], schemaVersion: schemaVersion)
+        // **[2026-08-30 철회 — 이 자리에 있던 `version` 기능 게이트를 걷어냈다]**
+        // 종전 두 줄은 `let schemaVersion = numericInt(scene["version"])` 로 최상위 version 을 읽고
+        // `Self.versionGatedGeneral(scene["general"], schemaVersion:)` 로 general 사본에서 v3+/v4+
+        // 키 14개를 **삭제**했다. 그 게이트의 유일한 근거가 철회됐다 — 사유·산수는 아래 묘비
+        // (`// MARK: - parse general 후처리 추출 헬퍼` 절)에 있다.
+        // 지금은 `scene["general"]` 을 **그대로** 쓴다 — 키를 읽을지는 **키가 있는지**로 정하고,
+        // version 숫자는 보지 않는다. 미저작 키는 종전처럼 각 필드의 생성자 기본값에 착지한다.
+        let general = scene["general"] as? [String: Any] ?? [:]
         let proj = general["orthogonalprojection"] as? [String: Any] ?? [:]
         // `auto: true` 면 WE 는 width/height 를 **읽지 않고** 정사영 크기를 0(=출력 해상도)으로 둔다
         // (`0x140187565` `or [scene+0xE0],0x18` 직후 `0x14018756D` 이 값 저장 블록을 건너뛴다).
@@ -1799,8 +1853,11 @@ extension SceneDocument {
             guard let w = numericInt(proj["width"]), let h = numericInt(proj["height"]) else { return nil }
             return (w, h)
         }()
-        let pw = orthoAuto ? 1920 : (orthoSize?.w ?? 1920)
-        let ph = orthoAuto ? 1080 : (orthoSize?.h ?? 1080)
+        // WE bit3은 딕셔너리 존재만으로 켜지지 않는다. auto=true이거나 width/height가 둘 다
+        // 0이 아닐 때만 정사영이다. 잘못된/0 크기는 둘 다 viewport 폴백으로 접는다.
+        let orthographic = orthoAuto || (orthoSize.map { $0.w != 0 && $0.h != 0 } ?? false)
+        let pw = orthographic && !orthoAuto ? (orthoSize?.w ?? 1920) : 1920
+        let ph = orthographic && !orthoAuto ? (orthoSize?.h ?? 1080) : 1080
         let clear = vec3(general["clearcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         let ambientColor = vec3(general["ambientcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         // 부재 시 (0,0,0) — `ambientcolor` 폴백이 아니다(선언부 주석: 등록/저장/생성자 모두 독립).
@@ -1824,8 +1881,10 @@ extension SceneDocument {
         // 동봉+설치본 355개 씬 전건 부재라 실질적으로 항상 .ultra 다.
         let quality = Quality(rawValue: (general["quality"] as? String)?.lowercased() ?? "ultra") ?? .ultra
 
-        // 3D 카메라(orthogonalprojection 이 딕셔너리가 아닌 3D 씬 + camera{eye,center,up}+fov 존재 시). 2D=nil.
-        let (camera3D, cameraScripts) = parseCamera(scene: scene, general: general)
+        // `scene.camera`는 정사영에서도 runtime eye의 출처다. 원본 자세는 항상 보존하되,
+        // 원근 렌더 경로를 켜는 `camera3D`만 orthogonalprojection 유무로 분리한다.
+        let (sceneCamera, cameraScripts) = parseCamera(scene: scene, general: general)
+        let camera3D = orthographic ? nil : sceneCamera
 
         var layers: [SceneLayer] = []
         var particles: [SceneParticle] = []
@@ -1836,6 +1895,7 @@ extension SceneDocument {
         var sounds: [SceneSound] = []
         var sprites: [SceneSprite] = []
         var cameraObjects: [SceneCameraObject] = []
+        var parallaxObjects: [SceneObjectParallaxDescriptor] = []
         let resolvedAssets: ((String) -> Data?)?
         if let sharedAssetProbe {
             resolvedAssets = { name in
@@ -1848,6 +1908,14 @@ extension SceneDocument {
         let imageLayerCompositeIDs = referencedImageLayerCompositeIDs(in: package)
         for (order, any) in (scene["objects"] as? [Any] ?? []).enumerated() {
             guard let obj = any as? [String: Any] else { continue }
+            let commonOrigin = vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0)
+            parallaxObjects.append(SceneObjectParallaxDescriptor(
+                order: order,
+                id: intVal(obj["id"]) ?? 0,
+                parent: intVal(obj["parent"]),
+                origin: Vec2(x: commonOrigin.x, y: commonOrigin.y),
+                depth: vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1)
+            ))
             // 사운드 오브젝트("sound" 키): 트랜스폼/계층 무시(전역 재생), 실측 필드만 파스.
             // 콘텐츠 키(image/model/…)가 없어 아래 그룹-노드 분기로 새면 nodes3D 로 오분류되므로 먼저 처리.
             // sound 는 배열(플레이리스트) 또는 단수 경로 문자열(scene-json-schema.md:141 "path to audio
@@ -1976,8 +2044,11 @@ extension SceneDocument {
                                 layers: layers, particles: particles,
                                 texts: texts, camera3D: camera3D, objects3D: objects3D, lights3D: lights3D,
                                 nodes3D: nodes3D)
+        out.orthographic = orthographic
+        out.sceneCamera = sceneCamera
         out.cameraScripts = cameraScripts
         out.cameraObjects = cameraObjects
+        out.parallaxObjects = parallaxObjects
         out.sounds = sounds
         out.sprites = sprites
         out.ambientColor = ambientColor
@@ -2255,12 +2326,10 @@ extension SceneDocument {
         return layer
     }
 
-    /// 3D 카메라 + 프로퍼티 스크립트. orthogonalprojection 이 딕셔너리가 아니고(3D 씬은 null)
-    /// camera{eye,center,up} + general.fov 가 있을 때만 카메라 반환(2D=nil). fov 는 float() 언랩 —
-    /// 실물(젤다)은 {"script":…,"value":50} 스크립트 프로퍼티. eye/center/up 은 scene.camera, fov 는 general.
+    /// 투영 종류와 무관한 `scene.camera` + 프로퍼티 스크립트. 정사영 씬에서도 eye는 runtime view와
+    /// parallax focus의 입력이므로 여기서 버리지 않는다. 원근 렌더 활성 여부는 호출부의 `camera3D`가 맡는다.
     private static func parseCamera(scene: [String: Any], general: [String: Any]) -> (camera: SceneCamera3D?, scripts: [String: String]) {
-        guard !(general["orthogonalprojection"] is [String: Any]),
-              let camDict = scene["camera"] as? [String: Any],
+        guard let camDict = scene["camera"] as? [String: Any],
               let eye = vec3(camDict["eye"]), let center = vec3(camDict["center"]),
               let up = vec3(camDict["up"]) else { return (nil, [:]) }
         // G-E3-04: `general.fov` 는 **선택** 키다. 종전엔 이걸 guard 에 넣어 fov 가 없으면 카메라를
@@ -2572,6 +2641,9 @@ extension SceneDocument {
         // W-①: 3D 씬 텍스트 빌보드용 origin.z(월드) — SceneLayer.originZ(:1221 인근)와 동일 파스 규약.
         let originFull = floats(obj["origin"])
         t.originZ = originFull.count >= 3 ? originFull[2] : 0
+        // 이미지 `SceneLayer.perspective`와 같은 공통 오브젝트 플래그. 텍스트 경로도
+        // `0x1401ed15f` 의 2D/3D 플래그 게이트 뒤에서 동일 원근 카메라를 쓴다.
+        t.perspective = weBool(obj["perspective"])
         // "Limit width/rows" — **게이트와 값은 실물에서 서로 다른 멤버**다(선언부 주석의 VA 참조:
         // 게이트 `+0x594` bit2/bit3, 값 `+0x508` float / `+0x510` int). 적용 루프 `0x1401731d0` 은
         // JSON 키 이름으로 디스크립터를 찾아 그 주입기 하나만 부르므로(`0x140173398`), 미체크 상태의
@@ -2682,25 +2754,26 @@ extension SceneDocument {
         // 실물은 3키 동반만 존재(스캔 11건) — 방어적으로 부분 저작은 결측 컴포넌트 0 으로 채운다.
         let cd0 = float(obj["cascadedistance0"]), cd1 = float(obj["cascadedistance1"]), cd2 = float(obj["cascadedistance2"])
         let cascades: Vec3? = (cd0 != nil || cd1 != nil || cd2 != nil) ? Vec3(x: cd0 ?? 0, y: cd1 ?? 0, z: cd2 ?? 0) : nil
+        let defaultColor = SceneLight3D.WEDefaults.color
         var light = SceneLight3D(
             id: intVal(obj["id"]) ?? 0,
             name: (obj["name"] as? String) ?? "",
             type: lightType,
             origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
             angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
-            color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
-            radius: float(obj["radius"]) ?? 0,
-            intensity: float(obj["intensity"]) ?? 1,
-            exponent: float(obj["exponent"]) ?? 1,
-            innerCone: float(obj["innercone"]) ?? 0,
-            outerCone: float(obj["outercone"]) ?? 0,
+            color: vec3(obj["color"]) ?? Vec3(x: defaultColor.x, y: defaultColor.y, z: defaultColor.z),
+            radius: float(obj["radius"]) ?? SceneLight3D.WEDefaults.radius,
+            intensity: float(obj["intensity"]) ?? SceneLight3D.WEDefaults.intensity,
+            exponent: float(obj["exponent"]) ?? SceneLight3D.WEDefaults.exponent,
+            innerCone: float(obj["innercone"]) ?? SceneLight3D.WEDefaults.innerConeDegrees,
+            outerCone: float(obj["outercone"]) ?? SceneLight3D.WEDefaults.outerConeDegrees,
             castShadow: weBool(obj["castshadow"]),   // {user,value} 바인딩도 읽는다(종전 평문 Bool 만 — 바인딩은 전부 false 로 접혔다)
             parent: intVal(obj["parent"]),
             order: order,
             cascadeDistances: cascades,
             castVolumetrics: weBool(obj["castvolumetrics"]),   // castshadow 와 동일 사유
-            volumetricsExponent: float(obj["volumetricsexponent"]) ?? 1,
-            density: float(obj["density"]) ?? 2,
+            volumetricsExponent: float(obj["volumetricsexponent"]) ?? SceneLight3D.WEDefaults.volumetricsExponent,
+            density: float(obj["density"]) ?? SceneLight3D.WEDefaults.density,
             // ltube 세그먼트 단점 B(WE g_LTube_OriginB — 키는 wallpaper64.exe 스트링 실측 소문자).
             originB: vec3(obj["originb"]))
         // SceneObject3D/SceneNode3D 의 propertyScripts/transformScripts 와 동형 캡처(파스만 — TODO 위 참조).
@@ -3343,7 +3416,9 @@ extension SceneDocument {
         return p
     }
 
-    /// instanceOverride 는 루트 def 에만 적용(자식 children 재귀에는 비전파 — 보수 규약).
+    /// 전체 instanceOverride의 정적 파스 적용은 루트 def 전용이다. 재귀 자식에는 넘기지 않지만,
+    /// `ParticleSystemDef.parse`가 루트 owner의 count 배수만 opcode4용 `instanceCountMultiplier`로
+    /// 모든 자식/손자 def에 공유한다(자식 emitter/maxCount 등은 authored 값 유지).
     private static func parseParticleDef(_ path: String, package: ScenePackage,
                                          visited: Set<String>,
                                          instanceOverride: ParticleInstanceOverride? = nil,
@@ -3398,10 +3473,9 @@ extension SceneDocument {
     /// 전건 `preview*` 라 non-preview 도달은 **0**. 그리고 **소비처가 아직 없으므로
     /// 그림이 바뀌는 씬은 0건**이다 — 이 라운드가 바꾸는 것은 보존되는 값뿐이다.
     ///
-    /// **[미해결]** CP 프레임 방향을 실제로 읽는 이미터/오퍼레이터를 특정하지 못했다.
-    /// 런타임 CP 레코드(`[sys+0x400] + i·0xD0`)의 `+0x80` 에 4×4 가 만들어지고 그 뒤
-    /// `0x14022c0b6`–`0x14022c148` 이 그것을 오브젝트/부모 행렬과 합성해 `+0x00` 에 굽는 것까지는
-    /// 봤지만, `+0x00`/`+0x80` 을 읽는 쪽을 못 찾았다. 그래서 **소비는 붙이지 않았다**.
+    /// **[2026-08-31 해소]** CP 프레임 소비처는 이미터 VM과 이니셜라이저 opid 13이다.
+    /// 정적 override 각도는 `ParticleSystemDef.controlPointFrameAngles`로 분리돼 opid 13과
+    /// sphere/box 이미터에 배선됐다. 아래 동적 트랙 갱신은 별도 후속이다.
     ///
     /// **[2026-08-21 · 클러스터 K 이관] `{animation:{…}}` 바인딩이 통째로 드롭되고 있었다.**
     /// 이 블록의 값은 위 서술대로 **바인딩 객체일 수 있는데**, `float()`/`vec3()` 는 정적 `value` 만
@@ -3413,9 +3487,10 @@ extension SceneDocument {
     /// 정적 언랩 **전에** 병행 캡처해 `SceneParticle.instanceOverrideAnimations` 에 보존한다.
     /// 정적 `value` 는 그대로 `ParticleInstanceOverride` 로 가므로 애니가 없을 때의 값·`relative` base 가 된다.
     ///
-    /// **소비는 아직 없다** — CP 프레임/위치를 per-frame 으로 갱신하는 소비처는 렌더 계층(다른 소유)이고,
-    /// 애초에 `controlPointAngles` 소비처도 미특정이다(아래 [미해결]). 이 라운드는 **파스·보존 전용**이라
-    /// 그림이 바뀌는 씬은 **0건**이다.
+    /// **[2026-08-31 동적 CP 해소]** 루트 GPU 시스템이 두 트랙을 보존하고 `ParticleSimulator`가
+    /// 자체 시간으로 매 서브스텝 평가한다. 위치는 live 배열과 binding 이동분 합성으로 전 CP
+    /// 소비자에, 각도는 이미터/opid 13에 전달된다. 2D·3D 라이브와 캡처/seek 재생성도 같은
+    /// `freshSimulator()` 경로를 쓴다.
     private static func particleInstanceOverride(_ raw: Any?)
         -> (override: ParticleInstanceOverride?, animations: [String: PropertyAnimation]) {
         guard let io = raw as? [String: Any], !io.isEmpty else { return (nil, [:]) }
@@ -3963,54 +4038,85 @@ extension SceneDocument {
 
     // MARK: - parse general 후처리 추출 헬퍼
 
-    /// scene.json `version` 기능 게이트 — 최상위 version 이 가리키는 스키마 세대보다 새 키를
-    /// general 사본에서 **제거해 소비 자체를 막는다**(값을 고쳐 읽는 게 아니라 키 부재로 떨어뜨려
-    /// 각 필드의 생성자 기본값이 남는다 — WE 도 저작되지 않은 키와 같은 착지다).
+    /// **[2026-08-30 철회 — `versionGatedGeneral` 을 삭제했다. 근거가 철회된 게이트였다]**
     ///
-    /// 근거(외부 코퍼스 관측, Waple-wallpaper-source 저장소):
-    /// `corpus_scan/scene-json-schema.md:189` — "version gating: pre-v3 scenes lack HDR/zoom;
-    /// pre-v4 lack wind/gravity." 같은 문서 :60-82 가 키 목록과 임계를 블록으로 묶는다:
-    ///  · :60-72 "HDR / bloom-HDR / zoom keys (version ≥ 3)" → `hdr` · `zoom` ·
-    ///    `bloomhdrstrength/threshold/feather/scatter/iterations` · `bloomtint`(:71) ·
-    ///    `perspectiveoverridefov`(:72). 단 `bloom/bloomstrength/bloomthreshold` 는 :38-42 의
-    ///    전씬 공통(core) 키라 **게이트 밖**이다.
-    ///  · :74-82 "Wind/gravity (version ≥ 4–5)" + :189 확정문 → `windenabled/strength/direction`
-    ///    · `gravitystrength/direction` 의 임계는 **v4**.
-    /// 관측치는 {1,3,4,5}(같은 문서 :20, 161씬 중 누락 2건)라 v1 씬에서 v3+·v4+ 키가,
-    /// v3 씬에서 v4+ 키가 무시된다. WE 실물 바이너리가 version 을 어떤 분기로 쓰는지는 미확정이고
-    /// 이 게이트는 코퍼스 관측 서술의 재현이다 — 그래서 판정 근거를 엔진 VA 가 아니라 위 문서 줄로 단다.
+    /// 이 자리에 `versionGatedGeneral(_:schemaVersion:)` 이 있었다. 최상위 `scene.version` 이
+    /// 가리키는 스키마 세대보다 새 키를 general 사본에서 **제거해** 소비 자체를 막는 게이트였고,
+    /// 호출부는 `parse()`(종전 `:1775-1776`)의 유일한 `scene["general"]` 읽기 자리였다.
+    /// 지운 키는 14개다 — v3 미만이면 `hdr` · `zoom` · `bloomhdrstrength/threshold/feather/`
+    /// `scatter/iterations` · `bloomtint` · `perspectiveoverridefov` 아홉 개, v4 미만이면
+    /// `windenabled/strength/direction` · `gravitystrength/direction` 다섯 개.
     ///
-    /// **version 누락/비정수 시엔 게이트를 적용하지 않고 종전 동작(무게이트 전소비)을 유지한다.**
-    /// 누락 2씬(같은 문서 :20)에 대해 WE 실물이 어떻게 굴러가는지 관측된 바 없어(WE 미관츠 행동),
-    /// 관측된 것만 고친다는 이 리포 원칙상 보수 쪽(현행 유지)을 택했다. 동봉 에디터 프리뷰 48씬은
-    /// `"version" : 0` 이라(<3) 게이트가 걸리는데, 저작값이 전부 생성자 기본값과 같아(bloomhdr* 2/1/
-    /// 0.1/8/1.619 · wind/gravity 비활성·항등 벡터 · perspectiveoverridefov 95) 문서 결과는 동일하다
-    /// (2026-08-25 전수 실측 — Sources/WapleRender/Resources/WEAssets/scenes/**/scene.json).
-    private static func versionGatedGeneral(_ raw: Any?, schemaVersion: Int?) -> [String: Any] {
-        var general = raw as? [String: Any] ?? [:]
-        guard let v = schemaVersion else { return general }   // version 누락/비정수 → 무게이트(위 주석)
-        if v < 3 {
-            // v3+ 키(scene-json-schema.md:60-72). bloomtint/perspectiveoverridefov 도 같은 블록이다.
-            for k in ["hdr", "zoom", "bloomhdrstrength", "bloomhdrthreshold", "bloomhdrfeather",
-                      "bloomhdrscatter", "bloomhdriterations", "bloomtint", "perspectiveoverridefov"] {
-                general.removeValue(forKey: k)
-            }
-        }
-        if v < 4 {
-            // v4+ 키(scene-json-schema.md:74-82, 임계 확정문 :189).
-            for k in ["windenabled", "windstrength", "winddirection", "gravitystrength", "gravitydirection"] {
-                general.removeValue(forKey: k)
-            }
-        }
-        return general
-    }
+    /// **왜 걷어냈나 — 인용한 근거가 짝 저장소에서 취소선으로 철회됐다.**
+    /// 종전 주석은 판정 근거를 엔진 VA 가 아니라 문서 한 줄에 달았다:
+    /// `Waple-wallpaper-source/corpus_scan/scene-json-schema.md:189` —
+    /// "version gating: pre-v3 scenes lack HDR/zoom; pre-v4 lack wind/gravity."
+    /// 그 줄은 짝 저장소 커밋 `0bb963ed`(2026-08-28 11:52:35 UTC, "측정 문서·스크립트에서 검증으로
+    /// 뒤집힌 다섯 자리를 고친다")에서 **취소선 처리되고 정정문이 붙었다** — 같은 파일 `:189-201`:
+    /// "**[CORRECTED 2026-08-28 — the corpus refutes this, and a consumer was built on it.]**
+    /// `version` does **not** gate those keys." 그 정정문은 소비자로 **이 함수를 명시**했다
+    /// (`Sources/WapleCore/SceneDocument.swift:3988-4005` — 실제 함수 경계는 `:3989-4005` 로
+    /// 한 줄 어긋나 있었다). `0bb963ed` 는 짝 저장소 HEAD 의 조상임을 확인했다
+    /// (`git merge-base --is-ancestor 0bb963ed HEAD` — 워킹트리 편집이 아니라 커밋된 철회다).
+    ///
+    /// **비둘기집 산수(이 리포 자신의 정본으로 2026-08-30 재확인)** — `spec/corpus/scene-schema.json`:
+    ///   · `scene.corpus.population.version` = {5:63, 1:33, 4:32, 3:31, None:3} → 162씬,
+    ///     v≥3 은 126씬, v≥4 는 95씬.
+    ///   · `scene.general.keys` 의 n: `hdr` 159 · `zoom` 159 · `bloomhdrstrength` 159 ·
+    ///     `bloomhdrthreshold` 159 · `bloomhdrfeather` 159 · `bloomhdrscatter` 159 ·
+    ///     `bloomhdriterations` 157 · `bloomtint` 142 · `perspectiveoverridefov` 130 ·
+    ///     `windenabled`/`windstrength`/`winddirection`/`gravitystrength`/`gravitydirection` 109.
+    ///   · version 부재 3씬은 옛 guard 가 general 을 그대로 반환한 **무게이트** 집합이라 v≥임계
+    ///     씬과 함께 제외한다. 따라서 159 − (126+3) = **최소 30씬이 v3 미만인데
+    ///     `hdr`/`zoom` 을 저작한다**(`bloomtint` 13, `perspectiveoverridefov` 1도 같은 방향).
+    ///     109 − (95+3) = **최소 11씬이 v4 미만인데 wind/gravity 를 저작한다.** 하한은 모두
+    ///     양수이므로 게이트의 전제는 어느 방향으로도 성립할 수 없다.
+    ///   · 세는 명령: `spec/corpus/scene-schema.json` 의 `scene.corpus.population.version` 과
+    ///     `scene.general.keys[*].n` 을 읽어 `n − (v≥임계 씬수 + version 부재 씬수)` 를 뺀다.
+    ///
+    /// **엔진 근거는 애초에 없었다.** 종전 주석이 스스로 적었다 — "WE 실물 바이너리가 version 을
+    /// 어떤 분기로 쓰는지는 미확정이고 이 게이트는 코퍼스 관측 서술의 재현이다." 즉 게이트를
+    /// 지탱한 것은 그 문서 한 줄뿐이었고, 그 줄이 사라지자 남는 근거가 0 이 됐다.
+    ///
+    /// **삭제의 영향 — 절반은 살아 있던 오진, 절반은 파스 값 오염.**
+    ///   · **HDR/bloom/zoom 여덟 키는 실렌더 소비처가 있다**(2026-08-31 재확인):
+    ///     `SceneRenderer.mount` 의 `doc.hdr` → `HDRPostPass`, `sceneWantsLDRBloom`,
+    ///     `sceneWantsHDRBloom`, `doc.bloomHDR*` 설정과 `sceneZoom` 사용부다. `hdr` 하나만 떨어져도 씬이
+    ///     HDR 블룸에서 LDR 블룸으로 조용히 갈아타므로, v1~v2 로 저작된 워크샵 씬은 오류 하나 없이
+    ///     **저자가 지정하지 않은 그림**을 그렸다. 심각도는 이쪽이 짊어진다.
+    ///   · **[2026-08-31 후속 해소]** `perspectiveoverridefov`는 이제 정적·동적 2D 쿼드가 소비한다.
+    ///     이 문단을 작성한 시점의 “호출부 0건”은 당시 사실이지만 현재 상태는 아니다.
+    ///   · **wind/gravity 다섯 키는 오늘 픽셀 영향이 0 이다** — `ParticleSimulator` 가 그 필드를
+    ///     받지 않아 구조적으로 소비 경로가 없다(`BACKLOG.md` 의 "wind/gravity 파티클 외력" 행 —
+    ///     이 글을 쓰는 시점 `:458`, "`ParticleSimulator` 가 그 필드를 받지 않아 구조적으로 소비
+    ///     경로가 없다". 그리고 `applyGeneralSettings` 의 "소비자 의미론 미확정, 파스·보존 전용"
+    ///     주석). 게이트가 오염시킨 것은 파스·보존 값과
+    ///     그 값을 잠근 테스트뿐이었다. **그래도 전제가 같이 틀렸으니 함께 걷어냈다** — 이 절반의
+    ///     수정 사유는 "깨진 렌더" 가 아니라 "근거 없는 게이트" 다.
+    ///
+    /// **동봉 프리뷰에는 무영향(2026-08-30 전수 재측정).**
+    /// `Sources/WapleRender/Resources/WEAssets/scenes/**/scene.json` 52종의 version 은
+    /// {0:48, None:3, 3:1} 이고, **게이트가 실제로 지웠을 키 중 생성자 기본값에서 벗어난 것은 0건**
+    /// 이다. 유일한 이탈값 `videoplayer/scene.json` 의 `bloomhdrstrength:0` 은 version 이 없어
+    /// 종전에도 게이트 밖이었다. 그래서 이 삭제는 동봉 스냅샷 골든에 대해 픽셀 중립이다 —
+    /// **골든이 깨지면 이 삭제보다 넓은 변경이 섞였다는 신호다.**
+    ///
+    /// **대체 동작: 키 존재 여부로 읽는다.** version 숫자는 더 이상 general 소비에 관여하지 않는다
+    /// (`parse()` 의 해당 자리 주석 참조). 미저작 키는 종전과 똑같이 각 필드의 생성자 기본값에
+    /// 착지하고, 저작된 키는 version 과 무관하게 소비된다. 짝 저장소 정정문의 결론과 같다 —
+    /// "Reading a key should depend on whether the key is there, not on a version number the
+    /// corpus does not corroborate."
+    ///
+    /// 이 게이트를 오라클로 못 박고 있던 `Tests/WapleCoreTests/SceneVersionFeatureGateTests.swift`
+    /// 는 같은 날 "게이트가 없다" 를 지키는 방향으로 뒤집었다(그 파일 머리말 참조).
 
     /// parse() 후반의 general 딕셔너리 기반 씬 글로벌 설정 적용(순수 할당, 흐름 제어 없음).
     /// 타입체커 식 깊이 분산 목적(기능 동치, 2026-07-31).
     private static func applyGeneralSettings(to out: inout SceneDocument, general: [String: Any],
                                              quality: Quality, userProps: [String: Any] = [:]) {
-        // camerashake 전역 지터(D 재감사 #16, 코퍼스 활성 13/168씬). {"user"/"value"} 바인딩(클린룸 15씬)
-        // 대비 unwrap. 수식은 렌더러(코퍼스 값분포 근사) — 여기선 원시 파라미터만 보존.
+        // camerashake 전역 지터. 동봉 활성 0/168, 설치본 `ricepod` 1씬(3D)이라는 재측정은
+        // `docs/re/camera-motion.md` §6.6·7 C-7. {"user"/"value"}를 언랩하고 여기서는
+        // 원시 파라미터만 보존하며, exact 소비 수식은 SceneCameraMath.shakeDelta가 맡는다.
         out.cameraShake = weBool(general["camerashake"])
         out.cameraShakeAmplitude = float(general["camerashakeamplitude"]) ?? 0.5
         out.cameraShakeRoughness = float(general["camerashakeroughness"]) ?? 1

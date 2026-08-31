@@ -495,25 +495,63 @@ CI 에서만 터진 실패 이력이 있다(`db90fc2` 타입체커 폭발, `14dc
 
 > **WE 를 실측(리버스 엔지니어링)하려면 [docs/dev/re-methodology.md](docs/dev/re-methodology.md) 를 먼저 읽어라.** 아래는 Swift 코드베이스 쪽 함정이고, 그쪽은 바이너리·자산·정본을 다룰 때 **실제로 틀렸던** 방식 26개다(남의 VA 베끼기 · 거꾸로 디스어셈 · 주입을 소비로 착각 · 리눅스 초록을 macOS 초록으로 착각 …).
 
-**오디오 출력이 죽어 있으면 테스트 12개가 빨개진다 — 코드 결함이 아니다.**
+**오디오 출력이 죽어 있으면 오디오 게이트가 걸린 테스트가 한꺼번에 빨개진다 — 코드 결함이 아니다.**
 [2026-08-25] 실측으로 당했다. 개발 머신의 기본 출력이 블루투스 동글(Sennheiser BTD 700)이었는데
 헤드셋이 꺼지자, 장치는 `system_profiler` 목록에 **그대로 남아 있으면서** `AVAudioPlayer.play()` 가
-`false` 를 돌려줬다. 결과는 `isPlaying == true` 를 단언하는 테스트 12개(단언 15건)가 한꺼번에
-빨개지는 것이고 — `SceneAudioPlayerTests` 9 · `SceneEventHookTests` 2 · `SceneInteractionMediaE2ETests` 1 —
+`false` 를 돌려줬다. 결과는 `isPlaying == true` 를 단언하는 테스트가 한꺼번에 빨개지는 것이고,
 실패 메시지는 전부 그냥 `XCTAssertTrue failed` 다. **원인을 가리키는 신호가 하나도 없다.**
 
-그 상태에서 소스 변경을 의심하느라 시간을 태웠다. `Sources/` 를 전부 되돌려도 같은 12개가 같은
-이름으로 실패해서야 환경임을 알았다. 지금은 `skipUnlessAudioOutputCanPlay()`(TestSupport)가
+그 상태에서 소스 변경을 의심하느라 시간을 태웠다. `Sources/` 를 전부 되돌려도 같은 이름들이 같은
+방식으로 실패해서야 환경임을 알았다. 지금은 `skipUnlessAudioOutputCanPlay()`(TestSupport)가
 **원인을 말하며 스킵**한다 — 무음 WAV 를 볼륨 0 으로 재생 시도해 장치 가용성만 본다.
 
-- 이 12건이 스킵되면 스킵 수가 63~64 → **75~76** 으로 뛴다. CI 스킵 상한 100 아래이지만
+> **[정정 2026-08-30] 이 절에 박혀 있던 세 값이 전부 낡아 있었다.** 종전 서술:
+>
+> - ~~"테스트 **12개**(단언 15건) … `SceneAudioPlayerTests` 9 · `SceneEventHookTests` 2 ·
+>   `SceneInteractionMediaE2ETests` 1"~~
+> - ~~"이 12건이 스킵되면 스킵 수가 63~64 → **75~76** 으로 뛴다"~~
+> - ~~"`swift test --filter SceneAudioPlayerTests` 는 오디오가 죽은 머신에서 **22건 중 11건**이 실패한다"~~
+>
+> **왜 틀렸나.** 이 문장들은 `fb5a913f`(2026-08-25)에서 그 시점 실측으로 쓰였다 —
+> 그때 게이트 사이트는 12개(`SceneAudioPlayerTests` 9)이고 그 클래스의 테스트는 22개였다.
+> 이틀 뒤 `a9f271bb`(2026-08-27)가 테스트 4개와 게이트 4개를 더했는데 **이 절은 안 따라왔다.**
+> 커밋별 실측:
+>
+> ```bash
+> for c in fb5a913f a9f271bb HEAD; do
+>   echo "$c 게이트 사이트: $(git grep -c 'try skipUnlessAudioOutputCanPlay()' $c -- Tests/ | awk -F: '{s+=$NF} END{print s}')"
+> done
+> # fb5a913f 12 · a9f271bb 16 · HEAD 16
+> ```
+>
+> **그래서 값을 다시 박지 않는다 — 세는 법을 적는다**(이 파일이 테스트 개수에 대해 이미 채택한
+> 규약과 같다. 「빌드와 테스트」의 [2026-08-27] 툼스톤 참조: "기준값을 여기 적었더니 또 썩었다").
+>
+> ```bash
+> # 게이트가 걸린 테스트 함수 수 — 정의(TestSupport.swift)와 산문 언급은 제외된다
+> grep -rn 'try skipUnlessAudioOutputCanPlay()' Tests/ --include='*.swift' | wc -l
+> # 파일별 분포
+> grep -rc 'try skipUnlessAudioOutputCanPlay()' Tests/ --include='*.swift' | grep -v ':0$'
+> ```
+>
+> 2026-08-30 실측(`70a8a708`): 사이트 **16**, 서로 다른 테스트 함수 **16**(사이트 1개당 함수 1개,
+> 중복 없음) — `SceneAudioPlayerTests` **13** · `SceneEventHookTests` 2 ·
+> `SceneInteractionMediaE2ETests` 1. `XCTAssertTrue(…isPlaying…)` 단언 수는 게이트 사이트와
+> 다른 모집단이고 실제로 이후 변했다. 게이트 수가 늘어도 단언 수가 유지된다고
+> 추론하지 말고, 필요하면 현재 트리에서 별도로 재라.
+> 스킵 점프는 **베이스라인 + 위 사이트 수**로 계산하라 — 현재 베이스라인 스킵은 63(HEAD 실측,
+> 정본은 `ci.yml` 의 census 스텝)이므로 63~64 → **79~80** 이다.
+
+- 이 게이트가 스킵되면 스킵 수가 위 계산대로 뛴다. CI 스킵 상한 100 아래이지만
   census 스텝에 그대로 찍히므로, 그 점프가 보이면 "이 머신의 오디오가 죽어 있다" 는 뜻이다.
 - **CI(macos-26)에는 재생 가능한 출력이 있어 이 게이트가 열린다** — 회귀 감시는 그대로다.
 - 최소 재현: `AVAudioPlayer(data: <무음 WAV>)` 를 만들고 `play()` 의 반환값을 본다.
 
-**`--filter` 로 오디오 테스트를 격리 실행하면 판정에 쓸 수 없다.** 같은 이유로
-`swift test --filter SceneAudioPlayerTests` 는 오디오가 죽은 머신에서 22건 중 11건이 실패한다.
-`--parallel` 이 판정에 못 쓰였던 것과 같은 부류다 — **전수로 판정해라.**
+**`--filter` 로 오디오 테스트를 격리 실행하면 판정에 쓸 수 없다.** 오디오가 죽은 머신에서
+`swift test --filter SceneAudioPlayerTests` 는 **게이트 수보다 많이** 실패한다 — 격리 실행이
+전수 실행에서는 서지 않던 전제를 깨기 때문이다(2026-08-25 실측: 게이트 9건이던 시점에 11건 실패).
+**그 초과분이 이 문장의 논점이므로 게이트 수로 대체하지 마라** — 다시 인용하려면 오디오가 죽은
+머신에서 재측정해야 한다. `--parallel` 이 판정에 못 쓰였던 것과 같은 부류다 — **전수로 판정해라.**
 
 **타입체커 폭발.** 긴 식을 합치면 `unable to type-check this expression in reasonable time`
 이 난다. 이건 이 리포에서 실제로 4번 일어났다. 식은 **쪼개는 방향으로만** 바꿔라.
@@ -530,8 +568,34 @@ CI 에서만 터진 실패 이력이 있다(`db90fc2` 타입체커 폭발, `14dc
 지우지 마라.
 
 **조용히 틀리는 것보다 실패하는 쪽을 택한 곳이 있다.** `ShaderPreprocessor` 는 지원하지 않는
-`#if` 식(모듈로·비트·삼항·시프트·16진)을 통과시키지 않고 거부한다. 오역된 셰이더가 조용히
+`#if` 식을 통과시키지 않고 거부한다. 오역된 셰이더가 조용히
 그려지는 것보다 낫다는 판단이다. 이 거부 경로를 관용적으로 바꾸면 버그가 눈에 안 보이게 된다.
+
+> **[정정 2026-08-30] 거부 목록이 낡아 있었다 — 다섯 중 넷은 이제 평가된다.**
+> 종전 이 자리는 ~~"지원하지 않는 `#if` 식(**모듈로·비트·삼항·시프트·16진**)을 거부한다"~~ 였다.
+> `G2` 라운드가 평가기에 엔진 렉서의 문법을 실물대로 넓혔고(모듈로·비트·시프트·16진/접미 리터럴),
+> `BK` 가 소수 리터럴을 더했다. 즉 **거부되는 것은 삼항 하나뿐**이고 나머지 넷은 평가된다.
+> 코드는 이 반전을 두 곳에 기록해 뒀는데(`ShaderPreprocessor.swift` 의 `preprocess` 앞 주석과
+> `evalChecked` 의 독 코멘트) **이 문서만 안 따라왔다.**
+>
+> **거부 규약의 정본은 코드 한 곳이다** — `Sources/WapleCore/ShaderPreprocessor.swift` 의
+> `evalChecked` 독 코멘트("**[G2] 거부 규약은 유지하되 아는 문법을 넓혔다**"). 여기 목록을
+> 베끼지 말고 그 자리를 읽어라(줄 번호로 가지 마라 — `grep -n 'G2. 거부 규약은 유지하되'`).
+> 2026-08-30 실측으로 그 코멘트가 적은 **거부 3종**을 확인했다:
+>
+> | 거부 | 어디서 | 실측 |
+> | --- | --- | --- |
+> | 렉서가 모르는 문자(`? : ; @` · 수 밖의 `.`) | `tokenize` 의 `unsupported = true` 낙하 | `A ? 1 : 0` → nil · `A @ 1` → nil · `.5` → nil |
+> | 수로 못 읽는 수치 define 참조(`suspect`) | `if suspect.contains(t) { failed = true }` | `#define X 1.5` 를 참조하는 `#if` |
+> | 잔여 토큰 | `pos == toks.count` 검사 | `1 0` → nil · `1e5` → nil |
+>
+> 반대로 **평가로 넘어간 것**(`ShaderPreprocessorRequireTests` 가 값까지 못박는다):
+> `A % 2`=1 · `A & 6`=2 · `A << 3`=8 · `-8 >> 1`=-4(산술 시프트) · `0x10`=16 · `1u`=1 · `1.5`=1.
+>
+> **주의 — 이 정정은 "거부 경로를 없애라" 가 아니다.** 위 본문의 판단(거부 경로가 있어야 하고,
+> 관용으로 바꾸면 버그가 안 보인다)은 HEAD 에서 그대로 유효하다. `preprocess` 가 nil 을 `""` 로
+> 접어 번역 실패 → 폴백으로 보내고, 거부 지점 둘이 경고를 남긴다. G2 가 넓힌 것은 **"아는 문법"**
+> 이지 **"모르면 아무거나"** 가 아니다 — `testStillRefusesWhatEngineGrammarDoesNotCover` 가 그 경계를 잠근다.
 
 **순서와 키가 계약인 곳.** `PuppetPose` 의 행렬 곱 순서(`Rz·Ry·Rx·S`, `T·R·S`)는 비가환이라
 "수학적으로 같아 보이는" 재배열도 안 된다. `GLSLTranslator` 의 프로세스 전역 메모이즈 캐시는

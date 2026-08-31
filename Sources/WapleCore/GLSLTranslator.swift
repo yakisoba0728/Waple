@@ -1524,7 +1524,15 @@ public enum GLSLTranslator {
             // F614: g_Screen = (렌더타깃 w, h, w/h) — 미분류 시 머티리얼 팬텀 슬롯(padDefault 0) 강등.
             || name == "g_Screen"
             // F744: 2D genericimage4/fluidsim 이 bare g_LightAmbientColor 선언 시 padDefault=0 폭백.
-            // 엔진 상수로 승격해 흰색(1,1,1,1)을 주입; 실제 scene ambientColor 연동은 후속 범위.
+            // 엔진 상수로 승격해 흰색을 주입한다 — **타입은 vec3 다**(아래 engineReplacement :1646).
+            // [H4 정정 2026-08-30] 종전 이 줄은 "흰색(1,1,1,1)을 주입" 으로 vec4 를 적었다. 틀렸다 —
+            // G-A2/A4/B2 블록(:1640-1645)이 바로 그 float4 주입이 소비처를 전부 타입 불일치로 깨뜨려
+            // float3 으로 되돌린 기록이다. 같은 사실을 두 자리에 적어 한쪽만 고쳤던 자리다.
+            // 그리고 **흰색 자체가 WE 와 반대 방향인 의도적 이탈**이다: `spec/engine/uniform-feed.json`
+            // `engine.uniformFeed.wapleGaps`(확정)는 WE 를 "씬 authoring 값. 키가 없으면 (0,0,0) — 검정."
+            // 으로 적고 우리 상수 주입을 "폴백 방향이 반대다" 로 판정한다. 실 갭은 기본값이 아니라
+            // 저작값(`SceneDocument` 가 이미 파싱해 둔 `ambientColor`)을 안 읽는 것이며, 그 배선까지가
+            // 이 이탈의 해소 조건이다. 그때 폴백은 흰색이 아니라 검정이어야 한다.
             || name == "g_LightAmbientColor"
             // 짝 유니폼 — generic{,2,3,4}.vert / genericimage{2,3,4}.frag / genericparticle.frag 가
             // `mix(g_LightSkylightColor, g_LightAmbientColor, dot(n,+Y)*0.5+0.5)` 로 함께 소비한다.
@@ -1600,9 +1608,9 @@ public enum GLSLTranslator {
         // (`0x14017c73d`) 후 qword 0 을 심는다(`0x14017c77d`/`0x14017c784`). 종전 이 주석은 0.5,0.5
         // 라고 적었는데 틀렸다. 값은 `SceneRenderer` 가 공급하므로 이 줄의 동작은 무영향이다.
         if name == "g_PointerPosition" { return "eng.timeAndPad.yz" }
-        // 실물 depthparallax: 엔진이 매프레임 채우는 시차 위치 — 포인터 UV alias(중앙 0.5,0.5 = 시차 정지).
-        // 머티리얼-0 고정이면 코너 고정 시차 왜곡.
-        if name == "g_ParallaxPosition" { return "eng.timeAndPad.yz" }
+        // 실물 depthparallax: renderState+0x9c의 별도 vec2. 포인터 UV가 아니라 delay/influence/eye를
+        // 반영한 focus/projection 값이다(FUN_1401891a0 0x140189c90–0x140189cc6).
+        if name == "g_ParallaxPosition" { return "eng.parallaxAndPad.xy" }
         // 실물 fluidsim/cursorripple: dt(초) + 이전 프레임 포인터 UV — 머티리얼-0 고정이면
         // 시간적분 동결/이전 포인터 부재. 짝 배선(위 isEngine 주석).
         if name == "g_Frametime" { return "eng.timeAndPad.w" }
@@ -1688,16 +1696,33 @@ public enum GLSLTranslator {
     /// alpha·brightness·useralpha=1, color=(1,1,1). 어노테이션이 있으면 이 함수는 안 탐(annotationDefault 우선).
     /// 실제 레이어 알파/색은 컴포지터가 별도 적용(base 이미지는 QuadShaders 하드포트) — 라이브 값 주입은
     /// 렌더 파이프라인 밖이라 스코프 아웃(중립값이면 이중적용도 없음).
+    ///
+    /// **[H4 2026-08-30] 여기 있던 `g_LightAmbientColor` case 를 지웠다 — 도달 불가한 죽은 분기에
+    /// 거짓 근거가 붙어 있었다.** 종전 주석은 이랬다:
+    /// > ~~F744: 2D genericimage4/fluidsim 이 bare g_LightAmbientColor 을 선언하면 padDefault=0 으로~~
+    /// > ~~레이어가 검게 나옴. WE 는 ambient 를 흰색(1,1,1)으로 폭백하는 케이스가 많다.~~
+    ///
+    /// 두 문장이 다 틀렸다.
+    /// ① **그 경로는 탈 수 없다.** `isEngine`(:1513)이 이 이름을 무조건 claim 하므로 :323-335 분류
+    ///    루프의 `else if isEngine` 가 먼저 잡아 `materials` 에 append 되지 않는다. 이 함수의 호출부는
+    ///    :333 하나뿐이고 그것이 머티리얼 분기다. 실측(컴파일 프로브): `uniform vec3 g_LightAmbientColor`
+    ///    → `materialParams=[]`, `uniform vec4` 형도 `[]`. `padDefault=0` 은 애초에 안 온다.
+    /// ② **WE 가 흰색으로 폭백한다는 것도 반대다.** `spec/engine/uniform-feed.json`
+    ///    `engine.uniformFeed.wapleGaps`(status 확정)는 `we: "씬 authoring 값. 키가 없으면 (0,0,0) —
+    ///    검정."` / `impact: "폴백 방향이 반대다."` 로 적는다. 실제 갭은 기본값이 아니라 **저작값을
+    ///    안 읽고 상수를 넣는 것**이다.
+    /// 지운 이유는 위험이 반대 방향이라서다 — 나중에 `isEngine` 에서 이 이름을 빼서 실 씬
+    /// `ambientColor` 에 배선하는 사람이 이 줄을 보면 "흰색 안전망이 있다" 고 읽는데, 확정 정본이
+    /// 말하는 올바른 무연산 폴백은 **검정**이다. 죽은 분기가 그 불일치를 가린다.
+    /// 산 경로의 근거는 :1638-1645(`engineReplacement`)에 있다. 동작 변화 0(도달 불가 실측).
+    /// 선행 기록: `docs/full-audit-2026-08-26.md:224` 항목 (1) — 이 편집이 그것을 닫는다.
     private static func engineNeutralDefault(_ name: String, _ t: GLSLType) -> [Float] {
         switch name {
         case "g_Alpha", "g_UserAlpha", "g_Brightness", "g_Color",
              // F613: g_Color 의 vec4 변형 — 미등재 시 padDefault (0,0,0,0) 으로 color*=0 즉시 검정.
              "g_Color4",
              // 실물 blend.vert TRANSFORMUV 콤보: UV 를 이 값으로 나눔 — 0 이면 ÷0 NaN, 중립은 항등 배율 1.
-             "g_TextureReductionScale",
-             // F744: 2D genericimage4/fluidsim 이 bare g_LightAmbientColor 을 선언하면 padDefault=0 으로
-             // 레이어가 검게 나옴. WE 는 ambient 를 흰색(1,1,1)으로 폭백하는 케이스가 많다.
-             "g_LightAmbientColor":
+             "g_TextureReductionScale":
             return Array(repeating: 1, count: max(1, t.components))
         default: return padDefault(t)
         }
@@ -1817,7 +1842,8 @@ public enum GLSLTranslator {
         //      (b*a)=M·v : (0,0)(1,0)(1,1)(0,1) → p0,p1,p2,p3 **정확 일치**
         //      (a*b)=v·M : → (-0.031,-0.757) (0.017,-0.831) (0.089,-0.768) (0.091,-0.652) — 전혀 다름
         //    즉 (a*b) 로는 이 함수가 이름값을 못 한다. RE 산출물도 같은 결론을 독립 확립했다
-        //    (WE-2.8-COMPLETE-KR.md §A.1 / deep/lanes/A4 §1.4: "포팅 시 `#define mul(a,b) ((b)*(a))`").
+        //    (`spec/engine/mul-convention.json` `mul.squareToQuadCornerIdentity` 가 두 순서를
+        //    독립 계산해 `(b*a)`만 네 코너 계약을 만족함을 고정한다.)
         //
         //    이 순서는 벡터-우선(`mul(v,M)`)·행렬-우선(`mul(tangentSpace, lightDir)` — generic.vert)
         //    두 형태 모두에 동시에 옳다. 그게 ((b)*(a)) 가 보편 셰임인 이유다.
@@ -2193,18 +2219,60 @@ public enum GLSLTranslator {
         // X-⑤: targetRes(layerTint 뒤 추가 — 앞 오프셋 불변) = 이펙트 **출력(dst)** 해상도, 전 패스 불변.
         // 채택 근거·이 근거의 판별력 한계·레이어 커스텀 경로와의 규약 이원화·라이브 A/B 대기 상태는
         // 위 g_TexelSize 치환부(computeUV 근처) 주석 참조 — "실측으로 확정" 아님.
-        let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; float4 texWrap[2]; float4 texFilter[2]; float4 layerTint; float4 targetRes; };\n"
+        let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; float4 texWrap[2]; float4 texFilter[2]; float4 layerTint; float4 targetRes; float4 parallaxAndPad; };\n"
         // UV 암시적 절단(HLSL 방언 호환): 오버로드로 타입별 안전 절단.
+        //
+        // **[H3 정정 2026-08-30] 아래 `we_cast3x3(float s)` 의 근거가 다른 언어의 규칙이었다.**
+        // 그 줄에 붙어 있던 주석은 ~~`// mat3(scalar)=대각(GLSL 단일 스칼라)`~~ 였다. 틀린 인용이다 —
+        // `CAST3X3` 은 GLSL 생성자가 아니라 WE 컴파일러 내장 shim 매크로이고, wallpaper64.exe
+        // 원본(5,360,112 B, 파일오프셋 0x486bf6 — 오프셋 규약은 ShaderPreprocessor.swift:74-83)이
+        // `#define CAST3X3(x) ((float3x3)(x))` 로 **HLSL 캐스트**로 정의한다(직접 덤프해 확인.
+        // 같은 shim 의 8종에 CAST2X2/CAST4X4 는 없다 — ShaderPreprocessor.swift:82-83).
+        // WE 는 GLSL 문법 셰이더를 HLSL(D3D11) 백엔드로 컴파일하므로(F3 — ShaderPreprocessor.swift:38-40)
+        // 적용되는 규칙은 HLSL/DXSAS 클래스 캐스팅의 Scalar→Matrix 행이다: "Replicate the scalar source
+        // value into every component of the destination matrix"
+        // (learn.microsoft.com/en-us/windows/win32/direct3d9/casting-and-conversion).
+        // 즉 `CAST3X3(1.0)` 은 실물에서 **9성분 전부 1.0**(replicate)이고 우리 `float3x3(s)` 는
+        // **대각만**(1,0,0, 0,1,0, 0,0,1) 이다. 판정: replicate 가 WE 정합이고 이 값은 실물과 다르다.
+        //
+        // **그럼에도 값은 바꾸지 않았다.** 버그 수정이 아니라 소비처 없는 동작 변경이 되기 때문이다:
+        //  · 도달 0건. 모집단을 섞지 않고 `CAST3X3(...)` 어휘 출현을 전수 열거했다
+        //    (`rg -o --no-filename 'CAST3X3\([^)]*\)' <root> | sort | uniq -c`):
+        //      - 동봉 WEAssets 502 셰이더(`.frag/.vert/.geom/.h`): g_ModelMatrix 14 ·
+        //        g_Bones[…] **48** · g_ViewProjectionMatrix 5 · g_ModelMatrixInverse 3 ·
+        //        g_EffectTextureProjectionMatrixInverse 1 · 스칼라 0.
+        //      - 형제 리포 `wallpaper_engine/projects/` 90 셰이더: g_ModelMatrix 4 · 스칼라 `1.0` 1.
+        //    형제 `assets/` 는 동봉 WEAssets 와 같은 502파일 사본이라 합산하지 않는다. 따라서 중복을
+        //    제거한 전체는 g_ModelMatrix 18 · g_Bones 48 · 5 · 3 · 1 · 스칼라 1이다. 행렬 인자는
+        //    위 두 오버로드가 받고, 스칼라는 그 1건뿐이다.
+        //  · 그 1건은 Waple 에 **동봉되지 않았고**(형제 리포 shimmering_particles/shaders/particle.vert:98
+        //    `mRotation = CAST3X3(1.0);`) WE 안에서도 이중으로 죽어 있다: (a) `#if TRAILRENDERER` 안인데
+        //    그 파일이 선언하는 콤보는 REFRACT(기본 0) 하나라 TRAILRENDERER 는 미정의→0 이고,
+        //    (b) 소비처 particle.vert:123 은 4인자로 부르는데 유일한 정의 common_particles.h:88 은
+        //    5파라미터다 — REFRACT=1 이어도 WE 자신이 컴파일에 실패한다(같은 낡은 mRotation 시그니처가
+        //    genericparticle.geom:56 에 주석으로 남고 :57 이 산 5인자 호출이다). 게이트가 열려도
+        //    동작하는 코드로 이어지지 않는다.
+        //  · 짝이 될 오라클이 없다. 현 가드 `TranslatorResidualsTests.testCast3x3OfScalar` 는
+        //    `try compile(t.msl)` 로 **컴파일만** 보고 값은 안 본다 — replicate 로 바꿔도 그냥 초록이라
+        //    회귀를 잡지 못한다.
+        //  · 검증 경계: MSL 쪽(대각)은 컴파일로 직접 확인했다. HLSL 쪽(replicate)은 이 환경에 D3D
+        //    툴체인이 없어 **문서 규칙 인용**이며 실측이 아니다.
+        // 그래서 실물과 다른 값을 **알고** 남긴다. 스칼라 CAST3X3 을 쓰는 실입력(워크샵 셰이더)이
+        // 관측되면 `float3x3(float3(s), float3(s), float3(s))` 로 바꾸고 위 테스트를 9성분 판정으로
+        // 확장할 것. **CAST2X2/CAST4X4 에는 이 논리를 적용하지 마라** — WE shim 에 없는 로컬 추가라
+        // 대응 HLSL 캐스트가 존재하지 않고, replicate 로 바꾸면 근거 없이 GLSL 에서 이탈한다.
         let uvHelpers = """
         inline float2 we_uv(float2 v) { return v; }
         inline float2 we_uv(float3 v) { return v.xy; }
         inline float2 we_uv(float4 v) { return v.xy; }
         inline float2 we_uv(float v) { return float2(v); }
-        // CAST3X3(x): GLSL mat3(x) 대응. mat4→상단 3x3 절단(MSL 엔 float3x3(float4x4) 생성자 부재),
-        // mat3→통과(실물 depthparallax 의 g_EffectTextureProjectionMatrixInverse 회전 추출).
+        // CAST3X3(x): WE 내장 shim 매크로(HLSL 캐스트). mat4→상단 3x3 절단(MSL 엔 float3x3(float4x4)
+        // 생성자 부재), mat3→통과(실물 depthparallax 의 g_EffectTextureProjectionMatrixInverse 회전 추출).
         inline float3x3 we_cast3x3(float4x4 m) { return float3x3(m[0].xyz, m[1].xyz, m[2].xyz); }
         inline float3x3 we_cast3x3(float3x3 m) { return m; }
-        inline float3x3 we_cast3x3(float s) { return float3x3(s); }  // mat3(scalar)=대각(GLSL 단일 스칼라)
+        // 스칼라: 대각. 실물 HLSL 캐스트는 replicate 라 값이 다르다 — 도달 0건이라 의도적으로 유지한다
+        // (근거·판정·교체 조건은 GLSLTranslator.swift 의 이 문자열 바로 위 [H3 정정 2026-08-30] 참조).
+        inline float3x3 we_cast3x3(float s) { return float3x3(s); }
         // GLSL mod(x,y) = x - y*floor(x/y) — fmod 와 달리 음수에서 항상 y 부호(오프셋 스크롤 등에 중요).
         inline float we_mod(float x, float y) { return x - y * metal::floor(x / y); }
         inline float2 we_mod(float2 x, float y) { return x - y * metal::floor(x / y); }
