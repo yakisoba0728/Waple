@@ -950,7 +950,7 @@ gl_FragColor = vec4(normal * CAST3(0.5) + CAST3(0.5), 1.0);
 
 ### 2.11 패스 17 — combine (출력)
 
-유일하게 MVP 를 쓰는 패스다(`combine.vert:32`). 슬롯: 0 = `Dye2`, 1 = `previous`,
+유일하게 MVP 를 쓰는 패스다(`fluidsimulation_combine.vert:32`). 슬롯: 0 = `Dye2`, 1 = `previous`,
 2 = `Normal`(LIGHTING), 3 = 그래디언트 맵(어노테이션 default), 4 = `Velocity2`(RENDERING==3).
 
 ```glsl
@@ -1913,7 +1913,7 @@ float amt = smoothstep(size, 0.0, length(delta));      // edge0 > edge1 → 중�
 
 **W2 (P1) `LIGHTING=1` → 이펙트 통째 폴백.**
 `ShaderPreprocessor` 의 `#require` 분기 가 `#require` 줄을 **소비**하는 것까지는 실물과 같지만
-`LIGHTING≠0` 일 때의 코드 생성은 미구현이다. 그러면 `combine.frag:116` 의
+`LIGHTING≠0` 일 때의 코드 생성은 미구현이다. 그러면 `fluidsimulation_combine.frag:116` 의
 `PerformLighting_V1(...)` 호출부가 미정의로 남아 MSL 컴파일이 실패하고
 `SceneRendererResources` 의 이펙트 폴백 분기 가 이펙트를 통째로 버린다.
 **"조용히 틀린 그림" 이 아니라 "시끄러운 폴백" 이므로 현행 선택은 옳다.**

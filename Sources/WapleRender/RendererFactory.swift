@@ -27,13 +27,18 @@ public enum RendererFactory {
     /// ⚠️ `MainActor.assumeIsolated { WebRenderer(...) }` 로 덮는 것은 **안 된다** — captureSceneStill 은
     /// 백그라운드에서 이 함수를 부르고 프로젝트 타입을 가리지 않으므로(웹 프로젝트면 `as? SceneRenderer`
     /// 캐스트 실패로 nil 이 되는 것이 현재 동작), 웹 프로젝트에서 즉시 트랩이 된다.
-    public static func makeRenderer(for project: WallpaperProject) -> WallpaperRenderer? {
+    public static func makeRenderer(for project: WallpaperProject,
+                                    preparedVideoURL: URL? = nil) -> WallpaperRenderer? {
         switch project.type {
         case .web:
             return WebRenderer(mode: .web)
         case .video:
             guard let url = WallpaperPathSecurity.containedFileURL(project.fileName, root: project.folderURL) else {
                 return nil
+            }
+            if let preparedVideoURL {
+                guard FFmpegConverter.needsConversion(url) else { return nil }
+                return VideoRenderer(preparedConversionURL: preparedVideoURL)
             }
             if VideoRenderer.isSupportedContainer(url) { return VideoRenderer() }
             guard FFmpegConverter.needsConversion(url) else { return nil }

@@ -297,6 +297,11 @@ def measure_consumers(literals):
 
 
 def main():
+    specfmt.require_inputs(
+        "measure_misc_assets",
+        ("dir", WE, "WE_ROOT", "WE 설치본"),
+        ("dir", WS, "WE_WORKSHOP", "워크샵 코퍼스"),
+    )
     A = assets_root()
     ev_asset = specfmt.ev("asset", A)
     ev_corpus = specfmt.ev("corpus", "워크샵 코퍼스 scene.pkg/gifscene.pkg 전수")

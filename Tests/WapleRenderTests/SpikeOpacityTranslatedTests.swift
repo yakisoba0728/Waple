@@ -63,10 +63,10 @@ final class SpikeOpacityTranslatedTests: XCTestCase {
         // material: p[0] = (alpha=0.5, 0,0,0)
         var p: [SIMD4<Float>] = [SIMD4(0.5, 0, 0, 0)]
         let pbuf = device.makeBuffer(bytes: &p, length: MemoryLayout<SIMD4<Float>>.stride)!
-        // engine: mvp identity(16) + timeAndPad(4) + pointerLastAndPad(4) + texRes[8](32) + texWrap[8](32,F162/F163).
+        // engine: EngineU 전체 84 float. 이 테스트는 앞쪽 슬롯만 쓰지만 Metal 검증이 구조체 길이를 본다.
         // texRes 는 1 로 채워 div0 회피. texWrap 미기입(0=repeat) 이라도 tex0/1 은 1x1 이라 clamp/repeat 무차이
         // — 버퍼 크기만 EngineU(assemble()) 실제 struct 와 일치해야 함(작으면 셰이더가 밖을 읽어 GPU 검증 실패).
-        var eng = [Float](repeating: 0, count: 16 + 8 + 32 + 8)
+        var eng = [Float](repeating: 0, count: 84)
         eng[0] = 1; eng[5] = 1; eng[10] = 1; eng[15] = 1       // identity
         for i in 24..<56 { eng[i] = 1 }                         // texRes = 1
         let ebuf = device.makeBuffer(bytes: eng, length: MemoryLayout<Float>.stride * eng.count)!

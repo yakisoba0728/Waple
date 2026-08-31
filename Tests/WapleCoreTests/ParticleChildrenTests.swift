@@ -72,6 +72,153 @@ final class ParticleChildrenTests: XCTestCase {
         }
     }
 
+    /// `children[].flags & 1`은 부모의 살아 있는 파티클 위치를 자식 CP에 매 프레임 공급한다.
+    /// 실제 thunderbolt_child_spawner → thunderbolt_beam_child가 `startIndex:1`로 부모
+    /// 파티클을 CP1/CP2에 받고, beam child의 mapsequencebetween(CP0→CP1)이 첫 점까지의
+    /// 번개 선분을 만든다. CP0은 저작 원점 그대로 남아야 한다.
+    func testChildControlPointFeedDrivesMapSequenceBetweenAtRuntime() {
+        let childJSON = """
+        {"flags":1,
+         "controlpoint":[{"offset":"0 0 0"},{"offset":"0 0 0"}],
+         "emitter":[{"name":"boxrandom","rate":0,"instantaneous":3,"distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":10,"max":10},
+                        {"name":"mapsequencebetweencontrolpoints","count":3,
+                         "controlpointstart":0,"controlpointend":1}],
+         "renderer":[{"name":"sprite"}],"maxcount":3}
+        """
+        let child = ParticleSystemDef.parse(json(childJSON), material: nil)
+
+        let parentJSON = """
+        {"flags":1,
+         "controlpoint":[{"offset":"100 0 0"},{"offset":"200 0 0"}],
+         "emitter":[{"name":"boxrandom","rate":0,"instantaneous":2,"distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":10,"max":10},
+                        {"name":"mapsequencebetweencontrolpoints","count":2,
+                         "controlpointstart":0,"controlpointend":1}],
+         "children":[{"name":"beam.json","type":"static","flags":1,
+                      "controlpointstartindex":1,"maxcount":1}],
+         "renderer":[{"name":"sprite"}],"maxcount":2}
+        """
+        let parent = ParticleSystemDef.parse(json(parentJSON), material: nil) { path in
+            path == "beam.json" ? child : nil
+        }
+
+        var sim = ParticleSimulator(def: parent, seed: 403)
+        _ = sim.step(0.01)
+        let beam = sim.childDisplay(0)
+
+        XCTAssertEqual(beam.count, 3)
+        XCTAssertEqual(beam[0].pos.x, 0, accuracy: 1e-5)
+        XCTAssertEqual(beam[1].pos.x, 50, accuracy: 1e-5)
+        XCTAssertEqual(beam[2].pos.x, 100, accuracy: 1e-5)
+    }
+
+    /// 자식 시스템도 루트 scene object를 owner로 보유하므로 opcode4는 루트의
+    /// `instanceoverride.count`를 읽는다. 자식 JSON 자체에는 전체 오버라이드를 재적용하지 않고,
+    /// 이미 저작된 8개 방출에 대해 between count 4 × owner count 2의 step 1/7만 공유한다.
+    func testResolvedChildBetweenBit4UsesRootOwnerCount() {
+        let child = ParticleSystemDef.parse(json("""
+        {"flags":1,
+         "controlpoint":[{"offset":"0 0 0"},{"offset":"7 0 0"}],
+         "emitter":[{"name":"boxrandom","rate":0,"instantaneous":8,"distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":10,"max":10},
+                        {"name":"mapsequencebetweencontrolpoints","count":4,"flags":16}],
+         "renderer":[{"name":"sprite"}],"maxcount":8}
+        """), material: nil)
+        var override = ParticleInstanceOverride()
+        override.count = 2
+        let parent = ParticleSystemDef.parse(json("""
+        {"children":[{"name":"beam.json","type":"static","maxcount":1}],
+         "renderer":[{"name":"sprite"}],"maxcount":0}
+        """), material: nil, instanceOverride: override) { path in
+            path == "beam.json" ? child : nil
+        }
+
+        var sim = ParticleSimulator(def: parent, seed: 405)
+        _ = sim.step(0.01)
+        let beam = sim.childDisplay(0)
+
+        XCTAssertEqual(beam.count, 8, "자식의 authored burst/maxcount는 루트 count로 재스케일하지 않는다")
+        for (particle, expectedX) in zip(beam, (0...7).map(Float.init)) {
+            XCTAssertEqual(particle.pos.x, expectedX, accuracy: 1e-5)
+        }
+    }
+
+    /// bit4가 없으면 owner count를 공유해도 opcode4 레코드가 없으므로 authored 1/(4-1)을 유지한다.
+    /// 링크를 새 def로 재구성하는 과정에서 여섯 필드도 모두 그대로 남아야 한다.
+    func testResolvedChildWithoutBetweenBit4KeepsAuthoredStepAndLinkFields() {
+        let child = ParticleSystemDef.parse(json("""
+        {"flags":1,
+         "controlpoint":[{"offset":"0 0 0"},{"offset":"7 0 0"}],
+         "emitter":[{"name":"boxrandom","rate":0,"instantaneous":4,"distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":10,"max":10},
+                        {"name":"mapsequencebetweencontrolpoints","count":4,"flags":0}],
+         "renderer":[{"name":"sprite"}],"maxcount":4}
+        """), material: nil)
+        var override = ParticleInstanceOverride()
+        override.count = 2
+        let parent = ParticleSystemDef.parse(json("""
+        {"children":[{"name":"beam.json","type":"static","maxcount":9,"probability":1,
+                      "origin":"11 0 0","controlpointstartindex":3,"flags":4}],
+         "renderer":[{"name":"sprite"}],"maxcount":0}
+        """), material: nil, instanceOverride: override) { _ in child }
+
+        let link = parent.children[0]
+        XCTAssertEqual(link.trigger, .always)
+        XCTAssertEqual(link.maxInstances, 9)
+        XCTAssertEqual(link.probability, 1)
+        XCTAssertEqual(link.origin, Vec3(x: 11, y: 0, z: 0))
+        XCTAssertEqual(link.controlPointStartIndex, 3)
+        XCTAssertEqual(link.flags, 4)
+
+        var sim = ParticleSimulator(def: parent, seed: 406)
+        _ = sim.step(0.01)
+        let beam = sim.childDisplay(0)
+
+        XCTAssertEqual(beam.count, 4, "전체 override를 자식 emitter/maxcount에 재적용하면 안 된다")
+        let expected: [Float] = [0, 7.0 / 3.0, 14.0 / 3.0, 7]
+        for (particle, expectedX) in zip(beam, expected) {
+            XCTAssertEqual(particle.pos.x, expectedX, accuracy: 1e-5)
+        }
+    }
+
+    /// 동적 CP 선분이 110→120으로 늘어나면, 직전 선분의 절반(x=55)에 있던 입자는
+    /// 현재 선분의 절반(x=60)으로 따라가야 한다. 현재 선분 안인지 클램프만 하는 정적 축약식은
+    /// x=55에 그대로 남아 이 테스트를 실패한다.
+    func testChildControlPointFeedMovesMaintainedParticlesWithTheSegment() {
+        let child = ParticleSystemDef.parse(json("""
+        {"controlpoint":[{"offset":"0 0 0"},{"offset":"0 0 0"}],
+         "emitter":[{"name":"boxrandom","rate":0,"instantaneous":1,
+                     "origin":"55 10 0","distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":10,"max":10}],
+         "operator":[{"name":"maintaindistancebetweencontrolpoints",
+                      "controlpointstart":0,"controlpointend":1}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """), material: nil)
+        let parent = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":1,
+                     "origin":"100 0 0","distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":10,"max":10},
+                        {"name":"velocityrandom","min":"100 0 0","max":"100 0 0"}],
+         "operator":[{"name":"movement"}],
+         "children":[{"name":"beam.json","type":"static","flags":1,
+                      "controlpointstartindex":1,"maxcount":1}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """), material: nil) { _ in child }
+
+        var sim = ParticleSimulator(def: parent, seed: 404)
+        _ = sim.step(0.1)  // CP1: 0→110, 직전 선분 퇴화라 첫 프레임은 보정 스킵
+        var beam = sim.childDisplay(0)
+        XCTAssertEqual(beam.count, 1)
+        XCTAssertEqual(beam[0].pos, SIMD3(55, 10, 0))
+
+        _ = sim.step(0.1)  // CP1: 110→120, 축 비율 1/2을 새 선분으로 재매핑
+        beam = sim.childDisplay(0)
+        XCTAssertEqual(beam.count, 1)
+        XCTAssertEqual(beam[0].pos.x, 60, accuracy: 1e-5)
+        XCTAssertEqual(beam[0].pos.y, 10, accuracy: 1e-5, "수직 성분은 월드축 그대로 보존")
+    }
+
     /// F178(E1-③): 손자(2단) 자식 — 시뮬은 깊이4 재귀를 지원하므로 자식의 자식도 실제로 스텝·방출된다.
     /// descendantDisplay(path:) 로 루트에서 경로([자식링크, 손자링크])를 따라 조회 가능해야 한다.
     func testGrandchildAlwaysChild_reachableViaDescendantDisplay() {
@@ -252,5 +399,74 @@ final class ParticleChildrenTests: XCTestCase {
         var target: Vec3? = nil
         for op in c.operators { if case let .controlPointAttract(_, _, t, _, _) = op { target = t } }
         XCTAssertEqual(target, Vec3(x: 7, y: 7, z: 7))
+    }
+
+    /// 자식 CP를 부모 CP로 갈아끼울 때 vortex의 authored offset은 정확히 한 번만 더해져야 한다.
+    /// 첫 파스에서 `oldCP + offset`을 구운 뒤 재베이크가 그 값을 다시 offset으로 쓰면 oldCP가 중복된다.
+    func testParentAttachedChildVortexRebakeAddsAuthoredOffsetExactlyOnce() {
+        let child = """
+        {"controlpoint":[{},
+                          {"offset":"10 0 0","flags":4,"parentcontrolpoint":1}],
+         "operator":[{"name":"vortex","controlpoint":1,"offset":"1 2 3"}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """
+        let parent = ParticleSystemDef.parse(json("""
+        {"controlpoint":[{}, {"offset":"100 0 0"}],
+         "children":[{"name":"child.json"}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """), material: nil) { _ in ParticleSystemDef.parse(json(child), material: nil) }
+
+        guard case let .vortex(_, _, _, _, _, center, _, _, _) = parent.children[0].def.operators[0] else {
+            return XCTFail("child vortex missing")
+        }
+        XCTAssertEqual(center, Vec3(x: 101, y: 2, z: 3),
+                       "parent CP100 + authored offset1; old child CP10 must not survive rebake")
+    }
+
+    /// `flags & 4` 부착은 파스 시점 복사로 끝나지 않는다. 부모의 live 위치와 각도를 매 스텝
+    /// 자식 CP에 전달해야 자식 emitter/베이크 오퍼레이터가 같은 현재 프레임을 본다.
+    func testParentAttachedChildControlPointTracksRuntimePositionAndAngle() {
+        func kf(_ frame: Float, _ value: Float) -> PropertyKeyframe {
+            PropertyKeyframe(frame: frame, value: value,
+                             frontEnabled: false, frontX: 0, frontY: 0,
+                             backEnabled: false, backX: 0, backY: 0)
+        }
+        func animation(_ end: Vec3) -> PropertyAnimation {
+            PropertyAnimation(tracks: [
+                [kf(0, 0), kf(1, end.x)],
+                [kf(0, 0), kf(1, end.y)],
+                [kf(0, 0), kf(1, end.z)]
+            ], fps: 1, length: 1, mode: "single", relative: false)
+        }
+
+        let child = """
+        {"flags":1,
+         "controlpoint":[{}, {"offset":"0 0 0","flags":4,"parentcontrolpoint":1}],
+         "emitter":[{"name":"sphererandom","controlpoint":1,
+                      "directions":"1 0 0","sign":"1 0 0",
+                      "distancemin":2,"distancemax":2,
+                      "speedmin":4,"speedmax":4,"rate":0,"instantaneous":1}],
+         "initializer":[{"name":"lifetimerandom","min":10,"max":10}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """
+        let parent = ParticleSystemDef.parse(json("""
+        {"flags":1,
+         "controlpoint":[{}, {"offset":"0 0 0"}],
+         "children":[{"name":"child.json","type":"static"}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """), material: nil) { _ in ParticleSystemDef.parse(json(child), material: nil) }
+        var simulator = ParticleSimulator(
+            def: parent, seed: 409,
+            instanceOverrideAnimations: [
+                "controlpoint1": animation(Vec3(x: 10, y: 0, z: 0)),
+                "controlpointangle1": animation(Vec3(x: 0, y: 0, z: .pi / 2))
+            ])
+
+        _ = simulator.step(1)
+        let particle = simulator.childDisplay(0)[0]
+        XCTAssertEqual(particle.pos.x, 10, accuracy: 1e-5)
+        XCTAssertEqual(particle.pos.y, 6, accuracy: 1e-5)
+        XCTAssertEqual(particle.vel.x, 0, accuracy: 1e-5)
+        XCTAssertEqual(particle.vel.y, 4, accuracy: 1e-5)
     }
 }

@@ -24,7 +24,7 @@ private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
-public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegate, WKScriptMessageHandler,
+public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, WKNavigationDelegate, WKScriptMessageHandler,
                                 NSWindowDelegate {
     public enum Mode { case web; case videoFallback }
 

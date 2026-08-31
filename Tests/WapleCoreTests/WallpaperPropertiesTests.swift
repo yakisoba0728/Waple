@@ -178,6 +178,58 @@ final class WallpaperPropertiesTests: XCTestCase {
         XCTAssertEqual(props.first?.options?.map(\.label), ["Off", "On"])
     }
 
+    /// JSONSerialization 은 숫자 0/1도 `as? Bool` 로 성공시킨다. combo 기본값과 option 값을
+    /// 불리언으로 오타입하면 숫자로 파싱되는 preset override와 Picker tag가 달라져 선택 항목이
+    /// 없는 상태가 된다. 실물 파일 경로(AssetJSON → WallpaperProperties)를 그대로 통과시킨다.
+    func testNumericComboValuesStayNumericAndMatchPresetSelection() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WPPropsNumericCombo-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let json = """
+        {"type":"web","general":{"properties":{
+          "quality":{"type":"combo","value":0,"options":[
+            {"label":"Off","value":0},{"label":"On","value":1}
+          ]}
+        }},"preset":{"quality":1}}
+        """
+        try Data(json.utf8).write(to: dir.appendingPathComponent("project.json"))
+
+        let parsed = try XCTUnwrap(WallpaperProperties.parse(folderURL: dir).first)
+        XCTAssertEqual(parsed.value, .number(0))
+        XCTAssertEqual(parsed.options?.map(\.value), [.number(0), .number(1)])
+
+        let project = try ProjectJSONParser.parse(folderURL: dir)
+        let effective = try XCTUnwrap(WallpaperProperties.applying(
+            overrides: project.presetOverrides, to: [parsed]).first)
+        XCTAssertEqual(effective.value, .number(1))
+        XCTAssertTrue(effective.options?.contains(where: { $0.value == effective.value }) == true,
+                      "Picker selection must equal one of its option tags")
+    }
+
+    func testDefaultValueInferenceKeepsNumericZeroOneDistinctFromBooleans() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WPPropsDefaultTags-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let json = """
+        {"type":"web","general":{"properties":{
+          "zero":{"type":"unknown","value":0,"order":0},
+          "one":{"type":"textinput","value":1,"order":1},
+          "enabled":{"type":"unknown","value":true,"order":2},
+          "disabled":{"type":"file","value":false,"order":3}
+        }}}
+        """
+        try Data(json.utf8).write(to: dir.appendingPathComponent("project.json"))
+
+        let byKey = Dictionary(uniqueKeysWithValues:
+            try WallpaperProperties.parse(folderURL: dir).map { ($0.key, $0.value) })
+        XCTAssertEqual(byKey["zero"], .number(0))
+        XCTAssertEqual(byKey["one"], .number(1))
+        XCTAssertEqual(byKey["enabled"], .bool(true))
+        XCTAssertEqual(byKey["disabled"], .bool(false))
+    }
+
     func testPreservesCondition() {
         let general: [String: Any] = [
             "x": ["type": "bool", "value": true, "condition": "y.value == true"]

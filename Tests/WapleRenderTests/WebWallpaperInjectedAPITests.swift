@@ -120,6 +120,7 @@ final class WebWallpaperInjectedAPITests: XCTestCase {
 
 /// zcompat 호환성 패치가 **스킴 핸들러 응답에 실제로 반영되는지**.
 /// 스키마·치환 규칙 자체의 고정은 `WapleCoreTests/WebCompatPatchTests`(리눅스 레인)에 있다.
+@MainActor
 final class WallpaperSchemeHandlerCompatPatchTests: XCTestCase {
 
     /// 동봉 `zcompat/web/780658164.json` 의 액션이 걸린 파일은 패치된 본문으로 서빙돼야 한다.
@@ -177,7 +178,7 @@ final class WallpaperSchemeHandlerCompatPatchTests: XCTestCase {
     }
 }
 
-/// `WKURLSchemeTask` 스텁. 핸들러는 io 큐에서 `didReceive` 를 부르므로 접근을 락으로 지킨다.
+/// `WKURLSchemeTask` 스텁. 테스트 룰룹의 완료 관찰과 콜백 상태 갱신을 락으로 지킨다.
 private final class FakeSchemeTask: NSObject, WKURLSchemeTask {
     let request: URLRequest
     private let lock = NSLock()

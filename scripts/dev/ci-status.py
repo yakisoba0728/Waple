@@ -162,10 +162,11 @@ def show_runs(repo, branch, limit):
 
 
 TEST_SUMMARY = re.compile(r"Executed (\d+) tests?, with (?:(\d+) tests? skipped and )?(\d+) failures?")
+BUNDLE_SUMMARY = re.compile(r"Test Suite '([^']+\.xctest)' (?:passed|failed) at ")
 
 
 def test_tally(repo, job_id):
-    """잡 로그의 마지막 `Executed N tests, ... M failures` 요약.
+    """잡 로그의 최상위 xctest 번들 요약을 합산한다.
 
     왜 필요한가: release 레인은 `continue-on-error` 라 **테스트가 실패해도 잡 결론이
     success** 다(의도된 보고 전용 — debug 가 차단 게이트다). 잡 결론만 보면 그 실패가
@@ -175,6 +176,25 @@ def test_tally(repo, job_id):
         text = api("repos/%s/actions/jobs/%s/logs" % (repo, job_id), raw=True).decode("utf-8", "replace")
     except SystemExit:
         return None
+    # Swift 툴체인에 따라 타깃별 xctest 번들을 따로 실행한다. 마지막 요약만 읽으면 앞 번들의
+    # 실패가 사라지므로 최상위 `*.xctest` 완료 요약을 합산한다. CI 구형 로그처럼 번들 이름이
+    # 없는 형태는 아래 기존 last-summary 폴백으로 유지한다.
+    bundles, pending = [], False
+    for line in text.splitlines():
+        if BUNDLE_SUMMARY.search(line):
+            pending = True
+            continue
+        if "Test Suite '" in line:
+            pending = False
+            continue
+        if pending:
+            match = TEST_SUMMARY.search(line)
+            if match:
+                bundles.append((int(match.group(1)), int(match.group(2) or 0), int(match.group(3))))
+                pending = False
+    if bundles:
+        return tuple(sum(values) for values in zip(*bundles))
+
     last = None
     for m in TEST_SUMMARY.finditer(text):
         last = m
@@ -189,7 +209,31 @@ def test_tally(repo, job_id):
 # 이 도구가 유일하게 드러내는 사고(release 레인 `continue-on-error` 가 가리는 테스트 실패)가
 # 둘 다 **기계적으로는 초록**이었다. `until python3 scripts/dev/ci-status.py; do …; done` 이
 # 그 자리에서 성공으로 빠져나온다 — 사람이 화면을 읽을 때만 보이는 경고는 게이트가 아니다.
-HIDDEN = {"test_failures": 0, "ci_missing_for_head": False, "no_runs": False}
+HIDDEN = {"test_failures": 0, "ci_missing_for_head": False, "no_runs": False,
+          "inspected_test_jobs": set()}
+
+
+def inspect_hidden_test_failures(repo, run_id):
+    """Inspect successful release jobs whose `continue-on-error` can hide tests.
+
+    This is part of the exit-code contract, not an opt-in display feature.  The
+    default and `--watch` paths both call it once the HEAD workflows complete.
+    """
+    d = api("repos/%s/actions/runs/%s/jobs?per_page=30" % (repo, run_id))
+    for j in d.get("jobs", []):
+        if (j.get("status") != "completed" or j.get("conclusion") != "success"
+                or "release" not in j.get("name", "").lower()
+                or j.get("id") in HIDDEN["inspected_test_jobs"]):
+            continue
+        HIDDEN["inspected_test_jobs"].add(j.get("id"))
+        tally = test_tally(repo, j["id"])
+        if not tally:
+            continue
+        _, _, failures = tally
+        if failures:
+            HIDDEN["test_failures"] += failures
+            print("     ⚠ %s: 잡은 success 인데 테스트 실패 %d건(continue-on-error)"
+                  % (j.get("name", "release"), failures))
 
 
 def show_jobs(repo, run_id, tests=False):
@@ -199,6 +243,7 @@ def show_jobs(repo, run_id, tests=False):
         c = j.get("conclusion") or j["status"]
         line = "  [%s] %s   job=%s" % (MARK.get(c, c), j["name"], j["id"])
         if tests and j["status"] == "completed":
+            HIDDEN["inspected_test_jobs"].add(j["id"])
             t = test_tally(repo, j["id"])
             if t:
                 executed, skipped, failures = t
@@ -219,7 +264,8 @@ def show_log(repo, job_id, keep):
     """잡 로그에서 실패 신호만 — 전문은 수 MB 라 컨텍스트를 먹는다."""
     text = api("repos/%s/actions/jobs/%s/logs" % (repo, job_id), raw=True).decode("utf-8", "replace")
     needles = ("error:", "failed", "FAILED", "XCTAssert", "TEST FAILED",
-               "Executed ", "위반", "실패", "Traceback", "executed=")
+               "Executed ", "위반", "실패", "Traceback", "executed=",
+               "TYPECHECK_OBSERVATION")
     # 워크플로 **소스**가 그대로 에코되는 줄(`[36;1m` = 명령 에코)은 뺀다 — 스크립트 본문에
     # "실패"·"Executed" 같은 단어가 들어 있어서, 안 빼면 발췌가 자기 소스로 가득 찬다.
     lines = [l for l in text.splitlines()
@@ -236,7 +282,7 @@ def main():
     ap.add_argument("--limit", type=int, default=8)
     ap.add_argument("--jobs", action="store_true", help="실패(없으면 최신) 실행의 잡/실패 스텝")
     ap.add_argument("--tests", action="store_true",
-                    help="--jobs 에 잡별 테스트 집계를 붙인다(release 의 숨은 실패를 드러낸다)")
+                    help="--jobs 에 잡별 테스트 집계를 붙인다(숨은 release 실패 판정은 기본값도 수행)")
     ap.add_argument("--sha", default=None,
                     help="이 커밋의 실행을 본다(앞 7자 이상). 새 푸시가 목록을 밀어낸 뒤에도 "
                          "과거 실패를 열어볼 수 있다 — 없으면 실패→CI→맨위 순으로 고른다")
@@ -317,12 +363,17 @@ def main():
         return 2
     if any(r.get("conclusion") != "success" for r in same):
         return 1
+    # release `Test` 는 continue-on-error 이므로 workflow/job 이 success 여도 테스트가 실패할
+    # 수 있다. 사람이 `--tests` 를 붙였을 때만 보던 정보를 기본/--watch 종료코드에도 넣는다.
+    for run in same:
+        if run.get("name") == "CI":
+            inspect_hidden_test_failures(a.repo, run["id"])
     if HIDDEN["ci_missing_for_head"]:
         print("\n[ci-status] HEAD 에 코드 변경이 있는데 CI 실행이 없다 — 검증 0")
         return 1
     if HIDDEN["test_failures"]:
         # release 레인은 `continue-on-error` 라 잡이 success 로 끝나면서 테스트는 실패한다.
-        # `--tests` 로 그 사실을 화면에 찍어 놓고 종료코드는 0 이면 아무도 못 막는다.
+        # 기본/--watch 경로에서도 자동으로 읽는다. `--tests` 는 잡별 상세 표시 옵션일 뿐이다.
         print("\n[ci-status] 잡 결론은 success 인데 테스트 실패 %d건 — continue-on-error 가 가린 것이다"
               % HIDDEN["test_failures"])
         return 1

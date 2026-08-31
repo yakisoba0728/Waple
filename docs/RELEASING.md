@@ -9,14 +9,17 @@ Waple 은 외부 SPM 의존성 0 원칙을 지킨다. 패키징도 macOS 기본 
 
 1. 태그(`v0.2.0` 등)에서 버전 추출(v 접두사 제거) → `WAPLE_VERSION` 으로 주입.
    빌드 번호(`WAPLE_BUILD`)는 `github.run_number`.
-2. `scripts/package-app.sh` 실행 → `Waple.dmg` 산출(서명: 아래 §2 참조).
-3. `shasum -a 256 Waple.dmg` 계산.
-4. **draft** GitHub Release 생성 + `Waple.dmg` 업로드. 본문에 sha256 포함
+2. 이 정확한 커밋 SHA의 `CI`·`spec` 워크플로 성공 실행과 아래 배포 승인 변수를 확인한다.
+   태그 push 때 세 워크플로가 동시에 시작하므로 missing/pending 은 최대 20분 기다리고,
+   failure/cancelled 는 즉시 중단한다.
+3. `scripts/package-app.sh` 실행 → `Waple.dmg` 산출(서명: 아래 §2 참조).
+4. `shasum -a 256 Waple.dmg` 계산.
+5. **draft** GitHub Release 생성 + `Waple.dmg` 업로드. 본문에 sha256 포함
    (Homebrew cask 갱신용). 웹 UI 에서 검토 후 "Publish release" 로 공개한다.
 
 로컬에서의 릴리스 체크리스트:
 
-1. `swift test` 그린 확인(CI 에서도 돌지만, 태그는 로컬에서 그린을 확인한 커밋에 붙인다).
+1. `swift test` 그린 확인. Release 워크플로도 같은 SHA의 CI·spec 성공이 없으면 중단한다.
 2. `git tag v<버전> && git push origin v<버전>`.
 3. 워크플로 완료 후 draft 릴리스를 열어 DMG/노트/sha256 검토 → Publish.
 4. Homebrew cask 사용 시 §3 템플릿의 `version`/`sha256` 갱신.
@@ -42,6 +45,14 @@ Actions → Release → Run workflow → 브랜치 선택 → tag 입력(예: v0
 어긋난다. `Refuse to clobber an existing release` 스텝이 이제 **태그도 함께 조회**해서
 이 커밋을 가리키지 않으면 빌드 전에 멈춘다 — 그 메시지가 나오면 태그를 지우고 다시 붙이거나
 새 태그를 써라.
+
+### 1-2. 공개 산출물 배포 승인 preflight
+
+`LICENSE`/`NOTICE` 는 동봉된 `WEAssets` 재배포 권리를 Waple 이 보유한다고 단정하지 않는다.
+Release 워크플로도 권리를 추정하지 않으며, repository variable
+`WAPLE_WE_ASSETS_DISTRIBUTION_APPROVED=true` 가 명시된 경우에만 패키징을 시작한다. 이 값은
+저장소 운영자가 별도로 권리 근거를 확인했다는 운영 승인이지, 워크플로 자체의 법적 판정이 아니다.
+근거를 확인하지 못했다면 변수를 설정하지 말고 공개 릴리스를 보류한다.
 
 ## 2. 패키징 스크립트(로컬)
 
@@ -97,7 +108,7 @@ WAPLE_VERSION=1.2.3 WAPLE_BUILD=45 WAPLE_SIGN_IDENTITY="Developer ID Application
 
 ### 서명/공증 정책
 
-- **CI**: 아래 secrets 가 **전부** 설정되면 Developer ID 서명 + `notarytool` 공증 +
+- **CI**: 아래 secrets **6개가 전부** 설정되면 Developer ID 서명 + `notarytool` 공증 +
   `stapler staple` + 검증까지 자동 수행한다. 하나라도 없으면 ad-hoc 서명으로 폴백하고
   릴리스 노트에 첫 실행 Gatekeeper 안내가 붙는다(릴리스 자체는 멈추지 않는다).
 

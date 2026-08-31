@@ -70,7 +70,10 @@ public final class LibraryStore: @unchecked Sendable {
             NSLog("%@", "[Waple] library index save skipped at \(indexURL.path) — earlier read failed transiently, avoiding clobber")
             return
         }
-        backupCorruptStoreFile(indexURL, &indexCorrupt)  // 손상 원본을 덮어쓰기 전 1회 백업
+        guard backupCorruptStoreFile(indexURL, &indexCorrupt) else {
+            NSLog("%@", "[Waple] library index save skipped at \(indexURL.path) — corrupt original backup failed, avoiding clobber")
+            return
+        }
         let idx = Index(entries: entries, selectedId: selectedId)
         do {
             let data = try JSONEncoder().encode(idx)
@@ -270,11 +273,16 @@ public final class LibraryStore: @unchecked Sendable {
             let dest = importedDir.appendingPathComponent(name, isDirectory: true)
             // F584: 실패 경로를 try? 로 삼키면 어느 배경이 왜 빠졌는지 무통지다 — 각 단계 실패를
             // 로그로 남기고, 이동 후 등록 실패 시 엔트리 없는 고아 관리 폴더를 정리한다.
+            var replacedFolderBackup: URL?
             if fm.fileExists(atPath: dest.path) {
+                let backup = importedDir.appendingPathComponent(".\(name).replaced-\(UUID().uuidString)", isDirectory: true)
                 do {
-                    try fm.removeItem(at: dest)
+                    // 교체 완료 전에는 기존 폴더를 지우지 않는다. 같은 볼륨의 숨김 형제 경로로 rename 해
+                    // 새 root 이동/등록 어느 단계가 실패해도 원래 dest 로 되돌릴 수 있게 한다.
+                    try fm.moveItem(at: dest, to: backup)
+                    replacedFolderBackup = backup
                 } catch {
-                    NSLog("%@", "[Waple] failed to replace managed folder \(dest.path): \(error) — skipping")
+                    NSLog("%@", "[Waple] failed to stage existing managed folder \(dest.path): \(error) — skipping")
                     continue
                 }
             }
@@ -282,6 +290,7 @@ public final class LibraryStore: @unchecked Sendable {
                 try fm.moveItem(at: root, to: dest)
             } catch {
                 NSLog("%@", "[Waple] failed to move \(root.path) into library: \(error) — skipping")
+                restoreReplacedManagedFolder(replacedFolderBackup, to: dest, fm: fm)
                 continue
             }
             do {
@@ -289,9 +298,14 @@ public final class LibraryStore: @unchecked Sendable {
                 // F582(importFolders)와 같이 루프 동안은 저장을 미루고 마지막에 1회만 저장한다.
                 let entry = try importFolder(dest, saving: false)
                 imported.append(entry)
+                if let backup = replacedFolderBackup {
+                    do { try fm.removeItem(at: backup) }
+                    catch { NSLog("%@", "[Waple] failed to remove replaced managed folder backup \(backup.path): \(error)") }
+                }
             } catch {
-                NSLog("%@", "[Waple] failed to register imported folder \(dest.path): \(error) — removing")
+                NSLog("%@", "[Waple] failed to register imported folder \(dest.path): \(error) — rolling back")
                 try? fm.removeItem(at: dest)
+                restoreReplacedManagedFolder(replacedFolderBackup, to: dest, fm: fm)
             }
         }
         if !imported.isEmpty { save() }   // 감사 V06: 일괄 임포트 저장 일괄화(F582 패턴)
@@ -303,6 +317,17 @@ public final class LibraryStore: @unchecked Sendable {
         while usedNames.contains("\(base)-\(n)")
                 || fm.fileExists(atPath: importedDir.appendingPathComponent("\(base)-\(n)").path) { n += 1 }
         return "\(base)-\(n)"
+    }
+
+    /// stable-id 교체 실패 시 숨김 형제 경로에 보관한 기존 폴더를 원래 관리 경로로 복원한다.
+    private func restoreReplacedManagedFolder(_ backup: URL?, to dest: URL, fm: FileManager) {
+        guard let backup else { return }
+        do {
+            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+            try fm.moveItem(at: backup, to: dest)
+        } catch {
+            NSLog("%@", "[Waple] failed to roll back managed folder \(backup.path) to \(dest.path): \(error)")
+        }
     }
 
     public func select(_ id: String) {

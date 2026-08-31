@@ -130,8 +130,34 @@ def waple_facts():
         body = m.group(0) if m else ""
         f[name + "UsesHelper"] = HELPER + "(" in body
         f[name + "DirectSamples"] = len(re.findall(r"\.sample\(", body))
-    f["topLevelUpsampleFlipped"] = bool(
-        re.search(r"e\.setFragmentTexture\(top, index: 0\)", s))
+    # **[정정 2026-08-30] 이 탐침은 `44503a87` 에서 태어날 때부터 죽어 있었다.**
+    # 종전 형태는 `re.search(r"e\.setFragmentTexture\(top, index: 0\)", s)` 였는데
+    # 식별자 `top` 이 HEAD 소스에 **0건**이라(`grep -nw top WSRC` → exit 1) 입력과 무관하게
+    # 항상 false 였다. 그 false 가 정본 `filterShapeDeviations.postSwapMeasured` 에
+    # **확정** 등급으로 실려, S1(최상위 업샘플 가중 반전)이 재발해도 "뒤집히지 않았다" 를
+    # 계속 주장했다 — 막으려던 회귀를 통과시키는 게이트 구멍이었다.
+    #
+    # 고아가 된 경위(`git log -S` 실측 — 종전 서술이 `b19db5b` 를 지목했는데 **무관하다**):
+    #   · `cb10c23f`(2026-08-01) 이 이 키를 신설했고, 그때는 두 줄 짝
+    #     `setFragmentTexture(top, index: 0)` + `(L[0], index: 1)` 로 당시 소스와 **맞았다**
+    #     (`git show cb10c23f:WSRC` :233 `let top = acc` · :235-236).
+    #   · `44503a87`(2026-08-02) 이 업샘플을 균일 `L[i]`/`acc` 루프로 갈면서 `let top` 을
+    #     지웠는데, **같은 커밋이** 탐침을 위 한 줄 형태로 줄여 넣었다. 즉 이 형태는
+    #     한 번도 true 를 낼 수 없었고 정본은 그 false 를 4주간 확정으로 실었다.
+    #   · `b19db5b`(2026-08-21)의 `weDownsample4` → `weBox4` 개명은 이 키와 무관하다.
+    #
+    # 그래서 **현행 코드 모양으로 재도출**하고, 줄 번호가 아니라 조건식(바인딩 순서)으로
+    # 건다. 두 순서를 **양쪽 다** 재고, 어느 쪽도 안 잡히면 형제 탐침처럼 `"탐침 불일치"` 를
+    # 낸다 — 이름이 또 바뀌면 값이 조용히 false 로 굳는 대신 눈에 띄어야 한다
+    # (bool → str 은 축소 가드가 형 변경으로 잡는다: `specfmt._shrinks` "ko != kn").
+    # `L\[i\]` 는 다운샘플의 `L[i - 1]`(:273)과 겹치지 않으므로 업샘플 루프에만 유일하게 걸린다.
+    UPSAMPLE_BINDING_OK = (r"e\.setFragmentTexture\(L\[i\], index: 0\)\s*\n"
+                           r"\s*e\.setFragmentTexture\(acc, index: 1\)")
+    UPSAMPLE_BINDING_FLIPPED = (r"e\.setFragmentTexture\(acc, index: 0\)\s*\n"
+                                r"\s*e\.setFragmentTexture\(L\[i\], index: 1\)")
+    f["topLevelUpsampleFlipped"] = (
+        True if re.search(UPSAMPLE_BINDING_FLIPPED, s)
+        else (False if re.search(UPSAMPLE_BINDING_OK, s) else "탐침 불일치"))
     f["uniformUpsampleRule"] = bool(
         re.search(r"for i in stride\(from: n - 2, through: 0, by: -1\)", s))
     f["levelZeroScale"] = ("1/2" if ">> (1 + i)" in s else ("1/4" if ">> (2 + i)" in s else "탐침 불일치"))
@@ -337,7 +363,15 @@ def build():
         #
         # 지우지 않고 묘비로 남기는 이유: 근거 축소 가드가 항목·키 소멸을 잡는데 이 하나를 통과시키려면
         # allow_shrink 를 켜야 하고, 그러면 이 파일의 가드가 영구히 꺼진다(= 원격 스위치). 그리고
-        # HDRBloomPyramidPass.swift · parity-sweep 문서가 이 id 를 인용한다. 원문 키도 그대로 보존한다.
+        # ~~HDRBloomPyramidPass.swift · parity-sweep 문서가 이 id 를 인용한다.~~ 원문 키도 그대로 보존한다.
+        #
+        # **[정정 2026-08-30] 인용처가 두 곳이라는 것이 거짓이었다.** 이 서술을 넣은 커밋
+        # `93abc7ce` 가 **같은 커밋에서** 소스 쪽 인용을 지웠다 — HDRBloomPyramidPass.swift 의
+        # 그 `/// 정본:` 주석은 지금 `engine.uniformFeed.hdrBloom.materialParams` 를 가리킨다.
+        # 실측(HEAD): `grep -rn upsampleWeightUnknown Sources/` → 0건. 인용은
+        # `docs/history/parity-sweep-2026-08-19.md` · `docs/mac-handoff-2026-08-01.md` 두 문서뿐이다.
+        # 세 번째 이유도 있다: `validate.py` 의 `superseded_ids` 헤지 면제가 다른 항목의
+        # `supersedes` 를 요구하고 `engine.bloom.hdr.upsampleWeight` 가 이 id 를 그렇게 가리킨다.
         specfmt.entry("engine.bloom.hdr.upsampleWeightUnknown",
                       {
                           "question": "WE 셰이더 문면대로면 업샘플 가중이 **평균 x g_BloomScatter** 인데, 저작값 scatter=1.619 를 그대로 넣으면 레벨마다 곱해져 발산한다.",
@@ -347,7 +381,7 @@ def build():
                           "howToClose": "wallpaper64.exe 에서 scatter 머티리얼 프로퍼티를 셰이더 상수로 넘기는 지점을 찾거나(정적 분석), 윈도우에서 같은 씬을 캡처해 헤일로 감쇠율을 재면 된다.",
                           "closed": "**[2026-08-20] 이 미해결은 닫혔다** → engine.bloom.hdr.upsampleWeight 참조. 위 question/openQuestion/howToClose 는 당시 서술을 지우지 않고 남긴 것이다.",
                           "whyItWasWrong": "미확인이 아니었다. ① 동봉 셰이더 원문의 어노테이션이 material 이름을 직접 적고 있었다(함정 ⑦: x86 전에 GLSL 을 먼저 봤어야 했다). ② 같은 정본 uniform-feed.json 이 **확정** 등급으로 답을 갖고 있었다. ③ 출하 코드는 이미 확정 쪽을 따랐다. 정본만 낡아 모순을 배포하고 있었다.",
-                          "whyKeptAsTombstone": "id 를 지우지 않는 이유 둘. ① 근거 축소 가드가 항목·키 소멸을 잡는데 이 하나를 통과시키려면 allow_shrink 를 켜야 하고 그러면 이 파일의 가드가 영구히 꺼진다 — 이 리포가 반복해서 잡아낸 '원격 스위치' 부류다. ② Sources/WapleRender/HDRBloomPyramidPass.swift 와 docs/history/parity-sweep-2026-08-19.md 가 이 id 를 인용한다.",
+                          "whyKeptAsTombstone": "id 를 지우지 않는 이유 둘. ① 근거 축소 가드가 항목·키 소멸을 잡는데 이 하나를 통과시키려면 allow_shrink 를 켜야 하고 그러면 이 파일의 가드가 영구히 꺼진다 — 이 리포가 반복해서 잡아낸 '원격 스위치' 부류다. ② ~~Sources/WapleRender/HDRBloomPyramidPass.swift 와 docs/history/parity-sweep-2026-08-19.md 가 이 id 를 인용한다.~~ **[정정 2026-08-30]** 그 두 곳 중 **소스 쪽이 거짓**이다. 이 문장을 넣은 커밋 `93abc7ce`(2026-08-20) 이 **같은 커밋에서** 소스 쪽 인용을 지웠다 — 그 자리의 `/// 정본:` 주석은 지금 `engine.uniformFeed.hdrBloom.materialParams` 를 가리킨다(`hdrBloomUpsample` 프래그먼트 바로 위). 즉 문장은 태어날 때부터 거짓이었다. 실측(HEAD): `grep -rn upsampleWeightUnknown Sources/` → **0건** · 인용은 `docs/history/parity-sweep-2026-08-19.md` 와 `docs/mac-handoff-2026-08-01.md` **두 문서뿐**이다. ③ 그리고 이유는 셋이다 — `validate.py` 의 `superseded_ids` 헤지 면제가 **다른 항목이 실제로 supersedes 로 대체할 것**을 요구하는데 `engine.bloom.hdr.upsampleWeight` 가 이 id 를 그렇게 가리킨다. 이 묘비를 지우면 그 면제도 함께 깨진다.",
                       },
                       "확정", [shader_ev, mat_ev, code_ev]),
 
@@ -414,6 +448,12 @@ def build():
 
 
 def main():
+    specfmt.require_inputs(
+        "measure_hdr_bloom",
+        ("file", os.path.join(SHADERS, "hdr_downsample.frag"), "WE_ROOT", "HDR 다운샘플 셋이더"),
+        ("file", os.path.join(SHADERS, "combine_hdr.frag"), "WE_ROOT", "HDR 합성 셋이더"),
+        ("dir", T.WS, "WE_WORKSHOP", "워크샵 코퍼스"),
+    )
     entries = build()
     specfmt.dump(specfmt.doc("scripts/spec/measure_hdr_bloom.py", entries), OUT)
     v = {e["id"]: e["value"] for e in entries}

@@ -22,6 +22,8 @@ final class PuppetMDLAFramingTests: XCTestCase {
         var flags: UInt32 = 0
         /// 본별 (trackFlags, 키 배열). 키는 9 float = pos3 + euler3 + scale3.
         var tracks: [(UInt32, [[Float]])]
+        var events: [AnimationMarker] = []
+        var eventCountField: UInt32? = nil
     }
 
     private func u8(_ v: UInt8, _ d: inout Data) { d.append(v) }
@@ -86,6 +88,11 @@ final class PuppetMDLAFramingTests: XCTestCase {
                     u32(UInt32(keys.count * 36), &d)
                     for k in keys { for v in k { f32(v, &d) } }
                 }
+                u32(c.eventCountField ?? UInt32(c.events.count), &d)
+                for event in c.events {
+                    f32(c.fps > 0 ? event.frame / c.fps : 0, &d)
+                    cstr(#"{"frame":\#(event.frame),"name":"\#(event.name)"}"#, &d)
+                }
             }
         }
         return d
@@ -138,6 +145,36 @@ final class PuppetMDLAFramingTests: XCTestCase {
         XCTAssertEqual(m.animations[1].id, 7)
         // clipIndex 가 이름 휴리스틱보다 id 를 먼저 본다.
         XCTAssertEqual(PuppetPose.clipIndex(model: m, name: "a", fallback: 0, clipId: 7), 1)
+    }
+
+    /// 이벤트 블록은 MDLA 버전 게이트 밖이라 네이티브 MDLA0001에도 클립마다 존재한다.
+    /// 첫 클립의 이벤트를 소비하지 않으면 그 count를 다음 클립 id로 오독해 두 번째 클립을 잃는다.
+    func testNativeMDLAEventsAreParsedWithoutDesynchronizingTheNextClip() throws {
+        let clips = [
+            Clip(id: 10, name: "idle", mode: "loop", fps: 20, frameCount: 1,
+                 tracks: [(0, [key(x: 0), key(x: 1)])],
+                 events: [AnimationMarker(name: "blink", frame: 12)]),
+            Clip(id: 11, name: "wave", mode: "single", fps: 20, frameCount: 1,
+                 tracks: [(0, [key(x: 2), key(x: 3)])]),
+        ]
+
+        let model = try XCTUnwrap(PuppetModel.parse(makeMDL(
+            bones: [("root", -1, identity, "")], clips: clips)))
+        XCTAssertEqual(model.animations.map(\.name), ["idle", "wave"])
+        guard model.animations.count == 2 else { return }
+        XCTAssertEqual(model.animations[0].events, [AnimationMarker(name: "blink", frame: 12)])
+        XCTAssertTrue(model.animations[1].events.isEmpty)
+    }
+
+    func testNativeMDLAEventCountAboveSafetyLimitDropsClipBeforeAllocation() throws {
+        var clip = Clip(id: 10, name: "hostile", mode: "loop", fps: 20, frameCount: 1,
+                        tracks: [(0, [key(x: 0), key(x: 1)])])
+        clip.eventCountField = 4_097
+
+        let model = try XCTUnwrap(PuppetModel.parse(makeMDL(
+            bones: [("root", -1, identity, "")], clips: [clip])))
+        XCTAssertTrue(model.animations.isEmpty,
+                      "신뢰할 수 없는 eventCount를 Int로 좁히거나 reserveCapacity에 넘기면 안 됨")
     }
 
     // MARK: - 2. trackFlags 는 크기가 아니다

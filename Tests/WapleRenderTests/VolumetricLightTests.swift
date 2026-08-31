@@ -6,7 +6,7 @@ import Metal
 final class VolumetricLightTests: XCTestCase {
     /// H5: castVolumetrics 라이트가 있는 3D 씬에서 VolumetricLightPass 가 빌드된다.
     func testVolumetricLightPassBuildsForCastVolumetricsScene() throws {
-        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let scene = """
         {"general":{"fov":50},
          "camera":{"eye":"0 0 10","center":"0 0 0","up":"0 1 0"},
@@ -28,7 +28,7 @@ final class VolumetricLightTests: XCTestCase {
 
     /// H5: castVolumetrics 없는 3D 씬은 패스 미빌드.
     func testNoVolumetricLightPassWithoutCastVolumetrics() throws {
-        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let scene = """
         {"general":{"fov":50},
          "camera":{"eye":"0 0 10","center":"0 0 0","up":"0 1 0"},

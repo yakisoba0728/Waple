@@ -62,6 +62,20 @@ final class Scene3DMathTests: XCTestCase {
         XCTAssertEqual(right.x, 1, accuracy: 1e-4)
     }
 
+    /// W-8: Scene::updateCamera가 매 프레임 실효 FOV를 `[0.1, 179.9]`로 제한한다
+    /// (`wallpaper64.exe` 0x140189b1a–0x140189b4c). 3D 카메라의 정적값과 스크립트값도
+    /// 이 행렬 소비 경계에서 같은 클램프를 거쳐야 하며, NaN은 minss 규칙상 상한에 착지한다.
+    func testPerspectiveClampsHostileFovAtMatrixConsumption() {
+        func yScale(_ fov: Float) -> Float {
+            Scene3DMath.perspective(fovYDegrees: fov, aspect: 1, nearZ: 0.1, farZ: 100).columns.1.y
+        }
+
+        XCTAssertEqual(yScale(-20), yScale(0.10000000149011612))
+        XCTAssertEqual(yScale(0), yScale(0.10000000149011612))
+        XCTAssertEqual(yScale(1_000), yScale(179.89999389648438))
+        XCTAssertEqual(yScale(.nan), yScale(179.89999389648438))
+    }
+
     // MARK: modelMatrix (T·R·S, R = Rz·Ry·Rx)
 
     func testModelMatrixTRSOrder() {

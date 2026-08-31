@@ -167,7 +167,7 @@ CP 개수만큼(`[sys+0x44]`) 돌면서 `flags`(`+0xc0`)로 갈라진다:
 | --- | --- | --- |
 | `bt edx,0x10`(bit16) | `0x14022e468` | **아무것도 안 한다**(remap 출력 CP — 오퍼레이터가 직접 쓴다) |
 | `test dl,1`(bit0) | `0x14022e472` | `+0x80..0xbf` → `+0x00..0x3f` 복사 후 `+0x30/+0x34/+0x38` 을 **마우스 광선 교차점**으로 덮는다(`0x14022e656`–`0x14022e662`) |
-| `test dl,4`(bit2) | `0x14022e66e` | 부모 시스템(`[sys+0x10]`)의 CP `[parent+0x400] + [CP+0xc4]*0xd0` 에 부착. `[parent+0x44]` 로 경계검사(`0x14022e68b`). `test dl,8`(bit3, `0x14022e6b3`)이면 부모 4×4 를 **그대로 복사**, 아니면 부모 4×4 × 자기 base 를 합성 |
+| `test dl,4`(bit2) | `0x14022e66e` | 부모 시스템(`[sys+0x10]`)의 current CP `[parent+0x400] + [CP+0xc4]*0xd0` 에 부착. `[parent+0x44]` 로 경계검사(`0x14022e68b`). `(부모·자식 모두 world) || bit3`이면 부모 4×4를 그대로 복사한다. 나머지는 자식 base가 아니라 transform-stack 공간 bridge를 곱한다: child-world/parent-local=`P×Tp`, child-local/parent-world=`P×inverse(Tc)`, 둘 다 local=`P×Tp×inverse(Tc)` (`0x14022e6ee`–`0x14022eb26`). |
 | 그 외 | `0x14022eb2d` | `test edx, 0x10005` 로 다시 걸러낸 뒤 `0x14022a070` 호출 |
 
 **[확정] 기본 경로 `0x14022a070`** 은 `[sys+0x20] & 1` (시스템 flags bit0)일 때만
@@ -308,6 +308,12 @@ opid 공간이 아니다(파서가 초기화 스트림 `[rsp+0x48]` 에 대해 �
 **[추정]** 런타임 오프셋(`+0xf0`/`+0xa8`)이 파스 오프셋보다 정확히 `0x10` 큰 것은 이미터 레코드에
 `0x10` 헤더가 붙기 때문으로 보이지만, 복사 지점을 직접 짚지는 않았다.
 
+> **[구현 2026-08-31]** `ParticleSystemDef.emitterControlPoints`가 두 파서 값을 CP0 기본·unsigned
+> 7-clamp로 보존하고, `ParticleSimulator.spawn`이 sphere/box 로컬 변위와 초기속도 방향에 active
+> CP 3×3을 적용한다. row3와 emitter origin은 위치에만 후가산한다. 공개 parse→step 오라클과
+> 동봉 dripping-water **6 선언 / 4 물리 파일 / 2 고유 바이트** 도달 테스트는
+> [`particle-emitter-controlpoint-binary-2026-08-31.md`](particle-emitter-controlpoint-binary-2026-08-31.md)가 정본이다.
+
 ### 4.4 `remapinitialvalue`(15)·`remapvalue`(19)
 
 **[확정]** 둘 다 `inputcontrolpoint0/1`·`outputcontrolpoint0/1` 로 CP 를 읽는다
@@ -422,7 +428,7 @@ if (t < 0):  step = −step ; t = −t                           ; 0x14023ce13�
 그리고 두 경계 검사의 `jbe`(`0x14023cdc4` · `0x14023ce34`)는 **비순서(NaN)에서도 잡힌다** —
 `t` 가 NaN 이면 실물은 `t`/`step` 을 그대로 둔다(부호 반전 없음).
 
-### 5.3 `mapsequencearoundcontrolpoint`(opid 13) 의 페이로드 — §11 [미해결] 3 을 절반 닫는다
+### 5.3 `mapsequencearoundcontrolpoint`(opid 13) — 페이로드와 런타임 산술 [해소 2026-08-31]
 
 레코드 `0x5c` / 페이로드 `0x58`(썽크 `0x1401d88f0` — `mov byte [rdx],0xd` @`0x1401d88f7`,
 `mov word [rdx+2],0x5c` @`0x1401d8901`). 파스 `0x1401c9930`–`0x1401ca1c2`, 게이트
@@ -436,18 +442,46 @@ if (t < 0):  step = −step ; t = −t                           ; 0x14023ce13�
 | `+0x08` | `bounds[0]` | `0x1401c9ac9` | `[r14+0xc]` `0x14023c650` | `"0 1"` (`0x1401bbd93`) |
 | `+0x0c` | `bounds[1] − bounds[0]` | `0x1401c9ae5` | `[r14+0x10]` `0x14023c63f` | — |
 | `+0x10..+0x18` | **`speedmin` (vec3)** | `0x1401c9d82` / `0x1401c9d9b` | `[r14+0x14]` `0x14023c7d9` · `[r14+0x18]` `0x14023c7f9` · `[r14+0x1c]` `0x14023c7a0` | **`"0 0 0"`** (`0x1401bbeb3`, 상수 `0x14048f4d4`) |
-| `+0x1c..+0x24` | **`speedmax` (vec3)** | `0x1401c9db5` / `0x1401c9dbd` | `[r14+0x20]` `0x14023c7d3` · `[r14+0x24]` `0x14023c7ef` · `[r14+0x28]` `0x14023c752` | **`"0 0 0"`** (`0x1401bbf7b`) |
+| `+0x1c..+0x24` | **`speedmax−speedmin` span (vec3)** | raw max 뒤 `FUN_14005f0a0` @`0x1401c9d9e` | `[r14+0x20]` `0x14023c7d3` · `[r14+0x24]` `0x14023c7ef` · `[r14+0x28]` `0x14023c752` | raw max **`"0 0 0"`** (`0x1401bbf7b`) |
 | `+0x28`/`+0x34`/`+0x40` | 기저벡터 셋(`axis` 에서 조립) | `0x1401c9ebb`/`0x1401c9ecd`/`0x1401c9ec3` → `0x1401c19e0` @`0x1401c9ed4` | `[r14+0x2c]`/`[r14+0x38]`/`[r14+0x44]` | `axis` **`"0 0 1"`** (`0x1401bbfc4`, 상수 `0x14048f6e0`) |
 | `+0x4c` | `limitbehavior == "mirror"` | `0x1401c9b2c` | `[r14+0x50]` `0x14023c9df` | `"repeat"` (`0x1401bbfda`) |
 | `+0x50` | `controlpoint`(≤7 클램프) | `0x1401c9b75` | `[r14+0x54]` `0x14023c4fd` | 0 (`0x1401bbff0`) |
 | `+0x54` | (읽히지만 **파스가 안 쓴다** — 아래) | — | — | `flags` 0 (`0x1401bc002`) |
 
-**[확정] `speedmin`/`speedmax` 는 살아 있다.** 핸들러가 여섯 성분을 전부 읽고, 그 사이에
+**[확정] `speedmin`/`speedmax` 는 살아 있다.** 핸들러가 min과 span 여섯 성분을 전부 읽고, 그 사이에
 균일난수 `0x1401f87a0` 호출이 **정확히 셋**(`0x14023c74d` · `0x14023c7c7` · `0x14023c7ea`) 끼어
 기저벡터 셋과 섞여 스폰 속도가 된다. 부재 기본이 `"0 0 0"` 이라 안 적으면 기여가 0 이다.
 동봉·설치 저작 **2선언**(`presets/magic/.../magic_trinity.json` — `speedmin "0 10 0"` ·
 `speedmax "0 100 0"`).
-**[미해결]** 그 혼합의 정확한 대수식(축별 결합 순서)은 아직 안 옮겼다.
+
+**[해소 2026-08-31] 위치·속도·상태식 전체를 opid 13에서 닫고 production에 옮겼다.**
+
+```text
+D = normalize(axis)                          // 정확한 영벡터만 (0,0,1) 대체
+B = normalize(cross(D, Z))                   // D.x==0 && D.y==0 이면 (1,0,0)
+C = cross(D, B)
+(D, B, C) = 각 벡터 × CP의 현재 3×3          // 0x140184440, row-vector 규약
+
+q      = position - CP
+axial  = dot(q, D)
+radius = length(q - axial*D)
+theta  = 2π * (boundsMin + t*boundsSpan)
+R      = cos(theta)*C + sin(theta)*B
+T      = -sin(theta)*C + cos(theta)*B
+
+position' = CP + axial*D + radius*R
+velocity' = velocity
+          + T*lerp(speedMin.x, speedMax.x, rx)
+          + R*lerp(speedMin.y, speedMax.y, ry)
+          + D*lerp(speedMin.z, speedMax.z, rz)
+```
+
+RNG 호출은 **rz → rx → ry** 순서이며 speed가 전부 0이어도 세 번을 소비한다. 누산기는
+`t += step`; 위쪽 repeat는 `fmodf(t,1)`, mirror는 step 부호를 뒤집고 `1-(t-1)`로 반사한다.
+아래쪽은 mirror와 무관하게 반사하고, NaN은 두 ordered 비교를 통과하지 않아 그대로 남는다.
+정확한 1은 `>`가 아니므로 한 번 소비된다. Waple은 raw JSON max를 모델에 보존하므로 solver에서
+`max-min`을 계산한다. `ParticleMapSequenceOracleTests` 41건이 원 궤도, raw min/max affine,
+CP row-vector 회전, repeat/mirror/NaN, 무속도 3드로와 실제 spawn 배선을 잠근다.
 
 **[미해결 — 신규] `around` 파스는 `flags` 를 한 번도 읽지 않는다.** 주입기는 `flags` 기본 0 을
 DOM 에 심지만(`xor r8d,r8d` @`0x1401bc002` → `H_INT` @`0x1401bc00f`), `0x1401c9930`–`0x1401ca1c2`
@@ -457,21 +491,33 @@ speedmin ×2 · speedmax ×2 · axis). 그런데 `0x1401ca184 test byte [rsi+0x5
 두 번째 스트림 레코드를 찍을지 고른다(§5.4). **그래서 Waple 의 `MapSequenceAroundSpec` 에는
 `flags` 를 싣지 않았다** — 읽히지 않는 값을 필드로 만들면 유령이 된다.
 
-### 5.4 두 mapsequence 는 **이니셜라이저 스트림 밖에도** 레코드를 찍는다 [미해결]
+### 5.4 두 mapsequence 는 **이니셜라이저 스트림 밖에도** 레코드를 찍는다 [between bit4 확정 · around 남음]
 
-팩토리는 스트림을 **둘** 쌓는다 — `[rsp+0x48]`(이니셜라이저, §4.2 의 썽크들)과 `[rsp+0x30]`.
-`mapsequence*` 는 조건부로 `[rsp+0x30]` 에도 하나 찍는다:
+**[2026-08-31 해소]** `[rsp+0x30]` 은 별도 레코드 VM의 팩토리 커서이고, 소비자는
+`FUN_1401d15a0`(`0x1401d15a0`)이다. 이 절이 처음 기록한 `between flags` bit4 레코드는
+**씬 `instanceoverride.count` 배율에 맞춰 opid 14 페이로드의 `step` 을 매 업데이트 다시 쓰는
+동적 패치 레코드**다. 오퍼레이터 VM(`0x14023fbc0`)과는 정말 다른 계열이었지만, 효과가
+미확정인 것은 아니게 됐다.
+
+#### 5.4.1 팩토리 scratch와 opcode 4 레코드 [확정]
+
+팩토리 시작 `0x1401c5b41`–`0x1401c5b70` 에서 scratch 원점
+`B = qword[factoryContext+0x1450]` 를 잡고
+`[rbp+0x70] = B`(두 번째 스트림 불변 base), `[rsp+0x30] = B`(그 스트림의 현재 cursor),
+`[rsp+0x40] = B+0x4000`(이니셜라이저 스트림 불변 base)를 둔다. `[rsp+0x48]` 은 그
+이니셜라이저 스트림의 현재 cursor다. `mapsequence*` 는 조건부로 두 번째 스트림에도 하나 찍는다:
 
 ```
 ; between — 0x1401ca62c
 0x1401ca62c  test byte [r13+8], 0x20   ; jne → 안 찍음
 0x1401ca637  test byte [rdi+0x1c], 0x10 ; je  → 안 찍음      ← 페이로드 flags **bit4**
 0x1401ca658  call 0x1401d8950           ; opcode 4, 레코드 0x24
-0x1401ca66c  [rax+8]    = 0x24
-0x1401ca6a4  [rbx+0x10] = asFloat(count)
-0x1401ca6ac  [rbx+0x14] = -1.0f
-0x1401ca6b3  [rbx+0x18] = 0xd0
-0x1401ca6ba  [rbx+0x1c] = (이 페이로드의 버퍼 내 바이트 오프셋)
+0x1401ca66c  [P+0x08] = 0x24
+0x1401ca673  [P+0x00] = [rsp+0x40]       ; 이니셜라이저 스트림 base
+0x1401ca6a4  [P+0x10] = asFloat(count)
+0x1401ca6ac  [P+0x14] = -1.0f
+0x1401ca6b3  [P+0x18] = 0xd0
+0x1401ca6ba  [P+0x1c] = P_between - [rsp+0x40]
 
 ; around — 0x1401ca17d
 0x1401ca17d  test byte [r13+8], 0x20   ; jne → 안 찍음
@@ -479,16 +525,123 @@ speedmin ×2 · speedmax ×2 · axis). 그런데 `0x1401ca184 test byte [rsi+0x5
 0x1401ca1a1  call 0x1401d8910           ; opcode 3, 레코드 0x24
 0x1401ca1b8  [rax+0x14] = 0xd0
 ```
+여기서 `[r13+8]`은 별도 미상 객체가 아니라 **파티클 JSON 최상위 `flags`**다. 같은 팩토리가
+`"flags"` 키를 `0x1401c55e4`에서 잡고, 숫자면 `asInt`(`0x1401c56e4`)의 하위 byte를
+`[r13+8]`에 `0x1401c56f0`에서 저장한다. 따라서 between 레코드의 정확한 producer 조건은
+`(system.flags & 0x20) == 0 && (between.flags & 0x10) != 0`이다(시스템 bit5의 이름은 미확정).
+
 그리고 around 은 그와 별개로 `0x1401c9ed9 test byte [r13+8],0x10` 이 **안 서면**
 `0x1401d8800`(opcode `0x0a`, `0x3c`)로 또 하나를 찍고 거기에 `speedmin`/`speedmax` 를 **다시**
 파스해 넣는다(`0x1401c9efb`–`0x1401ca161`).
 
-**[미해결]** `[rsp+0x30]` 스트림의 VM 을 아직 안 짚었다 — 오퍼레이터 VM(`0x14023fbc0`)의 썽크는
-`0x1401d8a50`(opid 4) · `0x1401d8b30`(opid 10)이라 **다른 스트림**이다. 그래서 이 레코드들의
-효과는 미확정이다. 함정 2("한 요소에 핸들러가 둘 붙을 수 있다")의 실사례다.
-**도달**: `between` 의 bit4 는 동봉·설치 **2선언**
-(`presets/lightning/particles/presets/thunderbolt.json` `flags:23` ·
-`.../thunderbolt_beam_child.json` `flags:19`). around 쪽 게이트는 §5.3 의 [미해결] 때문에 미상.
+`0x1401d8950` 자체는 더 단순하다. 입력 cursor가 가리키던 주소를 레코드 base `R`이라 하면
+`0x1401d8950`–`0x1401d8961` 은 `R[0] = 4`, cursor `= R+0x24`, 반환값 `P = R+4`만 만든다.
+따라서 위 쓰기를 레코드 기준으로 옮기면 다음과 같다.
+
+| 레코드 필드 | 값 | 의미 |
+| --- | --- | --- |
+| `R+0x00` `u8` | `4` | VM opcode |
+| `R+0x04` `u64` | 이니셜라이저 스트림 base | 목적 스트림 포인터(복사 뒤 rebase) |
+| `R+0x0c` `i32` | `0x24` | 다음 레코드 stride |
+| `R+0x14` `f32` | authored `count` | 배율의 상수항 |
+| `R+0x18` `f32` | `-1.0` | 분모 bias |
+| `R+0x1c` `u32` | `0xd0` | 런타임 source 멤버 offset |
+| `R+0x20` `i32` | `P_between - initializerBase` | opid 14 페이로드 `+0x00`(`step`)의 목적 offset |
+
+#### 5.4.2 factory 임시 버퍼는 런타임까지 **두 번 deep-copy + rebase** 된다 [확정]
+
+이 레코드는 stack/scratch 주소를 런타임에 붙들지 않는다.
+
+1. 팩토리 꼬리 `0x1401d035f`–`0x1401d03ee` 가 길이
+   `L = [rsp+0x30] - B` 를 구해 `FUN_1401c2e70(B, B+L)`(`0x1401d038c`)로 복사하고,
+   결과 디스크립터 `+0x98`에 새 포인터, `+0xa0`에 `L`을 둔다. 빈 스트림도
+   `FUN_1401c2e50`의 16-byte 정렬 zero sentinel을 소유한다.
+2. `FUN_1401c2e70`(`0x1401c2e70`–`0x1401c2ebb`)은 `L+0x10`을 정렬 할당해 `memcpy`하고
+   끝에 zero word를 둔다. 이어 `FUN_1401c2ef0` 호출 셋(`0x1401d03b1`, `0x1401d03c6`,
+   `0x1401d03db`)이 각 레코드를 `R += signext(i32[R+0x0c])`로 걷고 `R+0x04`가 옛
+   `B+0x2000`/`B+0x4000`/`B+0x6000`이면 대응하는 새 스트림 포인터로 바꾼다. 이 opcode 4의
+   `R+0x04`는 옛 `B+0x4000`이므로 디스크립터 `+0x68` 포인터로 바뀐다.
+3. `FUN_1401c4220`도 source 디스크립터 `+0x98/+0xa0`을 다시 `FUN_1401c2e70`으로 복사
+   (`0x1401c44c8`–`0x1401c44e4`)한 뒤, 세 primary 스트림 포인터를 다시 rebase한다
+   (`0x1401c44eb`–`0x1401c4564`). 시스템 생성 `0x14022cc5a`–`0x14022ccb7`에서 이 deep copy의
+   목적은 `system+0x18`이다. 따라서 런타임의 이니셜라이저 스트림은 `system+0x80`, 두 번째
+   스트림은 `system+0xb0`(길이 `system+0xb8`)에 있다.
+
+#### 5.4.3 소비 VM과 opcode 4의 정확한 식 [확정]
+
+정상 업데이트는 `0x14022be45`–`0x14022be5d`, 자식/복사 업데이트는
+`0x14022f967`–`0x14022f982`에서 같은 `FUN_1401d15a0`을 부른다. 함수는
+`mov rdi,[rdx+0x98]`(`0x1401d1756`)로 위 두 번째 스트림을 잡고, opcode 0 sentinel까지
+opcode 1…14 점프테이블(`0x1401d17c0`–`0x1401d17e1`)을 돈다. opcode 4 arm은
+`0x1401d186a`–`0x1401d189c`이며 그대로 쓰면 다음 식이다.
+
+```text
+next = R + signext(i32[R+0x0c])
+source = f32[runtimeParams + u32[R+0x1c]]
+denominator = max(source * f32[R+0x14] + f32[R+0x18], 1e-4)
+f32[u64[R+0x04] + signext(i32[R+0x20])] = 1.0 / denominator
+```
+
+상수는 `1e-4` @`0x1404925fc`, `1.0` @`0x140492704`이고 루프 백에지는
+`0x1401d228b`–`0x1401d2296`이다. 이 레코드에 값을 대입하면 결론은 하나다.
+
+```text
+between.step = 1 / max(authoredCount * runtimeParams.count - 1, 1e-4)
+```
+
+`runtimeParams`는 호출부가 넘기는 외부 파티클 인스턴스 블록 `particle+0x778`이고, `+0xd0`
+(`particle+0x848`)은 추측성 scale이 아니라 **`instanceoverride.count`**다. 블록 생성자
+`FUN_14024d760`의 `0x14024d7bc`가 기본 `1.0`을 심고, 등록 함수 `FUN_14024d940`은 문자열
+`"count"`(`0x14048f72c`)와 멤버 offset `0xd0`을 `0x14024db67`/`0x14024db8a`에서 한
+프로퍼티로 묶는다. 즉 bit4는 opid 14 핸들러가 이후 스폰에서 읽을 누산기 step을 현재 인스턴스
+count 배율에 맞춰 갱신한다. 이 쓰기는 기존 값에 대한 배수가 아니라 **매 업데이트의 양수 대입**이다.
+따라서 `limitbehavior:"mirror"`가 직전 스폰에서 step 부호를 음수로 뒤집었더라도 다음
+`FUN_1401d15a0` 호출은 다시 위 양수로 덮는다. count가 바뀔 때만 재계산하는 구현으로는 같지 않다.
+
+#### 5.4.4 실물 도달과 Waple 갭 [확정]
+
+동봉 `Sources/WapleRender/Resources/WEAssets`와 원본 `wallpaper_engine/assets`를 각각 전수하면
+bit4 선언은 두 트리 모두 정확히 다음 **2선언**이다(동명의 `preview` 복사본은 flags 7/3이라 제외).
+
+| 프리셋 | flags | 동시에 켜진 기존 산술 | bit4 step (`C = instanceoverride.count`) |
+| --- | ---: | --- | --- |
+| `presets/lightning/particles/presets/thunderbolt.json` | 23 (`0b10111`) | bit0 수직 arc · bit1 속도 arc · bit2 size arc; bit3 꺼짐 | `1 / max(32*C - 1, 1e-4)`(count 부재 → 주입 32) |
+| `presets/lightning/particles/presets/thunderbolt_beam_child.json` | 19 (`0b10011`) | bit0 수직 arc · bit1 속도 arc; bit2/3 꺼짐 | `1 / max(8*C - 1, 1e-4)`(저작 count 8) |
+
+두 프리셋은 최상위 시스템 `flags:0`이라 `[def+8]&0x20` producer 게이트를 통과하고,
+`limitbehavior` 부재(주입 `"repeat"`)다. 이를 참조하는 동봉 장면은 `instanceoverride.count`를
+따로 저작하지 않아 `C=1`이고, 각각 `1/31`, `1/7`로 정적 초기 step과 수치가 같다. repeat라 위
+mirror 부호 재대입 차이도 없다. 따라서 **이 정확한 동봉 장면의 현재 출력은 Waple 갭에 의해
+달라지지 않는다.** 하지만 커스텀 장면/에디터가 두 시스템에 count 배율을 주면 즉시 도달한다
+(예: `C=0.5`면 `1/15`, `1/3`). Waple은
+`ParticleSystemDef.parse`와 `ParticleSimulator`는 이제 파스 시점의 `instanceOverride.count`를
+`instanceCountMultiplier`로 보존하고, 위 producer 게이트가 열린 선언의 step을 매 `step(_:)`
+시작에 다시 대입한다. 아래 1·2·4는 `ParticleMapSequenceOracleTests`가 순수/통합 오라클로 잠근다.
+다만 Waple에는 런타임 프로퍼티 애니메이션으로 override count를 바꾸는 통로가 없으므로 현재 구현
+범위는 **정적 instance override**까지다. 직접 조립한 def와 override 부재는 기본 배율 `1`을 쓴다.
+
+자식도 별도 count 기본값을 쓰는 것이 아니라 **루트 scene instance의 owner count를 공유**한다.
+루트 생성 경로 `FUN_14018ff60`은 `FUN_1402293a0(..., plVar10)`으로 scene object를 owner로 넘기고,
+자식 생성 `FUN_14022ebe0`·`FUN_140236cd0`·`FUN_1402378a0`은 모두 같은 부모의 owner
+`param_1[1]`을 `FUN_1402293a0`의 세 번째 인자로 다시 넘긴다. 따라서 Waple의 SceneDocument는
+**전체** `instanceOverride`를 자식 JSON 파스에 넘기지 않고(자식 emitter/maxCount 등 authored 정적
+값 유지), 루트 파스가 확정한 `instanceCountMultiplier`만 모든 자식/손자 def에 재귀 주입한다.
+직접 `ParticleSystemDef.parse(resolveChild:)`를 부르는 경로도 같은 후처리를 탄다. 이는 동적 override
+객체 전체를 구현한 것이 아니라, 현재 정적 범위에서 opcode 4가 읽는 owner count만 보존한 것이다.
+
+1. `authoredCount=8`, `C=0.5`, between bit4 on, system bit5 off → `step=1/3`.
+2. 같은 입력에서 between bit4 off **또는** system bit5 on → 정적 authored step `1/7` 유지
+   (두 producer 게이트를 각각 대조).
+3. `authoredCount*C−1 <= 1e-4` → 정확히 `10000`; 분모 clamp를 count clamp로 바꾸지 않았음을 감시
+   (현재 authored step의 동일 clamp 오라클이 있고, opcode 4 배율 경로의 별도 직교 테스트는 남음).
+4. mirror가 음수로 바꾼 step도 다음 업데이트 시작에 양수 식으로 덮임. `C` 값 변화가 없는 프레임도
+   다시 써야 한다는 런타임 순서 오라클.
+
+**남은 것**: 소비 VM 가족 자체는 찾았지만, 이 절의 `around` 쪽은 아직 닫지 않았다.
+`FUN_1401d15a0`의 opcode 3/10 arm이 존재하는 것과 별개로, §5.3의 **파서가 `flags`를 안 읽는데
+`0x1401ca184`가 `+0x54`를 게이트로 읽는 모순**, 그 게이트의 실물 도달, opcode 10의
+`speedmin`/`speedmax` 최종 필드 의미는 계속 미해결이다. 함정 2("한 요소에 핸들러가 둘 붙을 수
+있다")의 실사례라는 결론도 그대로다.
 
 **[정정]** §8.3 의 "값 16 은 bit4 이고 런타임이 읽는 비트가 아니라 아무 데도 안 걸린다" 는
 **`controlpoint[].flags`** 에 대한 문장이다. `mapsequencebetweencontrolpoints` **자신의** `flags`
@@ -502,7 +655,7 @@ bit4 는 위처럼 걸린다 — 두 `flags` 는 다른 필드다.
 
 파스: 대형 팩토리 `0x1401c5490`–`0x1401d152c` 안에서 자식 링크 구조체(`[rbp+0x490]` 기준)를 채운다 —
 `flags` → `+0x64`(`0x1401d09be`), `controlpointstartindex` → `+0x68`(`0x1401d09db`,
-키 `lea` `0x1401d09c4`, `asInt` `0x140085f70`).
+키 `lea` `0x1401d09c4`, `asUInt` `0x140085f70`).
 
 ### 6.2 스폰 시 — `0x14022c3c0` 이 시스템에 심는다
 
@@ -707,6 +860,18 @@ bit4 는 위처럼 걸린다 — 두 `flags` 는 다른 필드다.
 `relative` 를 가진 블록은 7 중 **1건**이고 그것은 `objects[].origin` 이다 — **`instanceoverride` 아래
 `relative` 는 0건**이다.
 
+**[2026-08-31 동적 각도 배선]** 직접 `objects[]`에서 파스되는 `controlpointangleN` 트랙은
+`ParticleSimulator`가 자체 시간으로 매 서브스텝 평가하고, 이미터와 opid 13이 같은 live 3×3을 읽는다.
+루트 GPU 시스템이 트랙을 보존해 2D/3D 라이브와 캡처 reset에 공통 전달한다. block mask는
+`0x10005`이고, 코퍼스의 decimal `16`은 `0x10`이라 허용된다는 양성 대조도 있다. 다만
+`previewvortexorb`의 particle은 emitter CP0·around 0이라 angle1 소비처 교집합은 0이다.
+
+**[2026-08-31 동적 위치 배선]** `controlpointN`도 자체 시계에서 live CP를 갱신한다. emitter,
+mapsequence 13/14, remap CP 입력, maintain-between은 그 배열을 직접 읽고, 파스 때 target을 굽는
+attract/maintain-to/vortex/reduce는 binding을 통해 `runtimeCP - defCP`를 합성한다. flags&4 자식은
+`parentcontrolpoint`가 가리키는 부모 live 위치/각도를 매 스텝 받는다. vortex binding은 authored
+offset을 별도로 보존하므로 정적 부모 CP 재베이크와 동적 이동 모두 offset을 정확히 한 번만 더한다.
+
 ### 8.3 파티클 `.json` 쪽
 
 | | 동봉 | 설치본 |
@@ -751,8 +916,8 @@ bit4 는 위처럼 걸린다 — 두 `flags` 는 다른 필드다.
 > | --- | --- | --- |
 > | **P4** 문서 정정(44→0x40) | **적용** | `docs/re/particle-operator-vm.md` §7. 함수 `0x14024f2d0`–`0x14024f331`, dword 16회 = 64B 확인 |
 > | **P3** CP 각도 소비처 주석 | **적용** | `ParticleSystem.swift` 두 자리. 소비처 둘을 재확인했고, **파티클 `.json` 쪽 `angles` 는 base 에 안 실린다**는 구분을 명시 |
-> | **P2** `children[].flags` | **파스만 적용**(소비 이월) | `ChildLink.flags` + `feedsControlPoints`. 소비는 CP 정적 베이크 구조 때문에 별도 라운드 |
-> | **P1** `mapsequence` = 위치 | **미적용**(근거는 문서화) | 실측·무회귀 증명은 끝났으나 삭제가 **소유 밖 테스트 파일**을 건드려야 해서 이월 |
+> | **P2** `children[].flags` | **부분 적용** | `ChildLink.flags` + 런타임 CP 작업 배열. between·CP remap 입력·`maintaindistancebetweencontrolpoints`와 베이크형 attract/vortex/maintain/reduce까지 live CP를 소비한다. 남은 것은 비항등 mixed-space 부모→자식 transform-stack 4×4 변환이다. |
+> | **P1** `mapsequence` = 위치 | **between·around 적용** | 두 타입 모두 선언별 solver로 위치·속도를 되쓰고 `p.frame`은 건드리지 않는다. between은 크기도 갱신한다. around는 CP 프레임·RNG·상태·Float 명령순서까지 오라클로 잠겼다. |
 >
 > **P1 무회귀 증명(새로 잰 것).** 동봉 `WEAssets` 와 설치본 두 코퍼스 모두에서
 > `initializer[].name` 이 `mapsequence*` 인 파티클 `.json` 은 **17파일 / 19선언**(between 12 ·
@@ -829,6 +994,19 @@ bit4 는 위처럼 걸린다 — 두 `flags` 는 다른 필드다.
 > **27건 0실패**(rc=0). 돌연변이 4건(스텝의 `−1` 제거 · `arc` 지수 2→1 ·
 > 크기식 `(1−sr)+sr·arc` → `sr+(1−sr)·arc` · `controlpointend` 주입 기본 1→0)을 넣으니
 > **8개 테스트 15단언이 실패**했다 — 네 돌연변이 전부 잡힌다.
+
+> **[2026-08-31 네 번째 라운드 — 위치 배선 해소]** opid 14의 산술·페이로드가 이미 완결돼
+> 있었으므로 실제 스폰 경로의 no-op을 red 통합 테스트로 재현한 뒤 배선했다. `ParticleSimulator`는
+> `mapSequenceBetween` 선언마다 `MapSequenceBetweenSolver` 하나를 보유하고, 매 스폰에서
+> between-only ordinal로 같은 상태를 이어 쓴다. around는 인덱스를 소비하지 않는다.
+>
+> red에서는 burst 3개가 전부 원점/크기 4에 남아 **6단언이 실패**했다. green에서는 count=3의
+> `t=0,0.5,1`이 위치 x=`0,5,10`, 크기=`0.4,4,0.4`를 만들었고, around 사이에 둔 두 between
+> 선언도 독립 상태로 x=`100,200`을 냈다. `ParticleMapSequenceOracleTests` 29건과
+> `ParticleSimulatorTests`·`TexFramesAndMapSequenceTests`를 합친 관련 93건이 모두 통과했다.
+> 이 라운드 당시 남겼던 `around` 기저 혼합식은 2026-08-31 후속 라운드에서 opid 13으로
+> 연결됐다. ChildLink 동적 CP 피드도 같은 날 런타임 작업 배열까지 연결됐고, 남은 경계는 아래
+> P2에 적는다.
 
 아래 파일들은 **이 클러스터의 소유가 아니다**. 고치지 않았다. 넘긴다.
 
@@ -943,8 +1121,8 @@ case let .mapSequence(count, mirror, between, b0, bSpan, cpS, cpE, flags, arcAmt
     phase[opIndex] = (t, step)
     // **p.frame 은 건드리지 않는다.**
 ```
-`around` 분기(`between == false`)의 실물 식은 §4.2 의 세 기저벡터 변환까지 필요하므로
-이번 라운드에서 옮기지 않았다 — **[미해결]** 로 남긴다.
+`around` 분기(`between == false`)의 실물 식도 2026-08-31 후속 라운드에서 옮겼다.
+세 기저벡터·CP 3×3·원주 위치·속도·repeat/mirror 상태를 `MapSequenceAroundSolver`가 소비한다.
 
 **무회귀 — [정정 2026-08-21] 이 경고는 성립하지 않는다.** `p.frame` 을 안 쓰게 되면
 `p.frame >= 0` 분기가 죽고 시트 인덱스가 `particleSheetFrameIndex` 폴터로 가는 것은 맞다.
@@ -958,41 +1136,44 @@ case let .mapSequence(count, mirror, between, b0, bSpan, cpS, cpE, flags, arcAmt
 선분 위로 옮기고, 동봉 12선언 중 8선언이 `flags & 4` 로 크기를 양 끝에서 10% 까지 줄인다.
 그쪽은 A/B 캡처가 필요하다(맥 절차는 §9).
 
-**[2026-08-21 진척]** 아래 `after` 중 **산술과 페이로드 파스는 이미 들어갔다** —
+**[2026-08-31 해소]** 아래 `after` 중 **산술·페이로드 파스·between 시뮬 배선이 모두 들어갔다** —
 `MapSequenceBetweenSolver`(`ParticleSimulator.swift`) · `MapSequenceBetweenSpec` /
 `MapSequenceAroundSpec` + `def.mapSequenceBetween` / `def.mapSequenceAround`
 (`ParticleSystem.swift`). 케이스 시그니처는 **안 바꿨다** — 페이로드를 def 배열에 실었으므로
 `SceneRendererResources.swift` 의 `if case .mapSequence(_, true, _)` 패턴이 그대로 산다.
-남은 것은 시뮬에 원소별 solver 슬롯을 두고 `apply` 를 부르는 일과 `p.frame` 대입 제거뿐이다.
+시뮬은 선언별 solver 슬롯을 보존하며 `p.frame`은 건드리지 않는다. between의 두 번째 스트림
+opcode 4와 동적 CP 피드도 2026-08-31 후속 라운드에서 연결됐다. around 위치·속도 산식도 같은 날
+해소됐고, **남은 것은 around 보조 스트림 opcode 3/10 의미**다.
 
-### P2. `ChildLink.controlPointStartIndex` 소비 배선
+### P2. `ChildLink.controlPointStartIndex` 소비 배선 — **부분 해소(2026-08-31)**
 
-`ParticleSystem.swift` 의 `ChildLink.controlPointStartIndex` 에 붙은 `[파스·보존 전용]` 을 닫을 수 있다.
+`ParticleSimulator.stepChildren`가 링크 `flags & 1`일 때 매 프레임 부모 파티클 위치를 자식의
+런타임 CP 작업 배열에 공급한다. `ParticleControlPointMath.childControlPointFeed`가 슬롯 선택을
+맡고, 자식 시뮬레이터는 이전/현재 배열을 함께 보존한다.
 
 **규약**(§6): 자식 링크 `flags & 1` 일 때만, 자식 시스템의 CP 슬롯
 `startIndex … 7` 에 **부모의 살아 있는 파티클 위치**를 순서대로 채운다.
 그 슬롯들은 저작 CP 를 덮고, `flags & 0x10005` 인 CP 는 건너뛴다.
 자식 CP 개수는 8 로 강제된다(`0x14022ccda`).
 
-**패치안**: `ChildLink` 에 `flags: Int` 를 추가로 파스하고(현재 `children[].flags` 미파스 —
-파스 VA `0x1401d09be`, 주입 기본 0), `ParticleSimulator` 의 자식 인스턴스 스폰/갱신 지점
-(`ParticleSimulator.swift` 의 `makeInstance` / `stepChildren` 자식 갱신 루프)에서 매 프레임
-```swift
-if link.flags & 1 != 0 {
-    var slot = max(0, link.controlPointStartIndex)
-    for parent in parentAlive where slot < 8 {
-        if childDef.controlPointFlags[slot] & 0x10005 != 0 { continue }   // 실물은 slot 을 전진 안 시킨다
-        childInstance.controlPoints[slot] = parent.pos                    // 필요시 부모→자식 스페이스 변환
-        slot += 1
-    }
-}
-```
-**주의 ①** Waple 의 CP 는 현재 `def` 에 정적으로 박혀 있고
-(`ParticleSystem.parse` 가 로드 시 1회 베이크), `controlpointattract` 등은 **target 을 이미
-구워 갔다**(`bakeControlPointTargets`). 자식 CP 를 매 프레임 바꾸려면 **베이크를 걷어내고**
-소비 시점에 CP 를 읽도록 바꿔야 한다 — 구조 변경이라 별도 라운드가 맞다.
-**주의 ②** 실물은 막힌 슬롯에서 `slot` 을 전진시키지 않는다(§6 [미해결]). 위 스케치는
-`continue` 로 `slot` 을 고정해 실물과 같게 뒀다 — 무한 정체가 실물 동작이다.
+**현재 소비자**는 세 부류다.
+
+- `mapsequencebetweencontrolpoints`: 스폰 때 현재 CP[start/end]를 직접 읽는다. thunderbolt
+  spawner→beam 체인의 실제 동적 두 끝점이 이 경로를 탄다.
+- CP 입력 `remapvalue`: `remapCP`가 정적 def 대신 런타임 배열을 읽는다.
+- `maintaindistancebetweencontrolpoints`: 직전 선분에서 구한 축 비율과 수직 성분을 현재 선분으로
+  옮긴다. 정적 CP는 종전 clamp fast path를 유지한다.
+
+통합 테스트는 실제 링크 토폴로지의 `x=[0,50,100]` 배치와, 선분 `0→110`이 `0→120`으로
+움직일 때 중간 파티클 `x=55→60`·수직 성분 보존을 잠근다.
+
+**후속 해소(2026-08-31)**: `controlpointattract`·`vortex`·
+`maintaindistancetocontrolpoint`·`reducemovementnearcontrolpoint`는 정적 target에
+`runtime CP - def CP` 이동분을 합성하는 공통 resolver를 쓴다. 따라서 부모 파티클
+피드와 scene `controlpointN` 키프레임을 포함한 동적 CP가 베이크형 소비자에도
+즉시 반영된다. **남은 경계는 하나**다: 정적 부모→자식 프레임은 번들의
+world/world와 identity bridge까지 위치·회전을 전달하지만, 비항등 mixed-space의
+transform-stack 4×4 bridge는 같은 좌표계 직접 전달 근사다.
 
 ### P3. `ParticleSystemDef.controlPointAngles` 의 `[미해결]` 을 닫는다
 
@@ -1005,8 +1186,14 @@ if link.flags & 1 != 0 {
 
 다만 **[확정] 파티클 `.json` 의 `controlpoint[].angles` 는 런타임 base 행렬에 반영되지 않는다**
 (생성자 `0x14022c3c0` 이 회전 3행에 항등을 넣는다 — §2.1). 살아 있는 것은 **씬 쪽
-`controlpointangleN`** 뿐이다. 주석을 그렇게 고쳐야 한다.
+`controlpointangleN`** 뿐이다. 구현은 이 둘을 분리해 정적/동적 scene angle만 live frame에 넣는다.
 동봉 `controlpoint[].angles` 저작 **0건**이라 그림 변화는 없다.
+
+**[구현 2026-08-31]** 정적 scene override 각도는 별도 `controlPointFrameAngles`에 들어가 두 소비자
+모두에 배선됐다: opid 13과 sphere/box emitter spawn. 파티클 본문 `controlpoint[].angles`는 계속
+보존만 하고 두 소비자에는 넣지 않는다. `instanceOverrideAnimations`의 위치·각도는
+`ParticleSimulator` 시계에서 매 스텝 평가되고, 최초 생성·캡처·seek 재생성이 같은 트랙을
+받는다. 남은 것은 object-world/parent/pointer를 포함한 동적 active 행렬 합성이다.
 
 ### P4. 문서 정정 (`docs/re/particle-operator-vm.md` §7)
 
@@ -1086,17 +1273,21 @@ print({hex(k):sorted(set(v)) for k,v in hits.items()})"
    **3함수**(파서 2자리 · 생성자 1자리)까지 좁혔다. 언롤 상수 접근만 남았다.
 2. `mapsequencebetweencontrolpoints` 의 `[sys+0x20] & 1` 게이트(`0x14023cb55`)가 왜
    수직 성분 기준점을 바꾸는지(월드/로컬 구분으로 보이나 확증 없음).
-3. ~~`mapsequencearoundcontrolpoint`(opid 13)의 **페이로드 전수**~~ — **[2026-08-21 절반 닫음, §5.3]**
+3. ~~`mapsequencearoundcontrolpoint`(opid 13)의 **페이로드·런타임 산술 전수**~~ —
+   **[해소 2026-08-31, §5.3]**
    페이로드 지도(`+0x00` 스텝 · `+0x04` t · `+0x08/+0x0c` bounds · `+0x10..0x18` `speedmin` ·
    `+0x1c..0x24` `speedmax` · `+0x28/+0x34/+0x40` 기저 · `+0x4c` mirror · `+0x50` controlpoint)와
    `speedmin`/`speedmax` 의 소비처(핸들러 `[r14+0x14..0x1c]`/`[r14+0x20..0x28]`, 균일난수 3드로와
-   혼합) · 주입 기본(**둘 다 `"0 0 0"`**)까지 확정했다.
-   **남은 것**: 그 혼합의 정확한 대수식(축별 결합 순서), 그리고 파스가 `flags` 를 안 읽는데
-   `0x1401ca184` 가 `+0x54` 를 읽는 모순(§5.3 끝).
-3b. **[신규]** `[rsp+0x30]` 스트림의 VM(§5.4). `mapsequence*` 가 조건부로 찍는 `0x24`/`0x3c`
-   레코드(썽크 `0x1401d8950` opcode 4 · `0x1401d8910` opcode 3 · `0x1401d8800` opcode 0xa)의
-   효과가 미확정이다. `between` 의 게이트는 **자기 `flags` bit4** 이고 동봉 도달 2선언이다.
-   오퍼레이터 VM 썽크(`0x1401d8a50`/`0x1401d8b30`)와 다른 계열이라 그 문서로도 안 닫힌다.
+   혼합) · 주입 기본(**둘 다 `"0 0 0"`**)까지 확정했다. 위치·속도·CP 프레임·RNG 호출 순서와
+   repeat/mirror 상태식도 production solver로 옮겼다. 파스가 `flags` 를 안 읽는데
+   `0x1401ca184` 가 `+0x54` 를 읽는 모순은 아래 3b의 보조 스트림 문제로만 남는다.
+3b. ~~`[rsp+0x30]` 스트림의 VM과 `between` opcode 4 효과~~ —
+   **[해소 2026-08-31 · between, §5.4]** 소비자는 `FUN_1401d15a0`이고 opcode 4는
+   `step = 1/max(authoredCount*instanceoverride.count−1, 1e-4)`를 opid 14 페이로드에 다시 쓴다.
+   팩토리 scratch → 디스크립터 → 런타임 시스템의 두 차례 deep copy/rebase와 `count` 멤버
+   `+0xd0`까지 닫았다. 동봉 도달 2선언은 둘 다 현재 `instanceoverride.count=1`이라 정적 step과
+   같지만, 비기본 override에서 살아 있다.
+   **남은 것**: `around`의 opcode 3/10 producer 필드 의미와 §5.3의 `flags` 파스 모순/도달.
 4. §6 의 슬롯 정체(막힌 CP 에서 `edx` 미전진)가 의도인지.
    **[해소 2026-08-21 · 부분]** §6 덧붙임 — **동작**은 확정했고(정체가 아니라 "그 뒤로 아무것도
    안 채워짐"), **도달 정정**: 종전 "동봉 도달 0" 은 오측이고 실제로는 **동봉 2파일 / 설치 2파일**
@@ -1133,7 +1324,7 @@ print({hex(k):sorted(set(v)) for k,v in hits.items()})"
 | 1 | §11-2 `mapsequencebetween` 의 `[sys+0x20]&1` 게이트 의미 | **12 선언 / 12** (between 전건) | **간접 해소** — 같은 비트의 의미를 §12.2 에서 확정했다(시스템 worldspace). 이 핸들러에서 왜 `p −= A` 를 그 비트로 가르는지는 여전히 미상 |
 | 2 | §11-1 파티클 `.json` `controlpoint[].angles` 를 읽는 지점 | `angles` 저작 **0 / 0** (실효 0) | **부분 해소** — 스트라이드 `0x20` 인덱서를 이미지 전수로 3함수까지 좁혔다(§2.1 덧붙임) |
 | 3 | §11-4 자식 CP 피드 슬롯 정체가 의도인가 | **2 파일 / 2** ← 종전 "0" 은 **오측** | **도달 정정 + 동작 확정**(§6 덧붙임). 의도는 미상 |
-| 4 | §11-3b `[rsp+0x30]` 스트림의 VM | between bit4 **2 선언 / 2**, around 게이트 미상 | 손대지 않음 |
+| 4 | §11-3b `[rsp+0x30]` 스트림의 VM | between bit4 **2 선언 / 2**, around 게이트 미상 | **between 해소** — `FUN_1401d15a0` opcode 4, `step=1/max(authoredCount*instanceoverride.count−1,1e-4)` (§5.4). around 3/10은 남음 |
 | 5 | §5.4 around 쪽 두 번째 스트림 게이트의 도달 | 미상(§11-3b′ 에 종속) | 손대지 않음 |
 | 6 | §11-3a `speedmin`/`speedmax` 혼합 대수식 | **2 선언 / 2** (`magic_trinity`) | 손대지 않음 |
 | 7 | §11-3b(신규) around 파스가 `flags` 를 안 읽는데 `0x1401ca184` 가 `+0x54` 를 읽는 모순 | **7 선언 / 7** | 손대지 않음 |
@@ -1452,11 +1643,12 @@ for op in ops {
 `controlPointFlags` · `controlPointParent`)에 리터럴 `8` 로 박혀 있다.
 `ParticleControlPointLimits.slotCount` 로 바꾸면 §12.1 의 근거가 코드에 붙는다.
 
-### 13.4 `ParticleSystem.swift` — `controlPointAngles` 소비 (지금은 저장만 한다)
+### 13.4 `ParticleSystem.swift` — `controlPointAngles` 소비 — **해소(2026-08-31)**
 
-`def.controlPointAngles` 는 파스만 되고 아무도 안 읽는다. 실물은 그 각도가
-**base 4×4 의 3×3** 이 되고, 그 base 가 §12.2 의 네 갈래로 `cur` 이 된다.
-최소 침습 패치는 CP 를 `Vec3` 대신 4×4 로 굽는 것이다:
+`def.controlPointFrameAngles`와 scene `controlpointangleN` 키프레임을 런타임 CP 3×3 기저로
+조립해 sphere/box emitter와 `mapsequencearoundcontrolpoint`(opid 13)이 읽는다.
+아래 코드는 구현 전 최소 패치 제안이며, 현행 코드는 동일 규약을
+`ParticleControlPointMath` 프레임 헬퍼와 `ParticleSimulator` 런타임 배열로 나누어 구현했다:
 
 ```swift
 // 지금:  var controlPoints = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
@@ -1478,16 +1670,18 @@ if !r.skipped { controlPointBases[id] = r.base }
 회전을 실제로 소비하는 것은 이미터(`0x140237c42` 계열)와 `mapsequencearoundcontrolpoint`
 (`0x14023c537`)이므로, 그 둘을 배선하기 전에는 `translation` 만 쓰이고 **그림은 안 바뀐다**.
 
-### 13.5 `ParticleSimulator.swift` — 자식 CP 피드 소비 (§6 · §12.0-3)
+### 13.5 `ParticleSimulator.swift` — 자식 CP 피드 소비 (§6 · §12.0-3) — **부분 해소**
 
-`ChildLink.flags` / `controlPointStartIndex` 는 파스만 돼 있다. 배정 자체는
+`ChildLink.flags` / `controlPointStartIndex` 는 이제 파스뿐 아니라 `stepChildren`에서 소비된다.
 `ParticleControlPointMath.childControlPointFeed(startIndex:parentLifetimes:childControlPointFlags:)`
-가 이미 실물과 같은 정체 동작까지 포함해 계산한다. 남은 것은
-① CP 정적 베이크를 걷어내 매 프레임 CP 를 읽게 하는 구조 변경과
-② 부모→자식 스페이스 변환(`0x14022a5f7`–`0x14022a6a9`)이다. 둘 다 별도 라운드가 맞다.
+가 실물과 같은 슬롯 정체를 계산하고, 각 자식 시뮬레이터의 런타임 CP 배열에 부모 위치를 쓴다.
+between·CP remap·이동 선분 유지가 이 배열을 직접 읽는다.
 
-**주의**: 실물은 **막힌 슬롯에서 슬롯을 전진시키지 않는다**(§6 덧붙임).
-`continue` 로 넘어가게 구현하면 동봉 `thunderbolt.json` 2파일에서 실물과 갈린다.
+베이크형 attract/vortex/maintain/reduce도 공통 live-target resolver로 전환됐다.
+`flags & 4` 부착 자식은 `parentcontrolpoint` 매핑을 통해 부모의 live 위치·각도를
+매 스텝 받는다. 남은 것은 비항등 mixed-space 부모→자식 transform-stack 4×4 변환
+(`0x14022a5f7`–`0x14022a6a9`)뿐이다. 막힌 슬롯에서 슬롯을 전진시키지 않는 규약은
+helper와 회귀 테스트가 잠근다.
 
 ### 13.6 마우스 CP (미배선)
 

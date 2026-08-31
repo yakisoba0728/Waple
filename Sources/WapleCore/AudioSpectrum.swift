@@ -56,17 +56,17 @@ public enum AudioSpectrum {
     /// 게인 루프가 `cmp ecx, 0x40`(0x1400d1df3).
     public static let bandCount = 64
 
-    /// 밴드 매핑 지수. AudioProcessor `+0xE4`, 생성자 immediate(`0x1400c0d59`).
+    /// 밴드 매핑 지수. 생성자 `rdi+0xEC`, immediate(`0x1400c0d59`).
     /// 바이너리 전체에서 이 필드에 쓰는 지점이 생성자 말고는 없다 — 씬 프로퍼티
     /// `audioprocessingexponent` 는 **이 경로에 도달하지 않는다**(프로젝트 JSON 기본값 작성기에만 등장).
     public static let exponent: Float = 0.25
 
-    /// 스펙트럴 틸트 상수. AudioProcessor `+0xE8` = `0x3f004189` = 0.50099998712539673f
+    /// 스펙트럴 틸트 상수. 생성자 `rdi+0xF0` = `0x3f004189` = 0.50099998712539673f
     /// (`0x1400c0d63`). 짝인 0.499 는 **리터럴이 아니라** 런타임에 `1.0 - C` 로 만든다
     /// (`0x1400d1c12: subss xmm9, xmm12`) — 그래서 바이너리에서 0.499 를 찾으면 안 나온다.
     public static let tiltC: Float = 0.50099998712539673
 
-    /// 원본 FFT 길이 계수(AudioProcessor `+0xEC` = 30.0)와 빈 개수 계수(`+0xF0` = 10.0),
+    /// 원본 FFT 길이 계수(생성자 `rdi+0xF4` = 30.0)와 빈 개수 계수(`rdi+0xF8` = 10.0),
     /// 그리고 둘에 공통으로 곱해지는 64.0(`0x1404928e4`). 즉 44.1 kHz 에서 N=1920, B=640.
     public static let referenceRate: Double = 44100
     public static let referenceFFTLength = 1920
@@ -167,7 +167,8 @@ public enum AudioSpectrum {
     /// 스레드 `0x1400d02b0` 은 `{this=0x1404e55a8, fn=0x1400d02b0}` 클로저로 뜬다
     /// (`0x14006e525`/`0x14006e52f`, 재시도 분기 `0x14006e5ac`/`0x14006e5b6`). 스레드 안에서
     /// `AP+0x0C` 를 읽는 자리는 **게인 한 곳뿐**이다(`0x1400d1d3f  movss xmm2,[rdi+0xc]`).
-    /// 교차 확인: 같은 호출이 넘기는 `rcx=0x1404e568c` 가 정확히 `AP+0xE4`(상수 4개 묶음)다.
+    /// 교차 확인: 같은 호출이 넘기는 `rcx=0x1404e568c` 가 생성자 베이스
+    /// `0x1404e55a0+0xEC`(상수 4개 묶음)다. 스레드 내부 베이스 `0x1404e55a8`에서는 `+0xE4`다.
     ///
     /// 스칼라가 곱해지는 **위치**는 우리와 다르지만(실물은 비정규화 진폭에, 우리는 밴드 출력에)
     /// 곱셈은 결합적이라 관측 결과는 같다.
@@ -211,13 +212,10 @@ public enum AudioSpectrum {
         gain * inputVolumeGain(setting: setting)
     }
 
-    /// AudioProcessor `+0xEC`(생성자 `0x1400c0d6d`) — N 계수 30.0.
-    /// **오프셋 기준선 주의**: 생성자의 `this` 와 오디오 스레드의 `rdi` 는 8 어긋나 있다
-    /// (생성자가 `lea rbx,[rcx+8]` 로 밴드 버퍼를 심는다 — `0x1400c0cb4`). 여기 적은 오프셋은
-    /// 스레드 기준(정본 `spec/engine/effect-fbo-audio.json` 과 같은 기준)이라 생성자 즉시값
-    /// VA 에서 보이는 오프셋보다 8 작다.
+    /// 생성자 `rdi+0xF4`(`0x1400c0d6d`) — N 계수 30.0.
+    /// 정본 `spec/engine/effect-fbo-audio.json` 도 생성자 `rdi` 기준을 쓴다.
     public static let engineFFTLengthFactor: Float = 30
-    /// AudioProcessor `+0xF0`(생성자 `0x1400c0d77`) — B 계수 10.0. `B = int(10 × 64) = 640` 고정.
+    /// 생성자 `rdi+0xF8`(`0x1400c0d77`) — B 계수 10.0. `B = int(10 × 64) = 640` 고정.
     public static let engineBinCountFactor: Float = 10
     /// 두 계수에 공통으로 곱해지는 64.0(`0x1404928e4`).
     public static let engineFactorScale: Float = 64

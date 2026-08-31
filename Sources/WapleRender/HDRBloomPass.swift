@@ -2,7 +2,8 @@ import Metal
 import simd
 import WapleCore
 
-/// HDR bloom(#22) 파라미터 — `hdr && bloom` 씬(코퍼스 8) 전용. LDR bloom 과 별개 레시피.
+/// HDR bloom(#22) 파라미터 — `hdr && bloom` 씬(설치본 assets+projects 186 중 3) 전용.
+/// LDR bloom 과 별개 레시피.
 /// `strength` 는 실효값(마운트에서 `HDRBloomPass.strengthScale` 캘리브 적용 후) — 패스는 그대로 소비.
 struct HDRBloomParameters: Equatable {
     let strength: Float
@@ -45,9 +46,26 @@ protocol HDRBloomEncoding {
 ///   `DXGI_SWAP_CHAIN_DESC` 를 채우는 유일한 자리가 `R8G8B8A8_UNORM`(28)이다
 ///   (`0x140008146` → `0x140008172` `CreateSwapChain`). 상쇄해 줄 하드웨어 인코드는 없다.
 ///   결론(디코드 미이식)은 그대로이고 근거만 둘로 갈린다:
-///   ① WE 의 `lin()` 은 `hdr:true` 경로에만 있다 — 동봉+설치본 358 씬 중 354 씬은
-///      `combine.frag`(감마 변환 없음)이거나 최종 패스 자체가 없다(실측 348 + 6).
-///   ② `hdr:true` 4 씬에 대해서는 아래 합성부 주석의 골든 실측이 디코드 미적용 쪽을 지지한다.
+///   ① WE 의 `lin()` 은 `hdr:true` 경로에만 있다 — **설치본 assets/ + projects/ 186 씬**
+///      (이름 글롭 `{scene,gifscene}.json`) 중 **183 씬**은 `combine.frag`(감마 변환 없음)이거나
+///      최종 패스 자체가 없다(실측 178 + 5).
+///   ② **`hdr:true` 3 씬**에 대해서는 아래 합성부 주석의 골든 실측이 디코드 미적용 쪽을 지지한다.
+///
+///   **[정정 2026-08-30] 종전 이 두 줄의 모집단이 이중계수였다.** 종전 서술:
+///   > ① … 동봉+설치본 **358** 씬 중 **354** 씬은 … (실측 **348 + 6**).
+///   > ② `hdr:true` **4** 씬에 대해서는 …
+///   `5d6cba8b`·`83da9851`(2026-08-28)이 그 358 을 이중계수로 판정하고 정본을 186 ·
+///   reach {178,5,3,0} · 고유 HDR 3씬으로 고쳤는데 **이 주석이 안 따라왔다**. 동봉
+///   `Sources/WapleRender/Resources/WEAssets/` 는 설치본 `assets/` 의 **사본**이라
+///   172 씬을 두 번 센 것이다(358 = 172 + 186). 이 컨테이너에서 직접 센 값이 172 다 —
+///   세는 명령: `find Sources/WapleRender/Resources/WEAssets -name 'scene.json' -o
+///   -name 'gifscene.json' | wc -l`. 단일 모집단 산술도 그만큼 갈린다:
+///   348 = 178+170 · 6 = 5+1 · 4 = 3+1. 재계산: 186 − 3 = **183** = 178 + 5.
+///   정본은 `spec/engine/tonemapping.json` 의 `corpusPopulation`·`corpusScenes`·
+///   `corpusReach`·`hdrScenesNote` 이고, `ToneMappingCanonTests` 가 186 을 못박는다.
+///   **[동기화 2026-08-31]** 같은 수를 인용하던 `HDRPostPass`·`LDRBloomPass`·
+///   `LDRBloomMath`·`VolumetricLightPass`·`Mesh3DShaders`와 `docs/re/` 도 단일 모집단
+///   186 씬(reach 178/5/3/0, bloomtint 저작 77)으로 함께 고쳤다.
 ///   전문: `docs/re/tonemapping.md` §1.1·§1.2·§2.6·§9 W-20 ·
 ///   정본 `spec/engine/tonemapping.json` `engine.tonemap.transferFunctionSites`.
 ///

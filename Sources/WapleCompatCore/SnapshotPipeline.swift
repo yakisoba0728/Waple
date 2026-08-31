@@ -55,6 +55,10 @@ public enum SnapshotPipeline {
 
     enum Frame { case pixels([UInt8], png: URL); case empty }
 
+    /// `--capture` 셀프체크 전용 내부 모드. 공개 CLI 표면이 아니라 부모 프로세스가 같은
+    /// WapleCompat 실행파일을 한 번 더 띄울 때만 사용한다.
+    static let selfCheckPassFlag = "--snapshot-self-check-pass"
+
     // MARK: 씬 열거
 
     /// F520: DeepScan.projectContainer 와 동일 규칙 — root 가 개발 루트(하위에 backgrounds/ 디렉터리)면
@@ -203,6 +207,71 @@ public enum SnapshotPipeline {
 
     // MARK: --capture (자기-일관 셀프체크 포함 → 결정/비결정 자동 분류)
 
+    /// 셀프체크 패스를 별도 프로세스로 실행한다. 호출부가 이 함수 하나를 거치므로 테스트에서
+    /// 실제 새 PID와 경로 인자 보존을 검증할 수 있다.
+    static func launchSelfCheckPass(executableURL: URL, root: String, outDir: URL) throws -> Int32 {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = [selfCheckPassFlag, root, outDir.path]
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
+    static func selfCheckPassExitCode(failures: [String], empties: [String]) -> Int32 {
+        failures.isEmpty && empties.isEmpty ? 0 : 1
+    }
+
+    /// 부모 `runCapture`가 결정성 판정에 사용할 독립 캡처 한 벌을 만든다.
+    /// 장면마다 프로세스를 띄우지 않고 한 helper 프로세스가 정렬된 코퍼스를 한 번 순회한다.
+    public static func runSelfCheckPass(root: String, outDir: URL) -> Int32 {
+        let fm = FileManager.default
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
+            "waple_snap_self_\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+        try? fm.removeItem(at: tmp)
+        do {
+            try fm.createDirectory(at: outDir, withIntermediateDirectories: true)
+            try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        } catch {
+            fputs("[snap self-check] 폴더 생성 실패: \(error)\n", stderr)
+            return 2
+        }
+        defer { try? fm.removeItem(at: tmp) }
+
+        let restore = pinRenderSettings(root: root)
+        defer { restore() }
+        let folders = sceneFolders(root: root)
+        guard !folders.isEmpty else {
+            fputs("[snap self-check] 씬 0개: \(root)\n", stderr)
+            return 2
+        }
+
+        var failures: [String] = []
+        var empties: [String] = []
+        for folder in folders {
+            let id = folder.lastPathComponent
+            autoreleasepool {
+                do {
+                    let project = try ProjectJSONParser.parse(folderURL: folder)
+                    guard case let .pixels(_, png) = try captureFrame(project: project, into: tmp) else {
+                        empties.append(id)
+                        return
+                    }
+                    let destination = outDir.appendingPathComponent("\(id).png")
+                    try? fm.removeItem(at: destination)
+                    try fm.copyItem(at: png, to: destination)
+                } catch {
+                    failures.append(id)
+                    fputs("[snap self-check] 캡처 실패 \(id): \(error)\n", stderr)
+                }
+            }
+        }
+        if !empties.isEmpty {
+            fputs("[snap self-check] 무픽셀 \(empties.count)씬: \(empties.prefix(12).joined(separator: ","))\n", stderr)
+        }
+        return selfCheckPassExitCode(failures: failures, empties: empties)
+    }
+
     public static func runCapture(root: String, outDir: URL, label: String?) -> Int32 {
         let start = Date()
         let sha = gitSHA()
@@ -225,6 +294,26 @@ public enum SnapshotPipeline {
         guard !folders.isEmpty else {
             fputs("[snap] ⚠️ 씬 0개 — root 가 개발 루트/backgrounds/단일 씬 폴더 중 하나인지 확인: \(root)\n", stderr)
             return 2
+        }
+
+        // 결정성 셀프체크는 반드시 새 프로세스에서 캡처한다. 같은 프로세스 재마운트는
+        // 프로세스별 RNG/해시 시드와 정적 캐시를 공유해 실행 간 차이를 검출하지 못한다.
+        let selfCheckDir = tmp.appendingPathComponent("self-check", isDirectory: true)
+        try? fm.removeItem(at: selfCheckDir)
+        try? fm.createDirectory(at: selfCheckDir, withIntermediateDirectories: true)
+        let helperPath = ProcessInfo.processInfo.environment["WAPLE_SNAPSHOT_HELPER"]
+            ?? CommandLine.arguments[0]
+        do {
+            let status = try launchSelfCheckPass(
+                executableURL: URL(fileURLWithPath: helperPath).standardizedFileURL,
+                root: root,
+                outDir: selfCheckDir)
+            if status != 0 {
+                fputs("[snap] ⚠️ 별도 프로세스 셀프체크 패스 exit \(status) — 산출된 프레임만 판정에 사용합니다\n", stderr)
+            }
+        } catch {
+            // 독립 캡처를 못 했다면 결정적이라고 낙관하지 않는 보수적 방향이다.
+            fputs("[snap] ⚠️ 별도 프로세스 셀프체크 시작 실패: \(error)\n", stderr)
         }
         var entries: [SnapshotEntry] = [], empties: [String] = [], failures: [String] = []
         var nonDet: [String] = []
@@ -257,31 +346,21 @@ public enum SnapshotPipeline {
                             try? fm.copyItem(at: src, to: dst)
                         }
                     }
-                    // 셀프체크: 재마운트로 두 번째 캡처 → 프레임 산출 씬만 2× (empty/fail 은 1×).
-                    //
-                    // [정정 2026-08-01] 종전 주석은 "**독립** 재마운트" 였는데 독립이 아니다.
-                    // 2차 캡처가 **같은 프로세스** 안에서 일어나므로 프로세스 시작 시 정해지는 것
-                    // (RNG 시드·정적 캐시·딕셔너리 순회 순서·셰이더 컴파일 순서 등)이 두 캡처에서
-                    // 동일하다. 그 값이 실행마다 달라지면 화면이 달라지는데 여기선 항상 일치한다.
-                    // 실측(macOS 2026-08-01): 같은 커밋·같은 빌드로 전 코퍼스를 두 번 떠서 대조하니
-                    // **29종이 실행마다 다른데** 전부 deterministic=true / selfMaxDiff=0 으로 기록됐다.
-                    // 그래서 이 필드는 이름이 약속하는 "재현 가능한가" 가 아니라
-                    // **"같은 프로세스 안에서 두 번 그리면 같은가"** 만 답한다.
-                    // 여파: SnapshotCompare 가 이 값으로 strict/lax 임계를 고른다(:85).
-                    // 그 선택줄 자체는 **맞다**(결정적→strict, 비결정→lax). 문제는 분류가 틀려서
-                    // 실제로는 비결정인 29종이 strict 로 새는 것 — 고칠 곳은 :85 가 아니라 여기다.
-                    // 고치려면 2차 캡처를 별도 프로세스에서 돌리거나 교차 실행 재현성을 별도 필드로 둔다.
-                    // 근거·수치: spec/golden/gate-analysis.json (oracle.gate.selfCheckIsIntraProcess)
+                    // 셀프체크: 위에서 독립 WapleCompat 프로세스가 산출한 같은 씬의
+                    // 프레임과 대조한다. 이제 프로세스별 RNG/해시 시드와 정적 캐시도 공유하지 않아
+                    // `deterministic`이 실행 간 재현성을 답한다. 실측으로 기존 프로세스 내 재마운트는
+                    // 실행 간 다른 29종을 전부 deterministic=true/selfMaxDiff=0으로 오분류했다.
                     // F522: 스키마 규약(SnapshotEntry.selfMaxDiff "셀프체크 안 했으면 -1")에 맞춰 2차 캡처가
                     // 픽셀을 내지 못하면 -1 유지 — 종전엔 0 이 기록돼 "실행했는데 최대차 0"과 구분 불가였다.
                     var deterministic = true, selfMax = -1, note: String? = nil
-                    if case let .pixels(rgba2, _) = (try? captureFrame(project: project, into: tmp)) ?? .empty {
+                    let selfCheckPNG = selfCheckDir.appendingPathComponent("\(id).png")
+                    if let rgba2 = pngToRGBA(selfCheckPNG, width: thumbW, height: thumbH) {
                         let sd = diffRGBA(rgba1, rgba2)
                         selfMax = sd.maxAbsDiff
                         deterministic = passes(sd, .selfConsistent)
                         if !deterministic { note = "self-diff mean=\(String(format: "%.2f", sd.meanAbsDiff)) frac=\(String(format: "%.4f", sd.fracExceeding))"; nonDet.append(id) }
                     } else {
-                        deterministic = false; note = "second capture empty"; nonDet.append(id)
+                        deterministic = false; note = "cross-process capture unavailable"; nonDet.append(id)
                     }
                     entries.append(SnapshotEntry(id: id, width: thumbW, height: thumbH,
                                                  hash: fnv1a(rgba1), meanLuma: meanLuma(rgba: rgba1),

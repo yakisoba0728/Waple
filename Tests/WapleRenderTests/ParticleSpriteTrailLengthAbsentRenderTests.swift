@@ -110,10 +110,9 @@ final class ParticleSpriteTrailLengthAbsentRenderTests: XCTestCase {
         rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         rpd.colorAttachments[0].storeAction = .store
         let enc = try XCTUnwrap(cb.makeRenderCommandEncoder(descriptor: rpd))
-        var camOffset = SIMD2<Float>(0, 0)
         var aspectScale = SIMD2<Float>(1, 1)
         renderer.encodeParticle(sys, snapshot: [particle], into: enc, device: device,
-                                camOffset: &camOffset, aspectScale: &aspectScale)
+                                aspectScale: &aspectScale)
         enc.endEncoding()
         cb.commit(); cb.waitUntilCompleted()
         let rgba = readRGBA(tex)

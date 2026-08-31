@@ -75,6 +75,25 @@ public enum PointerHit {
         }
     }
 
+    /// 원근 투영과 near/far 클립이 끝난 볼록 다각형(씬 픽셀, 순환 꼭짓점 순서).
+    /// x/y 회전이 있는 image/text 평면은 투영 뒤 사다리꼴이고, 클립 면을 가로지르면 3–6각형이
+    /// 될 수 있어 평행사변형 `Quad`로는 표현할 수 없다. 렌더러가 triangle fan의 외곽 순서를 보존해 넣는다.
+    public struct ConvexPolygon: Equatable {
+        public var vertices: [SIMD2<Float>]
+
+        public init(vertices: [SIMD2<Float>]) { self.vertices = vertices }
+
+        /// 볼록 다각형 꼭짓점 평균. 항상 내부(또는 경계)에 있으므로 테스트/진단 클릭 좌표로 안전하다.
+        public var center: SIMD2<Float> {
+            guard !vertices.isEmpty else { return .zero }
+            return vertices.reduce(.zero, +) / Float(vertices.count)
+        }
+
+        public func translated(by d: SIMD2<Float>) -> ConvexPolygon {
+            ConvexPolygon(vertices: vertices.map { $0 + d })
+        }
+    }
+
     /// 쿼드 로컬 UV(`c0` 기준, `axisX` 방향 `u`, `axisY` 방향 `v`). 경계 밖이거나 퇴화면 `nil`.
     /// 실물 `sub_14019d5a0` 의 `u = (T·(D×e2))/det` · `v = ((T×e1)·D)/det` 를 광선이 평면 법선과
     /// 나란한 2D 경우로 축약한 것(크래머). 경계는 **포함**이다 — 실물이 `jbe`/`jae` 로 등호를 살린다.
@@ -92,6 +111,32 @@ public enum PointerHit {
     /// 회전을 존중하는 히트 판정. 종전 `SceneRenderer.layerHitRect` 의 축정렬 AABB 를 대체한다.
     public static func contains(_ quad: Quad, _ point: SIMD2<Float>) -> Bool {
         localUV(quad, point) != nil
+    }
+
+    /// 순환 순서의 볼록 다각형 포함 판정. 시계/반시계 방향을 모두 허용하고 경계를 포함한다.
+    /// 면적 0, 비유한 좌표, 3점 미만은 히트 불가다.
+    public static func contains(_ polygon: ConvexPolygon, _ point: SIMD2<Float>) -> Bool {
+        let v = polygon.vertices
+        guard v.count >= 3, point.x.isFinite, point.y.isFinite,
+              v.allSatisfy({ $0.x.isFinite && $0.y.isFinite }) else { return false }
+        var twiceArea: Float = 0
+        for i in v.indices {
+            let a = v[i], b = v[(i + 1) % v.count]
+            twiceArea += a.x * b.y - a.y * b.x
+        }
+        guard twiceArea.isFinite, abs(twiceArea) > determinantEpsilon else { return false }
+
+        var winding: Float = 0
+        for i in v.indices {
+            let a = v[i], b = v[(i + 1) % v.count]
+            let edge = b - a, rel = point - a
+            let cross = edge.x * rel.y - edge.y * rel.x
+            let tolerance = determinantEpsilon * max(1, simd_length(edge))
+            if abs(cross) <= tolerance { continue }
+            if winding == 0 { winding = cross }
+            else if (winding > 0) != (cross > 0) { return false }
+        }
+        return true
     }
 
     /// 실물이 `CursorEvent.localPosition` 으로 싣는 값 — `(u·size.x, (1−v)·size.y)`
@@ -191,6 +236,8 @@ public enum PointerHit {
         case unbound
         /// 소유 오브젝트의 히트 쿼드(씬 픽셀 · 시차 보정까지 끝난 것).
         case object(Quad)
+        /// 원근 투영/클립까지 끝난 소유 오브젝트의 화면 볼록 다각형.
+        case projected(ConvexPolygon)
         /// 소유 오브젝트가 히트 순회에 **아예 들어가지 않는다** — `solid` 가 꺼져 있다.
         case unhittable
         /// **Waple 한정 폴백**: 소유 오브젝트는 있는데 히트 기하가 미확정이다. 실물 텍스트 오브젝트의
@@ -216,6 +263,7 @@ public enum PointerHit {
         case .unbound, .geometryUnknown: return true
         case .unhittable: return false
         case .object(let quad): return point.map { contains(quad, $0) } ?? false
+        case .projected(let polygon): return point.map { contains(polygon, $0) } ?? false
         }
     }
 }

@@ -41,7 +41,7 @@ final class SceneWELightMathTests: XCTestCase {
         // 반경 밖 + exponent 0: HLSL 1.0 / GLSL 0.0 로 완전히 갈린다.
         XCTAssertEqual(SceneWELightMath.finiteFalloff(distance: 20, radius: 10, exponent: 0), 1, accuracy: tol)
         XCTAssertEqual(SceneWELightMath.finiteFalloffGLSLLane(distance: 20, radius: 10, exponent: 0), 0, accuracy: tol)
-        XCTAssertEqual(SceneWELightMath.hlslFalloffEpsilon, 1.17549435e-38)
+        XCTAssertEqual(SceneWELightMath.hlslFalloffEpsilon, Float(1.17549435e-38))
         XCTAssertEqual(SceneWELightMath.glslFalloffEpsilon, 6.103515625e-5)
     }
 
@@ -84,16 +84,155 @@ final class SceneWELightMathTests: XCTestCase {
         XCTAssertEqual(SceneWELightMath.legacySpecularStrength(roughness: 1, metallic: 0), 0.05, accuracy: 1e-6)
     }
 
-    /// GGX 직접광 k 매핑 `(r+1)²/8` — ScenePBRMath.schlickGGX 내부와 같은 값이어야 한다.
-    func testSchlickRoughnessKMatchesScenePBRMath() {
+    /// GGX 지접광 k 매핑 — **기대값을 동봉 WE 원문에서 파스해** 잠긴다
+    /// (`Sources/WapleRender/Resources/WEAssets/shaders/common_pbr.h` 의 `Schlick_GGX`).
+    ///
+    /// **[정정 2026-08-30] 종전엔 `(r + 1) * (r + 1) / 8` 을 테스트 안에 지직 적었다.**
+    /// 그 리터럴이 이 상수의 유일한 정본 앵서여서, 프로덕션 사본과 **양족에 같은 변이를
+    /// 넣으면 그대로 통과**했다. 실주(2026-08-30, 이 수정 전 판):
+    ///
+    /// | 변이 | 종전 테스트 |
+    /// | --- | --- |
+    /// | Swift 두 사본 + 테스트 리터럴 전부 `/8`→`/2` | **통과**(오라클이 변이와 함까 움직인다) |
+    /// | 라이밌 MSL 두 레인만 `/8`→`/2` | **통과**(이 테스트가 MSL 을 안 봤다) |
+    ///
+    /// 그래서 기대값을 헤더에서 읽고(테스드 안에서 수식을 다시 구현하지 않는다), 라이밌
+    /// MSL 두 레인을 같은 파서로 통과시킨다. `Sources/WapleCore` 의 사본 둘은 데드코드이므로
+    /// (`spec/engine/deviations.json` `deviation.finding.scenePBRMathIsDead`, 상태 확정) 그것만 봐서는
+    /// 화면에 닿는 경로가 하나도 덮이지 않는다.
+    func testSchlickRoughnessKMatchesWECanonHeader() throws {
+        let header = try Self.bundledPBRHeader()
+        // 헤더가 자기 식을 어떻게 적는지를 그대로 읽는다 — 원문은 `roughnessScaled`·`roughnessBase`
+        // 를 쓰며, 우리 사본의 변수명(`base`/`r`/`k`)은 헤더에 없다.
+        let canon = try XCTUnwrap(Self.schlickKMapping(header, kVariable: "roughnessScaled"),
+                                  "원문 Schlick_GGX 의 k 식을 파스하지 못했다 — 헤더 형식이 바뀌었으면 이 파서도 같이 고치라")
+        // 파서가 상수를 못 읽고 기물값을 낸 것이 아니어야 한다 — 분별자는 언제나 상수다.
+        XCTAssertGreaterThan(canon.divisor, 0, "원문 분모가 0 이하로 읽혔다 — 파스 실패")
+
         for r in [Float(0), 0.25, 0.5, 0.7, 1] {
             let k = SceneWELightMath.schlickRoughnessK(r)
-            XCTAssertEqual(k, (r + 1) * (r + 1) / 8, accuracy: tol)
+            let base = r + canon.addend
+            XCTAssertEqual(k, base * base / canon.divisor, accuracy: tol,
+                           "r=\(r) 에서 원문 매핑과 갈린다")
             // schlickGGX(nd) = nd / (nd*(1-k) + k) 로 재구성되는지 확인.
+            // 그 분모 형태도 원문에서 확인한다(아래 별도 테스트).
             let nd: Float = 0.6
             XCTAssertEqual(ScenePBRMath.schlickGGX(nd, roughness: r),
                            nd / (nd * (1 - k) + k), accuracy: 1e-6)
         }
+    }
+
+    /// `schlickGGX` 의 **분모 형태**를 원문 `return` 문에서 확인한다.
+    /// 이게 없으면 위 재구성 단언은 "우리가 생각하는 형태" 를 다시 적은 것일 뿐이다.
+    func testSchlickGGXDenominatorFormIsTheHeadersOwn() throws {
+        let header = try Self.bundledPBRHeader()
+        let body = try XCTUnwrap(Self.functionBody(header, signature: "float Schlick_GGX(float NV, float roughness)"),
+                                 "원문 Schlick_GGX 본문을 못 찾았다")
+        let ret = try XCTUnwrap(Self.lines(body).first { $0.hasPrefix("return ") },
+                                "Schlick_GGX 에 return 문이 없다")
+        XCTAssertEqual(ret, "return NV / (NV * (1.0 - roughnessScaled) + roughnessScaled);",
+                       "원문 분모 형태가 바뀜다 — 재구성 단언도 같이 고치라")
+    }
+
+    /// **화면에 닿는 레인 둘이 원문과 같은 k 매핑을 갖는가.**
+    ///
+    /// `ScenePBRMath`·`SceneWELightMath` 의 Swift 사본은 다 데드코드다 — 살아 있는 샤딩은
+    /// `Mesh3DShaders`(모시 3D)와 `QuadShaders`(2D 포워드 라이티링) 의 MSL 문자열 둘이다.
+    /// 리눅스에서 `WapleRender` 를 실행할 수 없으므로 소스를 직접 읽어 잠긴다
+    /// (`GLSLTranslatorTests.testMeshVertexDescriptorWiresNormalUnderTheSameCondition` 와 같은 수법).
+    func testLiveMSLLanesUseTheSameSchlickKAsTheCanonHeader() throws {
+        let canon = try XCTUnwrap(Self.schlickKMapping(try Self.bundledPBRHeader(),
+                                                       kVariable: "roughnessScaled"))
+        let root = try TexSpriteSheetBlendTests.repoRoot()
+        // 두 레인 둘 다 본다 — 한 쪽만 보면 다른 쪽이 조용히 표루한다(종전 상태).
+        for relative in ["Sources/WapleRender/Mesh3DShaders.swift",
+                         "Sources/WapleRender/QuadShaders.swift"] {
+            let text = try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+            let live = try XCTUnwrap(Self.schlickKMapping(text, kVariable: "k"),
+                                     "\(relative) 에서 Schlick k 식을 못 찾았다 — 삭제됐거나 형식이 바뀌었다")
+            XCTAssertEqual(live.addend, canon.addend, accuracy: tol,
+                           "\(relative) 의 roughness 가산이 원문과 갈렸다")
+            XCTAssertEqual(live.divisor, canon.divisor, accuracy: tol,
+                           "\(relative) 의 k 분모가 원문과 갈렸다")
+        }
+    }
+
+    // MARK: 원문 헤더 파스 보조
+
+    /// 동봉 `common_pbr.h`. 없으면(WEAssets 미배치) 스픍한다 — `BlendModeFormulaParityTests` 와 같은 관례.
+    private static func bundledPBRHeader() throws -> String {
+        guard let root = bundledWEAssetsRoot() else {
+            throw XCTSkip("WEAssets 미배치(WAPLE_WE_ASSETS 미지정)")
+        }
+        let url = root.appendingPathComponent("shaders/common_pbr.h")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("동봉 common_pbr.h 없음: \(url.path)")
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// 동봉 헤더는 **CRLF** 다. Swift `String` 은 그래툼 클러스터 단위라 `"\r\n"` 이
+    /// 하나의 `Character` 이고 `"\n"` 과 같지 않다 — `split(separator: "\n")` 은 한 줄도 못
+    /// 쓪는다(방법로로 함정 24). `isNewline` 으로 쓪는다.
+    private static func lines(_ text: String) -> [String] {
+        text.split(whereSeparator: { $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    /// `signature` 로 시작하는 함수의 본문(중쾄톨 안)을 중쾄톨 수로 뗼어랍다.
+    private static func functionBody(_ text: String, signature: String) -> String? {
+        guard let head = text.range(of: signature),
+              let open = text[head.upperBound...].firstIndex(of: "{") else { return nil }
+        var depth = 0
+        var body = ""
+        for ch in text[open...] {
+            if ch == "{" { depth += 1; if depth == 1 { continue } }
+            if ch == "}" { depth -= 1; if depth == 0 { return body } }
+            body.append(ch)
+        }
+        return nil
+    }
+
+    /// `k = (base * base) / divisor` 와 `base = roughness + addend` 를 한 파서로 뽑는다.
+    /// 원문과 MSL 두 레인이 **같은 파서**를 통과해야 직접 비교가 의밌하다.
+    /// 괄호는 있어도 없어도 된다(원문은 `(a * a) / 8.0`, 우리 MSL 은 `a * a / 8.0`).
+    static func schlickKMapping(_ text: String, kVariable: String) -> (addend: Float, divisor: Float)? {
+        let kPattern = "\\b\(kVariable)\\s*=\\s*\\(?\\s*(\\w+)\\s*\\*\\s*\\1\\s*\\)?\\s*/\\s*([0-9]+(?:\\.[0-9]+)?)\\s*;"
+        guard let (baseName, divisorText) = firstMatch(kPattern, in: text, groups: 2)
+            .map({ ($0[0], $0[1]) }),
+              let divisor = Float(divisorText) else { return nil }
+        let basePattern = "\\b\(NSRegularExpression.escapedPattern(for: baseName))\\s*=\\s*roughness\\s*\\+\\s*([0-9]+(?:\\.[0-9]+)?)\\s*;"
+        guard let addendText = firstMatch(basePattern, in: text, groups: 1)?.first,
+              let addend = Float(addendText) else { return nil }
+        return (addend, divisor)
+    }
+
+    /// 상수 뒤 식을 더 붙여도 앞 숫자만 읽고 통과하던 우측 미앵커 회귀.
+    /// WE 헤더가 식을 바꾸면 오라클도 반드시 실패해야 한다.
+    func testSchlickKMappingRejectsTrailingArithmetic() {
+        let valid = """
+        roughnessBase = roughness + 1.0;
+        roughnessScaled = (roughnessBase * roughnessBase) / 8.0;
+        """
+        XCTAssertNotNil(Self.schlickKMapping(valid, kVariable: "roughnessScaled"))
+        XCTAssertNil(Self.schlickKMapping(
+            valid.replacingOccurrences(of: "/ 8.0;", with: "/ 8.0 + 99.0;"),
+            kVariable: "roughnessScaled"))
+        XCTAssertNil(Self.schlickKMapping(
+            valid.replacingOccurrences(of: "+ 1.0;", with: "+ 1.0 * 7.0;"),
+            kVariable: "roughnessScaled"))
+    }
+
+    private static func firstMatch(_ pattern: String, in text: String, groups: Int) -> [String]? {
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text))
+        else { return nil }
+        var out: [String] = []
+        for g in 1...groups {
+            guard let r = Range(m.range(at: g), in: text) else { return nil }
+            out.append(String(text[r]))
+        }
+        return out
     }
 
     // MARK: 프레넬 — common_pbr.h:4-7 (= common_pbr_2.h:4-7)
@@ -345,21 +484,18 @@ final class SceneWELightMathTests: XCTestCase {
         XCTAssertEqual(SceneLight3D.WEDefaults.lightSourceSize, 0)
     }
 
-    /// **현재 갈려 있는 항목**을 명시적으로 기록한다 — 고쳐지면 이 테스트가 먼저 깨져서 알려 준다.
-    /// (파스는 `SceneDocument.parseLight` 소관. `exponent` 미저작은 동봉/설치본 `modeleditor` 씬의
-    ///  lpoint 2개가 실제 도달이다 — WE 2 vs Waple 1.)
-    func testParseDefaultsStillDivergeFromWE() throws {
-        let json = #"{"objects":[{"id":1,"light":"lpoint","origin":"0 0 0","color":"1 1 1","intensity":3}]}"#
+    /// 미저작 라이트 필드는 별도 Waple 폴백을 발명하지 않고 WE 생성자 기본값을 그대로 쓴다.
+    func testParseDefaultsMatchWEConstructor() throws {
+        let json = #"{"objects":[{"id":1,"light":"lpoint","origin":"0 0 0"}]}"#
         let pkg = ScenePackage.assemble([("scene.json", Data(json.utf8))])
         let doc = try SceneDocument.parse(package: pkg)
         let light = try XCTUnwrap(doc.lights3D.first)
-        // 지금 값(= WE 와 다름). 셋 중 하나라도 WE 쪽으로 고쳐지면 여기서 잡힌다.
-        XCTAssertEqual(light.radius, 0)
-        XCTAssertNotEqual(light.radius, SceneLight3D.WEDefaults.radius)
-        XCTAssertEqual(light.exponent, 1)
-        XCTAssertNotEqual(light.exponent, SceneLight3D.WEDefaults.exponent)
-        XCTAssertEqual(light.innerCone, 0)
-        XCTAssertEqual(light.outerCone, 0)
+        XCTAssertEqual(light.color, Vec3(x: 0, y: 0, z: 0))
+        XCTAssertEqual(light.intensity, SceneLight3D.WEDefaults.intensity)
+        XCTAssertEqual(light.radius, SceneLight3D.WEDefaults.radius)
+        XCTAssertEqual(light.exponent, SceneLight3D.WEDefaults.exponent)
+        XCTAssertEqual(light.innerCone, SceneLight3D.WEDefaults.innerConeDegrees)
+        XCTAssertEqual(light.outerCone, SceneLight3D.WEDefaults.outerConeDegrees)
     }
 
     /// **[2026-08-25] 원문 리터럴과 `Float.leastNormalMagnitude` 가 비트동일임을 못박는다.**
@@ -373,7 +509,7 @@ final class SceneWELightMathTests: XCTestCase {
     /// **이 테스트가 그 교체의 유일한 근거다** — 여기가 깨지면 교체를 되돌려야 한다.
     /// GPU 쪽(MSL 문자열)은 손대지 않았다: `EngineAttenuationLaneTests` 가 원문 그대로를 단언한다.
     func testHLSLFalloffEpsilonIsBitIdenticalToFLTMIN() {
-        let literal: Float = 1.17549435e-38   // 원문 표기 — 경고는 나지만 이 테스트의 핵심이다
+        let literal = Float(1.17549435e-38)   // 원문 표기를 Double→Float로 반올림해 비트를 직접 검증한다
         XCTAssertEqual(SceneWELightMath.hlslFalloffEpsilon.bitPattern, literal.bitPattern,
                        "엡실런이 원문 리터럴과 비트동일해야 한다")
         XCTAssertEqual(SceneWELightMath.hlslFalloffEpsilon.bitPattern, 0x0080_0000,

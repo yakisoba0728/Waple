@@ -85,16 +85,35 @@ def read_pe(path):
 
 
 def main():
-    entries = []
+    specfmt.require_inputs("measure_binaries",
+                           ("dir", WE, "WE_ROOT", "WE 설치 루트"))
+    # 디렉터리만 존재하는 빈/부분 설치도 0항목·부분 정본을 만들 수 있다. 이 생성기의 모집단은
+    # TARGETS 전부이므로 루트 존재와 별개로 각 파일을 쓰기 전에 한 번에 검증한다.
+    specfmt.require_inputs("measure_binaries", *(
+        ("file", os.path.join(WE, rel.replace("/", os.sep)), "WE_ROOT", f"WE 바이너리 {rel}")
+        for rel, _note in TARGETS
+    ))
+    parsed = []
+    invalid = []
     for rel, note in TARGETS:
         path = os.path.join(WE, rel.replace("/", os.sep))
-        if not os.path.exists(path):
-            print(f"  건너뜀(없음): {rel}")
+        try:
+            pe = read_pe(path)
+        except (OSError, IndexError, struct.error) as exc:
+            invalid.append(f"  - {rel}: {exc}")
             continue
-        pe = read_pe(path)
         if pe is None:
-            print(f"  건너뜀(PE 아님): {rel}")
+            invalid.append(f"  - {rel}: PE 시그니처가 아님")
             continue
+        parsed.append((rel, note, pe))
+    if invalid:
+        raise SystemExit(
+            "[measure_binaries] TARGETS 전부가 유효한 PE여야 한다. 정본을 쓰지 않고 중단한다.\n"
+            + "\n".join(invalid)
+        )
+
+    entries = []
+    for rel, note, pe in parsed:
         base = f"binary.{os.path.basename(rel)}"
         src = specfmt.ev("binary", f"{rel} (WE 2.8.42 설치본)", note)
         entries.append(specfmt.entry(f"{base}.fileBytes", pe["fileBytes"], "확정", [src]))

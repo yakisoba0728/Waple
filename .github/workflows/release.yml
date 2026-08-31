@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: write   # gh release create 에 필요
+  actions: read     # 이 커밋의 CI 성공 실행을 발행 전에 확인
 
 jobs:
   release:
@@ -36,9 +37,9 @@ jobs:
           xcodebuild -version
           swift --version
 
-      # swift test 는 여기서 실행하지 않는다 — ci.yml 워크플로가 이미 push/PR 마다
-      # 전수 테스트를 돌리므로, 태그는 "테스트가 그린인 커밋"에만 붙인다는 운영 전제를 둔다.
-      # (릴리스 잡에서 다시 돌리면 macOS 러너 비용/시간이 2배로 든다.)
+      # swift test 는 여기서 다시 실행하지 않는다. 대신 아래 preflight 가 **이 정확한 SHA**의
+      # ci.yml + spec.yml 성공 실행을 API 로 확인한다. 태그 push 때 세 워크플로가 동시에
+      # 시작하므로 missing/pending 은 제한시간 동안 기다리고, failure/cancelled 는 즉시 막는다.
 
       # 두 경로(태그 push · 수동 실행)가 **같은 변수 하나**로 합류한다. 이 아래로는
       # `GITHUB_REF_NAME` 을 쓰지 않는다 — 수동 실행에서는 그것이 브랜치 이름이라 태그가 아니다.
@@ -46,7 +47,7 @@ jobs:
       #
       # `${{ inputs.tag }}` 를 `run:` 본문에 직접 적으면 GitHub 이 셸 실행 **전에** 그 자리를
       # 문자열로 치환한다. 즉 값이 셸 문법으로 파싱되고, 아래 `case "$TAG" in v*)` 검증은
-      # 그보다 **나중**이라 막지 못한다. 이 잡은 `contents: write` 와 서명·공증 secrets 4개를
+      # 그보다 **나중**이라 막지 못한다. 이 잡은 `contents: write` 와 서명·공증 secrets 6개를
       # 들고 있으므로 방어층 하나가 빠진 상태였다.
       #
       # 특권 상승은 아니다 — `workflow_dispatch` 를 부를 수 있는 사람은 워크플로 파일 자체를
@@ -71,6 +72,47 @@ jobs:
           echo "WAPLE_VERSION=$PLIST_VERSION" >> "$GITHUB_ENV"
           echo "WAPLE_BUILD=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           echo "Releasing version: $VERSION (plist: $PLIST_VERSION, build $GITHUB_RUN_NUMBER)"
+
+      - name: Require successful CI and spec for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 판정 로직은 로컬 단위 테스트가 가능한 helper 에 둔다. helper rc: 0=둘 다 성공,
+          # 1=terminal failure, 2=missing/pending. 최대 20분만 기다려 잡 전체 40분 예산을 지킨다.
+          for attempt in {1..60}; do
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${GITHUB_SHA}&per_page=100" \
+              > "$RUNNER_TEMP/actions-runs.json"
+            set +e
+            python3 scripts/dev/check-release-ci.py "$GITHUB_SHA" "$RUNNER_TEMP/actions-runs.json"
+            rc=$?
+            set -e
+            case "$rc" in
+              0) exit 0 ;;
+              1) exit 1 ;;
+              2)
+                if [ "$attempt" -eq 60 ]; then
+                  echo "::error::CI/spec 가 20분 안에 둘 다 성공하지 않았다."
+                  exit 1
+                fi
+                echo "CI/spec 대기 ($attempt/60) — 20초 뒤 재확인"
+                sleep 20
+                ;;
+              *) echo "::error::CI/spec 판정 helper 오류 rc=$rc"; exit "$rc" ;;
+            esac
+          done
+
+      # LICENSE/NOTICE 는 동봉 WEAssets 의 재배포 권리를 Waple 이 보유한다고 단정하지 않는다.
+      # 워크플로도 권리를 추정하지 않는다. 저장소 운영자가 근거를 확인하고 이 repository
+      # variable 을 명시적으로 true 로 둔 경우에만 공개 산출물 패키징으로 넘어간다.
+      - name: Require distribution approval
+        env:
+          DISTRIBUTION_APPROVED: ${{ vars.WAPLE_WE_ASSETS_DISTRIBUTION_APPROVED }}
+        run: |
+          if [ "$DISTRIBUTION_APPROVED" != "true" ]; then
+            echo "::error::WEAssets 배포 승인 확인이 없다. repository variable WAPLE_WE_ASSETS_DISTRIBUTION_APPROVED=true 를 권리 근거 확인 후 설정해야 한다."
+            exit 1
+          fi
+          echo "WEAssets 배포 승인 preflight 통과(권리 자체를 이 워크플로가 판정한 것은 아니다)."
 
       # 발행된 릴리스를 덮어쓰지 않는 것은 옳다. 문제는 **언제** 그걸 알아차리느냐였다 —
       # 2026-08-17 태그를 재지목(force push)했더니 워크플로가 다시 돌아, 빌드·패키징·
@@ -119,7 +161,7 @@ jobs:
 
       # Developer ID 서명/공증은 secrets 이 설정된 경우에만 활성화된다.
       # 하나라도 없으면 ad-hoc 서명으로 폴백한다(로컬 패키징과 동일) — 릴리스가 멈추지 않는다.
-      # 필요한 secrets(4개, docs/RELEASING.md §서명/공증 참조):
+      # 필요한 secrets(6개, docs/RELEASING.md §서명/공증 참조):
       #   DEVELOPER_ID_APPLICATION   "Developer ID Application: NAME (TEAMID)"
       #   DEVELOPER_ID_CERT_P12      .p12 를 base64 로 인코딩한 문자열
       #   DEVELOPER_ID_CERT_PASSWORD .p12 내보내기 암호
@@ -129,10 +171,14 @@ jobs:
         env:
           DEV_ID: ${{ secrets.DEVELOPER_ID_APPLICATION }}
           CERT: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: |
-          if [ -n "$DEV_ID" ] && [ -n "$CERT" ] && [ -n "$NOTARY_APPLE_ID" ] && [ -n "$NOTARY_PASSWORD" ]; then
+          if [ -n "$DEV_ID" ] && [ -n "$CERT" ] && [ -n "$CERT_PASSWORD" ] \
+             && [ -n "$NOTARY_APPLE_ID" ] && [ -n "$NOTARY_TEAM_ID" ] \
+             && [ -n "$NOTARY_PASSWORD" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
             echo "WAPLE_SIGN_IDENTITY=$DEV_ID" >> "$GITHUB_ENV"
             echo "Developer ID 서명 + 공증 모드: $DEV_ID"
@@ -193,7 +239,7 @@ jobs:
           xcrun stapler staple Waple.dmg
           # 검증: 스테이플된 티켓과 서명이 실제로 통과하는지 확인한다(실패면 릴리스를 만들지 않는다).
           xcrun stapler validate Waple.dmg
-          spctl -a -vvv -t install Waple.dmg || true
+          spctl -a -vvv -t install Waple.dmg
 
       - name: Compute SHA-256
         run: |

@@ -10,11 +10,12 @@ final class ParticleShadersTests: XCTestCase {
         XCTAssertNotNil(lib.makeFunction(name: "pf_main"))
     }
 
-    /// F200 배치 P: pv_main 이 레이어(QuadShaders.v_main)와 동형으로 cameraOffset 을 parallaxDepth 로
-    /// 가중해야 한다 — 수정 전엔 곱셈 없이 (pos + cameraOffset + shakeOffset) 만 있어 이 assert 가 RED.
+    /// F200 ABI: pv_main은 레이어(QuadShaders.v_main)와 같은 5-buffer 레이아웃을 유지한다.
+    /// 현재 CPU는 root depth를 미리 적용한 offset + 단위 depth를 싣지만, 셰이더 계약을 축소하면
+    /// 기존/대체 호출자가 authored depth를 싣는 경로와 ABI가 갈라진다.
     func testVertexShaderWeightsCameraOffsetByParallaxDepth() {
         XCTAssertTrue(ParticleShaders.source.contains("cameraOffset * parallaxDepth"),
-                     "pv_main 이 레이어 v_main 과 동일하게 cameraOffset×parallaxDepth 를 소비해야(F200)")
+                     "pv_main 이 레이어 v_main 과 동일한 cameraOffset×parallaxDepth ABI를 유지해야(F200)")
     }
 
     /// 파이프라인이 확장된 5-버퍼 시그니처(v,cameraOffset,parallaxDepth,aspectScale,shakeOffset)로도

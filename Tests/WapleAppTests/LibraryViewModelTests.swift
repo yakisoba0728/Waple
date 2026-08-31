@@ -106,7 +106,7 @@ final class LibraryViewModelTests: XCTestCase {
         var assignmentReapplyCount = 0
         var globalApplyCount = 0
         vm.onAssignmentsChanged = { assignmentReapplyCount += 1 }
-        vm.onApply = { _ in globalApplyCount += 1; return true }
+        vm.onApply = { _, _ in globalApplyCount += 1; return .applied }
 
         vm.setProperty(key: "enabled-\(UUID().uuidString)", value: .bool(true), for: vm.entries[0])
 

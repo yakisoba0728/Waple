@@ -25,6 +25,25 @@ REPRODUCIBLE_KINDS = ("corpus", "binary", "asset", "shader", "script", "file")
 EVIDENCE_KINDS = ("corpus", "binary", "asset", "shader", "script", "file", "recon", "doc")
 
 
+def require_inputs(tool, *requirements):
+    """Reject missing generator prerequisites before any canon can be written.
+
+    Each requirement is ``(kind, path, env_var, description)`` where ``kind`` is
+    ``"file"`` or ``"dir"``. Missing inputs are reported together so callers do
+    not have to repair one path per invocation.
+    """
+    missing = []
+    for kind, path, env_var, description in requirements:
+        present = os.path.isfile(path) if kind == "file" else os.path.isdir(path)
+        if not present:
+            missing.append(f"  - {description}: {path!r} ({env_var} 설정 필요)")
+    if missing:
+        raise SystemExit(
+            f"[{tool}] 필수 입력(prerequisite)이 없다. 정본을 쓰지 않고 중단한다.\n"
+            + "\n".join(missing)
+        )
+
+
 def entry(id, value, status, evidence):
     if status not in STATUSES:
         raise ValueError(f"알 수 없는 status: {status!r} (가능: {STATUSES})")

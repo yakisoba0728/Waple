@@ -397,7 +397,7 @@ final class GLSLTranslatorTests: XCTestCase {
 
     func testParallaxPositionIsEngineUniformNotMaterial() throws {
         // 실물 depthparallax: bare `uniform vec2 g_ParallaxPosition;` — 머티리얼로 오인되면
-        // 기본값 (0,0) 영구고정 → 시차 왜곡/중앙정지 실패. 엔진 유니폼: 포인터 UV alias.
+        // 기본값 (0,0) 영구고정 → 시차 왜곡/중앙정지 실패. 포인터와는 별도 엔진 유니폼이다.
         let frag = """
         varying vec2 v_TexCoord;
         uniform sampler2D g_Texture0;
@@ -407,7 +407,10 @@ final class GLSLTranslatorTests: XCTestCase {
         }
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
-        XCTAssertTrue(t.msl.contains("eng.timeAndPad.yz"), "g_ParallaxPosition → 포인터 슬롯 alias:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("eng.parallaxAndPad.xy"),
+                      "g_ParallaxPosition → 독립 시차 슬롯:\n\(t.msl)")
+        XCTAssertFalse(t.msl.contains("eng.timeAndPad.yz"),
+                       "시차 위치가 g_PointerPosition 슬롯에 alias 되면 안 됨:\n\(t.msl)")
         XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
     }
 

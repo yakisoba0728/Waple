@@ -36,6 +36,7 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import measure_tex_deep as T
+import specfmt
 
 MAXPX = 1 << 22          # 레벨당 픽셀 상한(순수 파이썬 디코드라 거대한 mip0 는 건너뛴다)
 
@@ -260,6 +261,8 @@ def main():
     ap.add_argument("--scene")
     ap.add_argument("--json")
     a = ap.parse_args()
+    specfmt.require_inputs("measure_mip_luma",
+                           ("dir", T.WS, "WE_WORKSHOP", "워크샵 코퍼스"))
     if a.scene:
         one_scene(a.scene)
         return

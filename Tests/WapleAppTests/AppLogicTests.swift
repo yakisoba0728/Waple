@@ -141,6 +141,71 @@ final class AppLogicTests: XCTestCase {
         XCTAssertFalse(tornDown.contains("old1"), "이전 렌더러는 유지")
     }
 
+    func testVideoPreparationBatchDeduplicatesAndBecomesReadyOnlyAfterEverySource() {
+        let a = URL(fileURLWithPath: "/wallpapers/a.webm")
+        let b = URL(fileURLWithPath: "/wallpapers/b.mkv")
+        let convertedA = URL(fileURLWithPath: "/cache/a.mp4")
+        let convertedB = URL(fileURLWithPath: "/cache/b.mp4")
+        var batch = VideoPreparationBatch(sources: [a, a, b])
+
+        XCTAssertEqual(batch.sources, [a, b], "같은 소스를 표시하는 모니터가 여럿이어도 변환은 한 번")
+        guard case .pending = batch.record(source: a, output: convertedA) else {
+            return XCTFail("일부만 준비된 상태는 commit 가능하면 안 됨")
+        }
+        guard case .ready(let outputs) = batch.record(source: b, output: convertedB) else {
+            return XCTFail("모든 고유 소스 성공 후 ready")
+        }
+        XCTAssertEqual(outputs, [a: convertedA, b: convertedB])
+    }
+
+    func testVideoPreparationBatchFailsImmediatelyWhenAnyConversionFails() {
+        let a = URL(fileURLWithPath: "/wallpapers/a.webm")
+        let b = URL(fileURLWithPath: "/wallpapers/b.mkv")
+        var batch = VideoPreparationBatch(sources: [a, b])
+
+        guard case .failed(let source) = batch.record(source: a, output: nil) else {
+            return XCTFail("nil 변환 결과는 배치 전체 실패")
+        }
+        XCTAssertEqual(source, a)
+    }
+
+    func testVideoPreparationBatchIgnoresUnknownAndDuplicateCallbacks() {
+        let a = URL(fileURLWithPath: "/wallpapers/a.webm")
+        let b = URL(fileURLWithPath: "/wallpapers/b.mkv")
+        let unknown = URL(fileURLWithPath: "/wallpapers/stale.webm")
+        let convertedA = URL(fileURLWithPath: "/cache/a.mp4")
+        let convertedB = URL(fileURLWithPath: "/cache/b.mp4")
+        var batch = VideoPreparationBatch(sources: [a, b])
+
+        guard case .ignored = batch.record(source: unknown, output: convertedA) else {
+            return XCTFail("현재 배치에 없는 stale callback은 상태 갱신으로 취급하면 안 됨")
+        }
+        guard case .pending = batch.record(source: a, output: convertedA) else {
+            return XCTFail("첫 번째 등록 소스는 정상적으로 pending을 줄여야 함")
+        }
+        guard case .ignored = batch.record(source: a, output: convertedA) else {
+            return XCTFail("이미 소비한 callback은 중복 상태 갱신으로 취급하면 안 됨")
+        }
+        guard case .ready(let outputs) = batch.record(source: b, output: convertedB) else {
+            return XCTFail("stale/duplicate callback 뒤에도 남은 실제 소스가 배치를 완료해야 함")
+        }
+        XCTAssertEqual(outputs, [a: convertedA, b: convertedB])
+    }
+
+    func testVideoPreparationBatchAccumulatesOutputsAcrossReinterpretation() {
+        let a = URL(fileURLWithPath: "/wallpapers/a.webm")
+        let b = URL(fileURLWithPath: "/wallpapers/b.mkv")
+        let oldA = URL(fileURLWithPath: "/cache/a-old.mp4")
+        let newA = URL(fileURLWithPath: "/cache/a-new.mp4")
+        let convertedB = URL(fileURLWithPath: "/cache/b.mp4")
+
+        let accumulated = VideoPreparationBatch.accumulated(
+            existing: [a: oldA], newlyPrepared: [a: newA, b: convertedB])
+
+        XCTAssertEqual(accumulated, [a: newA, b: convertedB],
+                       "앞 배치 A를 잃으면 A/B를 번갈아 재변환하는 ping-pong이 된다")
+    }
+
     func testResolveProjectSlotsAllowsGlobalLessMonitorAssignments() {
         let folderA = URL(fileURLWithPath: "/lib/A")
         let out = MonitorMapping.resolveProjectSlots(

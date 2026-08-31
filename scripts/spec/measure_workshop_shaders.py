@@ -9,12 +9,15 @@
   6) 난이도 상위 사례
 
 왜 포트인가
-  이 머신엔 Swift 툴체인이 없어 Waple 을 실행할 수 없다. 그래서 거부 판정 경로만
-  (ShaderPreprocessor.preprocessStrict + ExprEval.evalChecked) Python 으로 1:1 포팅하고,
-  Swift 테스트(Tests/WapleCoreTests/TranslationEvalFixRegressionTests.swift,
-  TranslatorSceneFixRegressionTests.swift, ShaderPreprocessorTests.swift)에 있는
-  기대 입출력 케이스로 포트 자체를 검증한다(`--selftest`). 포트 대상은 "거부하는가"
-  까지이며 매크로 확장/본문 방출은 포팅하지 않는다(거부는 그 전에 결정된다).
+  최초 작성(2026-08-01) 머신에는 Swift 툴체인이 없어 거부 판정 경로
+  (ShaderPreprocessor.preprocessStrict + ExprEval.evalChecked)를 Python 으로 옮겼다. 현재 머신에는
+  Xcode/Swift가 있지만, 워크샵 PKG 전수 측정을 독립 실행할 수 있게 이 포트를 유지한다.
+
+  `--selftest` 는 **Swift 를 실행하지 않는다**. Swift 소스의 연산자 집합과 XCTest의 단일행 리터럴
+  기대값을 정적으로 수확해 Python 결과와 맞추고, 수확 불가 케이스는 이 파일의 고정 기대값과 맞춘다.
+  따라서 이것은 소스 드리프트 감시자이지 Python↔Swift 직접 differential 검증이 아니다. 프로덕션
+  동작은 아래 Swift 테스트를 별도로 실행해야 하며, 코퍼스 전체를 Swift에 직접 넣은 대조는 아직 없다.
+  포트 대상은 "거부하는가"까지이며 매크로 확장/본문 방출은 포팅하지 않는다.
 
   근거 줄번호(포팅 시점 소스):
     ShaderPreprocessor.swift:17-67(preprocessStrict), :81-95(splice), :98-106(COMBO),
@@ -75,27 +78,103 @@ def parse_pkg(data):
 
 # ---------------------------------------------------------------- ExprEval 포트 (ShaderPreprocessor.swift:483-609)
 
-TWO_CHAR_OPS = {"==", "!=", "<=", ">=", "&&", "||"}
-SINGLE_OPS = set("()!*/+-<>")
+# **[G2/BK 2026-08-30 이식]** 종전 이 두 집합은 pre-G2 판본이었다 — `SINGLE_OPS` 가
+# `% & | ^ ~` 를 빠뜨리고 시프트를 명시 거부했다. HEAD 의 Swift 는 그 전부를 **평가한다**
+# (`ShaderPreprocessor.swift:914` 의 two 집합 · `:922` 의 `"()!*/%+-<>&|^~"`).
+# 두 집합은 이제 `selftest_operator_sets()` 가 그 두 줄을 파싱해 대조한다 —
+# Swift 쪽이 넓어지면 이 파일을 안 고치는 한 셀프테스트가 빨개진다.
+TWO_CHAR_OPS = {"==", "!=", "<=", ">=", "&&", "||", "<<", ">>"}
+SINGLE_OPS = set("()!*/%+-<>&|^~")
+NUMERIC_SUFFIXES = "uUfFlL"        # 실물 접미 집합(ShaderPreprocessor.swift:891 `"uUfFlL"`)
+
+INT32_MIN = -(2 ** 31)
+INT32_MAX = 2 ** 31 - 1
+
+
+def _w32(v):
+    """실물이 32비트(`eax`/`esi`)로 도는 자리의 폭 맞춤 — Swift `w32`/`wide` 쌍과 같다."""
+    v &= (2 ** 32 - 1)
+    return v - 2 ** 32 if v > INT32_MAX else v
+
+
+def _ascii_digit(c, radix):
+    """실물은 `isdigit`/`isxdigit`(ASCII)로 판정한다 — 유니코드 숫자는 배제(Swift:869-872)."""
+    if not c.isascii():
+        return None
+    try:
+        v = int(c, 16)
+    except ValueError:
+        return None
+    return v if v < radix else None
+
+
+def we_numeric_literal(s, start):
+    """ExprEval.weNumericLiteral 포트(ShaderPreprocessor.swift:865-897) — (값, 다음 인덱스) 또는 None.
+
+    · `0x`/`0X` 접두 → 16진 누적, 그 밖엔 10진 누적. 둘 다 **32비트 랩**(`0xFFFFFFFF` = -1).
+    · 정수부 뒤 `.` 은 **무조건 소비**하고 이어지는 숫자도 소비하되 값에는 안 넣는다
+      (`#if 1.5` = 1 · `#if 1.` = 1 · 16진도 같은 합류점이라 `#if 0x10.5` = 16).
+    · 이어서 `u`/`f`/`l`(대소문자 무관) 접미를 여러 개 소비한다.
+    · `1e5` 는 여기서 수 `1` 로 끊기고 `e5` 가 식별자 토큰이 된다 → **잔여 토큰**으로 거부된다
+      (종전의 명시 거부와 결말 동일).
+    """
+    n = len(s)
+    i = start
+    if i >= n or _ascii_digit(s[i], 10) is None:
+        return None
+    acc = 0
+    if s[i] == "0" and i + 1 < n and s[i + 1] in "xX":
+        i += 2
+        while i < n:
+            d = _ascii_digit(s[i], 16)
+            if d is None:
+                break
+            acc = _w32(acc * 16 + d)
+            i += 1
+    else:
+        while i < n:
+            d = _ascii_digit(s[i], 10)
+            if d is None:
+                break
+            acc = _w32(acc * 10 + d)
+            i += 1
+    if i < n and s[i] == ".":
+        i += 1
+        while i < n and _ascii_digit(s[i], 10) is not None:
+            i += 1
+    while i < n and s[i] in NUMERIC_SUFFIXES:
+        i += 1
+    return acc, i
+
+
+def numeric_literal(s):
+    """ExprEval.numericLiteral — 문자열 **전체**가 하나의 WE 수치 리터럴일 때 그 값."""
+    v = s.strip()
+    r = we_numeric_literal(v, 0)
+    if r is None or r[1] != len(v):
+        return None
+    return r[0]
 
 
 def tokenize(s):
-    """ExprEval.tokenize — (tokens, unsupported)."""
+    """ExprEval.tokenize 포트(ShaderPreprocessor.swift:903-940) — (tokens, unsupported, badChars).
+
+    `badChars` 는 렉서가 모른 문자 목록(실물 토큰 코드 0x19) — `classify_refusal` 이 이걸로
+    사유를 가른다. 종전에는 식 원문을 정규식으로 되짚어 분류했는데, 그 정규식이 렉서와
+    따로 낡아 `%`/시프트/16진을 계속 거부 사유로 적고 있었다.
+    """
     toks = []
     i = 0
     n = len(s)
-    unsupported = False
+    bad = []
     while i < n:
         c = s[i]
         if c.isspace():
             i += 1
             continue
+        # 2글자 토큰을 1글자보다 먼저 — `<<` 가 `<`+`<` 로 쪼개지면 `A << 2` 가 `A < 0` 로 오평가된다.
         if i + 1 < n and s[i:i + 2] in TWO_CHAR_OPS:
             toks.append(s[i:i + 2])
-            i += 2
-            continue
-        if i + 1 < n and (s[i:i + 2] == "<<" or s[i:i + 2] == ">>"):
-            unsupported = True   # 시프트: `<`/`>` 이중 토큰 오평가 방지 명시 거부
             i += 2
             continue
         if c in SINGLE_OPS:
@@ -110,20 +189,27 @@ def tokenize(s):
             i = j
             continue
         if c.isdigit():
-            j = i
-            while j < n and s[j].isdigit():
-                j += 1
-            if j < n and (s[j].isalpha() or s[j] == "_"):
-                unsupported = True   # 0x10 / 1u / 1e5 — 10진 파서로는 오평가
-            toks.append(s[i:j])
-            i = j
+            r = we_numeric_literal(s, i)
+            if r is None:
+                bad.append(c)
+                i += 1
+                continue
+            toks.append(str(r[0]))
+            i = r[1]
             continue
-        unsupported = True   # % & | ^ ~ ? : . , ; " 등
+        # 렉서가 모르는 문자(`? : @ ; .` 등). 수 리터럴 안의 `.` 는 위에서 이미 소비됐으므로
+        # 여기 오는 `.` 는 수 밖의 것뿐이다(= 멤버 접근).
+        bad.append(c)
         i += 1
-    return toks, unsupported
+    return toks, bool(bad), bad
 
 
 MAX_DEPTH = 256
+# 재귀 하강 파서는 괄호 한 겹마다 Python 프레임을 여러 개 쓴다. CPython 기본 한도(보통
+# 1000)를 그대로 두면 깊이 약 120에서 MAX_DEPTH 검사보다 먼저 RecursionError가 난다.
+# Swift 포트 대상의 256 캡까지는 실제로 도달하게 충분한 여유를 두고, 구현 세부가 바뀌어
+# 그래도 넘치면 아래 eval_checked 경계에서 우아하게 거부한다.
+PYTHON_RECURSION_FLOOR = (MAX_DEPTH + 1) * 16
 INT_MIN = -(2 ** 63)
 INT_MAX = 2 ** 63 - 1
 
@@ -133,12 +219,26 @@ def _wrap(v):
     return v - 2 ** 64 if v > INT_MAX else v
 
 
-def eval_checked(expr, defines, defined_names=None, suspect=frozenset()):
-    """ExprEval.evalChecked — 미지원이면 None."""
-    toks, unsupported = tokenize(expr)
+def eval_checked(expr, defines, defined_names=None, suspect=frozenset(), text_defines=None,
+                 macro_depth=0):
+    """ExprEval.evalChecked 포트(ShaderPreprocessor.swift:702-853) — 미지원이면 None.
+
+    **[G2/BK 2026-08-30 이식]** 거부 규약은 유지하고 **아는 문법만 넓혔다**. HEAD 의 Swift 에서
+    거부는 이제 셋뿐이다: ① 렉서가 모르는 문자(`? : @ ;` · 수 밖의 `.`) ② 수로 못 읽는 수치
+    define(suspect) 참조 ③ 잔여 토큰. `% & | ^ ~ << >>` 와 16진·접미·소수 리터럴은 **평가된다**.
+
+    우선순위 사슬은 실물(=C)과 같다 — `|` < `^` < `&` < `==`/`!=` < 비교 < 시프트 < `+`/`-` <
+    `*`/`/`/`%` < 단항. 뭉치면 `1 | 2 ^ 3 & 1` · `2 == 1 < 1` · `1 << 2 + 1` 이 갈린다.
+    산술 폭도 실물과 같이 갈라 둔다: 비트·시프트·`~` 만 32비트 절단, `+ - * /` 는 64비트 랩.
+    """
+    if sys.getrecursionlimit() < PYTHON_RECURSION_FLOOR:
+        sys.setrecursionlimit(PYTHON_RECURSION_FLOOR)
+
+    toks, unsupported, _bad = tokenize(expr)
     if unsupported:
         return None
     known = set(defines.keys()) if defined_names is None else defined_names
+    td = text_defines or {}
     state = {"pos": 0, "failed": False, "depth": 0}
 
     def peek():
@@ -164,8 +264,12 @@ def eval_checked(expr, defines, defined_names=None, suspect=frozenset()):
                 return v
             if t == "!":
                 return 0 if parse_primary() != 0 else 1
+            if t == "~":
+                return _w32(~_w32(parse_primary()))     # 실물 `not eax`(0x140167e04) — 32비트
             if t == "-":
                 return _wrap(0 - parse_primary())
+            if t == "+":
+                return parse_primary()                   # 실물 0x140167c29: 단항 `+` 는 통과
             if t == "defined":
                 if peek() == "(":
                     state["pos"] += 1
@@ -175,28 +279,40 @@ def eval_checked(expr, defines, defined_names=None, suspect=frozenset()):
                     return 1 if name in known else 0
                 return 1 if (nxt() or "") in known else 0
             try:
-                return int(t)          # Swift Int(t) — 10진만
+                return int(t)          # 토큰화 단계에서 10진 문자열로 정규화돼 있다
             except ValueError:
                 pass
             if t in suspect:
                 state["failed"] = True
                 return 0
-            return defines.get(t, 0)
+            if t in defines:
+                return defines[t]
+            # G5 — 실물은 `#if` 식 안에서도 매크로를 확장한다(렉서가 재렉싱, 깊이 캡 0x63=99).
+            # 본문이 식으로 안 읽히면 0(거부가 아니다) — Swift 의 `?? 0` 과 같다.
+            if t in td and macro_depth < 99:
+                inner = dict(td)
+                inner.pop(t, None)     # 자기 참조(`#define A A`) 무한재귀 차단
+                v = eval_checked(td[t], defines, known, suspect, inner, macro_depth + 1)
+                return 0 if v is None else v
+            return 0
         finally:
             state["depth"] -= 1
 
     def parse_mul():
         v = parse_primary()
-        while peek() in ("*", "/"):
+        while peek() in ("*", "/", "%"):
             op = nxt()
             r = parse_primary()
             if op == "*":
                 v = _wrap(v * r)
             elif r == 0 or (v == INT_MIN and r == -1):
-                v = 0                                   # Swift 측 트랩 가드와 동일
-            else:
+                v = 0                                   # 실물 0x140167bcc: 제수 0 이면 결과 0
+            elif op == "/":
                 q = abs(v) // abs(r)                    # Swift Int 나눗셈 = 0 방향 절단
                 v = q if (v < 0) == (r < 0) else -q
+            else:
+                q = abs(v) % abs(r)                     # Swift `%` 는 피제수 부호를 따른다
+                v = q if v >= 0 else -q
         return v
 
     def parse_add():
@@ -207,20 +323,67 @@ def eval_checked(expr, defines, defined_names=None, suspect=frozenset()):
             v = _wrap(v + r) if op == "+" else _wrap(v - r)
         return v
 
-    def parse_cmp():
+    def parse_shift():
+        # 실물 0x140167a8e: `cmp ebp,0x1f; ja → 0`. **부호 없는** 비교라 음수 시프트량도 0.
         v = parse_add()
-        while peek() in ("==", "!=", "<", ">", "<=", ">="):
+        while peek() in ("<<", ">>"):
             op = nxt()
             r = parse_add()
-            v = int({"==": v == r, "!=": v != r, "<": v < r,
-                     ">": v > r, "<=": v <= r, ">=": v >= r}[op])
+            if r < 0 or r > 31:
+                v = 0
+            elif op == "<<":
+                v = _w32(_w32(v) << r)
+            else:
+                v = _w32(_w32(v) >> r)                  # `sar` = 산술 시프트(Python >> 도 산술)
+        return v
+
+    def parse_rel():
+        v = parse_shift()
+        while peek() in ("<", ">", "<=", ">="):
+            op = nxt()
+            r = parse_shift()
+            v = int({"<": v < r, ">": v > r, "<=": v <= r, ">=": v >= r}[op])
+        return v
+
+    def parse_eq():
+        # 실물은 `==`/`!=` 가 비교보다 **느슨**하다(0x140167680 이 0x140167850 을 부른다) —
+        # 뭉치면 `2 == 1 < 1` 이 1(종전) vs 0(실물)로 갈린다.
+        v = parse_rel()
+        while peek() in ("==", "!="):
+            op = nxt()
+            r = parse_rel()
+            v = int(v == r if op == "==" else v != r)
+        return v
+
+    def parse_bit_and():
+        v = parse_eq()
+        while peek() == "&":
+            state["pos"] += 1
+            r = parse_eq()
+            v = _w32(_w32(v) & _w32(r))
+        return v
+
+    def parse_bit_xor():
+        v = parse_bit_and()
+        while peek() == "^":
+            state["pos"] += 1
+            r = parse_bit_and()
+            v = _w32(_w32(v) ^ _w32(r))
+        return v
+
+    def parse_bit_or():
+        v = parse_bit_xor()
+        while peek() == "|":
+            state["pos"] += 1
+            r = parse_bit_xor()
+            v = _w32(_w32(v) | _w32(r))
         return v
 
     def parse_and():
-        v = parse_cmp()
+        v = parse_bit_or()
         while peek() == "&&":
             state["pos"] += 1
-            r = parse_cmp()
+            r = parse_bit_or()
             v = 1 if (v != 0 and r != 0) else 0
         return v
 
@@ -232,7 +395,12 @@ def eval_checked(expr, defines, defined_names=None, suspect=frozenset()):
             v = 1 if (v != 0 or r != 0) else 0
         return v
 
-    value = parse_or()
+    try:
+        value = parse_or()
+    except RecursionError:
+        # 매크로 재평가 등 파서 밖 재귀까지 합쳐 안전 여유를 넘더라도 측정 런 전체를
+        # traceback 으로 중단하지 않는다. evalChecked 의 미지원/잔여 토큰과 같은 거부다.
+        return None
     if state["failed"] or state["pos"] != len(toks):
         return None
     return value
@@ -385,6 +553,10 @@ def has_identical_branches(lines, start):
 
 
 def paren_decimal_int(value):
+    """ShaderPreprocessor.parenthesizedDecimalInt 포트(:593-600).
+
+    G2: 안쪽은 10진뿐 아니라 실물 문법(16진·`u`/`f`/`l` 접미·소수부)도 받는다 — `(0x10)`.
+    """
     v = value.strip()
     if not v.startswith("("):
         return None
@@ -393,7 +565,7 @@ def paren_decimal_int(value):
     try:
         return int(v)
     except ValueError:
-        return None
+        return numeric_literal(v)
 
 
 def token_after(kw, line):
@@ -402,26 +574,22 @@ def token_after(kw, line):
 
 
 def classify_refusal(expr, defines, defined_names, suspect):
-    """거부 사유 분류(진단용 — 판정은 eval_checked 가 한다)."""
-    toks, unsupported = tokenize(expr)
+    """거부 사유 분류(진단용 — 판정은 eval_checked 가 한다).
+
+    **[G2/BK 2026-08-30 이식]** 종전 이 함수는 식 원문을 정규식으로 되짚어 `shift`/`hexLiteral`/
+    `suffixedOrExpLiteral`/`modulo`/`bitwise` 를 사유로 냈다. HEAD 의 Swift 에서 그 다섯은
+    **거부가 아니라 평가**이므로 도달 불가한 라벨이었다(`ShaderPreprocessor.swift:700` 이 남은
+    트리거를 셋으로 열거한다: 미지 문자 · suspect define · 잔여 토큰).
+    이제 분류는 정규식이 아니라 **렉서가 실제로 모른 문자**(`tokenize` 의 세 번째 반환)로 한다 —
+    렉서가 넓어지면 분류도 자동으로 따라간다(정규식은 따라오지 않아 이 드리프트가 났다).
+    """
+    toks, unsupported, bad = tokenize(expr)
     if unsupported:
-        if "<<" in expr or ">>" in expr:
-            return "shift"
-        if re.search(r"\b0[xX][0-9a-fA-F]+", expr):
-            return "hexLiteral"
-        if re.search(r"\b\d+[a-zA-Z_]", expr):
-            return "suffixedOrExpLiteral"
-        if "?" in expr or ":" in expr:
-            return "ternary"
-        if "%" in expr:
-            return "modulo"
-        if re.search(r"[&|^~]", expr) and not re.search(r"&&|\|\|", expr.replace("&&", "").replace("||", "")):
-            return "bitwise"
-        if "." in expr:
-            return "memberAccess"      # uniform 멤버 비교(g_Texture0Resolution.x < …)
-        if re.search(r"[&|^~]", expr):
-            return "bitwise"
-        return "unknownChar"
+        if "?" in bad or ":" in bad:
+            return "ternary"           # 실물 렉서에도 삼항이 없다(토큰 코드 0x19)
+        if "." in bad:
+            return "memberAccess"      # 수 밖의 `.` — uniform 멤버 비교(g_Texture0Resolution.x < …)
+        return "unknownChar"           # `;` `@` 등 그 밖의 미지 문자
     if any(t in suspect for t in toks):
         return "suspectDefine"
     return "residualTokens"
@@ -499,7 +667,7 @@ def evaluate_conditionals(source, defines, tolerances=ALL_TOLERANCES):
                 cond = token_after("#ifndef", t) not in defined_names()
             else:
                 expr = t[3:]
-                v = eval_checked(expr, d, defined_names(), suspect)
+                v = eval_checked(expr, d, defined_names(), suspect, text_defines)
                 if v is not None:
                     cond = v != 0
                 elif parent_active or "parentActive" not in tolerances:
@@ -515,7 +683,7 @@ def evaluate_conditionals(source, defines, tolerances=ALL_TOLERANCES):
             cond = False
             if not f[1]:
                 expr = t[5:]
-                v = eval_checked(expr, d, defined_names(), suspect)
+                v = eval_checked(expr, d, defined_names(), suspect, text_defines)
                 if v is not None:
                     cond = v != 0
                 elif f[2] or "parentActive" not in tolerances:
@@ -575,13 +743,23 @@ def evaluate_conditionals(source, defines, tolerances=ALL_TOLERANCES):
                     d[name] = 1
                     flag_defines.add(name)
                 else:
+                    # 등록 사슬은 Swift `ShaderPreprocessor.swift:430-450` 과 같은 순서다:
+                    #   10진 정수 → 괄호 감싼 정수(F422) → WE 수치 리터럴(G2/BK) → suspect(F421)
                     try:
                         d[name] = int(value)
                     except ValueError:
                         pv = paren_decimal_int(value)
+                        nl = numeric_literal(value) if pv is None else None
                         if pv is not None:
                             d[name] = pv
+                        elif nl is not None:
+                            # G2/BK: `#define X 0x10` · `1u` · `1.5` — 실물 렉서가 아는 문법이므로
+                            # 값으로 등록한다. 종전에는 아래 suspect 로 몰려 이 이름을 쓰는 `#if`
+                            # 가 통째로 거부됐다(= 이펙트 폴백).
+                            d[name] = nl
                         elif value[0].isdigit():
+                            # 남은 거부는 실물이 **수로도 안 읽는** 형태뿐이다(`1e5` = 수 1 +
+                            # 식별자 `e5` → 잔여 토큰). `1.5` 는 [BK 2026-08-21] 이후 여기 안 온다.
                             suspect.add(name)
                     text_defines[name] = value
         elif emitting():
@@ -763,29 +941,307 @@ def collect_combos(src):
     return out
 
 
-# ---------------------------------------------------------------- 셀프테스트 (Swift 테스트 기대값 대조)
+# ---------------------------------------------------------------- 셀프테스트
+#
+# **[정정 2026-08-30] 종전 이 절은 기대값을 손으로 베껴 적어 두어, 잡아야 할 드리프트를
+# 자기 자신과 함께 굳혔다.** 종전 `SELFTEST_REFUSE` 는 14건 전부를 거부로 단언했는데
+# HEAD 의 Swift 는 그중 **2건만** 거부한다(삼항 · 잔여 토큰). 나머지 12건
+# (`% & | ^ ~ << >>` · `0x10` · `A == 0x10` · `1u` · `#elif A % 2` 체인 · `#define X 0x10`)은
+# G2(1e4660ad)/BK(ba2b6623, 둘 다 2026-08-21) 이후 **평가된다**. 이식본이 pre-G2 판본인데
+# 기대값도 같은 시점에 굳었으므로 `--selftest` 는 "통과 (0 실패)" 를 찍고 0 으로 종료했다 —
+# 프로덕션 로직이 통째로 바뀌어도 초록인 **죽은 게이트**였다.
+#
+# **그래서 기대값을 다시 굳히지 않는다.** 아래 `harvest_swift_expectations()` 가
+# `Tests/WapleCoreTests/` 의 XCTest 단언에서 `ExprEval.evalChecked` ·
+# `ShaderPreprocessor.preprocessStrict` 케이스를 **파싱해** 기대값을 만든다. Swift 쪽이
+# 넓어지거나 좁아지면 그 테스트 줄이 먼저 바뀌므로 이 셀프테스트가 자동으로 따라간다.
+# 문법 집합도 같은 이유로 `harvest_swift_operator_sets()` 가 `ShaderPreprocessor.swift` 의
+# 두 줄(two 집합 · 1글자 연산자 문자열)을 파싱해 이 파일의 `TWO_CHAR_OPS`/`SINGLE_OPS` 와
+# 대조한다 — Swift 가 연산자를 추가하면 여기서 빨개진다.
+#
+# **수확기가 못 덮는 것**(그래서 아래 손으로 적은 케이스가 남는다): 다중행 `"""` 리터럴로
+# 쓰인 소스, 배열 변수를 순회하는 단언, `preprocess`(비-strict) 문자열 포함 검사, 그리고
+# 애초에 Swift 테스트가 없는 이식본 고유 경로(관용 어블레이션 스위치 · 인클루드 통계 ·
+# [COMBO] 시딩). 이것들은 `SELFTEST_*` 에 남기되 **HEAD 의 Swift 에 실제로 돌려서** 값을
+# 정했다(방법: `.build/debug/WapleCore.o` 에 `@testable import WapleCore` 하는 스크래치
+# 실행파일을 링크해 14+10 케이스를 직접 호출 — 리포의 `Tests/` 는 건드리지 않았다).
 
+SWIFT_PREPROCESSOR = os.path.join(REPO, "Sources", "WapleCore", "ShaderPreprocessor.swift")
+SWIFT_TEST_FILES = (
+    "Tests/WapleCoreTests/ShaderPreprocessorRequireTests.swift",
+    "Tests/WapleCoreTests/ShaderEngineUniformTypeTests.swift",
+    "Tests/WapleCoreTests/TranslationEvalFixRegressionTests.swift",
+    "Tests/WapleCoreTests/ShaderPreprocessorConformanceTests.swift",
+    "Tests/WapleCoreTests/ShaderPreprocessorTests.swift",
+    "Tests/WapleCoreTests/TranslatorSceneFixRegressionTests.swift",
+)
+
+SWIFT_STR_LIT = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
+_SWIFT_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", '"': '"', "\\": "\\", "'": "'"}
+
+
+def swift_unescape(s):
+    out = []
+    i = 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s):
+            out.append(_SWIFT_ESCAPES.get(s[i + 1], s[i + 1]))
+            i += 2
+            continue
+        out.append(s[i])
+        i += 1
+    return "".join(out)
+
+
+def _swift_balanced(text, start):
+    """text[start] == '(' 일 때 짝이 맞는 ')' 바로 다음 인덱스. 문자열 리터럴 안은 세지 않는다."""
+    depth = 0
+    i = start
+    in_str = False
+    while i < len(text):
+        c = text[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            i += 1
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return None
+
+
+def _swift_split_args(s):
+    """최상위 콤마 분리 — 괄호·대괄호·문자열 리터럴 안의 콤마는 무시."""
+    out = []
+    buf = ""
+    depth = 0
+    in_str = False
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if in_str:
+            buf += c
+            if c == "\\" and i + 1 < len(s):
+                buf += s[i + 1]
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            buf += c
+            i += 1
+            continue
+        if c in "([":
+            depth += 1
+        elif c in ")]":
+            depth -= 1
+        if c == "," and depth == 0:
+            out.append(buf)
+            buf = ""
+            i += 1
+            continue
+        buf += c
+        i += 1
+    if buf.strip():
+        out.append(buf)
+    return out
+
+
+# Swift 기대값 표현식 중 **정수 산술만** 받는다(파이썬과 결과가 같은 연산자에 한정).
+# `1 | (2 ^ (3 & 1))` 처럼 테스트가 기대값을 식으로 적는 자리를 그대로 읽기 위한 것이다.
+_SWIFT_NAMED_INTS = {"Int(Int32.min)": -(2 ** 31), "Int(Int32.max)": 2 ** 31 - 1,
+                     "Int32.min": -(2 ** 31), "Int32.max": 2 ** 31 - 1}
+_SWIFT_INT_EXPR = re.compile(r"^[\s\d()+\-*/|&^~]+$")
+
+
+def swift_int_expr(text):
+    """Swift 테스트가 적은 기대 정수. 정수 리터럴·괄호·`+ - * / | & ^ ~` 만. 그 밖은 None."""
+    t = text.strip()
+    if t in _SWIFT_NAMED_INTS:
+        return _SWIFT_NAMED_INTS[t]
+    if not t or not _SWIFT_INT_EXPR.match(t):
+        return None
+    if re.search(r"\d\s*/\s*\d", t):
+        return None                       # 파이썬 `/` 는 실수 나눗셈 — 뜻이 갈리므로 받지 않는다
+    try:
+        return int(eval(t, {"__builtins__": {}}, {}))   # 위 정규식이 이름·호출·속성을 전부 배제한다
+    except (SyntaxError, ValueError, ZeroDivisionError, TypeError):
+        return None
+
+
+def swift_int_dict(text):
+    """`[:]` / `["A": 3, "B": 2]` → dict. 그 밖 형태(변수·계산식)는 None."""
+    t = text.strip()
+    if t == "[:]":
+        return {}
+    if not (t.startswith("[") and t.endswith("]")):
+        return None
+    body = t[1:-1].strip()
+    if not body:
+        return {}
+    out = {}
+    for part in _swift_split_args(body):
+        m = re.match(r'^\s*"([A-Za-z_]\w*)"\s*:\s*(-?\d+)\s*$', part)
+        if m is None:
+            return None
+        out[m.group(1)] = int(m.group(2))
+    return out
+
+
+def harvest_swift_expectations(repo=None):
+    """`Tests/WapleCoreTests/` 의 XCTest 단언에서 기대값을 뽑는다.
+
+    반환: (evals, pres, skipped)
+      evals — (expr, defines, want|None, 출처)  ← `ExprEval.evalChecked`
+      pres  — (source, combos, ok: bool, 출처)  ← `ShaderPreprocessor.preprocessStrict`
+      skipped — (출처, 이유) — 문법상 못 읽은 단언. **개수를 셀프테스트가 감시한다**(아래).
+    """
+    repo = repo or REPO
+    evals = []
+    pres = []
+    skipped = []
+    for rel in SWIFT_TEST_FILES:
+        path = os.path.join(repo, rel)
+        if not os.path.isfile(path):
+            skipped.append((rel, "테스트 파일이 없다"))
+            continue
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        for m in re.finditer(r"XCTAssert(Equal|Nil|NotNil)\s*\(", text):
+            kind = m.group(1)
+            close = _swift_balanced(text, m.end() - 1)
+            if close is None:
+                continue
+            args = _swift_split_args(text[m.end():close - 1])
+            if not args:
+                continue
+            call = args[0].strip()
+            where = "%s:%d" % (rel, text[:m.start()].count("\n") + 1)
+            for prefix, sink in (("ExprEval.evalChecked(", "eval"),
+                                 ("ShaderPreprocessor.preprocessStrict(", "pre")):
+                if not call.startswith(prefix):
+                    continue
+                cclose = _swift_balanced(call, call.index("("))
+                cargs = _swift_split_args(call[call.index("(") + 1:cclose - 1])
+                if len(cargs) < 2:
+                    skipped.append((where, "인자 형태를 못 읽었다"))
+                    break
+                lit = SWIFT_STR_LIT.match(cargs[0].strip())
+                if lit is None:
+                    skipped.append((where, "첫 인자가 단일행 문자열 리터럴이 아니다"))
+                    break
+                first = swift_unescape(lit.group(1))
+                label = "defines:" if sink == "eval" else "combos:"
+                dm = re.match(r"^\s*%s(.*)$" % label, cargs[1], re.S)
+                if dm is None:
+                    skipped.append((where, "`%s` 인자를 못 찾았다" % label))
+                    break
+                d = swift_int_dict(dm.group(1))
+                if d is None or len(cargs) > 2:
+                    skipped.append((where, "정수 리터럴 맵이 아니거나 추가 인자가 있다"))
+                    break
+                if sink == "eval":
+                    if kind == "Nil":
+                        evals.append((first, d, None, where))
+                    elif kind == "Equal" and len(args) >= 2:
+                        want = swift_int_expr(args[1])
+                        if want is None:
+                            skipped.append((where, "기대값이 정수식이 아니다: %r" % args[1].strip()))
+                        else:
+                            evals.append((first, d, want, where))
+                    else:
+                        skipped.append((where, "evalChecked 에 %s 는 안 읽는다" % kind))
+                else:
+                    if kind in ("Nil", "NotNil"):
+                        pres.append((first, d, kind == "NotNil", where))
+                    else:
+                        skipped.append((where, "preprocessStrict 에 %s 는 안 읽는다" % kind))
+                break
+    return evals, pres, skipped
+
+
+# 수확기가 최소 이만큼은 읽어야 한다 — 테스트 파일이 개명·이동되거나 파서가 깨지면
+# 조용히 0건이 되어 게이트가 다시 죽는다. 실측(2026-08-30, HEAD 70a8a708): eval 48 · pre 4.
+MIN_HARVESTED_EVALS = 40
+MIN_HARVESTED_PRES = 4
+# 못 읽은 단언 수의 상한. 실측 5건은 전부 다중행 `"""` 소스이고 아래 SELFTEST_* 가 덮는다.
+# 이 수가 늘면 새로 못 읽는 단언이 생긴 것이므로 수확기를 넓히거나 상한을 근거와 함께 올려라.
+MAX_HARVEST_SKIPPED = 5
+
+
+def harvest_swift_operator_sets(path=None):
+    """`ShaderPreprocessor.swift` 의 렉서 두 줄에서 연산자 집합을 뽑는다. 실패 시 (None, None)."""
+    path = path or SWIFT_PREPROCESSOR
+    if not os.path.isfile(path):
+        return None, None
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    two = None
+    m = re.search(r"let\s+two\s*:\s*Set<String>\s*=\s*\[([^\]]*)\]", src)
+    if m:
+        two = set(swift_unescape(x) for x in re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1)))
+    single = None
+    m = re.search(r'if\s+"((?:[^"\\]|\\.)*)"\.contains\(c\)\s*\{\s*toks\.append', src)
+    if m:
+        single = set(swift_unescape(m.group(1)))
+    return two, single
+
+
+# ---- 이식본 고유 경로(대응 Swift 테스트가 없거나 다중행 리터럴이라 수확 불가) ----
+#
+# 아래는 수확기가 읽지 못하는 경로의 **고정 기대값**이다. `--selftest` 자체는 Swift 를 실행하지
+# 않으므로 이 목록만으로 현재 HEAD 와의 직접 동등성을 주장하지 않는다.
+
+# G2/BK 이후에도 여전히 거부되는 것 — 렉서가 모르는 문자 · 잔여 토큰 · 수로 못 읽는 define.
+# (실측: 이 6건 전부 `preprocessStrict(_, combos: ["A": 3])` 가 nil 을 낸다.)
 SELFTEST_REFUSE = [
-    "#if A % 2\nyes\n#endif",
-    "#if A & 1\nyes\n#endif",
-    "#if A | 1\nyes\n#endif",
-    "#if A ^ 1\nyes\n#endif",
-    "#if ~A\nyes\n#endif",
-    "#if A << 1\nyes\n#endif",
-    "#if A >> 1\nyes\n#endif",
-    "#if A ? 1 : 0\nyes\n#endif",
-    "#if 0x10\nyes\n#endif",
-    "#if A == 0x10\nyes\n#endif",
-    "#if 1u\nyes\n#endif",
-    "#if 1 0\nyes\n#endif",
-    "#if A == 1\none\n#elif A % 2\ntwo\n#endif",
-    "#define X 0x10\n#if X\nyes\n#endif",
+    "#if A ? 1 : 0\nyes\n#endif",                       # 삼항 — 실물 렉서에도 없다(토큰 0x19)
+    "#if 1 0\nyes\n#endif",                             # 잔여 토큰
+    "#if 1e5\nyes\n#endif",                             # 수 `1` + 식별자 `e5` → 잔여 토큰
+    "#if A @ 1\nyes\n#endif",                           # 미지 문자
+    "#if .5\nyes\n#endif",                              # 수 **밖**의 `.` 는 여전히 미지 문자
+    "#if A == 1\none\n#elif A ? 2 : 3\ntwo\n#endif",    # 활성 체인의 #elif 도 같다
+    "#define K 1e5\n#if K\nyes\n#endif",                # 수로 못 읽는 수치 define(suspect)
+]
+# G2/BK 로 **거부에서 평가로 넘어간** 것들 — 종전 SELFTEST_REFUSE 에 있던 12건이 여기 온다.
+# (`want` 는 emitted 에 남아야 할 토큰. 자동 Swift 대조가 아닌 고정 기대값이다.)
+SELFTEST_NOW_EVALUATED = [
+    ("#if A % 2\nyes\n#endif", {"A": 3}, "yes"),
+    ("#if A & 1\nyes\n#endif", {"A": 3}, "yes"),
+    ("#if A | 1\nyes\n#endif", {"A": 3}, "yes"),
+    ("#if A ^ 1\nyes\n#endif", {"A": 3}, "yes"),
+    ("#if ~A\nyes\n#endif", {"A": 3}, "yes"),
+    ("#if A << 1\nyes\n#endif", {"A": 3}, "yes"),
+    ("#if A >> 1\nyes\n#endif", {"A": 3}, "yes"),
+    ("#if 0x10\nyes\n#endif", {"A": 3}, "yes"),
+    ("#if A == 0x10\nyes\n#endif", {"A": 3}, None),      # 3 != 16 — 통과하되 본문은 빈다
+    ("#if 1u\nyes\n#endif", {"A": 3}, "yes"),
+    ("#if A == 1\none\n#elif A % 2\ntwo\n#endif", {"A": 3}, "two"),
+    ("#define X 0x10\n#if X\nyes\n#endif", {"A": 3}, "yes"),
+    # BK: 소수 리터럴 define 도 값이다(정수부만) — `0.0174533` 은 0 이라 거짓 분기로 간다.
+    ("#define DEG2RAD 0.0174533\n#if DEG2RAD > 0\nyes\n#else\nno\n#endif", {}, "no"),
+    ("#define M_D_PI_2 1.5707963\n#if M_D_PI_2 > 0\nyes\n#else\nno\n#endif", {}, "yes"),
 ]
 SELFTEST_ACCEPT = [
     ("#if COMBO == 1\none\n#elif defined(X) && !defined(Y)\ntwo\n#else\nother\n#endif", {"COMBO": 1}),
     ("#if 1 + 2 * 3 == 7\nyes\n#endif", {}),
     ("#if (A > 2) && !(B <= 1)\nyes\n#endif", {"A": 3, "B": 2}),
-    ("#if 0\n#if BAD % 2\ndead\n#endif\n#else\nlive\n#endif", {}),                     # 비활성 부모 관용
+    ("#if 0\n#if BAD ? 1 : 0\ndead\n#endif\n#else\nlive\n#endif", {}),                 # 비활성 부모 관용
     ("#if MASK == 1;\nyes\n#else\nno\n#endif", {"MASK": 1}),                            # F611 후행 ;
     ("#if AUDIOSAMPLES == 16\na\n#elif AUDIOSAMPLES == 32;\nb\n#endif", {"AUDIOSAMPLES": 32}),
     ("#if AUDIO /* mic */\nyes\n#endif", {"AUDIO": 1}),                                  # 지시문 블록주석 절단
@@ -797,18 +1253,23 @@ SELFTEST_REFUSE_F610 = [
     "#if g_Texture0Resolution.x < g_Texture0Resolution.y\n#define r (vec2(g,1.0))\n#else\n#define r vec2(1.0)\n#endif",
     "#if g_Texture0Resolution.x < g_Texture0Resolution.y\na\n#elif FOO\na\n#else\na\n#endif",
 ]
+# G5 — 실물은 `#if` 식 안에서도 매크로를 확장한다(ShaderPreprocessor.swift:747-763).
+# 대응 Swift 테스트가 다중행이라 수확 불가 → 직접 실측한 값이다.
+SELFTEST_MACRO_IN_IF = [
+    ("#define A B\n#define B 1\n#if A\nyes\n#else\nno\n#endif", {}, "yes"),
+    ("#define A A\n#if A\nyes\n#else\nno\n#endif", {}, "no"),                    # 자기 참조 → 0
+    ("#define A vec2(1.0)\n#if A\nyes\n#else\nno\n#endif", {}, "no"),            # 식으로 안 읽히면 0
+]
+# 이식본 고유(연산자 우선순위·32비트 폭) — 수확기가 읽는 Swift 단언과 겹치는 것은 여기 안 적는다.
 SELFTEST_EVAL = [
-    ("1 + 2 * 3", {}, 7),
     ("7 / 2", {}, 3), ("0 - 7 / 2", {}, -3), ("A / 0", {"A": 5}, 0),
-    ("A % 2", {"A": 3}, None),
-    ("0x10", {}, None),
-    ("1 0", {}, None),
+    ("1.", {}, 1), ("0x10.5", {}, 16),
 ]
 
 
 SELFTEST_BRANCH = [
     # (source, combos, 남아야 할 토큰, 사라져야 할 토큰) — 활성 분기 선택 검증
-    ("#if 0\n#if BAD % 2\ndead\n#endif\n#else\nlive\n#endif", {}, "live", "dead"),
+    ("#if 0\n#if BAD ? 1 : 0\ndead\n#endif\n#else\nlive\n#endif", {}, "live", "dead"),
     ("#ifdef HLSL\nflip\n#else\nnoflip\n#endif", {}, "flip", "noflip"),
     ("#if SHADERVERSION < 62\nold\n#else\nnew\n#endif", {}, "new", "old"),
     ("#ifdef HLSL_SM30\nsm30\n#else\nmodern\n#endif", {}, "modern", "sm30"),
@@ -817,8 +1278,137 @@ SELFTEST_BRANCH = [
 ]
 
 
+# ---------------------------------------------------------------- 정본 산문 (근거 문면)
+#
+# 두 문면을 여기 한 곳에 둔다 — 종전에는 `portFidelity` 와 evidence `note` 가 각자 자리에서
+# **서로 다른 숫자**를 적고 있었다(전자 "거부 16", 후자 "거부 14" — 후자가 F610 2건을 빼먹었다).
+# 같은 사실을 두 곳에 적으면 한 곳은 반드시 썩는다.
+
+PORT_FIDELITY = (
+    "이 수치는 ShaderPreprocessor/ExprEval 의 **거부 판정 경로를 Python 으로 이식한 판본**으로 "
+    "측정한 것이고, 코퍼스에 대해 Swift 를 직접 돌려 얻은 것은 아니다. 이식본은 "
+    "`--selftest` 가 검증한다: ① `ShaderPreprocessor.swift` 의 렉서 두 줄에서 연산자 집합을 "
+    "파싱해 대조 ② `Tests/WapleCoreTests/` 의 XCTest 단언에서 기대값 52건을 수확해 대조"
+    "(evalChecked 48 · preprocessStrict 4) ③ 수확 불가 경로 46건은 이 파일의 고정 기대값과 "
+    "대조(거부 9 · G2·BK 평가 14 · G5 매크로 3 · 통과 9 · 평가값 5 · 분기선택 6). "
+    "`--selftest` 는 Swift 바이너리를 실행하지 않으므로 이 셋은 직접 differential 증거가 아니다. "
+    "미커버 경로에서 발산할 가능성은 남는다 — macOS 에서 GLSLTranslator.translate 를 코퍼스에 "
+    "직접 돌려 재확인할 것. "
+    "**[정정 2026-08-30]** 종전 이 문면은 두 가지를 거짓으로 주장했다. "
+    "① ~~\"이 머신엔 Swift 툴체인이 없다\"~~ — 이 값이 기록된 2026-08-01 시점에는 맞았지만 "
+    "지금은 아니다(`xcode-select -p` = Xcode 27.0 Beta 5, `swift --version` = 6.4). "
+    "② ~~\"Swift 회귀테스트의 기대값(거부 16·통과 9·분기선택 6·인클루드 2 케이스)으로 포트를 "
+    "검증했다\"~~ — `--selftest` 는 Swift 를 **한 번도 부르지 않았고**, 이식본을 자기 자신이 "
+    "적어 둔 기대값과 대조했을 뿐이다. 그 기대값이 이식 시점(pre-G2)에 함께 굳어서 "
+    "**Swift 가 반대를 단언하는 12건을 거부로 계속 단언**하고 있었다: "
+    "`% & | ^ ~ << >>` · `0x10` · `A == 0x10` · `1u` · `#elif A % 2` 체인 · `#define X 0x10` — "
+    "실측(HEAD 70a8a708, `preprocessStrict(_, combos: [\"A\": 3])`)으로 14건 중 **2건만** 거부다"
+    "(삼항 · 잔여 토큰). Swift 쪽 반대 단언은 "
+    "`Tests/WapleCoreTests/ShaderPreprocessorRequireTests.swift:179-192`. "
+    "그래서 `--selftest` 는 프로덕션 로직이 통째로 바뀐 뒤에도 \"통과 (0 실패)\" 를 찍는 "
+    "죽은 게이트였다. 이식본을 G2(1e4660ad)/BK(ba2b6623, 둘 다 2026-08-21)에 맞춰 넓혔고, "
+    "연산자 집합과 수확 가능한 52건은 Swift 소스·테스트에서 유도하고, 수확 불가 46건은 이 파일의 "
+    "고정 기대값으로 남겼다. 그러므로 직접 differential 이라는 주장은 하지 않는다."
+)
+
+SUSPECT_CRITERION_CORRECTION = (
+    "**[정정 2026-08-30]** 바로 위 `suspectDefineCandidates` 와 `suspectDefineCandidatesTop` 은 "
+    "**옛 판정 기준으로 센 값이다**(2026-08-01 측정). 종전 기준은 \"숫자로 시작하는데 10진 정수도 "
+    "괄호 정수도 아니면 suspect\" 라 `0x10`·`1u`·`1.5`·`0.0174533` 을 전부 후보로 셌는데, "
+    "G2/BK(1e4660ad·ba2b6623, 둘 다 2026-08-21) 이후 Swift 는 그 넷을 **값으로 등록**한다"
+    "(`ShaderPreprocessor.swift` 의 `ExprEval.numericLiteral` 분기 — `#define X 0x10` · `1.5` 는 "
+    "이제 suspect 가 아니다). 실측(HEAD 70a8a708, `preprocessStrict`): "
+    "`#define DEG2RAD 0.0174533` + `#if DEG2RAD > 0` → `\"no\"`(값 0 으로 평가, nil 아님) · "
+    "`#define M_D_PI_2 1.5707963` + `#if … > 0` → `\"yes\"`(값 1). 즉 위 표의 상위 항목 대부분이 "
+    "HEAD 의 suspect 집합에 없다. 남는 후보는 실물이 **수로도 못 읽는** 값뿐이다(`1e5` 류 지수 표기). "
+    "생성기(`measure_workshop_shaders.py`)의 판정은 이 정정과 함께 고쳤으니 다음 재생성이 참값을 "
+    "적을 것이다 — **워크샵 코퍼스가 두 리포 어디에도 없어 지금 재측정할 수 없다**"
+    "(`WE_WORKSHOP` 미설정, 기본 경로 `Z:\\SteamLibrary\\…\\431960` 부재). "
+    "숫자를 지우지 않는 이유는 근거 보존이다 — 옛 값이 무엇이었는지가 이 드리프트의 증거다. "
+    "**이 항목의 논지와 headline 은 바뀌지 않는다.** HEAD 의 suspect 집합은 옛 기준의 "
+    "**진부분집합**이므로 넓은 기준에서 이미 빈 `suspectNamesReferencedInIf: {}` 는 좁은 기준에서도 "
+    "비어 있고(단조성), 같은 이유로 `refusedFiles: 0` 과 `verdict` 는 재생성에서 0 이 아닌 값으로 "
+    "바뀔 수 없다 — 즉 이 정정은 정확성 회복이 아니라 **근거 문면의 정정**이다."
+)
+
+HISTOGRAM_MECHANISM_CORRECTION = (
+    "**[정정 2026-08-30]** 종전 이 히스토그램의 `%`·`&(비트)`·`|(비트)`·`^`·`~`·`<<`·`>>` 버킷은 "
+    "**`unsupported` 플래그 안에서 식 원문 문자열 검사로** 셌다. G2 이후 그 연산자들은 지원되므로 "
+    "플래그가 서지 않아 그 버킷은 구조적으로 **항상 0** 이 된다(도수가 아니라 죽은 코드였다). "
+    "이제 토큰에서 직접 센다. **위 표의 값은 바뀌지 않는다** — 이 코퍼스의 `#if`/`#elif` 식에는 "
+    "그 연산자들이 실제로 0건이라(그래서 종전에도 표에 없었다) 세는 법만 고쳐졌다. "
+    "`?:`·`.멤버` 버킷도 정규식 대신 렉서가 실제로 모른 문자로 센다."
+)
+
+CAUSE_LABELS_CORRECTION = (
+    "**[검증 2026-08-30]** 위 `causes` 의 세 라벨(`residualTokens`·`unknownChar`·`memberAccess`)은 "
+    "G2/BK 뒤에도 **전부 살아 있는 거부 사유**다(`ShaderPreprocessor.swift` 가 남은 트리거를 "
+    "미지 문자·suspect define·잔여 토큰 셋으로 열거한다). 각 어블레이션이 건드리는 트리거도 "
+    "여전히 거부된다: `directiveComment` 를 끄면 `/* mic */` 가 `/`·`*`·식별자·`*`·`/` 토큰으로 "
+    "남아 잔여 토큰 가드에 걸리고(그 다섯은 전부 1글자 연산자다), `trailingSemicolon` 을 끄면 "
+    "`;` 가 미지 문자로 남고, `identicalBranches` 를 끄면 `g_Texture0Resolution.x` 의 수 밖 `.` 이 "
+    "미지 문자로 남는다. 그래서 이 표는 재생성에서 같은 값이 나올 것으로 본다 — "
+    "종전 생성기가 냈던 죽은 라벨(`shift`·`hexLiteral`·`modulo`·`bitwise`·`suffixedOrExpLiteral`)은 "
+    "이 표에 애초에 등장하지 않는다. 정정이 필요한 것은 위 `evidence.note` 의 셀프테스트 주장뿐이다."
+)
+
+SCRIPT_EV_NOTE = (
+    "ShaderPreprocessor.swift / GLSLTranslator.swift 의 거부 판정 경로 포트"
+    "(preprocessStrict · evaluateConditionals · ExprEval · weNumericLiteral · isEngine). "
+    "`--selftest` 는 Swift 소스에서 연산자 집합을 파싱하고 `Tests/WapleCoreTests/` 의 단언 "
+    "52건을 수확해 대조한다(+ 수확 불가 경로 46건은 이 파일의 고정 기대값). "
+    "**[정정 2026-08-30]** 종전 이 note 는 \"Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 "
+    "케이스) 대조 통과\" 라고 적었는데 세 군데가 틀렸다: (a) 셀프테스트는 Swift 를 부르지 않았다 "
+    "(이식본 대 이식본 대조), (b) 그 \"거부 14\" 중 12건은 HEAD 에서 **평가된다**, "
+    "(c) 같은 목록을 세는 `portFidelity` 는 F610 2건을 포함해 \"거부 16\" 이라 적어 두 문면이 "
+    "서로 어긋났다. 줄 번호 인용도 드리프트해 심볼명으로 바꿨다."
+)
+
+
 def selftest():
     fails = []
+    # M23: Python 재귀 한도가 MAX_DEPTH(256)보다 먼저 터지면 이 포트는 Swift 의
+    # "캡 초과는 우아하게 0/거부" 규약에 도달하지 못하고 측정 런 전체를 중단한다.
+    for depth, want in ((120, 1), (200, 1), (400, None)):
+        expr = "(" * depth + "1" + ")" * depth
+        try:
+            got = eval_checked(expr, {})
+        except RecursionError:
+            fails.append("괄호 깊이 %d 에서 RecursionError — MAX_DEPTH 가 도달 불가" % depth)
+            continue
+        if got != want:
+            fails.append("괄호 깊이 %d 결과 %r, 기대 %r" % (depth, got, want))
+    # ---- ① Swift 소스에서 뜬 연산자 집합과 대조(문법이 넓어지면 여기서 걸린다)
+    two, single = harvest_swift_operator_sets()
+    if two is None or single is None:
+        fails.append("ShaderPreprocessor.swift 에서 연산자 집합을 못 읽었다 — 렉서 형태가 바뀌었나?"
+                     " (two=%r single=%r)" % (two, single))
+    else:
+        if two != TWO_CHAR_OPS:
+            fails.append("2글자 연산자 집합 불일치: Swift %r vs 이식본 %r (차집합 %r)"
+                         % (sorted(two), sorted(TWO_CHAR_OPS), sorted(two ^ TWO_CHAR_OPS)))
+        if single != SINGLE_OPS:
+            fails.append("1글자 연산자 집합 불일치: Swift %r vs 이식본 %r (차집합 %r)"
+                         % (sorted(single), sorted(SINGLE_OPS), sorted(single ^ SINGLE_OPS)))
+    # ---- ② Swift 테스트에서 수확한 기대값과 대조(Swift 가 동작을 바꾸면 여기서 걸린다)
+    evals, pres, skipped = harvest_swift_expectations()
+    if len(evals) < MIN_HARVESTED_EVALS:
+        fails.append("Swift evalChecked 단언 수확 %d건 < 하한 %d — 수확기가 깨졌거나 테스트가 옮겨졌다"
+                     % (len(evals), MIN_HARVESTED_EVALS))
+    if len(pres) < MIN_HARVESTED_PRES:
+        fails.append("Swift preprocessStrict 단언 수확 %d건 < 하한 %d" % (len(pres), MIN_HARVESTED_PRES))
+    if len(skipped) > MAX_HARVEST_SKIPPED:
+        fails.append("수확 못 한 단언 %d건 > 상한 %d: %r"
+                     % (len(skipped), MAX_HARVEST_SKIPPED, skipped[:8]))
+    for expr, defs, want, where in evals:
+        got = eval_checked(expr, defs)
+        if got != want:
+            fails.append("[%s] evalChecked(%r, %r)=%r, Swift 기대 %r" % (where, expr, defs, got, want))
+    for src, combos, want_ok, where in pres:
+        ok = preprocess_strict(src, combos, lambda h: None)[0]
+        if ok != want_ok:
+            fails.append("[%s] preprocessStrict(%r) ok=%r, Swift 기대 %r" % (where, src, ok, want_ok))
+    # ---- ③ 수확 불가 경로(이 파일에 고정한 기대값 — 자동 Swift 대조 아님)
     for src in SELFTEST_REFUSE:
         ok = preprocess_strict(src, {"A": 3}, lambda h: None)[0]
         if ok:
@@ -827,6 +1417,18 @@ def selftest():
         ok = preprocess_strict(src, {}, lambda h: None)[0]
         if ok:
             fails.append("F610 거부 기대인데 통과: %r" % src)
+    for src, combos, keep in SELFTEST_NOW_EVALUATED:
+        ok, why, _d, em = preprocess_strict(src, combos, lambda h: None)
+        if not ok:
+            fails.append("G2/BK 이후 평가 기대인데 거부(%s): %r" % (why, src))
+        elif keep is not None and keep not in "\n".join(em):
+            fails.append("G2/BK 평가 결과 불일치(기대 %r 유지): %r → %r" % (keep, src, em))
+    for src, combos, keep in SELFTEST_MACRO_IN_IF:
+        ok, why, _d, em = preprocess_strict(src, combos, lambda h: None)
+        if not ok:
+            fails.append("G5 매크로 확장 기대인데 거부(%s): %r" % (why, src))
+        elif keep not in "\n".join(em):
+            fails.append("G5 매크로 확장 결과 불일치(기대 %r): %r → %r" % (keep, src, em))
     for src, combos in SELFTEST_ACCEPT:
         ok, why = preprocess_strict(src, combos, lambda h: None)[:2]
         if not ok:
@@ -839,6 +1441,13 @@ def selftest():
         out = "\n".join(preprocess_strict(src, combos, lambda h: None)[3])
         if keep not in out or drop in out:
             fails.append("분기 선택 불일치(기대 %r 유지 / %r 제거): %r" % (keep, drop, out))
+    # 거부 사유 분류가 살아 있는 라벨만 내는가 — 종전 분류기는 G2 로 사라진 사유
+    # (`shift`/`hexLiteral`/`modulo`/`bitwise`/`suffixedOrExpLiteral`)를 계속 냈다.
+    live_causes = {"ternary", "memberAccess", "unknownChar", "suspectDefine", "residualTokens"}
+    for src in SELFTEST_REFUSE + SELFTEST_REFUSE_F610:
+        why = preprocess_strict(src, {"A": 3}, lambda h: None)[1]
+        if why is not None and why not in live_causes:
+            fails.append("죽은 거부 사유 라벨 %r (살아 있는 것: %r): %r" % (why, sorted(live_causes), src))
     # 콤보 기본값 + HLSL/SHADERVERSION 시딩
     d = preprocess_strict('// [COMBO] {"combo":"MODE","default":2}\n', {}, lambda h: None)[2]
     if d.get("MODE") != 2 or d.get("HLSL") != 1 or d.get("SHADERVERSION") != 69 or "HLSL_SM30" in d:
@@ -848,7 +1457,7 @@ def selftest():
     ok, _why, d2, em = preprocess_strict('#include "x.h"\n#if HH == 3\nyes\n#endif\n', {}, hdr.get)
     if not ok or d2.get("HH") != 3 or "fromheader" not in "\n".join(em) or "yes" not in "\n".join(em):
         fails.append("인클루드 인라인/헤더 COMBO 불일치")
-    # 미해석 인클루드는 조용한 드롭(경고 후 빈 줄) — 거부가 아니다
+    # 미해석 인클루드는 조용한 드롭(줄 자체가 사라진다) — 거부가 아니다
     stats = {"dropped": []}
     ok, _why, _d, em = preprocess_strict('#include "missing.h"\nbody\n', {}, lambda h: None, stats)
     if not ok or stats["dropped"] != ["missing.h"] or "body" not in "\n".join(em):
@@ -1073,6 +1682,9 @@ def main():
         print("셀프테스트 %s (%d 실패)" % ("통과" if not fails else "실패", len(fails)))
         return 1 if fails else 0
 
+    specfmt.require_inputs("measure_workshop_shaders",
+                           ("dir", WS, "WE_WORKSHOP", "워크샵 코퍼스"))
+
     shaders, pkg_files, decode_bad, ext_hist = load_corpus()
 
     # 쌍/미쌍 실계산(하드코딩 금지 — 다른 코퍼스에서 재측정해도 뜻이 있어야 한다)
@@ -1199,25 +1811,38 @@ def main():
         directive_counts.append((len(exprs), sh))
         depth_counts.append((max_conditional_depth(normalize_newlines(src)), sh))
         for e in exprs:
-            toks, unsupported = tokenize(e)
+            toks, unsupported, bad = tokenize(e)
+            # **[정정 2026-08-30]** 종전 이 히스토그램은 `%`·비트·시프트 버킷을 `unsupported`
+            # 플래그 안에서 식 원문 문자열 검사로 셌다 — G2 이후 그 연산자들은 지원되므로
+            # `unsupported` 가 서지 않아 **전부 0 이 된다**. 이제 토큰에서 직접 센다
+            # (`&&` 와 `&` 를 혼동하지 않는 것은 렉서가 2글자를 먼저 보기 때문이다).
             for t in toks:
-                if t in ("==", "!=", "<=", ">=", "&&", "||", "<", ">", "+", "-", "*", "/", "!", "(", ")"):
+                if t in ("==", "!=", "<=", ">=", "&&", "||", "<", ">", "+", "-", "*", "/",
+                         "!", "(", ")", "%", "^", "~", "<<", ">>"):
                     if_ops[t] += 1
+                elif t == "&":
+                    if_ops["&(비트)"] += 1
+                elif t == "|":
+                    if_ops["|(비트)"] += 1
                 elif t == "defined":
                     if_ops["defined"] += 1
             if unsupported:
-                for ch, label in (("%", "%"), ("&", "&(비트)"), ("|", "|(비트)"), ("^", "^"),
-                                  ("~", "~"), ("?", "?:"), ("<<", "<<"), (">>", ">>"), (".", ".멤버")):
-                    if ch in ("&", "|"):
-                        if re.search(r"(?<![%s])\%s(?![%s])" % (ch, ch, ch), e):
-                            if_ops[label] += 1
-                    elif ch in e:
-                        if_ops[label] += 1
+                # 미지 문자 버킷도 정규식이 아니라 **렉서가 실제로 모른 문자**로 센다.
+                if "?" in bad or ":" in bad:
+                    if_ops["?:"] += 1
+                if "." in bad:
+                    if_ops[".멤버"] += 1
                 unsupported_exprs[e] += 1
                 unsupported_expr_where.setdefault(e, "%s/%s::%s" % (sh["wid"], sh["pkg"], sh["name"]))
 
-        # F421 suspect 후보: 숫자로 시작하지만 10진 정수가 아닌 값의 #define(0x10·1.5·2u 류).
+        # F421 suspect 후보: 숫자로 시작하지만 **실물이 수로도 못 읽는** 값의 #define.
         # 이 이름이 #if 에서 참조되면 거부다 — 후보 수와 실제 참조를 따로 센다.
+        #
+        # **[정정 2026-08-30]** 종전 판정은 "10진 정수도 아니고 괄호 정수도 아니면 suspect" 라
+        # `0x10`·`1u`·`1.5`·`0.0174533` 을 전부 후보로 셌다. G2/BK 이후 Swift 는 그 넷을 **값으로
+        # 등록**하므로(`ShaderPreprocessor.swift:436` 의 `ExprEval.numericLiteral` 분기) 후보가
+        # 아니다. 남는 것은 `1e5` 류 지수 표기뿐이다 — 실물도 수 `1` 에서 끊고 `e5` 를 식별자로
+        # 내며, 우리는 그 잔여 토큰을 거부한다.
         sus = set()
         for m in re.finditer(r"^[ \t]*#define\s+([A-Za-z_]\w*)[ \t]+([^\n]*)", normalize_newlines(src), re.M):
             val = m.group(2).split("//")[0].split("/*")[0].strip()
@@ -1228,7 +1853,7 @@ def main():
                 continue
             except ValueError:
                 pass
-            if paren_decimal_int(val) is None:
+            if paren_decimal_int(val) is None and numeric_literal(val) is None:
                 sus.add(m.group(1))
                 suspect_define_candidates[m.group(1)] += 1
         if sus:
@@ -1387,10 +2012,7 @@ def main():
     top_gcount = top_unique(distinct_g_per_file, "distinctG")
 
     corpus_ev = specfmt.ev("corpus", "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)")
-    script_ev = specfmt.ev("script", "scripts/spec/measure_workshop_shaders.py",
-                           "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 "
-                           "거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·"
-                           "분기선택 6 케이스) 대조 통과")
+    script_ev = specfmt.ev("script", "scripts/spec/measure_workshop_shaders.py", SCRIPT_EV_NOTE)
     shader_ev = specfmt.ev("shader", "Sources/WapleRender/Resources/WEAssets/shaders/*.h (번들 베이스에셋 14헤더)")
 
     entries = [
@@ -1534,6 +2156,7 @@ def main():
             "topByExprCount": top_directives,
             "topByNestingDepth": top_depth,
             "note": "연산자 도수는 ExprEval 토크나이저 기준(&& 와 & 를 혼동하지 않는다)",
+            "histogramMechanismCorrection": HISTOGRAM_MECHANISM_CORRECTION,
         }, "확정", [corpus_ev, script_ev]),
 
         specfmt.entry("workshop.shaders.preprocessorRefusals", {
@@ -1547,11 +2170,7 @@ def main():
             "unsupportedExpressions": {e: {"count": c, "firstSeen": unsupported_expr_where[e]}
                                        for e, c in sorted(unsupported_exprs.items(),
                                                           key=lambda kv: (-kv[1], kv[0]))},
-            "portFidelity": "이 수치는 Swift 를 실행해 얻은 것이 아니다(이 머신에 Swift 툴체인 없음). "
-                            "ShaderPreprocessor/ExprEval 의 거부 판정 경로를 Python 으로 1:1 포팅하고 "
-                            "Swift 회귀테스트의 기대값(거부 16·통과 9·분기선택 6·인클루드 2 케이스)으로 "
-                            "포트를 검증했다. 미커버 경로에서 발산할 가능성은 남는다 — macOS 에서 "
-                            "GLSLTranslator.translate 를 코퍼스에 직접 돌려 재확인할 것",
+            "portFidelity": PORT_FIDELITY,
             "verdict": "ShaderPreprocessor 가 거부하는 워크샵 셰이더는 0건. 22,723 개 #if/#elif 식 중 "
                        "ExprEval 이 평가 못 하는 것은 1개뿐이고 그마저 F610 동일-분기 관용으로 통과한다",
             "combosCaveat": "측정은 [COMBO] 기본값(스테이지 합집합) 기준. 씬/머티리얼이 콤보를 명시하면 "
@@ -1562,6 +2181,7 @@ def main():
                 "unsupportedExprToleratedBy": "F610 동일-분기(원문 텍스트 비교라 콤보 무관)",
                 "suspectDefineCandidates": len(suspect_define_candidates),
                 "suspectDefineCandidatesTop": rank(suspect_define_candidates, 12),
+                "suspectCriterionCorrection": SUSPECT_CRITERION_CORRECTION,
                 "suspectNamesReferencedInIf": rank(suspect_referenced_in_if),
                 "note": "거부 트리거는 ① 미지원 식 ② suspect define 참조 ③ 잔여 토큰뿐이고 셋 다 "
                         "식 원문으로 결정된다. 콤보는 값만 바꾸므로 활성 분기를 바꿔도 새 거부를 만들 수 없다 "
@@ -1577,6 +2197,7 @@ def main():
             "ifParenCaveat": "ifParen 을 꺼도 거부는 0 — 실패 모드가 다르다. `#if(` 는 prefix 검사에 안 걸려 "
                              "지시문 줄이 그대로 MSL 로 새고 짝 #endif 만 소비된다(조용한 파손). "
                              "코퍼스 실사용 6건",
+            "causeLabelsCorrection": CAUSE_LABELS_CORRECTION,
             "ifParenOccurrences": 6,
         }, "확정", [script_ev]),
 

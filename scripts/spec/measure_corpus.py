@@ -51,6 +51,11 @@ def parse_pkg(data):
 
 
 def main():
+    specfmt.require_inputs(
+        "measure_corpus",
+        ("dir", WS, "WE_WORKSHOP", "워크샵 코퍼스"),
+        ("dir", WE, "WE_ROOT", "WE 설치본"),
+    )
     types = collections.Counter()
     types_raw = collections.Counter()
     pkg_magic = collections.Counter()

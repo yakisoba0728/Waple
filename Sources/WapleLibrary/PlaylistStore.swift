@@ -86,7 +86,10 @@ public final class PlaylistStore {
             NSLog("%@", "[Waple] playlist.json save skipped — earlier read failed transiently, avoiding clobber")
             return
         }
-        backupCorruptStoreFile(fileURL, &corrupt)  // 손상 원본을 덮어쓰기 전 1회 백업
+        guard backupCorruptStoreFile(fileURL, &corrupt) else {
+            NSLog("%@", "[Waple] playlist save skipped — corrupt original backup failed, avoiding clobber")
+            return
+        }
         do {
             let data = try JSONEncoder().encode(model)
             try data.write(to: fileURL, options: .atomic)

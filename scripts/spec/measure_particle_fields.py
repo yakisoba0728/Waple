@@ -33,10 +33,83 @@ import specfmt
 
 OUT = os.path.join("spec", "engine", "particle-fields.json")
 PSRC = os.path.join("Sources", "WapleCore", "ParticleSystem.swift")
+# bit1(worldspace) 소비 자리. **읽기 전용** — 이 생성기는 이 파일을 고치지 않는다.
+RSRC = os.path.join("Sources", "WapleRender", "SceneRenderer3D.swift")
 CASE = re.compile(r'^\s*case ((?:"[a-z0-9_]+"(?:,\s*)?)+)\s*:', re.M)
 KEY = re.compile(r'\[\s*"([a-z0-9_]+)"\s*\]')
 CONTROL = {"name", "id", "visible"}
 SECTIONS = ("emitter", "initializer", "operator")
+
+
+def _flags_consume_lineno():
+    """`sys.def.flags & 1` 을 실제로 소비하는 줄 번호를 소스에서 되짚는다. 없으면 None."""
+    try:
+        src = open(RSRC, encoding="utf-8").read()
+    except OSError:
+        return None
+    for i, line in enumerate(src.splitlines(), 1):
+        if line.lstrip().startswith("///") or line.lstrip().startswith("//"):
+            continue                       # 주석 속 산문 언급은 소비가 아니다
+        if re.search(r"\(sys\.def\.flags & 1\)", line):
+            return i
+    return None
+
+
+def flags_consume_site():
+    """bit1 소비 자리를 **조건식으로** 적는다 — 줄 번호는 되짚은 부산물로만 붙인다.
+
+    **[정정 2026-08-30] 이 자리는 같은 축으로 두 번 드리프트했다.** 종전엔 손으로 박은
+    줄번호였다: `:2050`(무관한 `MeshUniform` 조립부) → 2026-08-20 에 `:2183` 로 고쳤는데
+    그 :2183 도 HEAD 에선 빈 문서주석 줄(`///`)이다. `803523d` 의 줄번호 실재 검사는
+    **파일 길이 초과**만 잡으므로, 2,540줄 파일 안의 아무 줄이나 통과한다 — 근거가
+    그럴듯한 다른 줄을 가리키는 부류는 자동 검사에 안 걸린다.
+
+    세 번째를 막는 방법은 손으로 다시 박지 않는 것이다. 정체는 **조건식**이고 줄번호는
+    매 실행 되짚어 붙인다. 조건식이 사라지면 그 사실을 문장으로 낸다(조용히 굳지 않는다).
+    """
+    n = _flags_consume_lineno()
+    where = f"{RSRC}:{n}" if n else f"{RSRC}(조건식 미발견 — 탐침 불일치)"
+    return (f"{where} — `let worldspace = (sys.def.flags & 1) != 0` (빌보드 드로우 경로). "
+            "**줄 번호는 조건식에서 되짚은 것이다** — 종전 :2050 · :2183 이 차례로 드리프트해 "
+            "각각 무관한 줄을 가리켰다(정정 2026-08-20 · 2026-08-30). 다시 인용할 때도 "
+            "줄 번호가 아니라 이 조건식으로 찾아라.")
+
+
+def flags_comment_staleness():
+    """`flags` 주석이 아직 "파스·보존 전용(렌더 소비는 후속)" 이라고 적고 있는지 **읽어서** 판정한다.
+
+    **[정정 2026-08-30] 종전엔 이 자리가 하드코딩 리터럴이었다.** `staleComment` 가
+    "그 주석이 낡았다" 를 **확정** 등급으로 못박고 있었는데, 정작 그 주석은
+    `ec161fc3`(2026-08-01, "…낡은 flags 주석 정정")이 이미 고쳤다. 소스가 고쳐진 뒤에도
+    생성기 리터럴은 안 따라와서, 재생성해도 닫힌 결함을 영구히 다시 보고했다 —
+    **소스 문면에 대한 주장을 하드코딩하면 소스가 고쳐지는 순간 썩는다.**
+
+    게다가 그 리터럴은 애초에 어떤 살아 있는 주석의 축자 인용도 아니었다. 고치기 전
+    문면(`8e0741b8:542`)은 "파스·보존 전용(렌더 소비는 **WapleRender 경로** 후속)" 이고
+    리터럴은 그걸 "(렌더 소비는 후속)" 으로 압축했다. 그래서 인용을 따라 grep 하면
+    어느 커밋에서도 살아 있는 주석에 안 닿고 **묘비 줄에만** 닿는다 — 그 묘비를 '고치면'
+    정정 기록이 파괴된다.
+
+    그래서 이제 **재서, 낡았을 때만** 그 사실을 말한다. 줄 번호가 아니라 조건식으로 건다:
+    `[정정 ...]`/`종전` 묘비 줄은 제외하고 그 문구를 찾는다(묘비 안의 인용은 이력 보존이고
+    낡음이 아니다). 판정 불가로 무너지지 않게, 못 찾을 때도 그 사실을 문장으로 낸다.
+    """
+    src = open(PSRC, encoding="utf-8").read()
+    phrase = "파스·보존 전용(렌더 소비는"
+    live = []
+    for i, line in enumerate(src.splitlines(), 1):
+        if phrase not in line:
+            continue
+        if "[정정" in line or "종전" in line:   # 묘비 인용 — 이력 보존이지 낡음이 아니다
+            continue
+        live.append(i)
+    if live:
+        return (f"{PSRC}:{','.join(map(str, live))} 의 flags 주석이 "
+                f"'{phrase} 후속)' 이라고 적혀 있는데 bit1 은 이미 소비된다 — 주석이 낡았다.")
+    return (f"낡지 않았다 — `{phrase} 후속)` 은 {PSRC} 에서 `[정정 2026-08-01]` 묘비 "
+            "안에만 남아 있고(살아 있는 주석 0건), 그 묘비가 이미 **bit1 은 소비된다** 와 "
+            "비트별 소비 현황을 적는다. 종전 이 자리는 그 닫힌 결함을 확정 등급으로 "
+            "계속 보고하는 하드코딩 리터럴이었다(정정 2026-08-30).")
 
 
 def waple_block_keys():
@@ -289,7 +362,12 @@ def build(r):
             # (`mvp: matrix_identity_float4x4, model: …`). `803523d` 가 넣은 줄번호 실재
             # 검사는 **파일 길이 초과**만 잡으므로 2,288줄 파일의 :2050 은 통과한다 —
             # 근거가 그럴듯한 다른 줄을 가리키는 부류라 자동 검사에 안 걸린다.
-            "consumeSite": "Sources/WapleRender/SceneRenderer3D.swift:2183 — (sys.def.flags & 1)",
+            #
+            # **[정정 2026-08-30] 그 :2183 도 이미 드리프트했다 — 같은 축으로 두 번째다.**
+            # HEAD 의 :2183 은 빈 문서주석 줄(`///`)이다. 손으로 새 줄번호를 박으면 이 결함을
+            # 세 번째로 부르므로 **조건식으로 매 실행 되짚는다**(`flags_consume_site`) —
+            # 이 리포 자신의 권고대로 인용의 정체는 조건식이고 줄번호는 그 부산물이다.
+            "consumeSite": flags_consume_site(),
             "notConsumed": ["bit2", "bit4", "그 외 상위 비트"],
             "impact": f"bit4 는 {bits.get('4', 0)}씬이 저작하는데 파스만 되고 화면에 안 쓰인다. "
                       f"bit2 는 {bits.get('2', 0)}씬.",
@@ -299,13 +377,19 @@ def build(r):
                                              "움직이는 씬은 그 시스템이 **실제로 보이는** 경우로 "
                                              "한정되므로 이보다 적다 — 나중에 이 숫자를 기대 변화 "
                                              "수로 놓고 '고침이 안 먹었다' 고 판단하지 마라.",
-            "staleComment": f"{PSRC} 의 flags 주석이 '파스·보존 전용(렌더 소비는 후속)' 이라고 "
-                            "적혀 있는데 bit1 은 이미 소비된다 — 주석이 낡았다.",
+            # [정정 2026-08-30] 하드코딩 리터럴 → 실측. 사유는 `flags_comment_staleness` 주석.
+            "staleComment": flags_comment_staleness(),
             "bundledVocabulary": "WE 번들 프리셋도 같은 어휘를 쓴다(1·2·4·8, 조합 3/6/7/9, "
                                  "thunderbolt_child_spawner 는 248=상위 비트 다수). "
                                  "즉 코퍼스만의 방언이 아니라 엔진 어휘다.",
         }, "확정", [census_ev,
-                    specfmt.ev("file", "Sources/WapleRender/SceneRenderer3D.swift:2050"),
+                    # [정정 2026-08-30] 종전 ref 는 `:2050` 이었다 — `consumeSite` 가
+                    # 2026-08-20 에 :2183 으로 옮겨졌는데 **짝인 이 ref 는 안 따라와** 옛
+                    # 줄번호를 그대로 들고 있었다(같은 항목 안에서 두 줄번호가 갈렸다).
+                    # 이제 둘 다 같은 되짚기(`flags_consume_site`)에서 나오므로 갈릴 수 없다.
+                    specfmt.ev("file", f"{RSRC}:{_flags_consume_lineno() or ''}".rstrip(":"),
+                               "최상위 flags bit1(worldspace) 소비 자리 — 조건식 "
+                               "`(sys.def.flags & 1)` 으로 매 실행 되짚는다"),
                     specfmt.ev("asset", "assets/presets/**/particles/presets/*.json",
                                "번들 프리셋 232개의 flags 분포")]),
 
@@ -430,6 +514,8 @@ def build(r):
 
 
 def main():
+    specfmt.require_inputs("measure_particle_fields",
+                           ("dir", T.WS, "WE_WORKSHOP", "워크샵 코퍼스"))
     r = scan()
     entries = build(r)
     specfmt.dump(specfmt.doc("scripts/spec/measure_particle_fields.py", entries), OUT)

@@ -196,7 +196,7 @@
     "consumedByWaple": [
      "bit1"
     ],
-    "consumeSite": "Sources/WapleRender/SceneRenderer3D.swift:2183 — (sys.def.flags & 1)",
+    "consumeSite": "Sources/WapleRender/SceneRenderer3D.swift:2557 — `let worldspace = (sys.def.flags & 1) != 0` (빌보드 드로우 경로). **줄 번호는 조건식에서 되짚은 것이다** — 종전 :2050 · :2183 이 차례로 드리프트해 각각 무관한 줄을 가리켰다(정정 2026-08-20 · 2026-08-30). 다시 인용할 때도 줄 번호가 아니라 이 조건식으로 찾아라.",
     "notConsumed": [
      "bit2",
      "bit4",
@@ -204,7 +204,7 @@
     ],
     "impact": "bit4 는 70씬이 저작하는데 파스만 되고 화면에 안 쓰인다. bit2 는 26씬.",
     "reachIsNotExpectedChangeCount": "이 씬 수는 '해당 비트를 저작한 파티클 시스템을 하나라도 가진 씬' 이다. flags 는 파티클 시스템마다 따로 있고 한 씬이 여러 개를 갖는다. 고쳤을 때 골든이 움직이는 씬은 그 시스템이 **실제로 보이는** 경우로 한정되므로 이보다 적다 — 나중에 이 숫자를 기대 변화 수로 놓고 '고침이 안 먹었다' 고 판단하지 마라.",
-    "staleComment": "Sources\\WapleCore\\ParticleSystem.swift 의 flags 주석이 '파스·보존 전용(렌더 소비는 후속)' 이라고 적혀 있는데 bit1 은 이미 소비된다 — 주석이 낡았다.",
+    "staleComment": "낡지 않았다 — `파스·보존 전용(렌더 소비는 후속)` 은 Sources/WapleCore/ParticleSystem.swift 에서 `[정정 2026-08-01]` 묘비 안에만 남아 있고(살아 있는 주석 0건), 그 묘비가 이미 **bit1 은 소비된다** 와 비트별 소비 현황을 적는다. 종전 이 자리는 그 닫힌 결함을 확정 등급으로 계속 보고하는 하드코딩 리터럴이었다(정정 2026-08-30).",
     "bundledVocabulary": "WE 번들 프리셋도 같은 어휘를 쓴다(1·2·4·8, 조합 3/6/7/9, thunderbolt_child_spawner 는 248=상위 비트 다수). 즉 코퍼스만의 방언이 아니라 엔진 어휘다."
    },
    "status": "확정",
@@ -216,7 +216,8 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleRender/SceneRenderer3D.swift:2183"
+     "ref": "Sources/WapleRender/SceneRenderer3D.swift:2557",
+     "note": "최상위 flags bit1(worldspace) 소비 자리 — 조건식 `(sys.def.flags & 1)` 으로 매 실행 되짚는다"
     },
     {
      "kind": "asset",

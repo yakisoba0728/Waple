@@ -34,7 +34,8 @@ extension SceneRenderer {
     /// + texWrap[8](F162/F163: 슬롯별 1=clamp/0=repeat, pass.texWrap 그대로 — 빌드 시 고정이라 런타임 재계산 불요)
     /// + texFilter[8](감사 V07: 슬롯별 1=nearest/0=linear, pass.texFilter 그대로 — TexImage.noInterpolation)
     /// + layerTint[4](H1: 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값) + X-⑤ targetRes[4]
-    /// (g_TexelSize/g_TexelSizeHalf 전용 — 이펙트 체인 경로는 출력(dst) 해상도 고정값, 전 패스 불변).
+    /// (g_TexelSize/g_TexelSizeHalf 전용 — 이펙트 체인 경로는 출력(dst) 해상도 고정값, 전 패스 불변)
+    /// + parallaxAndPad[4](`g_ParallaxPosition` 전용 vec2; 포인터 슬롯과 분리).
     /// 레이아웃은 GLSLTranslator.assemble 의 EngineU 구조체 방출과 동기 필수.
     /// targetRes 는 의도적으로 기본값 없음(교차배치 리뷰 must_fix) — 신규 호출부는 자기 렌더 타깃
     /// 해상도를 명시 전달할 것(예: 3D 커스텀 메시 경로라면 소스 texRes.first 근사). 기본값 (1,1,1,1)
@@ -44,7 +45,7 @@ extension SceneRenderer {
                        layerTint: SIMD4<Float> = SIMD4(1, 1, 1, 1),
                        targetRes: SIMD4<Float>,
                        mvp: simd_float4x4? = nil) -> [Float] {
-        var e = [Float](repeating: 0, count: 16 + 8 + 32 + 8 + 8 + 4 + 4)
+        var e = [Float](repeating: 0, count: 16 + 8 + 32 + 8 + 8 + 4 + 4 + 4)
         let m = mvp ?? simd_float4x4(1)
         e[0] = m.columns.0.x; e[1] = m.columns.0.y; e[2] = m.columns.0.z; e[3] = m.columns.0.w
         e[4] = m.columns.1.x; e[5] = m.columns.1.y; e[6] = m.columns.1.z; e[7] = m.columns.1.w
@@ -67,6 +68,7 @@ extension SceneRenderer {
         for n in 0..<8 where n < texFilter.count { e[64 + n] = texFilter[n] }  // 감사 V07: texWrap 직후
         e[72] = layerTint.x; e[73] = layerTint.y; e[74] = layerTint.z; e[75] = layerTint.w
         e[76] = targetRes.x; e[77] = targetRes.y; e[78] = targetRes.z; e[79] = targetRes.w  // X-⑤
+        e[80] = parallaxPosition.x; e[81] = parallaxPosition.y  // g_ParallaxPosition, zw pad=0
         return e
     }
 
@@ -404,7 +406,7 @@ extension SceneRenderer {
     /// 우선) 이펙트 체인 결과(srcTex)는 그대로 유지한 채 저작 블렌드 모드가 적용된다.
     func runFrameBufferLayer(_ layer: GPULayer, acc: MTLTexture, cb: MTLCommandBuffer,
                                      ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
-                                     camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+                                     aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
         enc.endEncoding()
         var srcTex: MTLTexture? = nil
         var backdrop: MTLTexture? = nil
@@ -467,7 +469,7 @@ extension SceneRenderer {
             // P⑤: 효과 체인이 0패스(srcTex===backdrop)면 블렌드 소스=타깃 자기샘플이 되므로 blendSnapshot
             // 생략(무회귀 f_compose 폴백) — 효과 체인이 실제로 다른 텍스처를 만들었을 때만 블렌드 적용.
             let blendSnapshot: MTLTexture? = (layer.colorBlendMode != 0 && srcTex !== backdrop) ? backdrop : nil
-            encodeLayer(layer, texture: srcTex, into: next, camOffset: &camOffset, aspectScale: &aspectScale,
+            encodeLayer(layer, texture: srcTex, into: next, aspectScale: &aspectScale,
                         time: time, device: device, blendSnapshot: blendSnapshot)
         }
         return next
@@ -493,7 +495,7 @@ extension SceneRenderer {
     /// runFrameBufferLayer 와 같은 인코더 분할 패턴(효과 체인은 displayTextures 에서 이미 처리 — 미실행).
     func runBlendModeLayer(_ layer: GPULayer, texture: MTLTexture, acc: MTLTexture, cb: MTLCommandBuffer,
                            ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
-                           camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+                           aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
         enc.endEncoding()
         var snapshot: MTLTexture? = nil
         if let snap = blendModeSnapshotSlot(acc.width, acc.height, device),
@@ -506,7 +508,7 @@ extension SceneRenderer {
         rpd.colorAttachments[0].texture = acc
         rpd.colorAttachments[0].loadAction = .load
         guard let next = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
-        encodeLayer(layer, texture: texture, into: next, camOffset: &camOffset, aspectScale: &aspectScale,
+        encodeLayer(layer, texture: texture, into: next, aspectScale: &aspectScale,
                     time: time, device: device, blendSnapshot: snapshot)
         return next
     }
@@ -515,7 +517,7 @@ extension SceneRenderer {
     /// acc 스냅샷(dst) 확보 → f_blend 로 텍스트 쿼드 드로우 → 새 인코더 반환.
     func runBlendModeText(_ t: GPUText, texture: MTLTexture?, acc: MTLTexture, cb: MTLCommandBuffer,
                           ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
-                          camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+                          aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
         enc.endEncoding()
         var snapshot: MTLTexture? = nil
         if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true),
@@ -528,7 +530,7 @@ extension SceneRenderer {
         rpd.colorAttachments[0].texture = acc
         rpd.colorAttachments[0].loadAction = .load
         guard let next = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
-        encodeText(t, into: next, camOffset: &camOffset, aspectScale: &aspectScale,
+        encodeText(t, into: next, aspectScale: &aspectScale,
                   time: time, device: device, displayTexture: texture, blendSnapshot: snapshot)
         return next
     }
@@ -539,7 +541,7 @@ extension SceneRenderer {
     /// identity 레이어 폴터(무크래시). 재개 실패만 nil(호출자는 추가 인코딩 없이 commit).
     func runRefractLayer(_ layer: GPULayer, texture: MTLTexture, acc: MTLTexture, cb: MTLCommandBuffer,
                          ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
-                         camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+                         aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
         enc.endEncoding()
         var snapshot: MTLTexture? = nil
         if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true),
@@ -554,36 +556,25 @@ extension SceneRenderer {
         guard let next = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
         if let snap = snapshot, let pipe = refractLayerPipeline {
             encodeRefractLayer(layer, texture: texture, framebuffer: snap, pipe: pipe, into: next,
-                               device: device, camOffset: &camOffset, aspectScale: &aspectScale)
+                               device: device, time: time,
+                               aspectScale: &aspectScale)
         } else {
-            encodeLayer(layer, texture: texture, into: next, camOffset: &camOffset, aspectScale: &aspectScale,
+            encodeLayer(layer, texture: texture, into: next, aspectScale: &aspectScale,
                         time: time, device: device)  // identity 폴터
         }
         return next
     }
 
-    /// REFRACT 레이어 1개 드로우. encodeLayer 와 동형이나 노멀맵(1)·씬 스냅샷(2)·refract 유니폼을 바인딩하고
-    /// f_refract 파이프라인 사용. 정점은 layer.vertexBuffer(quadVertices 4-float) — 노멀은 알베도와 같은 uv 로 샘플.
+    /// REFRACT 레이어 1개 드로우. 프레임 상태 평가는 encodeLayer에 위임해 일반 stock 이미지와
+    /// animation/script/read-back/visible/live-state 계약을 하나로 유지하고, 최종 프래그먼트 바인딩만
+    /// f_refract로 갈라진다. 별도 평가 사본을 두면 transform/tint/count가 다시 stale해진다.
     func encodeRefractLayer(_ layer: GPULayer, texture: MTLTexture, framebuffer: MTLTexture,
                             pipe: MTLRenderPipelineState, into enc: MTLRenderCommandEncoder,
-                            device: MTLDevice, camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) {
-        guard let normal = layer.refract.normalTexture else { return }
-        enc.setRenderPipelineState(pipe)
-        enc.setVertexBuffer(layer.vertexBuffer, offset: 0, index: 0)
-        enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-        var depth = layer.parallaxDepth
-        enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
-        enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
-        var shake = frameShakeOffset
-        enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
-        enc.setFragmentTexture(texture, index: 0)         // 알베도(g_Texture0)
-        enc.setFragmentTexture(normal, index: 1)          // 노멀맵(g_Texture1)
-        enc.setFragmentTexture(framebuffer, index: 2)     // 씬 컬러 스냅샷
-        var tint = layer.tint
-        var params = SIMD4<Float>(layer.refract.amount, layer.refract.normalRG88 ? 1 : 0, 0, 0)
-        enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
-        enc.setFragmentBytes(&params, length: MemoryLayout<SIMD4<Float>>.stride, index: 1)
-        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+                            device: MTLDevice, time: Float,
+                            aspectScale: inout SIMD2<Float>) {
+        encodeLayer(layer, texture: texture, into: enc, aspectScale: &aspectScale,
+                    time: time, device: device,
+                    refractDraw: (framebuffer: framebuffer, pipeline: pipe))
     }
 
     /// W1-yaxis: 씬 픽셀 좌표(좌하단 원점, y-up — WE 전 씬 규약, RenderDoc 골든 3397690043 실측
@@ -618,16 +609,56 @@ extension SceneRenderer {
     }
 
     /// 씬 픽셀 좌표(좌하단 원점, W1-yaxis: y-up 확정) → NDC.
-    static func quadVertices(layer: SceneLayer, projW: Float, projH: Float) -> [SIMD4<Float>] {
+    static func quadVertices(layer: SceneLayer, projW: Float, projH: Float,
+                             perspectiveFov: Float = 95) -> [SIMD4<Float>] {
         quadVertices(origin: layer.origin, size: layer.size, scale: layer.scale, angleZ: layer.angleZ,
                      alignment: layer.alignment, projW: projW, projH: projH,
-                     perspective: layer.perspective, perspectiveFov: 95)
+                     perspective: layer.perspective, perspectiveFov: perspectiveFov,
+                     originZ: layer.originZ, angleX: layer.angleX, angleY: layer.angleY)
+    }
+
+    /// CPU에서 NDC까지 투영한 stock 쿼드의 clip-space w 복원 계수.
+    /// 카메라 depth는 평면의 로컬 UV에 대해 affine이므로 `w(u,v)=a*u+b*v+c` 한 식이면
+    /// 원본 네 코너뿐 아니라 near/far 클립으로 새로 생긴 UV 정점에도 그대로 적용된다.
+    static func quadProjectiveDepth(layer: SceneLayer, projH: Float,
+                                    perspectiveFov: Float = 95) -> SIMD4<Float> {
+        quadProjectiveDepth(size: layer.size, scale: layer.scale, angleZ: layer.angleZ,
+                            alignment: layer.alignment, projH: projH,
+                            perspective: layer.perspective, perspectiveFov: perspectiveFov,
+                            originZ: layer.originZ, angleX: layer.angleX, angleY: layer.angleY)
+    }
+
+    static func quadProjectiveDepth(size: Vec2, scale: Vec2, angleZ: Float, alignment: String,
+                                    projH: Float, perspective: Bool = false,
+                                    perspectiveFov: Float = 95, originZ: Float = 0,
+                                    angleX: Float = 0, angleY: Float = 0) -> SIMD4<Float> {
+        let affine = SIMD4<Float>(0, 0, 1, 0)
+        guard perspective, angleX != 0 || angleY != 0 else { return affine }
+        let hw = size.x * scale.x * 0.5
+        let hh = size.y * scale.y * 0.5
+        let ax: Float = alignment.contains("left") ? -hw : (alignment.contains("right") ? hw : 0)
+        let ay: Float = alignment.contains("top") ? hh : (alignment.contains("bottom") ? -hh : 0)
+        let rotation = Scene3DMath.modelMatrix(
+            origin: .zero, angles: SIMD3(angleX, angleY, angleZ), scale: SIMD3(repeating: 1)
+        )
+        let fov = CameraMotion.clampedFovDegrees(perspectiveFov)
+        let d = SceneCameraMath.layerPerspectiveDistance(orthoHeight: projH, fovDegrees: fov)
+        func depth(_ x: Float, _ y: Float) -> Float {
+            let r = rotation * SIMD4<Float>(x - ax, y - ay, 0, 0)
+            return d - originZ - r.z
+        }
+        let c = depth(-hw, hh)       // uv=(0,0), texture top-left
+        let a = depth(hw, hh) - c    // uv.x slope
+        let b = depth(-hw, -hh) - c  // uv.y slope
+        guard a.isFinite, b.isFinite, c.isFinite, a != 0 || b != 0 else { return affine }
+        return SIMD4(a, b, c, 1)
     }
 
     /// 명시 파라미터 변형 — 프로퍼티 애니메이션의 per-frame 재계산용.
     static func quadVertices(origin: Vec2, size: Vec2, scale: Vec2, angleZ: Float, alignment: String,
                               projW: Float, projH: Float, perspective: Bool = false,
-                              perspectiveFov: Float = 95) -> [SIMD4<Float>] {
+                              perspectiveFov: Float = 95, originZ: Float = 0,
+                              angleX: Float = 0, angleY: Float = 0) -> [SIMD4<Float>] {
         let hw = size.x * scale.x * 0.5
         let hh = size.y * scale.y * 0.5
         let a = angleZ   // A1: scene.json angles 는 이미 라디안(코퍼스 전부 ≤π 확정) — 종전 *.pi/180 은 라디안을 도로 오인해 회전 57× 축소
@@ -637,38 +668,169 @@ extension SceneRenderer {
             let rx = lx * ca - ly * sa, ry = lx * sa + ly * ca
             return SIMD2<Float>(c.x + rx, c.y + ry)
         }
-        func ndc(_ p: SIMD2<Float>) -> SIMD2<Float> { Self.pxToNDC(p.x, p.y, projW: projW, projH: projH) }
-        // W1-yaxis: pxToNDC 가 이제 y-up(큰 scene-y → 화면 위)이므로, uv(0,0)=텍스처 상단이 화면
-        // 위쪽에 오려면 로컬 ly=+hh(큰 y) 코너를 "tl/tr" 로 써야 한다(종전 −hh 는 이제 시각적 하단).
-        // hw/x 축은 y-flip 과 무관해 그대로 — 코너 4점의 SET 은 불변(재라벨링만, 회전/와인딩 무영향).
-        let tl = ndc(corner(-hw, hh)), tr = ndc(corner(hw, hh))
-        let br = ndc(corner(hw, -hh)), bl = ndc(corner(-hw, -hh))
-        // M4: perspective=true 레이어 원근 투영 근사 — FOV 기반 상단 축소(코퍼스 x/y angles=0 이라
-        // 정사영과 출력 동일, 후속 진짜 원근 구현 시 제거).
-        if perspective {
-            let fovScale = tan(perspectiveFov * 0.5 * Float.pi / 180)
-            func persp(_ p: SIMD2<Float>, _ isTop: Bool) -> SIMD2<Float> {
-                let factor: Float = isTop ? 1.0 / (1.0 + fovScale * 0.1) : 1.0
-                return SIMD2(p.x * factor, p.y)
+        // 정사영은 종전 수식을 그대로 둔다. 원근이어도 x/y 회전이 0이면 같은 수식을
+        // 쓰는 fast path로 z=0의 **비트동일** 계약을 지킨다. 단, 투영 전 카메라 depth가
+        // 실물 near/far 밖이면 비운다 — 종전 음수 배율의 반전 쿼드는 카메라 뒤 정점이었다.
+        if !perspective || (angleX == 0 && angleY == 0) {
+            let perspectiveScale: Float
+            if perspective {
+                let fov = CameraMotion.clampedFovDegrees(perspectiveFov)
+                let d = SceneCameraMath.layerPerspectiveDistance(orthoHeight: projH, fovDegrees: fov)
+                let clip = SceneCameraMath.layerPerspectiveClip(distance: d)
+                let depth = d - originZ
+                guard depth >= clip.near, depth <= clip.far else { return [] }
+                perspectiveScale = d / depth
+            } else {
+                perspectiveScale = 1
             }
-            let ptl = persp(tl, true), ptr = persp(tr, true)
+            func projected(_ p: SIMD2<Float>) -> SIMD2<Float> {
+                guard perspectiveScale != 1 else { return p }
+                let center = SIMD2<Float>(projW * 0.5, projH * 0.5)
+                return center + (p - center) * perspectiveScale
+            }
+            func ndc(_ p: SIMD2<Float>) -> SIMD2<Float> {
+                let q = projected(p)
+                return Self.pxToNDC(q.x, q.y, projW: projW, projH: projH)
+            }
+            // W1-yaxis: pxToNDC 가 y-up이므로 uv(0,0)=텍스처 상단은 local +hh와 짝짓는다.
+            let tl = ndc(corner(-hw, hh)), tr = ndc(corner(hw, hh))
+            let br = ndc(corner(hw, -hh)), bl = ndc(corner(-hw, -hh))
             return [
-                SIMD4<Float>(ptl.x, ptl.y, 0, 0), SIMD4<Float>(ptr.x, ptr.y, 1, 0), SIMD4<Float>(br.x, br.y, 1, 1),
-                SIMD4<Float>(ptl.x, ptl.y, 0, 0), SIMD4<Float>(br.x, br.y, 1, 1), SIMD4<Float>(bl.x, bl.y, 0, 1),
+                SIMD4<Float>(tl.x, tl.y, 0, 0), SIMD4<Float>(tr.x, tr.y, 1, 0), SIMD4<Float>(br.x, br.y, 1, 1),
+                SIMD4<Float>(tl.x, tl.y, 0, 0), SIMD4<Float>(br.x, br.y, 1, 1), SIMD4<Float>(bl.x, bl.y, 0, 1),
             ]
         }
-        // uv: TL(0,0) TR(1,0) BR(1,1) BL(0,1)
-        return [
-            SIMD4<Float>(tl.x, tl.y, 0, 0), SIMD4<Float>(tr.x, tr.y, 1, 0), SIMD4<Float>(br.x, br.y, 1, 1),
-            SIMD4<Float>(tl.x, tl.y, 0, 0), SIMD4<Float>(br.x, br.y, 1, 1), SIMD4<Float>(bl.x, bl.y, 0, 1),
+
+        // `preview3dclock` 실자산은 커서 델타로 x/y 각을 매 프레임 바꾼다. 오일러 합성은
+        // 3D 오브젝트와 같은 Rz·Ry·Rx(Scene3DMath.modelMatrix)이고, 정렬 앵커도 회전 앞의
+        // 로컬 점이므로 `origin + R * (corner-anchor)`로 월드 정점을 만든다.
+        let ax: Float = alignment.contains("left") ? -hw : (alignment.contains("right") ? hw : 0)
+        let ay: Float = alignment.contains("top") ? hh : (alignment.contains("bottom") ? -hh : 0)
+        let rotation = Scene3DMath.modelMatrix(
+            origin: .zero, angles: SIMD3(angleX, angleY, angleZ), scale: SIMD3(repeating: 1)
+        )
+        struct ClipVertex {
+            var position: SIMD3<Float>
+            var uv: SIMD2<Float>
+        }
+        func world(_ x: Float, _ y: Float, _ u: Float, _ v: Float) -> ClipVertex {
+            let r = rotation * SIMD4<Float>(x - ax, y - ay, 0, 0)
+            return ClipVertex(position: SIMD3(origin.x + r.x, origin.y + r.y, originZ + r.z),
+                              uv: SIMD2(u, v))
+        }
+        var polygon = [
+            world(-hw, hh, 0, 0), world(hw, hh, 1, 0),
+            world(hw, -hh, 1, 1), world(-hw, -hh, 0, 1),
         ]
+        let fov = CameraMotion.clampedFovDegrees(perspectiveFov)
+        let d = SceneCameraMath.layerPerspectiveDistance(orthoHeight: projH, fovDegrees: fov)
+        let clip = SceneCameraMath.layerPerspectiveClip(distance: d)
+
+        // Sutherland–Hodgman 슬래브 클립. depth=d-z 선형이므로 교점의 위치와 UV를
+        // 같은 t로 보간하면 near/far를 가로지르는 평면을 통째로 버리지 않고 보이는 조각만 남긴다.
+        func clipped(_ input: [ClipVertex], plane: Float,
+                     keeps: (Float, Float) -> Bool) -> [ClipVertex] {
+            guard var previous = input.last else { return [] }
+            var output: [ClipVertex] = []
+            var previousDepth = d - previous.position.z
+            var previousInside = keeps(previousDepth, plane)
+            for current in input {
+                let currentDepth = d - current.position.z
+                let currentInside = keeps(currentDepth, plane)
+                // 평면 위 끝점은 그 원본 자체가 이미 교점이다. d-z는 비슷한 큰 수의 상쇄라 결과
+                // depth의 ULP가 아니라 피연산자 크기의 1 ULP만큼 흔들릴 수 있다(예: d≈173에서
+                // near=5가 5.0000153). 그런 끝점을 t≈0/1 보간으로 또 만들면 거의 같은 두 점 사이의
+                // 가짜 edge가 projected hit polygon의 half-plane이 되어 실제 fan 내부를 잘라낸다.
+                // 화면 좌표 epsilon으로 합치지 않고, **inside로 남을 원본 끝점**이 d-z 연산의 표현
+                // 정밀도 안에서 plane과 같은 경우에만 보간을 생략한다. 정당한 짧은 edge는 보존된다.
+                func retainedEndpointAliasesPlane(_ depth: Float, _ vertex: ClipVertex,
+                                                   inside: Bool) -> Bool {
+                    guard inside else { return false }
+                    let subtractionMagnitude = max(abs(d), max(abs(vertex.position.z), abs(plane)))
+                    return abs(depth - plane) <= subtractionMagnitude.ulp
+                }
+                let aliasesEndpoint =
+                    retainedEndpointAliasesPlane(previousDepth, previous, inside: previousInside)
+                    || retainedEndpointAliasesPlane(currentDepth, current, inside: currentInside)
+                if currentInside != previousInside, !aliasesEndpoint {
+                    let denominator = currentDepth - previousDepth
+                    if denominator != 0 {
+                        let t = (plane - previousDepth) / denominator
+                        output.append(ClipVertex(
+                            position: previous.position + (current.position - previous.position) * t,
+                            uv: previous.uv + (current.uv - previous.uv) * t
+                        ))
+                    }
+                }
+                if currentInside { output.append(current) }
+                previous = current
+                previousDepth = currentDepth
+                previousInside = currentInside
+            }
+            return output
+        }
+        polygon = clipped(polygon, plane: clip.near, keeps: >=)
+        polygon = clipped(polygon, plane: clip.far, keeps: <=)
+        guard polygon.count >= 3 else { return [] }
+
+        let center = SIMD2<Float>(projW * 0.5, projH * 0.5)
+        func projected(_ vertex: ClipVertex) -> SIMD4<Float> {
+            let depth = d - vertex.position.z
+            let screen = center + (SIMD2(vertex.position.x, vertex.position.y) - center) * (d / depth)
+            let p = Self.pxToNDC(screen.x, screen.y, projW: projW, projH: projH)
+            return SIMD4(p.x, p.y, vertex.uv.x, vertex.uv.y)
+        }
+        var result: [SIMD4<Float>] = []
+        result.reserveCapacity((polygon.count - 2) * 3)
+        for i in 1..<(polygon.count - 1) {
+            result.append(projected(polygon[0]))
+            result.append(projected(polygon[i]))
+            result.append(projected(polygon[i + 1]))
+        }
+        return result
+    }
+
+    /// `quadVertices`가 내는 triangle fan 외곽을 포인터 씬 픽셀의 볼록 다각형으로 복원한다.
+    /// 원근 x/y 회전은 사다리꼴, near/far 교차는 3–6각형이므로 `layerHitQuad`로 축약하면 안 된다.
+    /// `ndcOffset`은 v_main이 projection 뒤 더하는 전역 camera/shake 이동이며 aspect/zoom은
+    /// pointerSceneCoords가 역적용하므로 여기서는 일부러 곱하지 않는다.
+    static func projectedHitPolygon(vertices: [SIMD4<Float>], projW: Float, projH: Float,
+                                    ndcOffset: SIMD2<Float>) -> PointerHit.ConvexPolygon? {
+        guard vertices.count >= 3, vertices.count.isMultiple(of: 3), projW > 0, projH > 0 else { return nil }
+        func xy(_ v: SIMD4<Float>) -> SIMD2<Float> { SIMD2(v.x, v.y) }
+        var ndcBoundary = [xy(vertices[0]), xy(vertices[1]), xy(vertices[2])]
+        if vertices.count > 3 {
+            var previous = xy(vertices[2])
+            for start in stride(from: 3, to: vertices.count, by: 3) {
+                // quadVertices는 polygon[0]을 중심으로 한 fan이다. 다른 topology를 조용히
+                // 오해하면 넓은 오배달 영역이 생기므로 계약이 깨졌을 때는 닫힌 범위(nil)로 간다.
+                guard xy(vertices[start]) == ndcBoundary[0], xy(vertices[start + 1]) == previous else { return nil }
+                previous = xy(vertices[start + 2])
+                ndcBoundary.append(previous)
+            }
+        }
+        var points: [SIMD2<Float>] = []
+        points.reserveCapacity(ndcBoundary.count)
+        for ndc0 in ndcBoundary {
+            let ndc = ndc0 + ndcOffset
+            guard ndc.x.isFinite, ndc.y.isFinite else { return nil }
+            let p = SIMD2<Float>((ndc.x + 1) * 0.5 * projW,
+                                 (ndc.y + 1) * 0.5 * projH)
+            if points.last != p { points.append(p) }
+        }
+        if points.count > 1, points.first == points.last { points.removeLast() }
+        let polygon = PointerHit.ConvexPolygon(vertices: points)
+        guard PointerHit.contains(polygon, polygon.center) else { return nil }
+        return polygon
     }
 
     /// H1: 커스텀 셰이더 레이어의 로컬 쿼드(-1…1) → NDC 변환 행렬.
     /// quadVertices + v_main 의 기존 동작을 행렬로 재현.
     func layerTransformMatrix(origin: Vec2, size: Vec2, scale: Vec2, angleZ: Float, alignment: String,
                               parallaxDepth: Vec2, camOffset: SIMD2<Float>, shakeOffset: SIMD2<Float>,
-                              aspectScale: SIMD2<Float>) -> simd_float4x4 {
+                              aspectScale: SIMD2<Float>, perspective: Bool = false,
+                              perspectiveFov: Float = 95, originZ: Float = 0,
+                              scaleZ: Float = 1, angleX: Float = 0, angleY: Float = 0) -> simd_float4x4 {
         let hw = size.x * scale.x * 0.5
         let hh = size.y * scale.y * 0.5
         let ca = cos(angleZ), sa = sin(angleZ)
@@ -701,7 +863,36 @@ extension SceneRenderer {
         var aspect = simd_float4x4(1)
         aspect.columns.0 = SIMD4(aspectScale.x, 0, 0, 0)
         aspect.columns.1 = SIMD4(0, aspectScale.y, 0, 0)
-        return aspect * cam * ortho * model
+        guard perspective else { return aspect * cam * ortho * model }
+
+        // 공통 이미지 렌더 래퍼 `0x1401e9233`–`0x1401e92ec`은 perspective bit7을
+        // material/custom 분기보다 바깥에서 검사해 view/projection을 교체한 뒤 virtual draw
+        // 전체를 감싼다. 따라서 커스텀 정점 셰이더에는 CPU 투영 정점이 아니라 같은 MVP를 줘야
+        // 셰이더가 이동한 정점까지 GPU near/far 클립에 참여한다.
+        let fov = CameraMotion.clampedFovDegrees(perspectiveFov)
+        let d = SceneCameraMath.layerPerspectiveDistance(orthoHeight: projH, fovDegrees: fov)
+        let clip = SceneCameraMath.layerPerspectiveClip(distance: d)
+        let projection = Scene3DMath.perspective(fovYDegrees: fov, aspect: projW / projH,
+                                                 nearZ: clip.near, farZ: clip.far)
+        var view = simd_float4x4(1)
+        view.columns.3 = SIMD4(-projW * 0.5, -projH * 0.5, -d, 1)
+
+        // customLayerQuadInterleaved의 local y=-1은 uv top이다. (hw,-hh,1) 스케일로
+        // stock 쿼드의 local (-hw,+hh)에 맞춘 뒤 Rz·Ry·Rx와 정렬 앵커를 동일 순서로 적용한다.
+        let rotation = Scene3DMath.modelMatrix(
+            origin: .zero, angles: SIMD3(angleX, angleY, angleZ), scale: SIMD3(repeating: 1)
+        )
+        var perspectiveModel = Scene3DMath.modelMatrix(
+            origin: .zero, angles: SIMD3(angleX, angleY, angleZ), scale: SIMD3(hw, -hh, scaleZ)
+        )
+        let anchor = rotation * SIMD4<Float>(
+            alignment.contains("left") ? -hw : (alignment.contains("right") ? hw : 0),
+            alignment.contains("top") ? hh : (alignment.contains("bottom") ? -hh : 0),
+            0, 0
+        )
+        perspectiveModel.columns.3 = SIMD4(origin.x - anchor.x, origin.y - anchor.y,
+                                            originZ - anchor.z, 1)
+        return aspect * cam * projection * view * perspectiveModel
     }
 
     /// 텍스트 horizontalAlign/verticalAlign(left|center|right / top|center|bottom) → SceneLayer.alignment
@@ -814,6 +1005,48 @@ extension SceneRenderer {
     /// 이미 종료된 인코더에 나머지 아이템을 계속 인코딩했다(Metal 크래시 후보). draw 쪽은 return 으로
     /// 고쳐져 있었는데 복제 루프가 발산한 것 — 루프 단일화로 구조적으로 제거(별도 목킹 불가로 RED
     /// 재현 테스트 대신 본 서술로 회귀 방지 근거를 남긴다).
+    /// child보다 뒤에 선언된 image root의 **순수 origin keyframe**만 draw 전에 계산한다. drawPlan을
+    /// parent-first로 바꾸면 z-order가 깨진다. 반대로 origin JS까지 여기서 실행하면 앞선 오브젝트의
+    /// shared side effect보다 먼저 평가되고 stateful update 순서를 깨므로 절대 포함하지 않는다.
+    /// late script/text/non-rendering/attached root는 현재 구조상 raw descriptor 폴백이다.
+    func prepareLateCameraParallaxAnimatedImageRoots(time: Float) {
+        guard parallaxEnabled, orthographicScene else { return }
+
+        func objectOrder(_ item: DrawItem) -> Int? {
+            switch item.kind {
+            case .layer: return item.idx < layers.count ? layers[item.idx].order : nil
+            case .particle: return item.idx < particleSystems.count ? particleSystems[item.idx].order : nil
+            case .text: return item.idx < textLayers.count ? textLayers[item.idx].order : nil
+            case .mesh3D: return item.idx < meshRenderables.count ? meshRenderables[item.idx].order : nil
+            }
+        }
+        var positionByOrder: [Int: Int] = [:]
+        for (position, item) in drawPlan.enumerated() {
+            if let order = objectOrder(item), positionByOrder[order] == nil {
+                positionByOrder[order] = position
+            }
+        }
+        var lateRootOrders: Set<Int> = []
+        for (position, item) in drawPlan.enumerated() {
+            guard let order = objectOrder(item), let root = cameraParallaxRootByOrder[order],
+                  root.order != order, let rootPosition = positionByOrder[root.order],
+                  rootPosition > position else { continue }
+            lateRootOrders.insert(root.order)
+        }
+        guard !lateRootOrders.isEmpty else { return }
+
+        for layer in layers where lateRootOrders.contains(layer.order) {
+            guard layer.attach == nil, layer.puppet == nil,
+                  !layer.propScripts.contains(where: { $0.key == "origin" }),
+                  let def = layer.def, let animation = def.animations["origin"] else { continue }
+            func animValue(_ comp: Int, _ base: Float) -> Float {
+                animation.value(component: comp, atTime: time, base: base)
+            }
+            cameraParallaxFrameOriginByOrder[layer.order] = Vec2(
+                x: animValue(0, def.origin.x), y: animValue(1, def.origin.y))
+        }
+    }
+
     func encodeDrawPlan(startingWith enc: MTLRenderCommandEncoder, acc: MTLTexture,
                                 cb: MTLCommandBuffer, device: MTLDevice, time: Float,
                                 displayTextures: [MTLTexture],
@@ -823,7 +1056,10 @@ extension SceneRenderer {
                                 // 방출 게이트를 웜업 스텝 전에 확정해야 해서 먼저 평가한다). nil = 여기서 평가
                                 // (라이브 draw — 종전 경로 그대로). 스크립트 프레임당 1회 평가 계약 유지용.
                                 particleVisible: ((Int) -> Bool)? = nil,
-                                camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+                                aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+        cameraParallaxFrameOriginByOrder.removeAll(keepingCapacity: true)
+        prepareLateCameraParallaxAnimatedImageRoots(time: time)
+        pendingInteractionGeometry.removeAll(keepingCapacity: true)
         var enc = enc
         var i = 0
         while i < drawPlan.count {
@@ -861,33 +1097,33 @@ extension SceneRenderer {
                 // 는 스코프 밖 → 아래 일반 .particle 로 identity 렌더(ponytail).
                 guard let next = runRefractParticle(particleSystems[item.idx], snapshot: particleSnapshot(item.idx),
                                                     acc: acc, cb: cb, ending: enc, device: device,
-                                                    camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
+                                                    aspectScale: &aspectScale) else { return nil }
                 enc = next
             case .particle:
                 encodeParticle(particleSystems[item.idx], snapshot: particleSnapshot(item.idx), into: enc,
-                               device: device, camOffset: &camOffset, aspectScale: &aspectScale)
+                               device: device, aspectScale: &aspectScale)
             case .text where textLayers[item.idx].def.colorBlendMode != 0:
                 // C⑥: colorBlendMode 텍스트 — 이미지 레이어와 동일 인코더 분할(acc 스냅샷 dst 블렌드).
                 guard let next = runBlendModeText(
                     textLayers[item.idx], texture: item.idx < textTextures.count ? textTextures[item.idx] : nil,
                     acc: acc, cb: cb, ending: enc, device: device, time: time,
-                    camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
+                    aspectScale: &aspectScale) else { return nil }
                 enc = next
             case .text:
-                encodeText(textLayers[item.idx], into: enc, camOffset: &camOffset, aspectScale: &aspectScale,
+                encodeText(textLayers[item.idx], into: enc, aspectScale: &aspectScale,
                           time: time, device: device,
                           displayTexture: item.idx < textTextures.count ? textTextures[item.idx] : nil)
             case .layer where layers[item.idx].isFrameBuffer:
                 guard let next = runFrameBufferLayer(layers[item.idx], acc: acc, cb: cb, ending: enc,
                                                      device: device, time: time,
-                                                     camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
+                                                     aspectScale: &aspectScale) else { return nil }
                 enc = next
             case .layer where layers[item.idx].colorBlendMode != 0:
                 // colorBlendMode: 그 시점까지의 acc 스냅샷을 dst 로 셰이더 블렌드(컴포지션과 동일한
                 // 인코더 분할 패턴 — 진행 중 타깃은 샘플 불가). 효과는 displayTextures 에 이미 적용됨.
                 guard let next = runBlendModeLayer(layers[item.idx], texture: displayTextures[item.idx],
                                                    acc: acc, cb: cb, ending: enc, device: device, time: time,
-                                                   camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
+                                                   aspectScale: &aspectScale) else { return nil }
                 enc = next
             case .layer where layers[item.idx].refract.enabled
                               && layers[item.idx].refract.normalTexture != nil
@@ -895,11 +1131,11 @@ extension SceneRenderer {
                 // H4: REFRACT 이미지 레이어: 여기까지의 acc(씬 컬러)를 스냅샷 떠 노멀 오프셋 재샘플(인코더 분할).
                 guard let next = runRefractLayer(layers[item.idx], texture: displayTextures[item.idx],
                                                  acc: acc, cb: cb, ending: enc, device: device, time: time,
-                                                 camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
+                                                 aspectScale: &aspectScale) else { return nil }
                 enc = next
             case .layer:
                 encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
-                            camOffset: &camOffset, aspectScale: &aspectScale, time: time, device: device)
+                            aspectScale: &aspectScale, time: time, device: device)
             }
             i += 1
         }
@@ -947,17 +1183,22 @@ extension SceneRenderer {
         rpd.depthAttachment.storeAction = needsStore ? .store : .dontCare
         guard var menc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
         // 직교 투영: z_ndc = 0.5 − z/(2F). F 는 WE ortho 기본 farz 와 같은 대칭 클립(오브젝트 z ≈ ±수백).
-        // W1-yaxis: sy/평행이동 y 를 pxToNDC 와 동일 부호(y-up)로 반전.
+        // 2D vertex 경로와 순서를 맞춘다: aspect · translation(shake) · pixelToNDC.
+        // sx/sy에 aspect만 미리 곱하고 translation을 -1로 두면 화면 중심이 aspect≠1에서 이동한다.
         let F: Float = 10000
-        let sx = 2 / max(1, projW) * aspectScale.x
-        let sy = 2 / max(1, projH) * aspectScale.y
-        var proj = simd_float4x4(columns: (
+        let sx = 2 / max(1, projW)
+        let sy = 2 / max(1, projH)
+        let pixelToNDC = simd_float4x4(columns: (
             SIMD4<Float>(sx, 0, 0, 0),
             SIMD4<Float>(0, sy, 0, 0),
             SIMD4<Float>(0, 0, -1 / (2 * F), 0),
             SIMD4<Float>(-1, -1, 0.5, 1)))
-        // camerashake/camera-origin 팬: 2D 레이어와 같은 화면 병진(clipTranslation — encode3D 와 동일 기법).
-        if frameShakeOffset != .zero { proj = Scene3DMath.clipTranslation(frameShakeOffset) * proj }
+        let aspect = simd_float4x4(columns: (
+            SIMD4<Float>(aspectScale.x, 0, 0, 0),
+            SIMD4<Float>(0, aspectScale.y, 0, 0),
+            SIMD4<Float>(0, 0, 1, 0),
+            SIMD4<Float>(0, 0, 0, 1)))
+        let proj = aspect * Scene3DMath.clipTranslation(frameShakeOffset) * pixelToNDC
         // W1-yaxis: sy 부호 반전으로 det 부호가 perspective 경로와 같아져 CCW 로 동반 전환.
         menc.setFrontFacing(.counterClockwise)
         // 월드행렬 입력(노드 계층) + 라이팅 바인드(섀도우 없음 — identity 행렬/nil 텍스처).
@@ -987,10 +1228,17 @@ extension SceneRenderer {
         for idx in meshIndices {
             let mr = meshRenderables[idx]
             guard let w = Scene3DMath.worldMatrix(id: mr.id, nodes: nmap), w.visible else { continue }
+            // 정사영 draw list의 model도 공통 root-parallax 분기를 탄다. 바이너리는 root offset을
+            // 임시 object matrix translation에 더하므로, clip-space 공용 카메라가 아니라 이 모델의
+            // world matrix에 픽셀 단위로 합성한다(연속 mesh run 안에서도 root별 값이 다를 수 있다).
+            let rootShift = renderCameraParallaxOffsetPixels(order: mr.order)
+            let drawModel = rootShift == .zero ? w.matrix :
+                Scene3DMath.modelMatrix(origin: SIMD3(rootShift.x, rootShift.y, 0),
+                                        angles: .zero, scale: SIMD3(1, 1, 1)) * w.matrix
             var u = MeshUniform(
-                mvp: proj * w.matrix,
-                model: w.matrix,
-                normalMatrix: Scene3DMath.normalMatrix4x4(w.matrix),
+                mvp: proj * drawModel,
+                model: drawModel,
+                normalMatrix: Scene3DMath.normalMatrix4x4(drawModel),
                 tint: SIMD4(1, 1, 1, 1),
                 material: SIMD4(0.7, 0, 0, 1),
                 specularTint: SIMD4(1, 1, 1, 0),
@@ -1218,15 +1466,20 @@ extension SceneRenderer {
     /// 프로퍼티 스크립트(F331)도 동일 두 그룹으로 나뉘어 반영: origin/scale/angles 는 이 함수 앞부분
     /// (애니와 합류해 quadDirty 단일 재계산), color/alpha/visible 은 아래 별도 루프).
     func encodeLayer(_ layer: GPULayer, texture: MTLTexture, into enc: MTLRenderCommandEncoder,
-                             camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>,
+                             aspectScale: inout SIMD2<Float>,
                              time: Float = 0, device: MTLDevice? = nil,
-                             blendSnapshot: MTLTexture? = nil) {
+                             blendSnapshot: MTLTexture? = nil,
+                             refractDraw: (framebuffer: MTLTexture,
+                                           pipeline: MTLRenderPipelineState)? = nil) {
         guard let pipeline else { return }
         var tint = layer.tint
         var vbuf = layer.vertexBuffer
+        var vertexCount = layer.vertexCount
+        var projectiveDepth = layer.projectiveDepth
         var litRect0 = layer.litRect.0, litRect1 = layer.litRect.1  // 애니 레이어는 아래서 재계산
+        var resolvedCameraParallaxPixels: SIMD2<Float>? = nil
         // H1/C②: 커스텀 셰이더·퍼펫 스킨 메시 배치 공용 유효 변환(애니/스크립트/attachment 반영 후).
-        var effectiveTransform: (origin: Vec2, scale: Vec2, angle: Float)? = nil
+        var effectiveTransform: (origin: SIMD3<Float>, scale: SIMD3<Float>, angles: SIMD3<Float>)? = nil
         // F723: thisLayer 직접 대입 read-back(구조·우선순위는 함수 주석 참조). 스크립트 없는 레이어는
         // JS 평가 비용 0(propScripts/animLayerScripts 가 비어 있으면 nil).
         let scriptUpdateKeys = Set(layer.propScripts.filter { $0.engine.hasUpdate }.map { $0.key })
@@ -1239,8 +1492,14 @@ extension SceneRenderer {
                 def.animations[key]?.value(component: comp, atTime: time, base: base) ?? base
             }
             var origin = Vec2(x: animValue("origin", 0, def.origin.x), y: animValue("origin", 1, def.origin.y))
+            var originZ = animValue("origin", 2, def.originZ)
             var scale = Vec2(x: animValue("scale", 0, def.scale.x), y: animValue("scale", 1, def.scale.y))
-            var angle = animValue("angles", 2, def.angleZ)
+            var scaleZ = animValue("scale", 2, def.scaleZ)
+            var angles = SIMD3<Float>(
+                animValue("angles", 0, def.angleX),
+                animValue("angles", 1, def.angleY),
+                animValue("angles", 2, def.angleZ)
+            )
             var quadDirty = def.animations["origin"] != nil || def.animations["scale"] != nil || def.animations["angles"] != nil
             // attachment(이름 본-슬롯 부착): 부모 퍼펫 부착점 프레임 A(t) → 씬 델타 D = P∘(Y·A·Y)∘P⁻¹ 를
             // 베이크된 월드 변환에 합성. childWorld(t) = P∘A(t)∘childLocal 이 되어 정적 배치(부착점 상대)와
@@ -1258,7 +1517,7 @@ extension SceneRenderer {
                                                      parentScale: att.parentScale, parentAngle: att.parentAngle) {
                     let o2 = d.m * SIMD2(origin.x, origin.y) + d.t
                     origin = Vec2(x: o2.x, y: o2.y)
-                    angle += atan2(d.m.columns.0.y, d.m.columns.0.x)
+                    angles.z += atan2(d.m.columns.0.y, d.m.columns.0.x)
                     // ponytail: 델타 선형부는 각+축배율로 분해(전단 폐기) — 2D 퍼펫 본은 z회전·평행이동 위주.
                     scale = Vec2(x: scale.x * simd_length(d.m.columns.0), y: scale.y * simd_length(d.m.columns.1))
                     quadDirty = true
@@ -1266,25 +1525,31 @@ extension SceneRenderer {
             }
             // 프로퍼티 스크립트(origin/scale/angles, F331): update(현재값) → 쿼드 지오메트리 갱신(오디오반응
             // 스케일·클릭 angles·호버 origin — 3D 빌보드 경로(SceneRenderer3D.Billboard3D.evaluateScripts)와
-            // 동일 marshalling 규약: origin/scale 은 Vec3(z 더미 성분 포함), angles 는 Vec3 의 z 성분만 사용.
-            // 애니메이션/attachment 가 이미 채운 origin/scale/angle 을 "현재값"으로 스크립트에 공급 —
+            // 동일 marshalling 규약: origin/scale/angles 는 모두 Vec3 이며, perspective 이미지의
+            // x/y 회전도 z 회전과 같은 동적 상태다. attachment는 아래에서 z 회전만 더한다.
+            // 애니메이션/attachment 가 이미 채운 origin/scale/angles 를 "현재값"으로 스크립트에 공급 —
             // 한 레이어에서 서로 다른 키가 애니와 스크립트로 나뉘어도(예: scale 키프레임 + origin 스크립트)
             // 둘 다 보존된다(스크립트 전용 바인딩은 PropertyAnimation.parse 가 nil 이라 키 단위로는 배타적).
             for sc in layer.propScripts where sc.key == "origin" || sc.key == "scale" || sc.key == "angles" {
                 sc.engine.setRuntime(Double(time))
                 switch sc.key {
                 case "origin":
-                    if let v = sc.engine.evaluateVec(current: [origin.x, origin.y, def.originZ]), v.count >= 2 {
-                        origin = Vec2(x: v[0], y: v[1]); quadDirty = true
+                    if let v = sc.engine.evaluateVec(current: [origin.x, origin.y, originZ]), v.count >= 2 {
+                        origin = Vec2(x: v[0], y: v[1])
+                        if v.count >= 3 { originZ = v[2] }
+                        quadDirty = true
                     }
                 case "scale":
-                    if let v = sc.engine.evaluateVec(current: [scale.x, scale.y, 1]), v.count >= 2 {
-                        scale = Vec2(x: v[0], y: v[1]); quadDirty = true
+                    if let v = sc.engine.evaluateVec(current: [scale.x, scale.y, scaleZ]), v.count >= 2 {
+                        scale = Vec2(x: v[0], y: v[1])
+                        if v.count >= 3 { scaleZ = v[2] }
+                        quadDirty = true
                     }
                 default:  // "angles"
                     // 단위 경계(1/3): 도↔라디안(evaluateAnglesVec). 0 은 두 단위에서 같다.
-                    if let v = sc.engine.evaluateAnglesVec(currentRadians: [0, 0, angle]), v.count >= 3 {
-                        angle = v[2]; quadDirty = true
+                    if let v = sc.engine.evaluateAnglesVec(currentRadians: [angles.x, angles.y, angles.z]),
+                       v.count >= 3 {
+                        angles = SIMD3(v[0], v[1], v[2]); quadDirty = true
                     }
                 }
             }
@@ -1292,41 +1557,65 @@ extension SceneRenderer {
             // attachment/puppet 은 별도 변환 채널(본 델타/스킨)이라 건드리지 않는다(무회귀).
             if let rb = scriptRB, layer.attach == nil, layer.puppet == nil {
                 if let o = rb.origin, !scriptUpdateKeys.contains("origin"), def.animations["origin"] == nil,
-                   (o.x != origin.x || o.y != origin.y) {
-                    origin = Vec2(x: o.x, y: o.y); quadDirty = true
+                   (o.x != origin.x || o.y != origin.y || o.z != originZ) {
+                    origin = Vec2(x: o.x, y: o.y); originZ = o.z; quadDirty = true
                 }
                 if let s = rb.scale, !scriptUpdateKeys.contains("scale"), def.animations["scale"] == nil,
-                   (s.x != scale.x || s.y != scale.y) {
-                    scale = Vec2(x: s.x, y: s.y); quadDirty = true
+                   (s.x != scale.x || s.y != scale.y || s.z != scaleZ) {
+                    scale = Vec2(x: s.x, y: s.y); scaleZ = s.z; quadDirty = true
                 }
                 if let a = rb.angles, !scriptUpdateKeys.contains("angles"), def.animations["angles"] == nil,
-                   a.z != angle {
-                    angle = a.z; quadDirty = true
+                   a != angles {
+                    angles = a; quadDirty = true
                 }
             }
+            // 바이너리는 root shift를 임시 object matrix의 translation에 먼저 합성한다. stock
+            // perspective 정점도 같은 순서를 지키도록 projection 전에 쓸 draw origin을 분리한다.
+            cameraParallaxFrameOriginByOrder[layer.order] = origin
+            let cameraPixels = renderCameraParallaxOffsetPixels(order: layer.order, currentOrigin: origin)
+            resolvedCameraParallaxPixels = cameraPixels
+            let drawOrigin = def.perspective
+                ? Vec2(x: origin.x + cameraPixels.x, y: origin.y + cameraPixels.y)
+                : origin
+            if def.perspective && cameraPixels != .zero { quadDirty = true }
             if quadDirty {
-                let verts = Self.quadVertices(origin: origin, size: def.size, scale: scale, angleZ: angle,
+                let verts = Self.quadVertices(origin: drawOrigin, size: def.size, scale: scale, angleZ: angles.z,
                                          alignment: def.alignment, projW: projW, projH: projH,
-                                         perspective: def.perspective, perspectiveFov: 95)
+                                         perspective: def.perspective, perspectiveFov: layerPerspectiveFov,
+                                         originZ: originZ, angleX: angles.x, angleY: angles.y)
+                vertexCount = verts.count
+                projectiveDepth = Self.quadProjectiveDepth(
+                    size: def.size, scale: scale, angleZ: angles.z, alignment: def.alignment,
+                    projH: projH, perspective: def.perspective,
+                    perspectiveFov: layerPerspectiveFov, originZ: originZ,
+                    angleX: angles.x, angleY: angles.y
+                )
                 if let b = layer.scratchQuad.load(verts, device: device) {
                     vbuf = b
                 }
-                // 라이트 레이어: 애니 지오메트리에 맞춰 월드 사각형도 재계산(f_lit 정합).
-                if layer.isLit {
-                    let r = Self.litRect(origin: origin, size: def.size, scale: scale, angleZ: angle, alignment: def.alignment, originZ: def.originZ)
-                    litRect0 = r.0; litRect1 = r.1
-                }
+            }
+            // 시차로 화면 쿼드만 움직이고 f_lit의 world rect가 원위치에 남으면 point/spot 거리와
+            // cone 판정이 어긋난다. 투영 종류와 무관하게 동일한 pixel shift를 world origin에 반영한다.
+            if layer.isLit {
+                let litOrigin = Vec2(x: origin.x + cameraPixels.x, y: origin.y + cameraPixels.y)
+                let r = Self.litRect(origin: litOrigin, size: def.size, scale: scale,
+                                     angleZ: angles.z, alignment: def.alignment, originZ: originZ)
+                litRect0 = r.0; litRect1 = r.1
             }
             // H1/C②: 유효 변환(애니/스크립트/attachment 반영 후)을 항상 보존 — 커스텀 셰이더 파이프라인
             // 행렬 산출뿐 아니라 퍼펫 스킨 메시 배치(:1056)도 이 값을 쓴다. 애니/스크립트/attachment가
             // 전무하면 origin/scale/angle == def 정적값이라 비트동일(무회귀).
-            effectiveTransform = (origin, scale, angle)
+            effectiveTransform = (
+                origin: SIMD3(origin.x, origin.y, originZ),
+                scale: SIMD3(scale.x, scale.y, scaleZ),
+                angles: angles
+            )
             // F743(S-35): 라이브 디스크립터 채널 — 이번 프레임 최종 변환 기록(알파/가시성은 아래서 병기).
             liveLayerStates[layer.uid] = ScriptLayerReadBack(
                 visible: nil, alpha: nil,
-                origin: SIMD3(origin.x, origin.y, def.originZ),
-                scale: SIMD3(scale.x, scale.y, 1),
-                angles: SIMD3(0, 0, angle))
+                origin: SIMD3(origin.x, origin.y, originZ),
+                scale: SIMD3(scale.x, scale.y, scaleZ),
+                angles: angles)
             if def.animations["alpha"] != nil || def.animations["color"] != nil {
                 let a = animValue("alpha", 0, def.alpha)
                 let c = Vec3(x: animValue("color", 0, def.color.x), y: animValue("color", 1, def.color.y), z: animValue("color", 2, def.color.z))
@@ -1362,6 +1651,59 @@ extension SceneRenderer {
         // 스크립트/애니도 없어 기록 불요, 기준 디스크립터의 정적값이 곧 정답).
         liveLayerStates[layer.uid]?.alpha = tint.w
         liveLayerStates[layer.uid]?.visible = scriptVisible[layer.uid] ?? layer.initialVisible
+        // 이 시점의 transform은 animation/script/attachment/read-back을 정확히 한 번 평가한 결과다.
+        // draw root 시차와 다음 입력 프레임의 hit geometry가 같은 값을 공유하도록 캐시한다.
+        if let def = layer.def {
+            let t = effectiveTransform ?? (
+                origin: SIMD3(def.origin.x, def.origin.y, def.originZ),
+                scale: SIMD3(def.scale.x, def.scale.y, def.scaleZ),
+                angles: SIMD3(def.angleX, def.angleY, def.angleZ)
+            )
+            let currentOrigin = Vec2(x: t.origin.x, y: t.origin.y)
+            cameraParallaxFrameOriginByOrder[layer.order] = currentOrigin
+            let leaf = cameraParallaxLeafByOrder[layer.order]
+            let leafOrigin = leaf.map {
+                Vec2(x: $0.origin.x + currentOrigin.x - def.origin.x,
+                     y: $0.origin.y + currentOrigin.y - def.origin.y)
+            } ?? currentOrigin
+            let leafDepth = leaf?.depth ?? def.parallaxDepth
+            let scope: PointerHit.DeliveryScope
+            let storedOrigin: Vec2
+            let storedDepth: Vec2
+            if !def.isSolid {
+                scope = .unhittable
+                storedOrigin = Vec2(x: 0, y: 0); storedDepth = Vec2(x: 0, y: 0)
+            } else if def.perspective {
+                // 실물 interaction은 draw root가 아니라 leaf 시차를 쓰지만, 그 이동 역시 object
+                // translation에 먼저 합성된다. 투영 뒤 polygon을 다시 균일 이동하면 yaw/pitch에서 틀린다.
+                let hitShift = hitCameraParallaxShift(origin: leafOrigin, depth: leafDepth)
+                let hitOrigin = Vec2(x: currentOrigin.x + hitShift.x,
+                                     y: currentOrigin.y + hitShift.y)
+                let vertices = Self.quadVertices(
+                    origin: hitOrigin, size: def.size,
+                    scale: Vec2(x: t.scale.x, y: t.scale.y), angleZ: t.angles.z,
+                    alignment: def.alignment, projW: projW, projH: projH,
+                    perspective: true, perspectiveFov: layerPerspectiveFov,
+                    originZ: t.origin.z, angleX: t.angles.x, angleY: t.angles.y)
+                scope = Self.projectedHitPolygon(vertices: vertices, projW: projW, projH: projH,
+                                                 ndcOffset: frameShakeOffset).map {
+                    .projected($0)
+                } ?? .unhittable
+                // leaf 시차와 camera/shake는 polygon에 이미 베이크됐다.
+                storedOrigin = Vec2(x: 0, y: 0); storedDepth = Vec2(x: 0, y: 0)
+            } else {
+                let shakePixels = SIMD2<Float>(frameShakeOffset.x * projW * 0.5,
+                                               frameShakeOffset.y * projH * 0.5)
+                let quad = Self.layerHitQuad(
+                    origin: currentOrigin, size: def.size,
+                    scale: Vec2(x: t.scale.x, y: t.scale.y), angleZ: t.angles.z,
+                    alignment: def.alignment).translated(by: shakePixels)
+                scope = .object(quad)
+                storedOrigin = leafOrigin; storedDepth = leafDepth
+            }
+            pendingInteractionGeometry[layer.uid] = PresentedInteractionGeometry(
+                scope: scope, parallaxOrigin: storedOrigin, parallaxDepth: storedDepth)
+        }
         // animationlayers 스크립트: per-frame 재평가 → 유효 visible/rate/blend 를 로컬 사본에 반영
         // (캐스케이드 블렌드 소비자 전용 — 정적 파스값 def.animationLayers 는 불변, current 인자로 재공급).
         // propScripts 와 동일하게 draw 스킵보다 먼저 평가(shared 사이드이펙트 보존). 예외/무update → 정적값 유지.
@@ -1389,9 +1731,11 @@ extension SceneRenderer {
         // 정적 false + 스크립트 없음이라 이 마운트 동안 절대 켜지지 않기 때문이다. 위 스크립트 평가를
         // **먼저** 끝낸 뒤 여기서 스킵하므로 컨트롤러 스크립트의 shared 사이드이펙트는 그대로 돈다.
         if layer.hiddenByAncestor { return }
-        var vertexCount = 6
         // 퍼펫: per-frame CPU 스키닝 → 메시 삼각형 리스트로 쿼드 대체.
         if let pm = layer.puppet, let def = layer.def, let device {
+            // 2D 퍼펫 정점은 이미 독립 평면 경로로 만들어진다. 이미지 쿼드의 UV-depth 평면을
+            // 스킨 메시 위에 적용하면 안 된다(기존 xy/scale.xy/angle.z 계약 유지).
+            projectiveDepth = SIMD4(0, 0, 1, 0)
             // 다층 animationlayers → 캐스케이드 블렌드(2+ 활성 레이어). 0/1 = 기존 단일 경로(무회귀).
             // effLayers = 정적 파스값 + per-frame 스크립트 평가값(위 animLayerScripts 루프).
             let eff = effLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
@@ -1442,7 +1786,15 @@ extension SceneRenderer {
             // attachedTransform(attachment 전용) ?? def 정적값으로 떨어져, attachment 없는 퍼펫의 애니/
             // 스크립트 변환이 계산만 되고 버려졌다(6씬 398오브젝트 실측 — 감사 C② wf3#20). 애니/스크립트/
             // attachment가 전무하면 effectiveTransform == def 정적값이라 비트동일(무회귀).
-            let (po, psRaw, pa) = effectiveTransform ?? (origin: def.origin, scale: def.scale, angle: def.angleZ)
+            let t = effectiveTransform ?? (
+                origin: SIMD3(def.origin.x, def.origin.y, def.originZ),
+                scale: SIMD3(def.scale.x, def.scale.y, def.scaleZ),
+                angles: SIMD3(def.angleX, def.angleY, def.angleZ)
+            )
+            let baked = (def.perspective ? (resolvedCameraParallaxPixels ?? .zero) : .zero)
+            let po = Vec2(x: t.origin.x + baked.x, y: t.origin.y + baked.y)
+            let psRaw = Vec2(x: t.scale.x, y: t.scale.y)
+            let pa = t.angles.z
             // H1(W0a): 스크립트 산출 scale 이 양 축 모두 0(완전 퇴화)이면 def 정적 scale 로 폴백 — 스크립트가
             // 미할당 변수를 산술에 섞어 NaN 을 만들면(예 WEMath.mix(a,b,undefined)) Vec2/Vec3 shim 생성자의
             // `x || 0` 관용이 이를 조용히 (0,0) 으로 흡수해 evaluateVec 의 NaN/Inf 가드를 통과해버린다
@@ -1459,20 +1811,61 @@ extension SceneRenderer {
                 vertexCount = verts.count
             }
         }
-        var depth = layer.parallaxDepth
+        // WE 정사영 draw는 leaf가 아니라 최상위 parent root의 origin/depth로 한 번 계산한 이동을 쓴다.
+        // helper가 depth까지 적용했으므로 셰이더의 기존 cameraOffset×depth ABI에는 단위 depth를 싣는다.
+        let currentOrigin = effectiveTransform.map { Vec2(x: $0.origin.x, y: $0.origin.y) }
+        let cameraPixels = resolvedCameraParallaxPixels
+            ?? renderCameraParallaxOffsetPixels(order: layer.order, currentOrigin: currentOrigin)
+        let perspectiveBaked = layer.def?.perspective == true
+        var drawCamOffset = perspectiveBaked || projW == 0 || projH == 0 ? .zero
+            : SIMD2<Float>(2 * cameraPixels.x / projW, 2 * cameraPixels.y / projH)
+        var depth = SIMD2<Float>(1, 1)
+        // H4 REFRACT는 위의 stock 공용 프레임 상태 평가를 전부 지난 뒤 최종 draw만 바꾼다.
+        // 따라서 동적 vbuf/count/projectiveDepth와 tint/alpha/visible/live-state가 일반 이미지와
+        // 정확히 같은 우선순위를 갖고, 스냅샷·이펙트 체인 분할은 runRefractLayer가 계속 소유한다.
+        if let refractDraw {
+            guard vertexCount > 0, let normal = layer.refract.normalTexture else { return }
+            enc.setRenderPipelineState(refractDraw.pipeline)
+            enc.setVertexBuffer(vbuf, offset: 0, index: 0)
+            enc.setVertexBytes(&drawCamOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+            enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+            var shake = frameShakeOffset
+            enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
+            enc.setVertexBytes(&projectiveDepth, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
+            enc.setFragmentTexture(texture, index: 0)                  // 알베도(g_Texture0)
+            enc.setFragmentTexture(normal, index: 1)                   // 노멀맵(g_Texture1)
+            enc.setFragmentTexture(refractDraw.framebuffer, index: 2)  // 현재까지의 씬 컬러
+            var params = SIMD4<Float>(layer.refract.amount,
+                                      layer.refract.normalRG88 ? 1 : 0, 0, 0)
+            enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+            enc.setFragmentBytes(&params, length: MemoryLayout<SIMD4<Float>>.stride, index: 1)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
+            return
+        }
         // H1: 커스텀 머티리얼 셰이더 경로 — QuadShaders 대체.
         if let custom = layer.customShader, let def = layer.def {
-            let t = effectiveTransform ?? (origin: def.origin, scale: def.scale, angle: def.angleZ)
+            let t = effectiveTransform ?? (
+                origin: SIMD3(def.origin.x, def.origin.y, def.originZ),
+                scale: SIMD3(def.scale.x, def.scale.y, def.scaleZ),
+                angles: SIMD3(def.angleX, def.angleY, def.angleZ)
+            )
+            let matrixOrigin = def.perspective
+                ? Vec2(x: t.origin.x + cameraPixels.x, y: t.origin.y + cameraPixels.y)
+                : Vec2(x: t.origin.x, y: t.origin.y)
             // 번역 셰이더의 mul(v, eng.mvp) 는 M·v 로 방출된다(GLSLTranslator translateBody ①의
             // ((b)*(a)) 셰임 — HLSL 행벡터 규약과 등가). layerTransformMatrix 도 M·v 규약이라
             // **전치 없이** 그대로 바인딩한다. 종전에는 번역기가 v·M 로 방출하던 시기(d45c259)의
             // 보정으로 여기에 .transpose 가 붙어 있었고, 셰임을 되돌리면서 함께 걷어냈다.
             // 무회전·축정렬 스케일만 있는 레이어는 D=Dᵀ 이라 전치 여부가 무관하다 — 회전 레이어에서만 발현.
-            let m = layerTransformMatrix(origin: t.origin, size: def.size, scale: t.scale,
-                                         angleZ: t.angle, alignment: def.alignment,
-                                         parallaxDepth: Vec2(x: layer.parallaxDepth.x, y: layer.parallaxDepth.y),
-                                         camOffset: camOffset, shakeOffset: frameShakeOffset,
-                                         aspectScale: aspectScale)
+            let m = layerTransformMatrix(origin: matrixOrigin, size: def.size,
+                                         scale: Vec2(x: t.scale.x, y: t.scale.y),
+                                         angleZ: t.angles.z, alignment: def.alignment,
+                                         parallaxDepth: Vec2(x: 1, y: 1),
+                                         camOffset: drawCamOffset, shakeOffset: frameShakeOffset,
+                                         aspectScale: aspectScale, perspective: def.perspective,
+                                         perspectiveFov: layerPerspectiveFov, originZ: t.origin.z,
+                                         scaleZ: t.scale.z, angleX: t.angles.x, angleY: t.angles.y)
             enc.setRenderPipelineState(custom.pipeline)
             // F1(flip①): effectQuadInterleaved(ev_main 전용, local(-1,-1)→uv(0,1))는 여기서 재사용하면
             // layerTransformMatrix 의 y-flip ortho 와 겹쳐 텍스처가 상하 반전된다 — 전용 버퍼로 분리
@@ -1511,6 +1904,10 @@ extension SceneRenderer {
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             return
         }
+        // stock perspective 쿼드가 near/far 밖으로 완전히 사라진 경우의 draw 게이트. 스크립트/
+        // 퍼펫 평가 뒤에 두어 사이드이펙트는 보존한다. custom은 자체 vertex shader가 stock
+        // 정점을 다시 옮길 수 있으므로 이 CPU 결과로 선행 컬링하지 않고 위 GPU MVP에 맡긴다.
+        guard vertexCount > 0 else { return }
         // 파이프라인 선택: lit > colorBlendMode > framebuffer compose > material additive >
         // DIRECTDRAW premultiplied 출력 > 기본 over.
         // additive는 특수 경로가 아닌 일반 f_main 레이어에만 적용한다.
@@ -1544,11 +1941,12 @@ extension SceneRenderer {
             enc.setRenderPipelineState(near ? pipelineNearest ?? pipeline : pipeline)
         }
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
-        enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+        enc.setVertexBytes(&drawCamOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
         enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
         var shake = frameShakeOffset  // camerashake 전역 지터(v_main buffer 4, 깊이 무관). 비활성=0 → +0 비트동일.
         enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
+        enc.setVertexBytes(&projectiveDepth, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
         enc.setFragmentTexture(texture, index: 0)
         enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
         // f_lit 유니폼: rect + 라이트 위치·exponent/색·반경 + 앰비언트 + 레이어 PBR 재질. 라이트 레이어만.
@@ -1611,7 +2009,7 @@ extension SceneRenderer {
     /// 트랜스폼/알파/가시성만 갱신한다(3D 빌보드 Billboard3D.evaluateScripts 와 동형 단일 루프 —
     /// 텍스트는 키프레임 애니메이션이 없어 GPULayer 처럼 애니 블록과 합류시킬 필요가 없다).
     func encodeText(_ t: GPUText, into enc: MTLRenderCommandEncoder,
-                            camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>,
+                            aspectScale: inout SIMD2<Float>,
                             time: Float = 0, device: MTLDevice? = nil,
                             displayTexture: MTLTexture? = nil,   // F741(S-13): 이펙트 적용 텍스처(없으면 원본)
                             blendSnapshot: MTLTexture? = nil) {  // C⑥: colorBlendMode dst 스냅샷(이미지 레이어와 동형)
@@ -1619,27 +2017,35 @@ extension SceneRenderer {
         var tint = t.tint
         var vbuf = t.vertexBuffer
         var origin = t.def.origin, scale = t.def.scale
-        // W3-⑤(b): 정적 angleZ(3146703458 등, ~178°) — rasterize() 가 굽는 초기 vbuf 는 무회전이라
-        // quadDirty 를 강제해야 아래 quadVertices 재계산이 실제로 회전을 반영한다(스크립트 없는 텍스트도).
-        var angle: Float = t.def.angleZ
-        var quadDirty = t.def.angleZ != 0
+        var originZ = t.def.originZ, scaleZ = t.def.scaleZ
+        var angles = SIMD3<Float>(t.def.angleX, t.def.angleY, t.def.angleZ)
+        var vertexCount = t.vertexCount
+        var projectiveDepth = t.projectiveDepth
+        // rasterize() 자체가 정적 perspective/originZ/세 각을 이미 굽는다. 여기서는
+        // 프로퍼티 스크립트 또는 content update의 thisLayer 직접 대입이 있을 때만 재계산한다.
+        var quadDirty = false
         // 모든 스크립트를 먼저 평가(shared 사이드이펙트 보존)한 뒤 visible 이 거짓이면 draw 스킵
         // (GPULayer.propScripts 루프와 동일 순서 원칙).
         for sc in t.propScripts {
             sc.engine.setRuntime(Double(time))
             switch sc.key {
             case "origin":
-                if let v = sc.engine.evaluateVec(current: [origin.x, origin.y, 0]), v.count >= 2 {
-                    origin = Vec2(x: v[0], y: v[1]); quadDirty = true
+                if let v = sc.engine.evaluateVec(current: [origin.x, origin.y, originZ]), v.count >= 2 {
+                    origin = Vec2(x: v[0], y: v[1])
+                    if v.count >= 3 { originZ = v[2] }
+                    quadDirty = true
                 }
             case "scale":
-                if let v = sc.engine.evaluateVec(current: [scale.x, scale.y, 1]), v.count >= 2 {
-                    scale = Vec2(x: v[0], y: v[1]); quadDirty = true
+                if let v = sc.engine.evaluateVec(current: [scale.x, scale.y, scaleZ]), v.count >= 2 {
+                    scale = Vec2(x: v[0], y: v[1])
+                    if v.count >= 3 { scaleZ = v[2] }
+                    quadDirty = true
                 }
             case "angles":
                 // 단위 경계(1/3): 도↔라디안(evaluateAnglesVec) — 이미지 레이어(:1114 루프)와 동형.
-                if let v = sc.engine.evaluateAnglesVec(currentRadians: [0, 0, angle]), v.count >= 3 {
-                    angle = v[2]; quadDirty = true
+                if let v = sc.engine.evaluateAnglesVec(currentRadians: [angles.x, angles.y, angles.z]),
+                   v.count >= 3 {
+                    angles = SIMD3(v[0], v[1], v[2]); quadDirty = true
                 }
             case "color":
                 if let v = sc.engine.evaluateVec(current: [tint.x, tint.y, tint.z]), v.count >= 3 {
@@ -1658,66 +2064,143 @@ extension SceneRenderer {
         // F723: thisLayer 직접 대입 read-back(텍스트 — GPULayer 와 동형). update 보유 키는 위 루프의
         // 반환값이 우선(무회귀). 텍스트는 키프레임 애니가 없어 변환 read-back 도 그대로 적용.
         // JS layers 인덱스 = 이미지 레이어 수 + 텍스트 uid(sceneScriptLayers 의 이미지→텍스트 순서).
-        if !t.propScripts.isEmpty, let rb = readBackScriptLayerState(index: sceneScriptImageLayerCount + t.uid) {
+        // content `text` update도 preview3dclock처럼 `thisLayer.angles`를 대입할 수 있다. 그 경로는
+        // propScripts 배열에 없으므로 엔진 존재 자체도 read-back 게이트에 포함한다.
+        if (!t.propScripts.isEmpty || t.engine != nil),
+           let rb = readBackScriptLayerState(index: sceneScriptImageLayerCount + t.uid) {
             let updateKeys = Set(t.propScripts.filter { $0.engine.hasUpdate }.map { $0.key })
-            if let o = rb.origin, !updateKeys.contains("origin"), (o.x != origin.x || o.y != origin.y) {
-                origin = Vec2(x: o.x, y: o.y); quadDirty = true
+            if let o = rb.origin, !updateKeys.contains("origin"),
+               (o.x != origin.x || o.y != origin.y || o.z != originZ) {
+                origin = Vec2(x: o.x, y: o.y); originZ = o.z; quadDirty = true
             }
-            if let s = rb.scale, !updateKeys.contains("scale"), (s.x != scale.x || s.y != scale.y) {
-                scale = Vec2(x: s.x, y: s.y); quadDirty = true
+            if let s = rb.scale, !updateKeys.contains("scale"),
+               (s.x != scale.x || s.y != scale.y || s.z != scaleZ) {
+                scale = Vec2(x: s.x, y: s.y); scaleZ = s.z; quadDirty = true
             }
-            if let a = rb.angles, !updateKeys.contains("angles"), a.z != angle {
-                angle = a.z; quadDirty = true
+            if let a = rb.angles, !updateKeys.contains("angles"), a != angles {
+                angles = a; quadDirty = true
             }
             if let al = rb.alpha, !updateKeys.contains("alpha") { tint.w = al }
             if let v = rb.visible, !updateKeys.contains("visible") { scriptTextVisible[t.uid] = v }
         }
+        cameraParallaxFrameOriginByOrder[t.order] = origin
+        let cameraPixels = renderCameraParallaxOffsetPixels(order: t.order, currentOrigin: origin)
+        let drawOrigin = t.def.perspective
+            ? Vec2(x: origin.x + cameraPixels.x, y: origin.y + cameraPixels.y)
+            : origin
+        if t.def.perspective && cameraPixels != .zero { quadDirty = true }
         // origin/scale/angles 스크립트가 있을 때만 재계산(정적 텍스트는 rasterize() 가 구운 vbuf 그대로
         // — device 없는 호출자는 지오메트리 갱신을 건너뛰되 tint/visible 은 이미 반영된 채 그린다).
         if quadDirty, let device {
             let align = Self.textAlignmentString(h: t.def.horizontalAlign, v: t.def.verticalAlign)
-            let verts = Self.quadVertices(origin: origin, size: Vec2(x: t.rasterWidth, y: t.rasterHeight),
-                                          scale: scale, angleZ: angle, alignment: align, projW: projW, projH: projH)
+            let verts = Self.quadVertices(origin: drawOrigin, size: Vec2(x: t.rasterWidth, y: t.rasterHeight),
+                                          scale: scale, angleZ: angles.z, alignment: align,
+                                          projW: projW, projH: projH,
+                                          perspective: t.def.perspective,
+                                          perspectiveFov: layerPerspectiveFov, originZ: originZ,
+                                          angleX: angles.x, angleY: angles.y)
+            vertexCount = verts.count
+            projectiveDepth = Self.quadProjectiveDepth(
+                size: Vec2(x: t.rasterWidth, y: t.rasterHeight), scale: scale,
+                angleZ: angles.z, alignment: align, projH: projH,
+                perspective: t.def.perspective, perspectiveFov: layerPerspectiveFov,
+                originZ: originZ, angleX: angles.x, angleY: angles.y
+            )
             if let b = t.scratchQuad.load(verts, device: device) { vbuf = b }
         }
         // F743(S-35): 텍스트 라이브 디스크립터(GPULayer 와 동형 — JS 인덱스 = 이미지 레이어 수 + uid).
         liveLayerStates[sceneScriptImageLayerCount + t.uid] = ScriptLayerReadBack(
             visible: scriptTextVisible[t.uid] ?? t.initialVisible, alpha: tint.w,
-            origin: SIMD3(origin.x, origin.y, 0), scale: SIMD3(scale.x, scale.y, 1),
-            angles: SIMD3(0, 0, angle))
+            origin: SIMD3(origin.x, origin.y, originZ), scale: SIMD3(scale.x, scale.y, scaleZ),
+            angles: angles)
+        cameraParallaxFrameOriginByOrder[t.order] = origin
+        let hitSize = PointerHit.textHitSize(
+            inkBox: SIMD2<Float>(t.rasterWidth, t.rasterHeight),
+            padding: SIMD2<Float>(t.def.padding.x, t.def.padding.y),
+            paddingActive: PointerHit.textPaddingActive(
+                hasEffects: !t.def.effects.isEmpty,
+                opaqueBackground: t.def.opaqueBackground,
+                colorBlendMode: t.def.colorBlendMode))
+        let hitAlign = Self.textAlignmentString(h: t.def.horizontalAlign, v: t.def.verticalAlign)
+        let leaf = cameraParallaxLeafByOrder[t.order]
+        let leafOrigin = leaf.map {
+            Vec2(x: $0.origin.x + origin.x - t.def.origin.x,
+                 y: $0.origin.y + origin.y - t.def.origin.y)
+        } ?? origin
+        let leafDepth = leaf?.depth ?? t.def.parallaxDepth
+        let textScope: PointerHit.DeliveryScope
+        let storedOrigin: Vec2
+        let storedDepth: Vec2
+        if !t.def.isSolid {
+            textScope = .unhittable
+            storedOrigin = Vec2(x: 0, y: 0); storedDepth = Vec2(x: 0, y: 0)
+        } else if hitSize.x <= 0 || hitSize.y <= 0 {
+            // 기존 빈 2D 텍스트의 넓은 폴백은 보존한다. perspective는 표시 polygon 자체가
+            // 없으므로 첫 프레임 전과 같은 닫힌 범위가 안전하다.
+            textScope = t.def.perspective ? .unhittable : .geometryUnknown
+            storedOrigin = Vec2(x: 0, y: 0); storedDepth = Vec2(x: 0, y: 0)
+        } else if t.def.perspective {
+            let hitShift = hitCameraParallaxShift(origin: leafOrigin, depth: leafDepth)
+            let hitOrigin = Vec2(x: origin.x + hitShift.x, y: origin.y + hitShift.y)
+            let vertices = Self.quadVertices(
+                origin: hitOrigin, size: Vec2(x: hitSize.x, y: hitSize.y),
+                scale: scale, angleZ: angles.z, alignment: hitAlign,
+                projW: projW, projH: projH, perspective: true,
+                perspectiveFov: layerPerspectiveFov, originZ: originZ,
+                angleX: angles.x, angleY: angles.y)
+            textScope = Self.projectedHitPolygon(vertices: vertices, projW: projW, projH: projH,
+                                                 ndcOffset: frameShakeOffset).map {
+                .projected($0)
+            } ?? .unhittable
+            storedOrigin = Vec2(x: 0, y: 0); storedDepth = Vec2(x: 0, y: 0)
+        } else {
+            let shakePixels = SIMD2<Float>(frameShakeOffset.x * projW * 0.5,
+                                           frameShakeOffset.y * projH * 0.5)
+            let hitQuad = Self.layerHitQuad(origin: origin, size: Vec2(x: hitSize.x, y: hitSize.y),
+                                            scale: scale, angleZ: angles.z,
+                                            alignment: hitAlign).translated(by: shakePixels)
+            textScope = .object(hitQuad)
+            storedOrigin = leafOrigin; storedDepth = leafDepth
+        }
+        pendingInteractionGeometry[sceneScriptImageLayerCount + t.uid] = PresentedInteractionGeometry(
+            scope: textScope, parallaxOrigin: storedOrigin, parallaxDepth: storedDepth)
         // visible 스크립트 평가값(또는 정적 초기값)이 거짓 → draw 스킵(GPULayer 와 동일 규약).
         if !(scriptTextVisible[t.uid] ?? t.initialVisible) { return }
         if t.hiddenByAncestor { return }   // 조상 상속 하드 게이트(encodeLayer 와 동일 규약)
-        guard let vbuf else { return }
+        guard vertexCount > 0, let vbuf else { return }
+        var drawCamOffset = t.def.perspective || projW == 0 || projH == 0 ? .zero
+            : SIMD2<Float>(2 * cameraPixels.x / projW, 2 * cameraPixels.y / projH)
         var depth = SIMD2<Float>(1, 1)
         // C⑥: colorBlendMode — 이미지 레이어(encodeLayer)와 동일 f_blend 경로 재사용. 스냅샷 없으면
         // (인코더 미분할 호출자 등) 일반 premult-over 폴백(무회귀).
         if let blendSnapshot, let blendPipeline, t.def.colorBlendMode != 0 {
             enc.setRenderPipelineState(blendPipeline)
             enc.setVertexBuffer(vbuf, offset: 0, index: 0)
-            enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            enc.setVertexBytes(&drawCamOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
             enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
             enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
             var shake = frameShakeOffset
             enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
+            enc.setVertexBytes(&projectiveDepth, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
             enc.setFragmentTexture(tex, index: 0)
             enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
             enc.setFragmentTexture(blendSnapshot, index: 1)
             var mode = Int32(clamping: t.def.colorBlendMode)  // F530-sweep: 이미지 레이어(:1450)와 동형
             enc.setFragmentBytes(&mode, length: MemoryLayout<Int32>.stride, index: 1)
-            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
             return
         }
         enc.setRenderPipelineState(pipeline)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
-        enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+        enc.setVertexBytes(&drawCamOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
         enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
         var shake = frameShakeOffset  // camerashake 전역 지터(v_main buffer 4). 텍스트도 전역 병진에 동참.
         enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
+        enc.setVertexBytes(&projectiveDepth, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
         enc.setFragmentTexture(tex, index: 0)
         enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
-        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
 
     /// E1(④): 2D 파티클 visible 프로퍼티 스크립트 재평가(레이어 encodeLayer/텍스트 encodeText 의 "visible"
@@ -1742,7 +2225,7 @@ extension SceneRenderer {
 
     /// 파티클 시스템 1개의 스냅샷을 빌보드 쿼드로 드로우(additive/translucent).
     func encodeParticle(_ sys: GPUParticleSystem, snapshot: [Particle], into enc: MTLRenderCommandEncoder,
-                                device: MTLDevice, camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) {
+                                device: MTLDevice, aspectScale: inout SIMD2<Float>) {
         // 감사 V07: 알베도 NoInterpolation 은 nearest 변형 우선(미빌드 시 대응 선형 폴터 — 무회귀).
         let linearPipe = sys.blendAdditive ? additivePipeline : translucentPipeline
         let nearPipe = sys.noInterp ? (sys.blendAdditive ? additiveNearestPipeline : translucentNearestPipeline) : nil
@@ -1754,8 +2237,9 @@ extension SceneRenderer {
         guard vertexCount > 0, let vbuf = sys.scratch.load(verts, device: device) else { return }
         enc.setRenderPipelineState(pipe)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
-        enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-        var depth = sys.parallaxDepth  // F200: 마우스 시차 가중치(pv_main buffer 2). 기본(1,1)/camOffset=0 은 비트동일.
+        var drawCamOffset = renderCameraParallaxOffset(order: sys.order)
+        enc.setVertexBytes(&drawCamOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+        var depth = SIMD2<Float>(1, 1)  // root helper가 authored depth를 이미 적용했다.
         enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
         var shake = frameShakeOffset  // camerashake 전역 지터(pv_main buffer 4). 파티클도 함께 흔들림. 비활성=0.
@@ -1772,7 +2256,7 @@ extension SceneRenderer {
     /// 반환 인코더로 나머지 drawPlan 지속. 재개 실패만 nil(호출자는 추가 인코딩 없이 commit).
     func runRefractParticle(_ sys: GPUParticleSystem, snapshot: [Particle], acc: MTLTexture, cb: MTLCommandBuffer,
                             ending enc: MTLRenderCommandEncoder, device: MTLDevice,
-                            camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+                            aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
         enc.endEncoding()
         var snap: MTLTexture? = nil
         if let s = pooledOffscreen(acc.width, acc.height, device, bgra: true), let blit = cb.makeBlitCommandEncoder() {
@@ -1786,10 +2270,10 @@ extension SceneRenderer {
         let refractPipe = sys.blendAdditive ? refractParticlePipelineAdditive : refractParticlePipeline
         if let snap, let pipe = refractPipe {
             encodeRefractParticle(sys, snapshot: snapshot, framebuffer: snap, pipe: pipe, into: next,
-                                  device: device, camOffset: &camOffset, aspectScale: &aspectScale)
+                                  device: device, aspectScale: &aspectScale)
         } else {
             encodeParticle(sys, snapshot: snapshot, into: next, device: device,
-                           camOffset: &camOffset, aspectScale: &aspectScale)  // identity 폴백
+                           aspectScale: &aspectScale)  // identity 폴백
         }
         return next
     }
@@ -1798,15 +2282,16 @@ extension SceneRenderer {
     /// pf_refract 파이프라인 사용. 정점(프레임 UV 포함)은 particleVertices 공유 — 노멀은 알베도와 같은 uv 로 샘플.
     func encodeRefractParticle(_ sys: GPUParticleSystem, snapshot: [Particle], framebuffer: MTLTexture,
                                pipe: MTLRenderPipelineState, into enc: MTLRenderCommandEncoder,
-                               device: MTLDevice, camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) {
+                               device: MTLDevice, aspectScale: inout SIMD2<Float>) {
         guard !snapshot.isEmpty, let normal = sys.normalTexture else { return }
         let verts = particleVertices(snapshot, sys)
         let vertexCount = verts.count / ParticleShaders.vertexFloats2D
         guard vertexCount > 0, let vbuf = sys.scratch.load(verts, device: device) else { return }
         enc.setRenderPipelineState(pipe)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
-        enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-        var depth = sys.parallaxDepth  // F200: 마우스 시차 가중치(pv_main buffer 2). 기본(1,1)/camOffset=0 은 비트동일.
+        var drawCamOffset = renderCameraParallaxOffset(order: sys.order)
+        enc.setVertexBytes(&drawCamOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+        var depth = SIMD2<Float>(1, 1)  // root helper가 authored depth를 이미 적용했다.
         enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
         var shake = frameShakeOffset  // camerashake 전역 지터(pv_main buffer 4). refract 파티클도 함께 흔들림.

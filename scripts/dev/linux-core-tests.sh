@@ -62,6 +62,41 @@ if [ ! -x "$SWIFTC_DIR/swift" ]; then
     exit 2
 fi
 
+# 아래 rm 대상은 사용자 지정 경로다. 저장소 루트/기존 데이터 디렉터리를 WORK 로 잘못 넘겨도
+# `Sources`·`Tests` 를 지우지 않도록, 이 스크립트가 빈 디렉터리에서 직접 만든 작업공간만 허용한다.
+case "$WORK" in
+    ""|/)
+        echo "!! 위험한 WAPLE_LINUX_TEST_DIR 거부: '$WORK'" >&2
+        exit 2
+        ;;
+esac
+if ! mkdir -p "$WORK" || ! WORK="$(cd "$WORK" && pwd -P)"; then
+    echo "!! 작업 디렉터리를 준비할 수 없다: $WORK" >&2
+    exit 2
+fi
+if [ "$WORK" = "$REPO" ]; then
+    echo "!! 저장소 루트를 WAPLE_LINUX_TEST_DIR 로 쓸 수 없다: $WORK" >&2
+    exit 2
+fi
+
+WORK_MARKER="$WORK/.waple-linux-core-tests-workspace"
+WORK_MARKER_VALUE="Waple linux core tests workspace v1"
+if [ -f "$WORK_MARKER" ] && [ "$(<"$WORK_MARKER")" = "$WORK_MARKER_VALUE" ]; then
+    : # 이 스크립트가 앞선 실행에서 만든 작업공간
+elif [ -e "$WORK_MARKER" ]; then
+    echo "!! 알 수 없는 작업공간 마커를 덮어쓰지 않는다: $WORK_MARKER" >&2
+    exit 2
+else
+    shopt -s nullglob dotglob
+    work_items=("$WORK"/*)
+    shopt -u nullglob dotglob
+    if [ "${#work_items[@]}" -ne 0 ]; then
+        echo "!! 소유 마커 없는 비어 있지 않은 작업 디렉터리를 거부한다: $WORK" >&2
+        exit 2
+    fi
+    printf '%s\n' "$WORK_MARKER_VALUE" > "$WORK_MARKER" || exit 2
+fi
+
 # 매번 새로 링크한다 — 파일이 추가·삭제돼도 따라간다.
 rm -rf "$WORK/Sources" "$WORK/Tests"
 mkdir -p "$WORK/Sources/simdshim" "$WORK/Sources/WapleCore" "$WORK/Tests/WapleCoreTests"

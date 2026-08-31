@@ -604,9 +604,14 @@ mov [r14+r15], ecx ; r14 = [desc+4] = 0x120
 > 즉 **레이어 `perspective` 는 정사영(2D) 씬 전용**이다. 3D 씬에서 켜도 아무 일도 없다.
 > 시차 레이어 오프셋(§3.2)과 같은 모양의 게이트다.
 
-같은 함수(`0x1401ed0d0` – `0x1401edb1b`)에 **두 번째** 호출부가 있다(`0x1401ed5b9`–`0x1401ed5dc`):
-부모(`r14`)가 `perspective` 인데 자식(`rsi`)은 아닐 때 자식에도 같은 변환을 적용한다 —
-**부모의 원근이 자식에 상속되고, 자식이 이미 켰으면 두 번 걸지 않는다.** 텍스트 레이어 쪽
+**[2026-08-31 정정] 이 함수는 scene parent 합성 경로가 아니다.** `0x1401ed0d0`은
+`IEffectLayer.transformAttachmentToTexture(thisLayer, attachmentLayer)`이고(`scene-script-api.md`
+§2.3), `r14=RCX=thisLayer`(`0x1401ed0f9`) · `rsi=attachmentLayer`(`0x1401ed155`)다. 첫 검사부와
+두 번째 호출부(`0x1401ed5b9`–`0x1401ed5dc`)는 두 임의 레이어 좌표계를 바꿀 때 **둘 중 하나라도**
+perspective이면 카메라 변환을 정확히 한 번 거는 OR다. 부모→자식 플래그 상속 근거가 아니다.
+실제 공통 이미지 렌더 `0x1401e8aa0`은 현재 오브젝트의 bit7만 검사한다(`0x1401e9233`) —
+view/proj push(`0x1401e923c`) → virtual draw(`0x1401e92be`) → pop(`0x1401e92c4`) 구간에
+parent bit7 참조가 없다. 따라서 Waple도 조상 perspective를 자식에 OR하지 않는다. 텍스트 레이어 쪽
 (`0x14025746a` · `0x140258587` · `0x14025d886` · `0x14025d9fa`)도 같은 bit10 을 본다.
 
 #### 5.7.3 카메라 구성 — `0x140184f00` – `0x140184ff7`
@@ -813,31 +818,31 @@ perspective(0x140490890, 오브젝트 키)  parallaxDepth(0x1404902c8, 오브젝
 
 | # | 항목 | WE 실측 | Waple 현행 | 등급 | 착지 지점 |
 |---|---|---|---|---|---|
-| **C-1** | shake 수식 | §2.1 (`cos φ`, `sin 1.333φ`, `sin φ`; `φ = s²·t`) | 2주파 사인 근사 + `roughness` 를 **고주파 오버톤 혼합비**로 해석, `φ = s·t` (`SceneRenderer.swift:920-937`) | **확정 · 미해소** | `SceneRenderer.cameraShakeOffset` 을 §2.1 로 축자 대체. 호출부·바인딩 불변(주석이 이미 그 계약을 적어 두었다) |
-| **C-2** | shake `roughness` 의미 | `|v|^(r³)` 크기 리매핑. **r=1 = 무연산** | 오버톤 혼합비(`norm = 1/(1+rough)`) — r=1 이 큰 변화를 준다 | **확정 · 미해소** | 위와 동일 |
-| **C-3** | shake 진폭 단위 | 2D `a·H/100` 정사영 픽셀 · 3D `a·0.1` 월드 | `amplitude × shakeNDCScale(0.03)` NDC 고정 (`SceneRenderer.swift:918`) | **확정 · 미해소** | 2D 는 `a*projectionHeight/100` 을 픽셀→NDC 로 환산, 3D 는 `a*0.1` 을 월드 오프셋으로 |
-| **C-4** | shake 성분 수 | 3성분(2D 는 z=0) | 2성분(x,y) | 확정 · 2D 무영향 | 3D 경로(`SceneRenderer3D`)에 z 추가 |
-| **C-5** | shake 적용 대상 | eye **와** target 에 동일 델타 = 평행이동 | 셰이더 전역 가산(`camX/camY`, `SceneRendererFrameEncoder.swift:668-669`) — 2D 는 등가, 3D 는 `viewProj` 좌승 | 유력 · 실질 등가 | 3D 는 `eye`/`center` 양쪽 가산이 축자 등가 |
+| **C-1** | shake 수식 | §2.1 (`cos φ`, `sin 1.333φ`, `sin φ`; `φ = s²·t`) | `SceneCameraMath.shakeDelta`가 같은 성분·위상·결합 순서를 보존하고 2D/3D가 공용 소비 | **확정 · 해소(2026-08-31)** | `SceneGeometryCameraMathTests` · `CameraShakeTests` |
+| **C-2** | shake `roughness` 의미 | `|v|^(r³)` 크기 리매핑. **r=1 = 무연산** | `roughness³` 지수와 `k<=0.001 || k==1` 건너뜀을 축자 보존 | **확정 · 해소(2026-08-31)** | C-1과 같은 순수 산술 오라클 |
+| **C-3** | shake 진폭 단위 | 2D `a·H/100` 정사영 픽셀 · 3D `a·0.1` 월드 | 2D는 픽셀 eye 델타를 마지막에 NDC로 변환, 3D는 월드 델타를 camera pose에 직접 가산 | **확정 · 해소(2026-08-31)** | `CameraShakeTests` · `Scene3DCameraShakeTests` |
+| **C-4** | shake 성분 수 | 3성분(2D 는 z=0) | 2D는 xy, 3D는 `SceneCameraMath`의 xyz 전부 소비 | **확정 · 해소(2026-08-31)** | `testPerspectiveShakeMovesCameraInWorldAndRemainsDepthDependent` |
+| **C-5** | shake 적용 대상 | eye **와** target 에 동일 델타 = 평행이동 | `resolveCamera3DFrame`이 eye/center 양쪽에 같은 월드 델타를 더한다 | **확정 · 해소(2026-08-31)** | clip-space 전역 가산은 3D에서 제거; 2D만 최종 eye를 NDC로 소비 |
 | **C-6** | shake 시계 | `g_Time`(renderState+0x130), 432000 s 되감김 | 씬 시간 `t` | 확정 · 등가 | 조치 불요 |
-| **C-7** | `camerashake` 코퍼스 활성 | 동봉 **0/168**, 설치본 1/175(3D, `ricepod`) | 주석 "코퍼스 활성 13/168씬(2D 11/3D 2)" (`SceneDocument.swift:1182-1183`), "코퍼스 0.04..1.0 / 0.0..1.1 / 0.5..7.0" (`:1186-1190`) | **확정 · 반증** | 주석 수치를 실측으로 교체. 값 범위 주장도 근거 없음(동봉·설치본 전건 `0.5/1.0/3.0`, 예외는 `0.01/0.1/5` 하나) |
+| **C-7** | `camerashake` 코퍼스 활성 | 동봉 **0/168**, 설치본 1/175(3D, `ricepod`) | `SceneDocument` 선언·파스 주석을 같은 모집단/값으로 교정 | **확정 · 해소(2026-08-31)** | 코드 기본값은 유지; 잘못된 범위 주장 제거 |
 | **W-1** | parallax 시간 성분 | **없음**(마우스 전용) | 없음 | 확정 · 일치 | 조치 불요 |
-| **W-2** | `mouseinfluence` 의미 | 초점을 **중앙↔마우스 선형 보간** — `infl=0` 이어도 (정적) 오프셋이 남는다 | 목표 오프셋에 곱하는 게인 (`SceneRenderer.swift:1750`) — `infl=0` → 오프셋 0 | **확정 · 미해소** | 초점 모델로 교체: `focus = lerp(center, mouse, infl)`, 레이어 오프셋 = `(origin−focus)·amount·depth` |
-| **W-3** | `cameraparallaxdelay` | `α = min(1, 10·(1−d/3)·dt)`, τ = `0.3/(3−d)`, `d≥3` 정지 | `α = 1 − exp(−dt/d)`, τ = `d` 초 (`ParallaxController.swift:45-50`) | **확정 · 미해소** | `smoothed()` 를 `α = min(1, 10*(1 - delay/3)*dt)` 로. 기본 0.1 에서 τ 0.100→0.103(3.4%)이라 **동봉 회귀 영향은 미미**, 비기본값(설치본 `ricepod` d=1: 1.0s→0.15s, 6.7배)에서 크게 갈린다 |
-| **W-4** | 레이어 오프셋 공식 | `(origin − focus) × amount × parallaxDepth`, z=0 | 전역 `cameraOffset × parallaxDepth`(`SceneRendererFrameEncoder.swift:668-669`), `cameraOffset = mouse × amount × infl × 0.1` | **확정 · 미해소** | `origin` 종속항이 통째로 없다. WE 는 초점에서 먼 레이어일수록 더 움직인다 |
+| **W-2** | `mouseinfluence` 의미 | 초점을 **중앙↔마우스 선형 보간** — `infl=0` 이어도 (정적) 오프셋이 남는다 | `advanceCameraParallax` → `SceneCameraMath.parallaxFocus`가 같은 초점 모델을 소비 | **확정 · 해소(2026-08-31)** | `testMouseInfluenceZeroStillMovesRootsAroundCenteredFocus` |
+| **W-3** | `cameraparallaxdelay` | `α = min(1, 10·(1−d/3)·dt)`, τ = `0.3/(3−d)`, `d≥3` 정지 | `SceneCameraMath.parallaxAlpha`와 `ParallaxController.smoothed`가 같은 식을 공용 소비 | **확정 · 해소(2026-08-21)** | 하한 clamp도 넣지 않아 `d>3` 발산을 보존 |
+| **W-4** | 레이어 오프셋 공식 | `(origin − focus) × amount × parallaxDepth`, z=0 | draw는 최상위 root, interaction은 현재 leaf로 각각 계산. 이미 평가된 root와 늦은 일반 image-root origin keyframe은 현재 프레임 값을 사용 | **확정 · 부분 해소(2026-08-31)** | 늦은 origin JS/text/attachment root는 2D update/draw 분리 전까지 raw 폴백. 보존 실자산 도달 0건 |
 | **W-5** | 레이어 오프셋 게이트 | `cameraparallax` **&&** 정사영(2D) | 2D 전용(3D 는 채널 없음) | 확정 · 일치 | 조치 불요 |
-| **W-6** | `g_ParallaxPosition` 유니폼 | renderState+0x9c, `clamp01(focus/size)`, 기본 (0.5,0.5) | **미구현**(리포 전체에 문자열 없음) | **확정 · 미해소** | `depthparallax` 이펙트를 구현할 때 필요. 무저작 씬은 `(0.5,0.5)` 로 채워야 셰이더가 중립이 된다 |
+| **W-6** | `g_ParallaxPosition` 유니폼 | renderState+0x9c, `clamp01(focus/size)`, 기본 (0.5,0.5) | EngineU 슬롯 80–81에 별도 `parallaxPosition`을 싣고 포인터 슬롯과 독립 갱신 | **확정 · 해소(2026-08-31)** | `testParallaxPositionIsIndependentFromPointerPosition` · depthparallax 실자산 대조 |
 | **W-7** | `parallaxDepth` 기본값 | ~~**[미해결]** — 오브젝트 생성자에서 초기화 지점을 못 찾았다~~ → **`(1.0, 1.0)` 확정** (`0x1401ddce1`/`0x1401ddcec`, §8.6) | `Vec2(1,1)` — `SceneDocument.swift` 의 `public var parallaxDepth: Vec2 = Vec2(x: 1, y: 1)`(세 곳) 과 파스 폴백 `vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1)` | **해소 · 일치** | 조치 불요. Waple 값이 맞았다. (이번 레인도 처음엔 `.text` **선형** 스윕으로 0건을 받아 같은 결론에 갇힐 뻔했다 — §8.6 방법론 기록 참조) |
 | **F-1** | `camerafade` 의미 | 경로 구간 처음/끝 0.5초를 `schemecolor×0.7` 로 덮음. **경로 없으면 무동작** | "파스만(의미 미확정 — 소비 보류)" (`SceneDocument.swift:1216-1218`) | **확정 · 신규** | 카메라 경로를 구현할 때 함께. 동봉 코퍼스 도달 0건이라 우선순위 낮음 |
 | **F-2** | 씬 시작 페이드인 | **없다** | 없음 | 확정 · 일치 | 조치 불요 |
 | **P-1** | `fov` 단위/축 | 도(확정) / 세로(유력) | 도·세로 (`SceneRenderer3D.swift:1460-1461,1526`) | 확정+유력 · 일치 | 조치 불요 |
 | **P-2** | `nearz`/`farz` 기본 | 0.1 / 10000, **3D 원근에서만 사용** | `?? 0.1` / `?? 10000` (`SceneDocument.swift:1885-1886`) | 확정 · 일치 | 조치 불요(2026-08-21 정정 반영됨) |
-| **P-3** | 2D 실효 fov | `perspectiveoverridefov`(기본 95) | `perspectiveOverrideFov: Float = 95` 파스 반영, 렌더는 리터럴 95 하드코딩 잔존 | 확정 · 부분 미해소 | `scene-postprocessing.md` W-7 과 동일 항목 |
+| **P-3** | 2D 실효 fov | `perspectiveoverridefov`(기본 95) | 문서 값을 정적·동적 이미지/텍스트 쿼드와 custom MVP가 모두 소비 | **확정 · 해소(2026-08-31)** | 소비 직전 `[0.1,179.9]` 클램프. `ScenePerspectiveOverrideFovRenderTests` |
 | **P-4** | `orthogonalprojection.auto` 주기 | **매 프레임** (`0x140189d8f`) | 로드 시 1회(`width ?? 1920` 폴백) | 확정 · 미해소 | 오브젝트 `size` 애니메이션이 있을 때만 갈린다. 동봉 auto 2씬은 정적 |
 | **P-5** | 2D eye 재중심화 | `(W/2, H/2, 2000)` (`0x140189da9`–`0x140189df0`) | 해당 개념 없음 | 확정 · 미해소 | 2D 에서 `g_EyePosition` 을 쓰는 셰이더가 생기면 필요 |
 | **P-6** | `zoom` 게이트 | 정사영일 때만, `general.zoom × 카메라레이어zoom` | `zoom` 파스·보존만(`SceneDocument.swift:1287` 부근) | 확정 · 미해소 | 코퍼스 전건 1.0 이라 회귀 위험 없음 |
-| **P-7** | 레이어 `perspective` | 2D 전용. view 를 `(W·cx, H·cy, d)` 로 옮기고 proj 를 `PerspectiveFov(pofov, aspect, 5, max(15000,d+1000))` 로 교체. `s(z) = d/(d−z)` | `SceneRendererFrameEncoder.quadVertices` 의 "M4 근사" — `perspectiveFov` 를 리터럴 95 로 받고, 상단 코너 x 만 `1/(1+tan(fov/2)·0.1)` 로 줄이는 **임의 근사**(:622-631). z 를 아예 안 본다 | **확정 · 미해소** | `SceneCameraMath.layerPerspectiveScale(z:orthoHeight:fovDegrees:)` 로 코너를 초점 기준 스케일. 저작 fov 는 리터럴이 아니라 `doc.perspectiveOverrideFov` |
-| **P-8** | `perspective:true` 도달 주장 | 동봉·설치본 실제 씬 **1건**(`preview3dclock`, `origin.z=0`) | `SceneDocument.swift:242-243` "19씬 전부 x/y angles 0" — 범위 라벨 없음, 이 두 코퍼스로 재현 불가 | **미해결(반증 아님)** | 주장에 코퍼스 범위 라벨을 붙이거나 실측으로 교체. 워크샵 코퍼스가 근거라면 그렇게 적어야 한다 |
-| **X-1** | 순수 산술의 자리 | — | shake·parallax 산술이 전부 `WapleRender`(리눅스 실행 검증 불가)에 있었다 | 해소 | **`Sources/WapleCore/SceneCameraMath`** 신설 — shake/초점/α/레이어오프셋/유니폼/레이어원근을 실측 그대로 담고 `SceneGeometryCameraMathTests`(26개)가 닫힌 식으로 잠근다. `ParallaxController.smoothed` 는 α 를 여기로 위임 |
+| **P-7** | 레이어 `perspective` | 2D 전용. view 를 `(W·cx, H·cy,d)` 로 옮기고 proj 를 `PerspectiveFov(pofov,aspect,5,max(15000,d+1000))` 로 교체. `s(z)=d/(d−z)` | 표준 쿼드는 origin.z·x/y/z 회전 후 near/far 슬래브를 CPU 클립하고, custom material은 같은 view/proj MVP를 GPU에 전달해 custom vertex 결과까지 클립 | **확정 · 해소(2026-08-31)** | z=0 정사영 비트동일, behind/near/far/부분 교차 및 stock/custom 픽셀 외곽 회귀 테스트 |
+| **P-8** | `perspective:true` 도달 주장 | 동봉·설치본 실제 씬 **1건**(`preview3dclock`, `origin.z=0`) | 범위 불명 `19씬` 주장을 제거하고, 동봉 실자산의 text perspective와 `thisLayer.angles=rotation` 파서→스크립트→픽셀 도달을 테스트 | **해소(2026-08-31)** | `testBundledPreview3DClockPreservesTextPerspectiveState` · `testTextContentScriptAngleAssignmentReachesPerspectivePixels` |
+| **X-1** | 순수 산술의 자리 | — | shake·parallax 산술이 전부 `WapleRender`(리눅스 실행 검증 불가)에 있었다 | 해소 | **`Sources/WapleCore/SceneGeometry.swift`의 `SceneCameraMath`** — shake/초점/α/레이어오프셋/유니폼/레이어원근을 실측 그대로 담고 `SceneGeometryCameraMathTests`가 닫힌 식으로 잠근다. `ParallaxController.smoothed` 는 α 를 여기로 위임 |
 | **A-1** | 자동회전(autorotate) | **존재하지 않는다**(§8.0 — JSON·`d.ts`·바이너리 키·셰이더 유니폼 전부 0건) | Waple 에도 없다 | 확정 · 일치 | 조치 불요. "카메라가 자동으로 돈다" 는 요구가 오면 `camera.paths` 로 표현해야 한다 |
 | **F-3** | `camera.paths` 재생 | 3차 에르미트, `v = p0 + Δ·(−u³+1.5u²+0.5u)`, eye·center·**up**·zoom 네 축(§8.2) | **미구현.** `SceneDocument.swift` 의 `guard … let camDict = scene["camera"] as? [String: Any]` 블록이 eye/center/up/fov/nearZ/farZ 만 읽고 `paths` 키를 아예 보지 않는다 | **확정 · 미구현** | `WapleCore.CameraMotion.step(paths:state:dt:)` 로 이미 뽑아 뒀다. 남은 것은 ① `camera.paths` 파스 ② `scripts/camera_XX.json` 로드 ③ 렌더 배선. 동봉 도달 0건이라 회귀 위험 0 |
 | **F-4** | 경로 전진 임계 | 팔마다 다르고(`ts[i+1]` / `duration − ts[i]` / `ts[i]+ts[i+1]`), `duration == ts[last]` 면 마지막 transform 을 건너뛴다(§8.3) | 미구현 | 확정 · 미구현 | 이식할 때 "직관적인 `duration`" 으로 고치지 말 것 — §8.4 가 그 부작용을 적어 뒀다 |
@@ -846,22 +851,18 @@ perspective(0x140490890, 오브젝트 키)  parallaxDepth(0x1404902c8, 오브젝
 
 ### 7.1 우선순위
 
-0. **[2026-08-21 갱신] W-3 은 해소됐다** — `ParallaxController.smoothed` 가 `α = min(1, 10·(1−delay/3)·dt)`
-   로 교체됐고, 산술 본체는 `WapleCore.SceneCameraMath.parallaxAlpha` 로 내려가 리눅스에서 실행 검증된다.
-
-1. **W-3(`delay` 매핑)** — 한 줄 수정, 동봉 회귀 위험 거의 없음, 즉시 해소 가능.
-2. **C-7(주석 반증)** — 코드 변경 없음. 잘못된 실측 주장이 후속 판단을 오염시키고 있다.
-3. **C-1/C-2/C-3(shake 수식)** — 함수 하나 축자 대체. 동봉 도달 0건이라 **비트동일 회귀 위험 0**,
-   다만 그래서 회귀 스위트로 검증도 안 된다(설치본 `ricepod` 를 오라클로 써야 한다).
-4. **W-2/W-4(parallax 구조)** — 구조 변경. 동봉 1씬(`depthparallax`)의 `parallaxDepth=0` 때문에
-   레이어 채널은 여전히 무영향이라, 실효 이득은 W-6(유니폼)과 함께 갈 때 생긴다.
-5. **[2026-08-21 추가] W-7 은 해소됐다** — `parallaxDepth` 기본값이 `(1.0, 1.0)` 으로 확정됐고
-   Waple 값이 이미 맞다(§8.6). 조치 없음.
-6. **[2026-08-21 추가] F-3/F-4(`camera.paths`)는 새 축이다.** 산술은 이미
+0. **[2026-08-31 갱신] C-1~C-5·C-7·W-2·W-3·W-6은 해소, W-4는 공식과 실자산
+   도달 범위를 해소했다.** shake exact 수식, 마우스 초점, root/leaf 비대칭, 늦은 image-root origin
+   keyframe, 별도 parallax 유니폼을 구현하고 관련 Core/Render 회귀 테스트로 잠갔다. W-4의 남은
+   origin JS/text/attachment root 순서는 위 표와 camera-parallax binary 문서 §8.1이 정본이다.
+1. **F-3/F-4(`camera.paths`)는 남은 가장 큰 축이다.** 산술은 이미
    `WapleCore.CameraMotion` 에 있고 리눅스에서 실행 검증된다. 남은 것은 파스·로드·배선인데
    **동봉 도달 0건**이라 회귀 위험이 없는 대신 회귀 스위트로 검증도 안 된다 —
    설치본 `arsenal`/`demon_core` 를 오라클로 써야 한다(C-1 계열과 같은 상황이다).
    우선순위는 낮다. 다만 §8.4 의 quirk 는 **이식할 때 반드시 같이** 가져가야 한다.
+2. **P-4(`orthogonalprojection.auto`)·P-5(2D eye 유니폼)·P-6(zoom)는 도달/소비부가 생길 때**
+   구현한다. 현재 동봉 자산에서는 정적 auto 또는 항등값이라 이번 수정 범위의 화면 차이가 없다.
+3. **F-1(`camerafade`)**은 camera path 구현과 함께 착지한다. 경로가 없으면 무동작이고 동봉 도달 0건이다.
 
 ---
 

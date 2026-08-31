@@ -312,10 +312,9 @@ final class SceneRenderFixRegressionTests: XCTestCase {
 
     // MARK: - E1(⑥): buildLayers projW/projH 클램프 통일(projection 0 씬 NaN 방지)
 
-    /// scene.json 이 orthogonalprojection width/height 를 명시적 0 으로 주면 파서가 그대로 통과시킨다
-    /// (SceneDocument.swift:735 `intVal(proj["width"]) ?? 1920`) — 종전 buildLayers 는 이 값을
-    /// 무클램프로 quadVertices 에 넘겨 pxToNDC 의 `x / projW` 가 0-나눗셈으로 NaN/Inf 정점을 냈다
-    /// (encodeLayer 의 per-frame 재계산 경로는 이미 max(1,…) 클램프된 projW/projH 를 써서 비대칭이었다).
+    /// WE는 width/height가 둘 다 0이 아니어야 orthographic bit를 세운다. 명시적 0은 viewport
+    /// 폴백(우리 표현의 1920×1080)으로 접힌다. 그 파서 계약과 별개로, 호출자가 직접 만든
+    /// `SceneDocument(0,0)`도 가능하므로 buildLayers의 0-나눗셈 방어는 계속 검증한다.
     func testBuildLayersClampsZeroProjectionDimensionsAvoidingNaNVertices() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let scene = """
@@ -329,11 +328,20 @@ final class SceneRenderFixRegressionTests: XCTestCase {
             ("materials/x.tex", solidTex(255, 255, 255)),
         ])
         let doc = try SceneDocument.parse(package: p)
-        XCTAssertEqual(doc.projectionWidth, 0, "파서는 명시적 0 을 그대로 통과(무회귀 확인 — 클램프는 렌더러 책임)")
-        XCTAssertEqual(doc.projectionHeight, 0)
+        XCTAssertEqual(doc.projectionWidth, 1920)
+        XCTAssertEqual(doc.projectionHeight, 1080)
+        XCTAssertFalse(doc.orthographic, "0×0은 유효한 정사영 크기가 아니라 viewport fallback이다")
+
+        // 파서가 아닌 직접 생성 경계의 방어를 계속 실행한다.
+        let zeroProjectionDoc = SceneDocument(
+            projectionWidth: 0, projectionHeight: 0, clearColor: doc.clearColor,
+            parallaxEnabled: doc.parallaxEnabled, parallaxAmount: doc.parallaxAmount,
+            parallaxMouseInfluence: doc.parallaxMouseInfluence, parallaxDelay: doc.parallaxDelay,
+            layers: doc.layers, particles: doc.particles)
 
         let renderer = SceneRenderer()
-        let built = renderer.buildLayers(doc: doc, package: p, device: device, sceneID: "e1-projzero")
+        let built = renderer.buildLayers(doc: zeroProjectionDoc, package: p, device: device,
+                                         sceneID: "e1-projzero")
         XCTAssertEqual(built.count, 1)
         let verts = built[0].vertexBuffer.contents().bindMemory(to: SIMD4<Float>.self, capacity: 4)
         for i in 0..<4 {

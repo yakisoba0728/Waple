@@ -356,6 +356,11 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
 /// 곱해지는 **위치**는 실물과 다르다(실물은 비정규화 진폭에, 우리는 밴드 출력에) — 곱셈이
 /// 결합적이라 관측 결과는 같다. 근거는 `docs/re/audio-capture.md` §9.2.
 public enum AudioInputSettings {
+    /// 프로덕션은 `.standard`, 테스트는 워커별 고유 suite 로 교체한다. `.standard` 는 사용자 단위라
+    /// 테스트가 직접 키를 지우면 실제 설정 유실과 병렬 워커 경합이 생긴다.
+    /// 프로덕션에서는 기동 후 바뀌지 않고 UserDefaults 자체는 스레드 안전하다.
+    nonisolated(unsafe) static var defaults: UserDefaults = .standard
+
     /// **옛 키 — 읽지도 쓰지도 않는다(툼스톤).** 여기에는 종전 의미의 값, 즉 볼륨은 **곱수**
     /// (기본 1)가, 임계는 **임계 그대로**가 들어 있다. 이름을 유지한 채 의미만 WE 설정 단위로
     /// 바꾸면 이미 저장한 사용자가 볼륨 **50배** · 임계 **1000배**를 맞는다. 그래서 새 키를 쓴다.
@@ -385,21 +390,21 @@ public enum AudioInputSettings {
     /// 저장 단위 그대로의 볼륨 설정. 미저장이면 배포 `config.json` 기본값 50.
     public static var volumeSetting: Int {
         get {
-            UserDefaults.standard.object(forKey: volumeSettingKey) == nil
+            defaults.object(forKey: volumeSettingKey) == nil
                 ? AudioSpectrum.defaultInputVolumeSetting
-                : UserDefaults.standard.integer(forKey: volumeSettingKey)
+                : defaults.integer(forKey: volumeSettingKey)
         }
-        set { UserDefaults.standard.set(newValue, forKey: volumeSettingKey) }
+        set { defaults.set(newValue, forKey: volumeSettingKey) }
     }
 
     /// 저장 단위 그대로의 임계 설정. 미저장이면 배포 `config.json` 기본값 0.
     public static var thresholdSetting: Float {
         get {
-            UserDefaults.standard.object(forKey: thresholdSettingKey) == nil
+            defaults.object(forKey: thresholdSettingKey) == nil
                 ? AudioSpectrum.defaultInputThresholdSetting
-                : UserDefaults.standard.float(forKey: thresholdSettingKey)
+                : defaults.float(forKey: thresholdSettingKey)
         }
-        set { UserDefaults.standard.set(newValue, forKey: thresholdSettingKey) }
+        set { defaults.set(newValue, forKey: thresholdSettingKey) }
     }
 
     /// 분석 결과 스펙트럼에 곱하는 스칼라 = `설정 × 0.02`(`0x14006c75e`).

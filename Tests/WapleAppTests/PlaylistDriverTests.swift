@@ -103,8 +103,13 @@ final class PlaylistDriverTests: XCTestCase {
         XCTAssertEqual(advanced.first, "S")
 
         var applied: [String] = []
-        let picked = driver.advance(screenKey: "S", now: elapsed) { id in applied.append(id); return true }
-        XCTAssertEqual(picked, "a", "sorted 순서는 목록 순서다")
+        var resolution: PlaylistAdvanceResolution?
+        let outcome = driver.requestAdvance(screenKey: "S", now: elapsed, apply: { id, _ in
+            applied.append(id)
+            return .applied
+        }, completion: { resolution = $0 })
+        XCTAssertEqual(outcome, .applied)
+        XCTAssertEqual(resolution, .applied(screenKey: "S", entryId: "a"), "sorted 순서는 목록 순서다")
         XCTAssertEqual(applied, ["a"])
     }
 
@@ -141,11 +146,13 @@ final class PlaylistDriverTests: XCTestCase {
         let driver = makeDriver(in: dir)
         sync(driver, ids: ["gone", "alsogone", "ok"], screens: ["S"])
         var tried: [String] = []
-        let picked = driver.advance(screenKey: "S", now: Date()) { id in
+        var resolution: PlaylistAdvanceResolution?
+        let outcome = driver.requestAdvance(screenKey: "S", now: Date(), apply: { id, _ in
             tried.append(id)
-            return id == "ok"
-        }
-        XCTAssertEqual(picked, "ok")
+            return id == "ok" ? .applied : .failed
+        }, completion: { resolution = $0 })
+        XCTAssertEqual(outcome, .applied)
+        XCTAssertEqual(resolution, .applied(screenKey: "S", entryId: "ok"))
         XCTAssertEqual(tried, ["gone", "alsogone", "ok"], "실패 후보를 순서대로 건너뛴다")
     }
 
@@ -155,8 +162,116 @@ final class PlaylistDriverTests: XCTestCase {
         let driver = makeDriver(in: dir)
         sync(driver, ids: ["a", "b"], screens: ["S"])
         var tries = 0
-        XCTAssertNil(driver.advance(screenKey: "S", now: Date()) { _ in tries += 1; return false })
+        var resolution: PlaylistAdvanceResolution?
+        XCTAssertEqual(driver.requestAdvance(screenKey: "S", now: Date(), apply: { _, _ in
+            tries += 1
+            return .failed
+        }, completion: { resolution = $0 }), .failed)
+        XCTAssertEqual(resolution, .exhausted(screenKey: "S"))
         XCTAssertEqual(tries, 2, "한 바퀴(항목 수)까지만 돈다 — 무한 루프가 되면 안 된다")
+    }
+
+    /// ffmpeg 선변환은 아직 RendererSwap 성공이 아니다. 이 상태를 Bool `true`로 접으면
+    /// 드라이버가 후보를 확정하고 시계를 0으로 저장해, 뒤늦은 변환 실패가 되돌릴 수 없다.
+    func testPendingCandidateDoesNotCommitThePlaylistClock() {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let driver = makeDriver(in: dir)
+        sync(driver, minutes: 60, ids: ["a", "b"], screens: ["S"])
+        var now = Date(timeIntervalSince1970: 3_500_000)
+        _ = driver.tick(now: now, isPaused: false)
+        for _ in 0..<6 {
+            now = now.addingTimeInterval(5)
+            _ = driver.tick(now: now, isPaused: false)
+        }
+        XCTAssertEqual(driver.elapsedByScreen["S"] ?? 0, 30, accuracy: 0.001)
+
+        var finishPending: ((WallpaperApplyResolution) -> Void)?
+        let outcome = driver.requestAdvance(screenKey: "S", now: now) { _, finish in
+            finishPending = finish
+            return .pending
+        }
+
+        XCTAssertEqual(outcome, .pending)
+        XCTAssertEqual(driver.elapsedByScreen["S"] ?? 0, 30, accuracy: 0.001,
+                       "RendererSwap 성공 전에는 재생목록 시계를 확정하면 안 된다")
+
+        finishPending?(.applied)
+        XCTAssertEqual(driver.elapsedByScreen["S"], 0,
+                       "실제 RendererSwap 성공 콜백 뒤에만 시계를 확정한다")
+    }
+
+    func testAsyncFailureContinuesTheSameAdvanceAtTheNextCandidate() {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let driver = makeDriver(in: dir)
+        sync(driver, ids: ["bad-video", "scene-ok"], screens: ["S"])
+        var finishVideo: ((WallpaperApplyResolution) -> Void)?
+        var tried: [String] = []
+        var final: PlaylistAdvanceResolution?
+
+        let outcome = driver.requestAdvance(screenKey: "S", now: Date()) { id, finish in
+            tried.append(id)
+            if id == "bad-video" {
+                finishVideo = finish
+                return .pending
+            }
+            return .applied
+        } completion: { final = $0 }
+
+        XCTAssertEqual(outcome, .pending)
+        finishVideo?(.failed)
+        XCTAssertEqual(tried, ["bad-video", "scene-ok"])
+        XCTAssertEqual(final, .applied(screenKey: "S", entryId: "scene-ok"))
+        XCTAssertEqual(driver.elapsedByScreen["S"], 0)
+    }
+
+    func testDuplicateAdvanceIsSuppressedWhilePreparationIsPending() {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let driver = makeDriver(in: dir)
+        sync(driver, ids: ["a", "b"], screens: ["S"])
+        var finishPending: ((WallpaperApplyResolution) -> Void)?
+        var attempts = 0
+        let apply: (String, @escaping (WallpaperApplyResolution) -> Void) -> WallpaperApplyDisposition = {
+            _, finish in
+            attempts += 1
+            finishPending = finish
+            return .pending
+        }
+
+        XCTAssertEqual(driver.requestAdvance(screenKey: "S", now: Date(), apply: apply), .pending)
+        XCTAssertEqual(driver.requestAdvance(screenKey: "S", now: Date(), apply: apply), .pending)
+        XCTAssertEqual(attempts, 1, "같은 1초 틱이 와도 ffmpeg/apply를 중복 시작하면 안 된다")
+
+        finishPending?(.cancelled)
+        XCTAssertFalse(driver.hasPendingAdvance)
+    }
+
+    func testPlaylistEditDuringPendingPreventsStaleIndexCommit() {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let driver = makeDriver(in: dir)
+        sync(driver, minutes: 60, ids: ["a", "b"], screens: ["S"])
+        var now = Date(timeIntervalSince1970: 3_600_000)
+        _ = driver.tick(now: now, isPaused: false)
+        for _ in 0..<6 {
+            now = now.addingTimeInterval(5)
+            _ = driver.tick(now: now, isPaused: false)
+        }
+        var finishPending: ((WallpaperApplyResolution) -> Void)?
+        var final: PlaylistAdvanceResolution?
+        XCTAssertEqual(driver.requestAdvance(screenKey: "S", now: now, apply: { _, finish in
+            finishPending = finish
+            return .pending
+        }, completion: { final = $0 }), .pending)
+
+        sync(driver, minutes: 60, ids: ["replacement", "b"], screens: ["S"])
+        finishPending?(.applied)
+
+        XCTAssertEqual(final, .cancelled(screenKey: "S"))
+        XCTAssertEqual(driver.elapsedByScreen["S"] ?? 0, 30, accuracy: 0.001,
+                       "같은 index가 다른 id가 됐으면 옛 후보로 clock을 확정하면 안 된다")
     }
 
     // MARK: - 화면별
@@ -174,7 +289,7 @@ final class PlaylistDriverTests: XCTestCase {
             now = now.addingTimeInterval(5)
             _ = driver.tick(now: now, isPaused: false)
         }
-        XCTAssertNotNil(driver.advance(screenKey: "S1", now: now) { _ in true })
+        XCTAssertEqual(driver.requestAdvance(screenKey: "S1", now: now) { _, _ in .applied }, .applied)
         XCTAssertEqual(driver.elapsedByScreen["S1"], 0)
         XCTAssertEqual(driver.elapsedByScreen["S2"] ?? 0, 60, accuracy: 0.001,
                        "다른 화면의 경과시간은 그대로다 — 전역 카운터가 아니다")
@@ -278,6 +393,6 @@ final class PlaylistDriverTests: XCTestCase {
         let driver = makeDriver(in: dir)
         sync(driver, ids: [], screens: ["S"])
         XCTAssertTrue(driver.tick(now: Date(), isPaused: false).isEmpty)
-        XCTAssertNil(driver.advance(screenKey: "S", now: Date()) { _ in true })
+        XCTAssertEqual(driver.requestAdvance(screenKey: "S", now: Date()) { _, _ in .applied }, .failed)
     }
 }

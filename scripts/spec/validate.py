@@ -42,10 +42,26 @@ def is_canon_path(path):
 # 다시 뜨지 않았기 때문이다. 정본에서 가장 위험한 종류의 거짓말이다: 등급은 '확정' 인데
 # 근거를 따라가 보면 없다. 사람이 열어보기 전까지 아무 것도 실패하지 않는다.
 #
-# 리포 밖 참조(설치본 `Z:\...`, 코퍼스, wallpaper64.exe)는 머신마다 다르므로 검사 대상이
-# 아니다 — 리포 최상위 이름으로 시작하는 경로만 본다.
+# 이 리포 상대경로는 항상 검사한다. 설치본/짝 저장소의 정형 경로(`wallpaper64.exe`,
+# `bin/...`, `assets/...`)는 아래 ``we_ref_path`` 가 별도로 맡고, 코퍼스 산문·임의 외부경로만
+# 머신마다 달라 검사하지 않는다.
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 REPO_PREFIXES = ("spec/", "Sources/", "Tests/", "scripts/", "docs/", ".github/", "Package.swift")
+# WE 설치 트리는 이 리포에 커밋하지 않고 보통 짝 저장소의 wallpaper_engine/ 에 둔다.
+# 그 짝이 실제로 있는 개발 머신에서는 `wallpaper64.exe`·`bin/...`·`assets/...` 근거도
+# 존재 검사를 한다. 없는 CI checkout 에서는 종전처럼 휴대 가능해야 하므로 자동 탐색 경로가
+# 없을 때만 건너뛴다. `WE_ROOT` 를 명시했다면 그 디렉터리를 그대로 쓴다.
+WE_ROOT = os.path.abspath(os.environ.get(
+    "WE_ROOT", os.path.join(REPO_ROOT, "..", "Waple-wallpaper-source", "wallpaper_engine")))
+WE_DIRECT_PREFIXES = (
+    "assets/", "bin/", "config_backups/", "distribution/", "locale/", "plugins/",
+    "projects/", "thirdparty/", "ui/",
+)
+WE_ASSET_ALIASES = ("effects/", "materials/", "scenes/", "shaders/")
+WE_BIN_BASENAMES = {
+    "cloneextensions64.dll", "mediaextensions64.dll", "resourcecompiler64.exe",
+    "resourceutil64.dll", "scenescript64.dll", "wallpaperui.exe", "webwallpaper64.exe",
+}
 # 줄 인용을 벗긴다. 정본에 실재하는 형태가 여럿이다:
 #   "f.swift:12" · "f.swift:12-34" · "f.h:114,115,119" · "f.swift:1254-1257,"
 REF_LINE_SUFFIX = re.compile(r":[\d,\-]+,?$")
@@ -86,6 +102,69 @@ def repo_ref_path(ref):
         if not s.startswith(REPO_PREFIXES):
             return None
     return s or None
+
+
+def we_ref_path(ref):
+    """WE 설치/짝 저장소 근거 ref 를 ``WE_ROOT`` 상대경로로 정규화한다.
+
+    정본에 공존하는 네 표기(`wallpaper64.exe`, `bin/...`, `shaders/...`,
+    `wallpaper_engine/...`)만 받는다. 산문의 ``...`` 와 임의 외부경로까지 추측해
+    매핑하면 거짓 실패가 되므로 확실한 접두사 밖은 None 이다.
+    """
+    if not isinstance(ref, str):
+        return None
+    s = ref.replace("\\", "/").strip().split(" ", 1)[0].split("#", 1)[0]
+    s = REF_LINE_SUFFIX.sub("", s).rstrip(":,")
+    if not s or "..." in s:
+        return None
+
+    marker = "/wallpaper_engine/"
+    if marker in s:
+        s = s.split(marker, 1)[1]
+    elif s.startswith("wallpaper_engine/"):
+        s = s[len("wallpaper_engine/"):]
+    elif s.startswith("$WE_ROOT/"):
+        s = s[len("$WE_ROOT/"):]
+    elif s.startswith("WE_ROOT/"):
+        s = s[len("WE_ROOT/"):]
+    elif s == "wallpaper64.exe":
+        pass
+    elif s in WE_BIN_BASENAMES:
+        s = "bin/" + s
+    elif s.startswith(WE_ASSET_ALIASES):
+        s = "assets/" + s
+    elif not s.startswith(WE_DIRECT_PREFIXES):
+        return None
+
+    # 글로브 ref 는 repo_ref_path 와 같은 규약으로 비글로브 최장 접두 디렉터리만 본다.
+    if any(c in s for c in GLOB_CHARS):
+        cut = min(s.index(c) for c in GLOB_CHARS if c in s)
+        s = s[:cut].rsplit("/", 1)[0]
+    normalized = os.path.normpath(s).replace("\\", "/")
+    if normalized in ("", "."):
+        return "."
+    if normalized == ".." or normalized.startswith("../") or os.path.isabs(normalized):
+        return None
+    return normalized
+
+
+def evidence_ref_census(docs):
+    """근거 ref 가 어느 존재 검사 그물에 들어가는지 센다."""
+    counts = {"total": 0, "repo": 0, "we": 0, "unstructured": 0}
+    for doc in docs.values():
+        for entry in doc.get("entries", []):
+            for evidence in entry.get("evidence", []) if isinstance(entry, dict) else []:
+                ref = evidence.get("ref") if isinstance(evidence, dict) else None
+                if not isinstance(ref, str):
+                    continue
+                counts["total"] += 1
+                if repo_ref_path(ref) is not None:
+                    counts["repo"] += 1
+                elif we_ref_path(ref) is not None:
+                    counts["we"] += 1
+                else:
+                    counts["unstructured"] += 1
+    return counts
 
 
 def validate_doc(d, path):
@@ -184,6 +263,12 @@ def validate_doc(d, path):
                                 errs.append(
                                     f"{where}: evidence[{j}] 의 ref 가 없는 줄을 가리킨다 — "
                                     f"{rel}:{line} 인데 그 파일은 {total}줄이다")
+                elif rel is None and os.path.isdir(WE_ROOT):
+                    we_rel = we_ref_path(x["ref"])
+                    if we_rel is not None and not os.path.exists(os.path.join(WE_ROOT, we_rel)):
+                        errs.append(
+                            f"{where}: evidence[{j}] 의 ref 가 WE 설치/짝 저장소에 없다 — "
+                            f"{we_rel!r} (WE_ROOT={WE_ROOT!r})")
             kinds.append(x.get("kind"))
 
         if status == "확정" and not any(k in specfmt.REPRODUCIBLE_KINDS for k in kinds):
@@ -236,10 +321,22 @@ def superseded_ids(docs):
     for d in docs.values():
         for e in d.get("entries", []):
             sup = (e.get("value") or {}).get("supersedes") if isinstance(e.get("value"), dict) else None
-            if isinstance(sup, str):
-                out.add(sup)
-            elif isinstance(sup, list):
-                out.update(x for x in sup if isinstance(x, str))
+            for s in ([sup] if isinstance(sup, str) else (sup or [])):
+                if not isinstance(s, str):
+                    continue
+                # `supersedes` 도 맨몸 id 와 산문이 섞여 쓰였다(위 crossRef 와 같은 사정).
+                # 산문이면 그 안의 id 를 뽑아 담는다 — 담기는 것이 id 여야 아래
+                # `hedge_triage` 의 `e['id'] in tombstones` 가 성립한다.
+                #
+                # **[2026-08-30]** 종전엔 `out.add(sup)` 로 산문을 통째로 담았다. 실측으로는
+                # 그 때문에 놓치는 면제가 **0건**이다(현행 묘비 3건 중 산문 2건이 가리키는
+                # `renderState.sampler.cache` · `format.tex.transcodeDecodes` 는 둘 다 헤지어가
+                # 없어 애초에 신고 대상이 아니고, 헤지가 있는 하나는 맨몸 id 로 적혀 있다).
+                # 그래도 집합의 의미를 맞춰 둔다 — 지금 무해한 것이 다음 묘비에서 무해하리라는
+                # 보장이 없고, 이름이 `superseded_ids` 인 집합에 문장이 들어 있으면 다음 사람이
+                # 같은 조사를 다시 하게 된다.
+                for cand in (ID_IN_PROSE.findall(s) or [s]):
+                    out.add(cand)
     return out
 
 
@@ -303,7 +400,22 @@ def cross_document_checks(docs):
                     # 값이 순수 id 일 수도 있고 산문 안에 id 가 섞여 있을 수도 있다
                     # (규약을 안 정해둬서 양쪽 다 쓰였다). 산문이면 id 를 추출해
                     # 하나라도 해석되면 통과로 본다 — 그래야 검사가 오탐으로 죽지 않는다.
-                    cands = ID_IN_PROSE.findall(t) or ([t] if "." in t else [])
+                    #
+                    # **[2026-08-30]** 종전 폴백은 `[t] if "." in t else []` 였다. 그래서
+                    # `ID_IN_PROSE` 가 아무것도 못 뽑은 **산문 전체**가 후보 id 로 들어갔고,
+                    # 문장에 마침표만 있으면 절대 해석될 수 없는 90자 문장이 "없는 id" 로
+                    # 신고됐다 — 이 검사가 내던 유일한 경고가 그 오탐이었다
+                    # (`misc.corpusSharedAssetReferences`: 가리키는 `material.util.*` 는 글로브라
+                    # 추출에 안 걸리는데 정작 대상 항목 `material.util.catalog` 등은 실재한다).
+                    # 영구 오탐 하나가 채널을 다 죽인다: 진짜 끊긴 링크가 나중에 들어와도
+                    # 구별이 안 된다(헤지 목록이 같은 이유로 묘비 면제를 두는 것과 같은 문제다).
+                    #
+                    # 폴백 자체는 **지우면 안 된다.** `ID_IN_PROSE` 는 점 2개 이상을 요구하는데
+                    # 정본에는 단일 점 id 가 다수 있어(`assets.fileCount`·`material.populations` 등)
+                    # 그것들은 이 폴백만이 검사한다. 그래서 없애는 대신 **좁힌다** — 공백이
+                    # 없을 때만(=맨몸 id 로 볼 수 있을 때만) 통째로 후보에 넣는다.
+                    cands = ID_IN_PROSE.findall(t) or (
+                        [t] if ("." in t and not any(c.isspace() for c in t)) else [])
                     if not cands:
                         continue
                     if not any(c in owner for c in cands):
@@ -378,6 +490,11 @@ def main(argv):
 
     print()
     print("상태 분포: " + " / ".join(f"{k} {v}" for k, v in stats.items()))
+    ref_stats = evidence_ref_census(docs)
+    we_state = "존재 검사" if os.path.isdir(WE_ROOT) else "경로 매핑만 검사(WE_ROOT 부재)"
+    print(f"근거 경로: 리포 {ref_stats['repo']}건 존재 검사 · WE/짝 저장소 "
+          f"{ref_stats['we']}건 {we_state} · 비정형/외부 {ref_stats['unstructured']}건 "
+          f"(합계 {ref_stats['total']})")
     print(f"오류 {total_err} 건 · 문서간 경고 {len(cross)}건 · "
           f"헤지 {len(hedges)}건(묘비 면제 {hedge_exempt}건 별도)")
     return 0 if total_err == 0 else 1

@@ -71,7 +71,8 @@ public enum LDRBloomMath {
     public static let defaultStrength: Float = 2
     /// `general.bloomthreshold` 기본값 — `0x1401870b7` 즉시값 `0x3f266666`.
     public static let defaultThreshold: Float = 0.65
-    /// `general.bloomtint` 기본값. 동봉+설치본 358 씬 중 저작 154건이 **전건** `"1 1 1"` 이다.
+    /// `general.bloomtint` 기본값. 설치본 `assets/ + projects/` 단일 모집단 186 씬 중
+    /// 저작 77건이 **전건** `"1 1 1"` 이다.
     public static let defaultTint = SIMD3<Float>(1, 1, 1)
 
     // MARK: - 탭 기하

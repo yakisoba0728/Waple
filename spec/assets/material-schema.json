@@ -3167,7 +3167,8 @@
     "정본": "fbos[].format 은 필수 키다(번들·코퍼스 전건 존재). 7종 — r16f, r8, rg1616f, rg88, rgb161616f, rgba8888, rgba_backbuffer",
     "해소": "`f1ba768`+`77ec33a`. EffectManifest.FBO.Format 이 21종(해시맵 19 + strcmp 백버퍼 별칭 2)을 파스하고 SceneRenderer.metalFormat 이 Metal 픽셀 포맷으로 옮긴다 — rg1616f→.rg16Float, r16f→.r16Float, rgba_backbuffer→HDR 이면 .rgba16Float. 해석은 FBOSpec.pixelFormat 에 담겨 makeOffscreenFormatted 까지 흐른다. 표에 없는 문자열은 에러가 아니라 rgba8 폴백(원본 해시맵 miss 와 동일)",
     "종전 상태": "EffectManifest.FBO 에 format 필드가 없었고 FBOSpec 은 {scale, fixedWidth, fixedHeight} 뿐이라 전부 .rgba8Unorm 으로 할당됐다 — fluidsimulation 의 velocity(rg1616f)·pressure/divergence/curl(r16f)이 [0,1] 클램프 + 8비트 양자화로 붕괴해 시뮬레이션이 원리적으로 성립하지 않았다",
-    "위치": "Sources/WapleCore/EffectManifest.swift 의 `FBO.Format` 과 `parse` fbos 루프, Sources/WapleRender/SceneRendererResources.swift:58-72(FBOSpec)·1326-1341(metalFormat)·1792-1796(makeOffscreenFormatted)"
+    "위치": "Sources/WapleCore/EffectManifest.swift 의 `FBO.Format` 과 `parse` fbos 루프, Sources/WapleRender/SceneRendererResources.swift 의 `struct FBOSpec` · `static func metalFormat(_ f: EffectManifest.FBO.Format?, hdr: Bool)` · `func makeOffscreenFormatted(_ w:_ h:_ device:format:)`",
+    "인용정정": "**[정정 2026-08-30 — 함정 22]** 종전 인용 세 자리가 드리프트했다: ~~`:58-72(FBOSpec)`~~ 는 `TranslatedPass` 의 mediaArtworkSlots/animations 필드, ~~`:1326-1341(metalFormat)`~~ 은 `_rt_` 슬롯 이름 처리 블록, ~~`:1792-1796(makeOffscreenFormatted)`~~ 는 커스텀 레이어 셰이더 빌드부다. 해소 판정은 그대로다. 줄 번호 대신 심볼명으로 걸었다."
    },
    "status": "확정",
    "evidence": [
@@ -3182,7 +3183,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleRender/SceneRendererResources.swift:1326-1341",
+     "ref": "Sources/WapleRender/SceneRendererResources.swift `static func metalFormat(_ f: EffectManifest.FBO.Format?, hdr: Bool)`",
      "note": "metalFormat: FBO.Format → MTLPixelFormat (sRGB arm 0건)"
     },
     {
@@ -3197,7 +3198,8 @@
     "정본": "fbos[].clear(\"0 0 0 0\", 번들 12건) 과 fbos[].unique(true, 번들 19건 / 코퍼스 81건)",
     "해소": "`f1ba768`+`77ec33a`(경화 `3fb9eb6`). EffectManifest.FBO.unique/clearColor 를 파스한다 — unique 는 원본과 같이 **진짜 boolean 만** 받고(isJSONBool), clear 는 공백 구분 정확히 4성분이다. unique FBO 는 SceneRenderer.UniqueFBOStore 가 이펙트 인스턴스별로 프레임을 넘겨 보유하고, clear 는 pendingClear 로 **생성 직후 1회만** 적용된다(매 프레임이 아니다). command:\"swap\" 은 저장소 배열 원소를 맞바꿔 핑퐁이 프레임을 넘어 유지된다",
     "종전 상태": "\"clear\"/\"unique\" 리터럴이 Sources 어디에도 없었다. FBO 는 pooledOffscreen 의 (w,h) 키 풀에서 재사용되고 매 패스 loadAction=.clear 로 시작해, motionblur 누적 버퍼·fluidsimulation 더블버퍼가 풀 체크아웃 순서의 우연에 기대고 있었다",
-    "위치": "Sources/WapleCore/EffectManifest.swift 의 `FBO.unique`/`FBO.clearColor` 와 `parseClearColor`, Sources/WapleRender/SceneRendererResources.swift:84-94(UniqueFBOStore)·742, Sources/WapleRender/SceneRendererFrameEncoder.swift:1988-2029·2057-2060"
+    "위치": "Sources/WapleCore/EffectManifest.swift 의 `FBO.unique`/`FBO.clearColor` 와 `parseClearColor`, Sources/WapleRender/SceneRendererResources.swift 의 `final class UniqueFBOStore`, Sources/WapleRender/SceneRendererFrameEncoder.swift 의 `case .translated(var passes, let fboSpecs, let uniqueStore)` 분기 — `uniqueStore.pendingClear` 순회와 `fboSpecs[i].clearColor ?? SIMD4<Float>(0, 0, 0, 0)`",
+    "인용정정": "**[정정 2026-08-30 — 함정 22]** 종전 인용이 드리프트했다: ~~`SceneRendererResources.swift:84-94(UniqueFBOStore)`~~ 는 HEAD 에서 `FBOSpec.init` 이고(`UniqueFBOStore` 는 그보다 아래), ~~`:742`~~ 는 주석 한 줄(`//`)이며, ~~`SceneRendererFrameEncoder.swift:1988-2029`~~ 는 DIRECTDRAW 플래그 재계산 주석 + `premultipliedDisplayLayers.removeAll` 부근, ~~`:2057-2060`~~ 은 `eff.bind` switch 머리다. 해소 판정은 그대로다. 줄 번호 대신 심볼/조건식으로 걸었다."
    },
    "status": "확정",
    "evidence": [
@@ -3212,7 +3214,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleRender/SceneRendererFrameEncoder.swift:1988-2029",
+     "ref": "Sources/WapleRender/SceneRendererFrameEncoder.swift `uniqueStore.pendingClear` 순회 — `let c = fboSpecs[i].clearColor ?? SIMD4<Float>(0, 0, 0, 0)`",
      "note": "UniqueFBOStore 재사용 + pendingClear 1회 클리어"
     },
     {
@@ -3265,7 +3267,8 @@
     "정본": "\"prev\" 가 bind.name 자리에 쓰인 파일이 1개 있다 — effects/blur/preview/effects/blur/effect.json (번들 최상위 0건 / preview 2건 / 코퍼스 0건)",
     "해소": "`fafcd21`. 규약이 \"previous 라는 이름\"이 아니라 \"**fbos[] 에 없는 이름은 전부 −1**(이펙트 입력)\" 이라는 것이 원본에서 확정됐고(0x1401e7eef 초기화 / 0x1401e7f81 일치 시에만 덮어쓰기, 바이너리에 \"previous\" 리터럴 부재), 구현이 그 규약으로 바뀌었다. \"prev\" 도 특별 취급 없이 같은 자리에 떨어진다 — 남은 \"previous\" 비교는 로그를 생략하는 용도뿐이다",
     "종전 상태": "b.name == \"previous\" 정확 일치만 보고 나머지 미지 이름은 이펙트를 통째로 드롭했다",
-    "위치": "Sources/WapleRender/SceneRendererResources.swift:949-953"
+    "위치": "Sources/WapleRender/SceneRendererResources.swift `buildPassBindings` — `if let idx = fboIndex[b.name] { binds.append((b.index, idx)) }` 와 그 else 의 `이펙트 입력(-1)으로 폴백` 로그 + `binds.append((b.index, -1))`",
+    "인용정정": "**[정정 2026-08-30 — 함정 22]** 종전 인용 ~~`:949-953`~~ 은 드리프트했다 — HEAD 의 그 자리는 `resolvePassShaderMeta` 선언부(③ 셰이더 이름 + 머티리얼 메타 해석)이고, `fbos[] 밖 이름은 전부 −1 폴백` 규약을 구현하는 코드는 `buildPassBindings` 안에 있다. 해소 판정 자체는 그대로다. 줄 번호 대신 조건식으로 걸었다."
    },
    "status": "확정",
    "evidence": [
@@ -3280,7 +3283,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleRender/SceneRendererResources.swift:949-953",
+     "ref": "Sources/WapleRender/SceneRendererResources.swift `buildPassBindings` — `if let idx = fboIndex[b.name]` … `binds.append((b.index, -1))`",
      "note": "fbos[] 밖 이름은 전부 −1 폴백"
     },
     {
@@ -3293,8 +3296,9 @@
    "id": "waple.gap.cullmodeInMaterialPass",
    "value": {
     "정본": "material passes[0].cullmode 는 코퍼스 5401건에 존재하고 그중 449건이 normal(백페이스 컬 켬)이다",
-    "Waple": "SceneDocument.parseMaterialPassProperties(:2324-2422)가 blending/depthtest/depthwrite/alphawriting/combos/constantshadervalues/shader/usershadervalues/textures 를 읽고 cullmode 는 읽지 않는다. cullmode 리터럴은 SceneRenderer3D:718 에만 있다(3D 메시 경로)",
-    "영향(추정)": "2D 레이어 경로에서 백페이스 컬 지정이 소실된다. 2D 쿼드는 대부분 단면이라 가시적 차이가 없을 수 있으나 뒤집힌 트랜스폼(음수 스케일) 레이어에서는 달라진다"
+    "Waple": "SceneDocument.parseMaterialPassProperties(`private static func parseMaterialPassProperties(_ p0:userProps:)`)가 blending/depthtest/depthwrite/alphawriting/combos/constantshadervalues/shader/usershadervalues/textures 를 읽고 cullmode 는 읽지 않는다(`grep cullmode Sources/WapleCore/SceneDocument.swift` = 0건). cullmode 리터럴은 SceneRenderer3D 의 `cullBack = (p0[\"cullmode\"] as? String) != \"nocull\"` 에만 있다(3D 메시 경로).",
+    "영향(추정)": "2D 레이어 경로에서 백페이스 컬 지정이 소실된다. 2D 쿼드는 대부분 단면이라 가시적 차이가 없을 수 있으나 뒤집힌 트랜스폼(음수 스케일) 레이어에서는 달라진다",
+    "인용정정": "**[정정 2026-08-30 — 함정 22]** 종전 문면의 줄 번호 셋이 전부 드리프트했다: ~~`parseMaterialPassProperties(:2324-2422)`~~ — HEAD 의 :2324 는 닫는 중괄호 `    }` 하나이고 함수는 훨씬 아래에 있다; ~~`SceneRenderer3D:718`~~ — 그 줄은 `let roughness: Float` 이고 참 자리는 위 `cullBack = …` 조건식이다. **판정은 그대로 유효하다** — cullmode 는 머티리얼 패스 파서에서 여전히 미참조이고(grep 0건) 갭은 열려 있다. 깨진 것은 근거를 따라가는 길뿐이었다. 앞으로도 줄 번호로 걸지 않는다."
    },
    "status": "확정",
    "evidence": [
@@ -3304,7 +3308,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCore/SceneDocument.swift:2324",
+     "ref": "Sources/WapleCore/SceneDocument.swift `parseMaterialPassProperties` — cullmode 미참조",
      "note": "parseMaterialPassProperties — cullmode 미참조"
     },
     {
@@ -3340,7 +3344,7 @@
     {
      "kind": "file",
      "ref": "Sources/WapleCore/EffectManifest.swift",
-     "note": "Condition/Conditions/evaluate/parseConditions. 소비 3지점은 SceneRendererResources.swift:624-626(fbo)·674(pass)·932(bind)"
+     "note": "Condition/Conditions/evaluate/parseConditions. 소비 3지점은 SceneRendererResources.swift 의 `EffectManifest.evaluate(manifest.fbos[r].conditions, combos:)`(fbo) · `EffectManifest.evaluate(mp.conditions, combos:)`(pass) · `EffectManifest.evaluate(b.conditions, combos:)`(bind) — grep `EffectManifest.evaluate`. **[정정 2026-08-30]** 종전 인용 ~~`:624-626`~~ 는 aux 슬롯 디코드 주석, ~~`:674`~~ 는 `return EffectGPU(pipeline:bind:)`, ~~`:932`~~ 는 반환 nil 의미에 대한 주석이다 — 셋 다 conditions 소비 자리가 아니었다. 줄 번호 대신 호출식으로 걸었다(함정 22)."
     },
     {
      "kind": "script",
@@ -3352,13 +3356,14 @@
    "id": "waple.gap.comboCaseFolding",
    "value": {
     "정본": "콤보 키는 대소문자가 혼용된다 — 코퍼스에 VERSION(254)/version(45), SPRITESHEET(44)/spritesheet(60) 가 공존한다",
-    "Waple 이 접는 것": "SceneDocument.swift:2336-2337 이 spritesheet 와 lighting 딱 둘만 lowercased() 비교한다",
+    "Waple 이 접는 것": "SceneDocument.swift 의 `combos.contains { $0.key.lowercased() == \"spritesheet\" … }` / `… == \"lighting\" …` 딱 둘만 lowercased() 비교한다 (`parseMaterialPassProperties` 안)",
     "Waple 이 안 접는 것": [
      "2356-2358 materialCombos[k] = i — 원문 대소문자를 그대로 보존해 하류 셰이더 콤보 해석에 넘긴다. VERSION 과 version 이 서로 다른 콤보 이름으로 도착한다",
      "2410 (p0[\"combos\"])?[\"REFRACT\"] — 정확 대소문자 + NSNumber 캐스트 + == 1. refract(소문자)나 REFRACT:2 는 false 로 읽힌다"
     ],
     "영향": "콤보가 매치되지 않으면 셰이더 분기가 기본값으로 컴파일된다 — 조용히 다른 그림이 나온다",
-    "위치": "Sources/WapleCore/SceneDocument.swift:2336-2337, 2356-2358, 2410"
+    "위치": "Sources/WapleCore/SceneDocument.swift `parseMaterialPassProperties` — `$0.key.lowercased() == \"spritesheet\"` / `== \"lighting\"` 두 비교 · `result.materialCombos[k] = i` · `combos[\"REFRACT\"]`",
+    "인용정정": "**[정정 2026-08-30 — 함정 22]** 종전 인용 ~~`:2336-2337`~~ · ~~`:2356-2358`~~ · ~~`:2410`~~ 은 전부 드리프트했다 — HEAD 에서 :2336 은 `/// (코퍼스 도달 0건 — 방어적 규약.)` 주석, :2337 은 `private static func parseSprite(`, :2356 은 닫는 중괄호, :2410 은 쿼드 가시성 parent 에 대한 `정정(2026-08-17)` 주석이다. 세 자리 모두 `parseMaterialPassProperties` 안에 있고, 판정(2키만 폴딩)은 그대로다. 줄 번호 대신 조건식/할당식으로 걸었다."
    },
    "status": "확정",
    "evidence": [
@@ -3368,7 +3373,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCore/SceneDocument.swift:2356"
+     "ref": "Sources/WapleCore/SceneDocument.swift `result.materialCombos[k] = i` (원문 대소문자 보존)"
     },
     {
      "kind": "script",
@@ -3381,18 +3386,19 @@
    "value": {
     "확인": "아래는 Waple 이 이미 읽는다 — 갭 표와 구분하기 위해 명시한다",
     "material": {
-     "blending(alphatocoverage 포함)": "SceneRenderer3D.swift:721",
-     "constantshadervalues 의 <str> 공백벡터": "SceneDocument.swift:2367 floatList",
-     "constantshadervalues 의 {script,scriptproperties,value}": "SceneDocument.swift:2286 scriptedConstant",
-     "usershadervalues": "SceneDocument.swift:2387 (키=유저프로퍼티, 값=셰이더 토큰)",
-     "usertextures(문자열 | {name,type})": "SceneDocument.swift:1925, 2180",
-     "combos 대소문자 무시 — 단 2키(spritesheet/lighting)만": "SceneDocument.swift:2336-2337. 일반 콤보 폴딩은 갭이다(waple.gap.comboCaseFolding 참조)"
+     "blending(alphatocoverage 포함)": "SceneRenderer3D.swift `let blend = (p0[\"blending\"] as? String) ?? \"normal\"` (그 아래 `if blend == \"alphatocoverage\" { alphaCutoff = 0.5 }`)",
+     "constantshadervalues 의 <str> 공백벡터": "SceneDocument.swift `parseMaterialPassProperties` 의 `else if let s = v as? String { let f = floatList(s) … }` (floatList 본체는 JSONNumerics.swift)",
+     "constantshadervalues 의 {script,scriptproperties,value}": "SceneDocument.swift `private static func scriptedConstant(_ v: Any?)` 와 그 호출부(`materialConstantScripts`/`materialConstantScriptProps`)",
+     "usershadervalues": "SceneDocument.swift `if let usv = p0[\"usershadervalues\"] as? [String: Any]` (키=유저프로퍼티, 값=셰이더 토큰) — 레이어 경로에도 같은 형태의 `passDict[\"usershadervalues\"]` 분기가 있다",
+     "usertextures(문자열 | {name,type})": "SceneDocument.swift `pass0[\"usertextures\"]` · `instance[\"usertextures\"]` · `passDict[\"usertextures\"]` · `p0[\"usertextures\"]` (grep `\"usertextures\"`)",
+     "combos 대소문자 무시 — 단 2키(spritesheet/lighting)만": "SceneDocument.swift `$0.key.lowercased() == \"spritesheet\"` / `== \"lighting\"` 두 비교. 일반 콤보 폴딩은 갭이다(waple.gap.comboCaseFolding 참조)"
     },
     "effect": {
-     "passes/material/shader/target/bind{name,index}": "EffectManifest.swift:46-62",
-     "command copy/swap + source": "SceneRendererResources.swift:570-583",
-     "fbos scale/fit/width/height/uvs": "EffectManifest.swift:63-79"
-    }
+     "passes/material/shader/target/bind{name,index}": "EffectManifest.swift `struct Pass`(shader/material/target/binds) 와 `struct Bind`",
+     "command copy/swap + source": "SceneRendererResources.swift `if mp.command == \"copy\"` / `if mp.command == \"swap\"` 분기",
+     "fbos scale/fit/width/height/uvs": "EffectManifest.swift `struct FBO`(scale/fit/width/height/uvs)"
+    },
+    "인용정정": "**[정정 2026-08-30 — 함정 22]** 이 표의 줄 번호 인용 여덟 자리가 드리프트해 있었다. 실측한 오탐 예: ~~`SceneRenderer3D.swift:721`~~ 은 `let alphaCutoff: Float`(구조체 필드) 이고 참 자리는 `let blend = (p0[\"blending\"] as? String) ?? \"normal\"`; ~~`SceneDocument.swift:2367`~~ 은 태양/렌즈플레어 스프라이트 주석; ~~`:2286`~~ 은 `var scripts: [String: String] = [:]`; ~~`:2387`~~ 은 `angles: vec3(obj[\"angles\"]) …`; ~~`:1925`~~ 는 VA 주석, ~~`:2180`~~ 은 `brightness: float(obj[\"brightness\"]) ?? 1`; ~~`EffectManifest.swift:46-62`/`:63-79`~~ 는 `dependencies`·`combos` 동명이키를 설명하는 doc comment; ~~`SceneRendererResources.swift:570-583`~~ 은 커스텀 레이어 셰이더 빌드부다. **어떤 키의 소비 여부 판정도 바뀌지 않았다** — 전부 심볼/조건식으로 다시 걸었다. 이 파일에 줄 번호 인용을 새로 추가하지 마라."
    },
    "status": "확정",
    "evidence": [

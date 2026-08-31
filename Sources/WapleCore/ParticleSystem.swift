@@ -180,21 +180,20 @@ public enum Initializer: Equatable {
     /// `testMapSequenceAround_angleToSequence`)은 같은 커밋에서 "시퀀스 슬롯을 만지지 않는다" 를
     /// 단언하는 쪽으로 뒤집었다.
     ///
-    /// **[미배선] 위치 산식은 옮겼지만 배선하지 않았다.**
-    ///   · 산술 — `MapSequenceBetweenSolver`(`ParticleSimulator.swift`)가 실물 핸들러
-    ///     `0x14023ca93`–`0x14023ce53` 를 명령 순서대로 들고 있고, 27건 오라클로 잠겨 있다
+    /// **[2026-08-31] 두 위치 산식을 모두 시뮬레이터에 배선했다.**
+    ///   · 산술 — `MapSequenceBetweenSolver` / `MapSequenceAroundSolver`가 실물 핸들러
+    ///     `0x14023ca93`–`0x14023ce53` / `0x14023c4cf`–`0x14023ca93`를 옮겼고, 오라클로 잠겨 있다
     ///     (`Tests/WapleCoreTests/ParticleMapSequenceOracleTests.swift`).
     ///   · 페이로드 — `MapSequenceBetweenSpec` / `MapSequenceAroundSpec` 이 파스한다
     ///     (`def.mapSequenceBetween` / `def.mapSequenceAround`, 선언당 하나).
-    ///   · **배선을 안 한 이유는 도달이 아니라 검증이다.** `p.frame` 쪽 도달은 0 이지만
-    ///     위치 대입은 **화면을 실제로 바꾼다** — 동봉 `between` 12선언 중 `flags & 4`(크기 축소)가
+    ///   · 위치 대입은 **화면을 실제로 바꾼다** — 동봉 `between` 12선언 중 `flags & 4`(크기 축소)가
     ///     선 것이 **8선언**이고(`flags` 저작 분포 4×2 · 7×3 · 3×1 · 15×2 · 23×1 · 19×1),
-    ///     `flags & 1`(수직 성분 수렴)은 **10선언**이다. 이 컨테이너에는 Metal 이 없어 A/B 캡처가
-    ///     불가능하므로 맥에서 뜬 뒤로 넘긴다.
-    ///   · 배선 시 케이스 시그니처는 **흔들 필요가 없다** — 페이로드는 def 배열에 있으므로
+    ///     `flags & 1`(수직 성분 수렴)은 **10선언**이다. around도 설치 에셋 7파일에 도달하며,
+    ///     CP 회전 기저·원 궤도·접선/반경/축 속도·z→x→y 난수 소비와 선언 상태를 함께 배선했다.
+    ///   · 케이스 시그니처는 **흔들지 않았다** — 페이로드는 def 배열에 있으므로
     ///     `SceneRendererResources.swift` 의 `if case .mapSequence(_, true, _)` 패턴은 그대로 산다.
-    ///     남는 것은 이니셜라이저 인스턴스별 `MapSequenceBetweenSolver` 슬롯을 시뮬에 두는 일뿐이다
-    ///     ((b) `p.frame` 대입 제거는 위에서 끝냈다).
+    ///     이니셜라이저 인스턴스별 solver 슬롯이 `t`/`step`을 다음 스폰까지 보존한다.
+    ///     `p.frame` 대입 제거도 위에서 끝냈다.
     ///
     /// 실물 `arcamount` 는 이 케이스가 아니라 **def 레벨 `mapSequenceArcAmount`** 에 싣는다
     /// (`mapSequenceAxis` 와 같은 관례 — 시뮬레이터의 `case .mapSequence` 패턴과
@@ -216,7 +215,7 @@ public enum Initializer: Equatable {
     /// (thunderbolt/thunderbolt_beam_child 각 0.1 ×4, dischargearc 0.44 ×2).
     /// around 분기는 이 키를 실을 수 없으므로 파스도 하지 않는다(0.3 이 아니라 **부재**를 뜻하는
     /// nil 로 남긴다 — 유령 기본값을 만들지 않기 위해서다).
-    /// **파스·보존 전용**(시뮬 미배선 — 위 [미배선] 참조).
+    /// 두 분기 모두 선언별 시뮬 소비다. 시퀀스 프레임 슬롯은 어느 쪽도 건드리지 않는다.
     case mapSequence(count: Float, mirror: Bool, between: Bool)
     /// `positionoffsetrandom` — 이름과 달리 **균일난수 오프셋이 아니라 fBm 노이즈 변위**다.
     /// 로케일도 그렇게 적는다: "Offsets the position of the particle with fractal brownian motion."
@@ -432,7 +431,7 @@ public enum ParticleOperator: Equatable {
     /// 동봉 도달 6건(`flags: 1`): rain_splashes_droplets ×2 · water_impact ×2 ·
     /// water_impact_droplets ×2. 그중 4건은 시스템 flags 가 0/부재라 실제로 회전을 받는다.
     case movement(gravity: Vec3, drag: Float, flags: Int = 0)
-    case alphaFade(fadeInTime: Float, fadeOutTime: Float)          // 수명 비율 0..1 (fadeOut 0=없음)
+    case alphaFade(fadeInTime: Float, fadeOutTime: Float)          // 수명 비율 0..1 경계 시각
     /// 수명 비율 구간에서 factor를 보간해 현재 크기에 곱한다.
     case sizeChange(startTime: Float, startValue: Float, endValue: Float, endTime: Float = 1)
     /// 수명 비율 구간에서 RGB factor를 성분별 보간해 현재 색에 곱한다.
@@ -1425,10 +1424,14 @@ public struct ChildLink: Equatable {
     /// **기본 0** 을 심는다(키 `lea`@0x1401c1723). 리더는 `lea`@0x1401d09c4 →
     /// `asUInt`(0x140085f70 @0x1401d09d6) → 자식 디스크립터 `[+0x4f8]`(0x1401d09db).
     ///
-    /// 동봉 도달 14건(파일 8) 중 **12건이 JSON `null`** 이다 — `asInt(null) = 0` 이라 원본에서도
+    /// 동봉 도달 14건(파일 8) 중 **12건이 JSON `null`** 이다 — `asUInt(null) = 0` 이라 원본에서도
     /// 0 으로 접힌다. 여기서도 `pint(null) = nil → 0` 이라 같은 결과다(기본 0 폴백 필수).
     /// 값이 실린 2건은 `thunderbolt_child_spawner` 의 `1`(preview 사본 포함).
-    /// **파스·보존 전용**(시뮬 미배선 — 자식 CP 오프셋 적용은 별도 라운드). 짝인 게이트는 아래 `flags`.
+    /// `ParticleSimulator.stepChildren`가 매 프레임 이 슬롯부터 부모 파티클 위치를 공급한다.
+    /// 현재 런타임 CP를 직접 읽는 `mapsequencebetweencontrolpoints`·CP remap 입력·
+    /// `maintaindistancebetweencontrolpoints`가 이 값을 소비한다. 파스 때 target을 굽는 다른 CP
+    /// 베이크 target 오퍼레이터도 runtime CP 이동분을 합성한다. 부모→자식 비항등 mixed-space
+    /// 4×4 변환만 현재 3×3+translation 모델의 별도 잔여다.
     public let controlPointStartIndex: Int
     /// `children[].flags` — **`controlPointStartIndex` 의 게이트**다. bit0 이 서야 자식 CP 피드가 켜진다.
     ///
@@ -1456,10 +1459,9 @@ public struct ChildLink: Equatable {
     /// 동봉/설치 코퍼스 도달: `children[].flags` bit0 이 선 링크 **4건**, `controlpointstartindex`
     /// 에 값이 실린 것 **2건**(`thunderbolt_child_spawner` 계열).
     ///
-    /// **파스·보존 전용**(시뮬 미배선). 배선하려면 CP 를 **매 프레임** 바꿔야 하는데, Waple 의 CP 는
-    /// 로드 시 오퍼레이터 target 으로 **정적으로 굽는** 구조다(`bakeControlPointTargets`) — 그
-    /// 구조 변경이 선결이라 이번 라운드는 게이트 값을 살려 두는 데까지만 한다. 지금은 미파스라
-    /// bit0 정보 자체가 소실돼 있었고, 그 상태로는 배선을 시작할 수조차 없었다.
+    /// **[해소 2026-08-31]** 런타임 CP 작업 배열을 mapsequence·remap·maintain-between이
+    /// 직접 읽고, target 베이크형 attract/vortex/maintain/reduce는 정적 target에 live CP
+    /// 이동분을 합성한다. 남은 것은 비항등 mixed-space 부모→자식 transform-stack 4×4 변환이다.
     public let flags: Int
     public init(def: ParticleSystemDef, trigger: ChildTrigger, maxInstances: Int,
                 probability: Float, origin: Vec3, controlPointStartIndex: Int = 0,
@@ -1470,7 +1472,7 @@ public struct ChildLink: Equatable {
         self.flags = flags
     }
     /// 자식 CP 피드 게이트(`flags & 1`) — 실물 `0x14022cccb`/`0x14022a593` 과 같은 판정.
-    /// **[미배선]** 소비처가 아직 없어 파스·보존 의미만 갖는다.
+    /// `ParticleSimulator.stepChildren`가 소비한다.
     public var feedsControlPoints: Bool { flags & 1 != 0 }
 }
 
@@ -1528,11 +1530,14 @@ public struct ParticleInstanceOverride: Equatable {
     /// 오퍼레이터 VM 은 대조군이다 — 스냅샷을 4×4 통째로 뜨고도 `0x14022a120` 으로
     /// `+0x30/+0x34/+0x38`(위치)만 뽑아 쓴다(`docs/re/particle-operator-vm.md` §7).
     ///
-    /// **[미해결] Waple 은 아직 배선하지 않았다.** 소비처가 어디인지는 위로 확정됐지만, 이 저장소의
-    /// 이미터·`mapSequence` 경로는 CP 회전을 아직 안 읽는다. 그래서 이 필드는 여전히
-    /// **파스·보존 + 적용 게이트**까지다. 동봉/설치 코퍼스 도달은 `controlpointangle1` 6 오브젝트 ·
-    /// `controlpointangle2` 1 오브젝트뿐이라(`docs/re/particle-control-points.md` §8.1) 배선 전까지의
-    /// 그림 차이도 그 범위로 한정된다.
+    /// **[해소 2026-08-31 · 정적/동적 경로]** 살아 있는 scene override 각도는
+    /// `ParticleSystemDef.controlPointFrameAngles`로 분리돼 이미터와 opid 13 두 소비자에 배선됐다.
+    /// `{animation:…}` 각도 트랙도 `ParticleSimulator`가 per-step live 프레임으로 갱신한다.
+    /// `controlpointN` 위치 트랙도 per-step live 배열을 갱신하고, target 베이크형 네 오퍼레이터는
+    /// binding이 보존한 정적 target에 현재 CP 이동분을 합성한다. flags&4 자식은 부모 live 위치/각도를
+    /// 이어받는다. object-world/pointer와 비항등 mixed-space 4×4 합성은 별도 경계다.
+    /// 동봉/설치 코퍼스 도달은 `controlpointangle1` 6 오브젝트 · `controlpointangle2` 1 오브젝트다
+    /// (`docs/re/particle-control-points.md` §8.1).
     public var controlPointAngles: [Int: Vec3] = [:]
     public init() {}
     public var isEmpty: Bool {
@@ -1719,7 +1724,13 @@ public struct EmitterWindow: Equatable, Sendable {
 public struct ControlPointBinding: Equatable {
     public let op: Int
     public let cp: Int
-    public init(op: Int, cp: Int) { self.op = op; self.cp = cp }
+    /// vortex/vortex_v2의 CP와 별개인 저작 offset. 이를 보존해야 부모 CP 부착으로 target을
+    /// 다시 구울 때 `oldCP + offset + newCP`가 되는 비멱등 재베이크를 피할 수 있다.
+    /// 다른 오퍼레이터는 nil이며, 공개 직접 조립 호환을 위해 기본값도 nil이다.
+    public let authoredOffset: Vec3?
+    public init(op: Int, cp: Int, authoredOffset: Vec3? = nil) {
+        self.op = op; self.cp = cp; self.authoredOffset = authoredOffset
+    }
 }
 
 /// `mapsequencebetweencontrolpoints`(opid 14) 의 **페이로드 전문**. 레코드 `0x38` / 페이로드 `0x34`
@@ -1748,10 +1759,9 @@ public struct ControlPointBinding: Equatable {
 /// 음수는 7 이 된다. 그리고 파스 꼬리 `0x1401ca60c`–`0x1401ca628` 이 정의의 CP 개수(`[def+0x2c]`)를
 /// `max(현재, start+1, end+1)` 로 밀어 올린다.
 ///
-/// **파스·보존 전용이다 — 시뮬 미배선.** 산술 자체는 `MapSequenceBetweenSolver` 가 들고 있고
-/// 오라클 테스트로 잠겨 있지만, 실제로 위치를 대입하면 **그림이 바뀐다**(동봉 12선언 중
-/// 8선언이 `flags & 4` 로 크기까지 줄인다). A/B 캡처 전까지 배선하지 않는다 —
-/// 근거는 `Initializer.mapSequence` 주석과 `docs/re/particle-control-points.md` §9.
+/// `ParticleSimulator`가 선언별 `MapSequenceBetweenSolver`와 1:1로 소비한다. 실제 위치·속도·기준
+/// 크기 대입과 누산기 보존은 통합 테스트로 잠겨 있다. 근거는 `Initializer.mapSequence` 주석과
+/// `docs/re/particle-control-points.md` §9.
 public struct MapSequenceBetweenSpec: Equatable {
     /// `count` — 시트 프레임 수가 **아니라** 시퀀스 스텝 수. 주입 기본 **32**
     /// (`mov qword [rax],0x20` @`0x1401bc0db`, 인라인 int 노드).
@@ -1772,15 +1782,14 @@ public struct MapSequenceBetweenSpec: Equatable {
     /// **함정 16**: 바로 앞 `mov r8d,1` 은 `controlpointend` 것이다 — 인접 `lea` 로 귀속하면
     /// 여기 기본이 1 로 잘못 읽힌다.
     ///
-    /// **[미해결 — 2026-08-21 신규] bit4(`0x10`)는 런타임 핸들러가 안 읽지만 죽은 비트가 아니다.**
-    /// 파스 꼬리 `0x1401ca637 test byte [rdi+0x1c],0x10` 이 서면(그리고 `[def+8] & 0x20` 이
-    /// 안 서면) **두 번째 스트림**(`[rsp+0x30]`, 이니셜라이저 스트림 `[rsp+0x48]` 과 별개)에
-    /// 썽크 `0x1401d8950`(opcode **4**, 레코드 `0x24`)로 레코드를 하나 더 찍는다
-    /// (`0x1401ca653`–`0x1401ca6ba`: `+0x10`=`asFloat(count)` · `+0x14`=**−1.0** ·
-    /// `+0x18`=**`0xd0`** · `+0x1c`=이 페이로드의 버퍼 내 바이트 오프셋). 그 스트림의 VM 을
-    /// 아직 안 짚었으므로 **효과는 미확정**이다. 동봉·설치 도달 **2선언**
-    /// (`presets/lightning/particles/presets/thunderbolt.json` `flags:23` ·
-    /// `…/thunderbolt_beam_child.json` `flags:19` — 둘 다 bit4 포함).
+    /// bit4(`0x10`)는 핸들러가 아니라 두 번째 스트림 opcode 4의 producer 게이트다.
+    /// `(flags & 0x10) != 0 && (system.flags & 0x20) == 0`일 때 `0x1401d8950`이 만든 레코드를
+    /// `FUN_1401d15a0`의 `0x1401d186a`–`0x1401d189c`가 매 시스템 업데이트 소비해
+    /// `step = 1 / max(count * instanceoverride.count - 1, 1e-4)`를 **양수로 다시 대입**한다.
+    /// 따라서 mirror가 직전 스폰에서 부호를 뒤집어도 다음 업데이트에 양수로 초기화된다.
+    /// 동봉·설치 도달은 `thunderbolt.json`의 flags 23과 `thunderbolt_beam_child.json`의
+    /// flags 19 두 선언이다. 전체 레코드 레이아웃과 deep-copy/rebase 근거는
+    /// `docs/re/particle-control-points.md` §5.4.
     public var flags: Int
     /// `arcamount`. 주입 기본 **0.3**(`movss xmm2,[0x140492694]` @`0x1401bc3cb` → `H_FLOAT` @`0x1401bc3dd`).
     public var arcAmount: Float
@@ -1797,6 +1806,13 @@ public struct MapSequenceBetweenSpec: Equatable {
     /// **`around`(opid 13)와 다르다** — 그쪽은 `−1` 이 없다(`MapSequenceAroundSpec.step`).
     public var step: Float { 1 / max(count - 1, 1e-4) }
 
+    /// 두 번째 스트림 opcode 4가 opid 14 페이로드 `+0x00`에 다시 쓰는 step.
+    /// `nil`이면 producer 레코드가 없으므로 현재 step을 그대로 보존해야 한다.
+    public func opcode4Step(instanceCountMultiplier: Float, systemFlags: Int) -> Float? {
+        guard flags & 0x10 != 0, systemFlags & 0x20 == 0 else { return nil }
+        return 1 / max(count * instanceCountMultiplier - 1, 1e-4)
+    }
+
     public init(count: Float, mirror: Bool, boundsMin: Float, boundsSpan: Float,
                 cpStart: Int, cpEnd: Int, flags: Int,
                 arcAmount: Float, arcDirection: Vec3, sizeReduction: Float) {
@@ -1812,9 +1828,8 @@ public struct MapSequenceBetweenSpec: Equatable {
 /// 레코드 `0x5c` / 페이로드 `0x58`(썽크 `0x1401d88f0` — `mov byte [rdx],0xd` / `mov word [rdx+2],0x5c`),
 /// 파스 `0x1401c9930`–`0x1401ca1c2`, 주입기 `0x1401bbc90`–`0x1401bc074`.
 ///
-/// **[2026-08-21 신규] `docs/re/particle-control-points.md` §11 [미해결] 3 의 절반을 닫는다.**
-/// 종전엔 `speedmin`/`speedmax` 가 "어디로 가는지 미확정" 이었다. 둘 다 **vec3** 이고
-/// 자리·기본값·소비처를 전부 짚었다:
+/// **[2026-08-31 해소]** `speedmin`/`speedmax`는 둘 다 **vec3**이고 자리·기본값·소비식까지
+/// opid 13 명령열에서 닫혔다:
 ///   · 파스 — `speedmin` → 페이로드 `+0x10/+0x14/+0x18`(`movsd` @`0x1401c9d82` + `mov` @`0x1401c9d9b`),
 ///     `speedmax` → `+0x1c/+0x20/+0x24`(`0x1401c9db5` / `0x1401c9dbd`). 키 `lea` 는
 ///     `0x1401c9b69`(min) · `0x1401c9c73`(max), 값은 `0x140085ca0`(asString) 뒤 `strtod` ×3.
@@ -1822,11 +1837,12 @@ public struct MapSequenceBetweenSpec: Equatable {
 ///     max `0x1401bbf7b` `mov edx,5`). 즉 부재면 속도 기여가 0 이다.
 ///   · 소비 — 핸들러 `0x14023c4cf` 가 여섯 성분을 **전부** 읽는다:
 ///     min `[r14+0x14]`(`0x14023c7d9`) · `[r14+0x18]`(`0x14023c7f9`) · `[r14+0x1c]`(`0x14023c7a0`),
-///     max `[r14+0x20]`(`0x14023c7d3`) · `[r14+0x24]`(`0x14023c7ef`) · `[r14+0x28]`(`0x14023c752`).
+///     span(max−min) `[r14+0x20]`(`0x14023c7d3`) · `[r14+0x24]`(`0x14023c7ef`) ·
+///     `[r14+0x28]`(`0x14023c752`). Swift 모델은 raw max를 보존해 solver에서 span을 계산한다.
 ///     사이에 균일난수 `0x1401f87a0` 호출이 정확히 셋(`0x14023c74d`·`0x14023c7c7`·`0x14023c7ea`)
 ///     끼어 기저벡터 셋(페이로드 `+0x28`/`+0x34`/`+0x40`, 조립 `0x1401c19e0` @`0x1401c9ed4`)과
-///     섞여 스폰 속도가 된다.
-/// **[미해결]** 그 혼합의 정확한 대수식(축별 결합 순서)은 아직 안 옮겼다 — 추정으로 적지 않는다.
+///     섞여 `T·lerp(minX,maxX,rx) + R·lerp(minY,maxY,ry) + D·lerp(minZ,maxZ,rz)`가 된다.
+///     여기서 `R=cosθ·C+sinθ·B`, `T=−sinθ·C+cosθ·B`이고 RNG 호출은 **z→x→y**다.
 ///
 /// **[미해결 — 2026-08-21 신규] `around` 파스는 `flags` 를 한 번도 읽지 않는다.** 주입기는
 /// `flags` 기본 0 을 DOM 에 심지만(`xor r8d,r8d` @`0x1401bc002` → `H_INT` @`0x1401bc00f`),
@@ -1835,7 +1851,7 @@ public struct MapSequenceBetweenSpec: Equatable {
 /// (썽크 `0x1401d8910`, opcode 3, `0x24`)를 찍을지 고른다. **그래서 이 구조체에는 `flags` 를
 /// 싣지 않는다** — 읽히지 않는 값을 필드로 만들면 유령이 된다.
 ///
-/// **파스·보존 전용**(시뮬 미배선).
+/// `ParticleSimulator`가 선언별 `MapSequenceAroundSolver`를 보존해 위치·속도·누산기를 소비한다.
 public struct MapSequenceAroundSpec: Equatable {
     /// 주입 기본 **32**(`mov qword [rax],0x20` @`0x1401bbceb`).
     public var count: Float
@@ -1848,6 +1864,7 @@ public struct MapSequenceAroundSpec: Equatable {
     /// 주입 기본 `"0 0 0"`(`0x14048f4d4`).
     public var speedMin: Vec3
     /// 주입 기본 `"0 0 0"`(`0x14048f4d4`).
+    /// 원본 payload는 파스 중 `max−min` span으로 바꾸지만 이 모델은 JSON의 raw max를 보존한다.
     public var speedMax: Vec3
     /// `axis` — 주입 기본 **`"0 0 1"`**(`lea r8,[0x14048f6e0]` @`0x1401bbfc4` → `H_STRING` @`0x1401bbfd5`).
     /// Waple 의 `mapSequenceAxis` z축 레거시 기본과 같은 값이다.
@@ -1880,7 +1897,7 @@ public struct ParticleSystemDef: Equatable {
     public let maxCount: Int
     public let startTime: Float
     public let material: ParticleMaterial?
-    public let children: [ChildLink]
+    public private(set) var children: [ChildLink]
     /// 컨트롤포인트 오프셋(id 0..7, 시스템 로컬 좌표). mapsequence/트리거류가 참조.
     public var controlPoints: [Vec3] = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
     /// 컨트롤포인트 **프레임 방향**(id 0..7, 라디안, `Rz·Ry·Rx`). 위치와 **쌍**이다.
@@ -1921,9 +1938,14 @@ public struct ParticleSystemDef: Equatable {
     ///    `0x14022bd40`–`0x14022c30a` 가 `cos/sin` 으로 만든 3행을 CP `+0x80/+0x90/+0xa0` 에
     ///    **직접 쓴다**(`0x14022bfcd` 이하). 그래서 §2.2 경로만 회전을 실제로 만든다.
     ///
-    /// **[미해결] Waple 은 아직 어느 쪽도 소비하지 않는다** — 배선은 별도 라운드다.
-    /// 자식 CP 부착(`flags & 4`)이 위치만 복사하는 것도 그대로 뒀다 — 그건 소비 쪽 결정이다.
+    /// `controlPointAngles` 자체는 두 입력 원천을 보존하는 스키마 필드다. 이 중 실제 CP 행렬을
+    /// 쓰는 씬 override만 아래 `controlPointFrameAngles`에도 복사되어 opid 13이 소비한다.
+    /// 자식 CP 부착(`flags & 4`)의 회전 합성은 별도 규약이라 여기서 추정하지 않는다.
     public var controlPointAngles: [Vec3] = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
+    /// 현재 CP 3×3을 실제로 바꾸는 각도만 담는다. 파티클 JSON `controlpoint[].angles`는 생성자가
+    /// 읽지 않으므로 이 배열에 들어오지 않고, 적용 게이트를 통과한
+    /// `instanceoverride.controlpointangleN`만 들어온다. 이미터와 `mapsequencearoundcontrolpoint`가 소비한다.
+    public var controlPointFrameAngles: [Vec3] = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
     /// `controlpoint[].flags`. 실물 CP 구조체 `+0xc0`(런타임) / 디스크립터 `+0xa4`(파스).
     /// 마스터 디스패치 0x14022e3e0 이 비트로 갈라진다 — 이 저장소에서 직접 확인한 것:
     ///   `bt edx, 0x10` @0x14022e468 → **bit16**: 이 CP 는 엔진 갱신을 통째로 건너뛴다(remap 출력 대상)
@@ -1945,6 +1967,10 @@ public struct ParticleSystemDef: Equatable {
     /// F620: 이미터별 speedmin/speedmax(emitters 와 병렬) — 방출 방향을 따르는 초기속도
     /// (WE 문서: "particle speed in conjunction with a movement Operator"). (0,0)=무속도(기존 동작).
     public var emitterSpeed: [SIMD2<Float>] = []
+    /// 이미터별 `controlpoint`(emitters 와 병렬). 부재 기본은 CP0이며, 실물의 `asUInt` 뒤
+    /// unsigned `< 7` 클램프를 그대로 써 범위 밖 값(음수 포함)은 CP7이 된다.
+    /// Emitter 케이스 시그니처를 넓히지 않는 것은 emitterAudio/emitterSpeed와 같은 호환 관례다.
+    public var emitterControlPoints: [Int] = []
     /// F627: box 이미터별 distancemin(emitters 와 병렬; sphere 는 nil — 구 distancemin 은 케이스 필드).
     /// nil = ±distanceMax 대칭 레거시. 실물은 distancemin/distancemax 코너 쌍(음수·혼합 부호 유효).
     public var boxDistanceMin: [Vec3?] = []
@@ -1989,16 +2015,14 @@ public struct ParticleSystemDef: Equatable {
     /// F626: 렌더러 orientation(기본 screen — 기존 스크린 빌보드 폴터와 동일).
     public var orientation: ParticleOrientation = .screen
     /// F630: mapsequencearoundcontrolpoint "axis"(회전 평면 선택, 기본 z축=XY 평면 레거시).
-    /// **[2026-08-21] 종전 소비 자리가 근거없음으로 판정돼 걷어냈다 — 지금은 파스·보존 전용이다.**
-    /// 시뮬이 이 축으로 각도를 재서 `p.frame` 을 정했는데, 실물 opid 13 암 `0x14023c4cf` 는
-    /// 시퀀스 슬롯 `+0x268` 을 **한 번도 안 만지고**(암 전 구간 전수 0회) 이 축을 CP 의 3×3 회전
-    /// (`0x1400dd7d0` @`0x14023c537`)과 함께 **기저변환**에 쓴다. 그 위치 배선은 아직
-    /// **[미배선]**이다 — 근거·남은 일은 `Initializer.mapSequence` 주석.
+    /// 이 스칼라는 호환용 "마지막 지정이 승" 보존값이고, 실제 시뮬 소비는 선언별
+    /// `mapSequenceAround[].axis`를 쓴다. opid 13은 시퀀스 슬롯 `+0x268`을 건드리지 않고,
+    /// 이 축으로 만든 D/B/C를 CP 3×3과 합성해 위치·속도를 갱신한다.
     public var mapSequenceAxis: Vec3? = nil
     /// `mapsequencebetweencontrolpoints` 의 `arcamount`(부재 주입 기본 **0.3**).
     /// nil = 그 이니셜라이저가 없었다(= 이 시스템에 실릴 수 없는 키다). 마지막 지정이 승 —
     /// `mapSequenceAxis` 와 같은 관례다. 유도·소비 근거는 `Initializer.mapSequence` 주석.
-    /// **파스·보존 전용**(시뮬 미배선).
+    /// 호환용 마지막 지정 스칼라. 실제 시뮬 소비는 선언별 `mapSequenceBetween[].arcAmount`를 쓴다.
     public var mapSequenceArcAmount: Float? = nil
     /// `mapsequencebetweencontrolpoints` 선언 **하나당 하나**. `mapSequenceAxis`/`mapSequenceArcAmount`
     /// 가 "마지막이 승" 인 def 레벨 스칼라인 것과 달리 이쪽은 **배열**이다 —
@@ -2006,10 +2030,12 @@ public struct ParticleSystemDef: Equatable {
     /// (동봉·설치 코퍼스에서 한 파일이 `between` 을 둘 이상 선언하는 경우는 없지만, 구조적으로
     /// 접을 이유가 없다.) 선언 순서 = JSON `initializer[]` 순서.
     ///
-    /// **파스·보존 전용**(시뮬 미배선) — `MapSequenceBetweenSpec` 주석 참조.
+    /// 선언별 시뮬 소비 배열 — `MapSequenceBetweenSpec` 주석 참조.
     public var mapSequenceBetween: [MapSequenceBetweenSpec] = []
-    /// `mapsequencearoundcontrolpoint` 선언당 하나. 위와 같은 이유로 배열이다.
-    /// **파스·보존 전용** — `MapSequenceAroundSpec` 주석 참조.
+    /// Waple에는 런타임 프로퍼티 애니메이션 배선이 아직 없으므로 파스 시점의
+    /// `instanceoverride.count`만 보존한다. 직접 조립한 def/override 부재는 엔진 기본 1.
+    public var instanceCountMultiplier: Float = 1
+    /// `mapsequencearoundcontrolpoint` 선언당 하나. 위와 같은 이유로 배열이며 선언별 solver가 소비한다.
     public var mapSequenceAround: [MapSequenceAroundSpec] = []
     /// rope/ropetrail 렌더러 확장 키(@0x48fbb0–0x48fc18) — 모델 노출 전용(렌더 소비 보류).
     public var ropeOptions: RopeRenderOptions? = nil
@@ -2257,7 +2283,7 @@ public struct ParticleSystemDef: Equatable {
                                           mirror: (i["limitbehavior"] as? String) == "mirror", between: false))
                 // F630: "0 1 0" 같은 회전축 — 각도 평면 선택(기본 z축 레거시, 마지막 지정 승).
                 mapSeqAxis = pvec3(i["axis"]) ?? mapSeqAxis
-                // 페이로드 전문(파스·보존 전용) — 근거는 `MapSequenceAroundSpec` 주석.
+                // 선언별 런타임 페이로드 — 근거는 `MapSequenceAroundSpec` 주석.
                 // `flags` 는 **일부러 안 싣는다**: around 파스는 그 키를 읽지 않는다(미해결).
                 let ab = mapSeqBoundsPair(i["bounds"])
                 mapSeqAround.append(MapSequenceAroundSpec(
@@ -2643,16 +2669,11 @@ public struct ParticleSystemDef: Equatable {
                 // `inputcomponent`/`outputcomponent` 는 **실물 키**다(`0x14048f760`/`0x14048f810`).
                 // `component` 는 Waple 레거시 별칭이라 남겨 둔다 — 셋 다 동봉 도달 0건이다.
                 //
-                // **[2026-08-21] `flags` 는 아직 이 목록에 없다 — 의도적이고, 갭이다.**
-                // 레거시 경로(`.remapValue`)에는 클램프 비트를 실을 자리가 없으므로 위
-                // `inputrange*` 와 **똑같은 이유로** 확장 키여야 한다. 그런데 넣으면 동봉
-                // `output:"speed"` + `flags:3` **3건**(`rain_screen(.json/_4k)` ×3)이 레거시에서
-                // Ex 로 옮겨 가고, 그 셋을 이름으로 못박은 테스트 둘이
-                // `Tests/WapleCoreTests/RemapOperationAxesTests.swift`
-                // (`testBundledSpeedRemapsStayOnTheLegacyPath` · `testBundledRemapValueAxesCensus`
-                //  의 `speed/legacy == 3`)에 있는데 그 파일은 이 라운드의 소유 밖이다.
-                // 그래서 넘긴다 — 정확한 패치안은 `docs/re/remap-operation.md` §11.4.
-                let extKeys = ["input", "operation", "transformoctaves",
+                // `flags`도 확장 키다. 레거시 `.remapValue`에는 플래그 슬롯이 없어, 명시 flags:3인
+                // rain speed 3건을 그쪽으로 보내면 VM의 bit1 출력 클램프(`[0,1]`)가 소실된다.
+                // 원본 파스 `[op+0x1c]`(0x1401ce829–0x1401ce83d), 소비/클램프
+                // 0x140244986·0x140245791–0x1402457a3. inputrange*와 같은 정보보존 경계다.
+                let extKeys = ["input", "operation", "transformoctaves", "flags",
                                "blendinstart", "blendinend", "blendoutstart", "blendoutend",
                                "inputcontrolpoint0", "inputcontrolpoint1",
                                "outputcontrolpoint0", "outputcontrolpoint1",
@@ -2782,7 +2803,9 @@ public struct ParticleSystemDef: Equatable {
     }
 
     /// resolveChild: 자식 json 경로 → def (호출측이 pkg/머티리얼/재귀 리졸브 담당). nil 리졸브 = 링크 드롭+로그.
-    /// instanceOverride: 씬 오브젝트 "instanceoverride"(루트 def 전용 — 자식 children 은 비전파 보수 규약).
+    /// instanceOverride: 씬 오브젝트 "instanceoverride". 정적 파스 적용은 루트 def 전용이고 전체
+    /// 오버라이드는 자식에 넘기지 않는다. 단, 런타임 owner가 공유하는 `count` 배수만 opcode4를 위해
+    /// 모든 자식/손자 def의 `instanceCountMultiplier`에 재귀 주입한다.
     /// 파스 **중** 적용해야 하는 이유: controlpointattract 의 target 이 CP 로 베이크되므로(아래 attractCPIds
     /// 재바인딩) CP 오버라이드는 베이크 전에 반영돼야 한다 — 사후 def 복제는 이 지점에 못 미친다.
     public static func parse(_ json: [String: Any], material: ParticleMaterial?,
@@ -2793,6 +2816,8 @@ public struct ParticleSystemDef: Equatable {
         var emitterAudio: [AudioProcessing?] = []
         // F620/F627: speedmin/speedmax·box distancemin 도 emitters 와 병렬로 함께 append.
         var emitterSpeed: [SIMD2<Float>] = []
+        // sphererandom(+0xe0)/boxrandom(+0x98)의 controlpoint. 런타임 레코드는 각각 +0xf0/+0xa8.
+        var emitterControlPoints: [Int] = []
         var boxDistanceMin: [Vec3?] = []
         // 주기 방출(minperiodicduration…maxtoemitperperiod @0x48f3c0–0x48f4b8)도 emitters 와 병렬.
         var emitterPeriodic: [PeriodicEmission?] = []
@@ -2876,6 +2901,7 @@ public struct ParticleSystemDef: Equatable {
                     sign: pvec3(e["sign"]) ?? Vec3(x: 0, y: 0, z: 0)))
                 emitterAudio.append(AudioProcessing.parse(e))
                 emitterSpeed.append(SIMD2(speedMin, speedMax))
+                emitterControlPoints.append(ParticleControlPointLimits.clampIndex(pint(e["controlpoint"]) ?? 0))
                 boxDistanceMin.append(nil)
                 emitterPeriodic.append(parsePeriodic(e))
                 emitterWindow.append(parseWindow(e))
@@ -2901,6 +2927,7 @@ public struct ParticleSystemDef: Equatable {
                     burst: pint(e["instantaneous"]) ?? 0))
                 emitterAudio.append(AudioProcessing.parse(e))
                 emitterSpeed.append(SIMD2(speedMin, speedMax))
+                emitterControlPoints.append(ParticleControlPointLimits.clampIndex(pint(e["controlpoint"]) ?? 0))
                 boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
                 emitterPeriodic.append(parsePeriodic(e))
                 emitterWindow.append(parseWindow(e))
@@ -2923,6 +2950,8 @@ public struct ParticleSystemDef: Equatable {
                 // (0x1401b9a5d) · speedmax=0.2(0x1401b9b1b) 를 심는다(둘 다 플래그 무관).
                 // sphererandom/boxrandom 주입기는 둘 다 0.0 이라 위 공용 계산이 그대로 맞다.
                 emitterSpeed.append(SIMD2(injected(e, "speedmin", 0.1), injected(e, "speedmax", 0.2)))
+                // layerimage의 독립 CP 페이로드는 확인하지 않았다. .box 폴백의 병렬성만 CP0으로 유지한다.
+                emitterControlPoints.append(0)
                 boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
                 emitterPeriodic.append(parsePeriodic(e))
                 emitterWindow.append(parseWindow(e))
@@ -3128,10 +3157,10 @@ public struct ParticleSystemDef: Equatable {
                     probability: pfloat(c["probability"]) ?? 1,
                     origin: pvec3(c["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
                     // 주입 기본 0(`xor r8d,r8d` @0x1401c1720 → H_INT @0x1401c172d).
-                    // 동봉 14건 중 12건이 `null` — `asInt(null)=0` 과 같은 자리로 접힌다.
+                    // 동봉 14건 중 12건이 `null` — `asUInt(null)=0` 과 같은 자리로 접힌다.
                     controlPointStartIndex: injectedInt(c, "controlpointstartindex", 0),
                     // 짝인 게이트. 주입 기본 0(`xor r8d,r8d` @0x1401c1732 → H_INT @0x1401c173f) ·
-                    // 리더 `asInt` @0x1401d09b2 → 링크 `+0x64`(0x1401d09be). 형제 키와 같은
+                    // 리더 `asUInt` @0x1401d09b2 → 링크 `+0x64`(0x1401d09be). 형제 키와 같은
                     // `asInt` 규약이라 `null`/부재 모두 0 으로 접힌다.
                     flags: injectedInt(c, "flags", 0)))
             }
@@ -3152,8 +3181,12 @@ public struct ParticleSystemDef: Equatable {
         // **[2026-08-21] `angles` 도 파스한다.** 종전 주석의 "의미 미측정" 은 닫혔다 —
         // 씬 쪽 `controlpointangleN` 의 런타임 소비(`0x14022bf3d`–`0x14022c0b6`)가 이 슬롯과
         // **같은 CP 레코드 `+0x80`** 을 채우므로 의미가 같다(라디안, `Rz·Ry·Rx`).
-        // 소비는 아직 없다 — `ParticleSystemDef.controlPointAngles` 선언부의 `[미해결]` 참조.
+        // 단, 이 authored 값은 CP 생성자가 안 읽어 런타임에는 inert다. 살아 있는 씬 override만
+        // `controlPointFrameAngles`로 분리해 opid 13이 소비한다.
         var controlPointAngles = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
+        // 파티클 JSON angles는 보존만 하고 여기에 넣지 않는다. 실물 CP 생성자의 base 3×3은
+        // identity이며, 살아 있는 scene instance override만 아래 블록에서 이 배열을 덮는다.
+        var controlPointFrameAngles = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
         var controlPointFlags = Array(repeating: 0, count: 8)
         var controlPointParent = Array(repeating: 0, count: 8)
         for (slot, element) in (json["controlpoint"] as? [Any] ?? []).enumerated() where slot < 8 {
@@ -3185,14 +3218,30 @@ public struct ParticleSystemDef: Equatable {
         if let ov = instanceOverride {
             func cpOverrideBlocked(_ id: Int) -> Bool { controlPointFlags[id] & 0x10005 != 0 }
             for (id, off) in ov.controlPoints
-            where id >= 0 && id < 8 && !cpOverrideBlocked(id) { controlPoints[id] = off }
+            where id >= 0 && id < 8 && !cpOverrideBlocked(id)
+                && !ParticleControlPointMath.isUnspecified(off.x) {
+                controlPoints[id] = off
+            }
             for (id, ang) in ov.controlPointAngles
-            where id >= 0 && id < 8 && !cpOverrideBlocked(id) { controlPointAngles[id] = ang }
+            where id >= 0 && id < 8 && !cpOverrideBlocked(id)
+                && !ParticleControlPointMath.isUnspecified(ang.x) {
+                controlPointAngles[id] = ang
+                controlPointFrameAngles[id] = ang
+            }
         }
-        let cpBindings = attractCPIds.map { ControlPointBinding(op: $0.op, cp: $0.cp) }
+        let cpBindings = attractCPIds.map { item -> ControlPointBinding in
+            guard ops.indices.contains(item.op),
+                  case let .vortex(_, _, _, _, _, offset, _, _, _) = ops[item.op]
+            else { return ControlPointBinding(op: item.op, cp: item.cp) }
+            // 아직 첫 bake 전이므로 이 offset은 v1의 authored 값 또는 v2의 정확한 0이다.
+            return ControlPointBinding(op: item.op, cp: item.cp, authoredOffset: offset)
+        }
         Self.bakeControlPointTargets(&ops, bindings: cpBindings, controlPoints: controlPoints)
         // `flags & 4` 인 **자식** CP 를 부모 CP 로 갈아끼우고 그 자식의 target 을 재베이크한다.
-        // 실물은 매 프레임 4×4 를 합성하지만 Waple 의 CP 는 정적이라 로드 시 1회로 족하다.
+        // 실물은 매 프레임 current 4×4를 갱신한다. Waple 모델에는 부모/자식별 transform-stack
+        // 행렬이 없으므로, 여기서는 부모 정적 위치+live 각도를 전달한다. 이는 현재 번들의
+        // parent/child worldspace, bit3 wholesale, 그리고 identity bridge인 local/local에 정확하다.
+        // 비항등 mixed-space bridge는 별도 4×4 런타임 모델이 필요해 근사로 남는다.
         // 순서가 중요하다 — 부모의 `controlPoints` 가 인스턴스 오버라이드까지 반영해 확정된 **뒤**여야
         // 자식이 최종값을 본다(바로 위 오버라이드 블록과 같은 이유).
         children = children.map { link in
@@ -3204,6 +3253,11 @@ public struct ParticleSystemDef: Equatable {
                 // 실물 경계검사 `cmp [r8+0x44], eax; jbe` @0x14022e68b — 범위 밖이면 부착하지 않는다.
                 guard parentIdx >= 0, parentIdx < controlPoints.count else { continue }
                 childDef.controlPoints[i] = controlPoints[parentIdx]
+                if childDef.controlPointFrameAngles.indices.contains(i),
+                   controlPointFrameAngles.indices.contains(parentIdx) {
+                    // authored `controlPointAngles`는 스키마 보존값이므로 덮지 않는다.
+                    childDef.controlPointFrameAngles[i] = controlPointFrameAngles[parentIdx]
+                }
                 changed = true
             }
             guard changed else { return link }
@@ -3223,9 +3277,11 @@ public struct ParticleSystemDef: Equatable {
             children: children)
         def.controlPoints = controlPoints
         def.controlPointAngles = controlPointAngles
+        def.controlPointFrameAngles = controlPointFrameAngles
         // 인스턴스 오버라이드는 emitters 를 .map(순서/개수 보존)만 하므로 emitterAudio 병렬성 유지.
         def.emitterAudio = emitterAudio
         def.emitterSpeed = emitterSpeed
+        def.emitterControlPoints = emitterControlPoints
         def.boxDistanceMin = boxDistanceMin
         def.emitterPeriodic = emitterPeriodic
         def.emitterWindow = emitterWindow
@@ -3238,6 +3294,7 @@ public struct ParticleSystemDef: Equatable {
         // `xor ecx,ecx`(0x1401c56ee). 오퍼레이터/컨트롤포인트의 동명 `flags` 는 게이트가 없어
         // (`pint` 유지) 불리언을 1/0 으로 받는다 — 같은 키 이름이라도 자리마다 규약이 다르다.
         def.flags = numericInt(json["flags"]) ?? 0
+        def.inheritOwnerInstanceCountMultiplier(instanceOverride?.count ?? 1)
         // F622: animationmode("sequence"/"randomframe")·sequencemultiplier(배속, 기본 1).
         def.animationMode = (json["animationmode"] as? String).flatMap { ParticleAnimationMode(rawValue: $0) }
         // `sequencemultiplier` 도 태그 게이트다(`call isNumeric` 0x1401c574d). 실패 분기는 0 이
@@ -3256,6 +3313,21 @@ public struct ParticleSystemDef: Equatable {
         return def
     }
 
+    /// 자식 시스템 생성자도 루트 scene object 포인터를 owner로 받으므로, opcode4 런타임 파라미터의
+    /// `instanceoverride.count`는 트리 전체가 같은 값을 읽는다. 이미 파스된 자식의 emitter/maxCount 등
+    /// 정적 필드는 건드리지 않고 이 런타임 배수만 재귀적으로 교체한다.
+    private mutating func inheritOwnerInstanceCountMultiplier(_ multiplier: Float) {
+        instanceCountMultiplier = multiplier
+        children = children.map { link in
+            var childDef = link.def
+            childDef.inheritOwnerInstanceCountMultiplier(multiplier)
+            return ChildLink(def: childDef, trigger: link.trigger, maxInstances: link.maxInstances,
+                             probability: link.probability, origin: link.origin,
+                             controlPointStartIndex: link.controlPointStartIndex,
+                             flags: link.flags)
+        }
+    }
+
     /// CP 좌표를 오퍼레이터 target 으로 굽는다. 파스 시 1회, 그리고 자식이 `flags & 4` 로 부모 CP 를
     /// 물려받았을 때 1회 더 — 그래서 함수로 뺐다.
     private static func bakeControlPointTargets(_ ops: inout [ParticleOperator],
@@ -3270,11 +3342,12 @@ public struct ParticleSystemDef: Equatable {
                                               target: controlPoints[cpid],
                                               deleteThreshold: deleteThreshold, flags: flags)
             case let .vortex(axis, dIn, dOut, sIn, sOut, offset, cf, ring, flags):
+                let authoredOffset = b.authoredOffset ?? offset
                 ops[i] = .vortex(axis: axis, distanceInner: dIn, distanceOuter: dOut,
                                  speedInner: sIn, speedOuter: sOut,
-                                 offset: Vec3(x: controlPoints[cpid].x + offset.x,
-                                              y: controlPoints[cpid].y + offset.y,
-                                              z: controlPoints[cpid].z + offset.z),
+                                 offset: Vec3(x: controlPoints[cpid].x + authoredOffset.x,
+                                              y: controlPoints[cpid].y + authoredOffset.y,
+                                              z: controlPoints[cpid].z + authoredOffset.z),
                                  centerForce: cf, ring: ring, flags: flags)
             case let .maintainDistanceToControlPoint(distance, vs, _):
                 ops[i] = .maintainDistanceToControlPoint(distance: distance, variableStrength: vs,

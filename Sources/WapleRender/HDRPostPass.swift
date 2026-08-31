@@ -18,9 +18,10 @@ import WapleCore
 /// `DXGI_SWAP_CHAIN_DESC` 를 채우는 유일한 자리가 `R8G8B8A8_UNORM`(28) 이다(`0x140008146`).
 /// 상쇄해 줄 하드웨어 인코드는 애초에 없다. 그래도 결론은 그대로인데, 근거가 둘로 갈린다:
 ///  1. WE 의 `lin()` 은 **`hdr:true` 경로에만 있다**(`combine_hdr.frag` · `passthroughsrgb.frag`,
-///     머티리얼 로드 게이트 `0x14017fb45`–`0x14017fb9f`). 358 씬 중 354 씬은 `combine.frag`
+///     머티리얼 로드 게이트 `0x14017fb45`–`0x14017fb9f`). 설치본 `assets/ + projects/` 단일 모집단
+///     186 씬 중 183 씬은 `combine.frag`
 ///     (감마 변환 없음)이거나 최종 패스 자체가 없다 — LDR 에서 디코드 없음이 **정확**하다.
-///  2. `hdr:true` 4 씬에 대해서는 골든 실측(EOTF 이식 p50 0.047 vs WE 골든 0.18, 클램프 p50 ≈0.19)이
+///  2. `hdr:true` 3 씬에 대해서는 골든 실측(EOTF 이식 p50 0.047 vs WE 골든 0.18, 클램프 p50 ≈0.19)이
 ///     디코드 미적용 쪽을 지지한다. 정적 측정과 골든이 갈리는 지점은 `docs/re/tonemapping.md`
 ///     §2.6 [미해결 C] 로 남아 있다.
 /// 전문: `docs/re/tonemapping.md` §1.1·§1.2·§2.4·§3·§9 W-20.

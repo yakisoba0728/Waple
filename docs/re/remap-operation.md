@@ -1206,13 +1206,13 @@ PY
 | 2 | `presets/lightning/particles/presets/thunderbolt.json` | opacity | sine | 6 | **0** | Ex | **D2** + 두 클램프 끔 |
 | 3 | `presets/lightning/previewthunderbolt/…/thunderbolt.json` | opacity | sine | 6 | **0** | Ex | **D2** + 두 클램프 끔 |
 | 4–9 | `presets/rain/**/rain_screen{,_4k,_fast,_fast_4k}.json` ×6 | velocity | simplexnoise | 10 | 부재(**1**) | Ex | 없음(무회귀 — §11.3) |
-| 10–12 | `presets/rain/**/rain_screen{,_4k}.json` ×3 | speed | fbmnoise | 8 | **3** | **레거시** `.remapValue(.speed)` | **닿지 않는다** — §11.4 |
+| 10–12 | `presets/rain/**/rain_screen{,_4k}.json` ×3 | speed | fbmnoise | 8 | **3** | Ex `.remapValueEx(.speed/.multiply)` | bit0 입력 + **bit1 출력 클램프** — §11.4 |
 
 `initializer[].remapinitialvalue` 3건은 Waple 에 시뮬 원소가 없다(파스·보존만) — 도달 0.
 
 **읽을 것 셋.**
-* `flags` 를 **명시**하는 것은 5건뿐이고(`0` ×2 · `3` ×3), 그중 `remapEval` 까지 닿는 것은 **2건**이다.
-* `flags:3`(두 클램프 다 켬) 3건은 확장 키가 없어 레거시 경로에 남아 있다 — 이 라운드의 **[미해결]**.
+* `flags` 를 **명시**하는 것은 5건뿐이고(`0` ×2 · `3` ×3), 이제 **5건 모두** `remapEval`에 닿는다.
+* `flags:3` 3건은 2026-08-31에 확장 경로로 옮겨 두 클램프가 보존된다(§11.4).
 * 나머지 7건은 부재 기본 1(= bit0 만)이라, 종전 구현이 `.none` 에서 우연히 맞던 자리와 겹친다.
 
 ### 11.3 갈리는 자리 — 값으로
@@ -1250,8 +1250,9 @@ PY
 **D3 — 두 클램프가 서로 다른 비트다.** 종전 `RemapSpec` 은 `flags` 를 아예 안 들고 있었고,
 `.none` transform 만 항상 잘랐다(= bit0 을 항상 켠 것과 같고 bit1 은 항상 끈 것과 같다).
 동봉에서 **독립 도달은 0** 이다 — `flags:0` 2건은 D2 와 겹치고(sine 출력이 이미 `[0,1]` 이라
-클램프가 무의미), `flags:3` 3건은 레거시 경로에 있다. 그래서 값 대조는 합성 스펙으로 잠갔다
-(`ParticleRemapFlagsWiringTests.testTheTwoClampBitsAreOrthogonal`): 배치 A(`t` 만 범위 밖)에서
+클램프가 무의미). `flags:3` 3건도 이제 확장 경로에 도달하며 실제 rain speed 출력의 음수/1 초과를
+막는 통합 오라클로 잠갔다. 독립성은 합성 스펙
+(`ParticleRemapFlagsWiringTests.testTheTwoClampBitsAreOrthogonal`)이 맡는다: 배치 A(`t` 만 범위 밖)에서
 flags `0≡2`·`1≡3`, 배치 B(출력만 범위 밖)에서 `0≡1`·`2≡3`. 한 비트가 다른 비트 일을 하면
 둘 중 하나가 깨진다.
 
@@ -1271,21 +1272,22 @@ flags `0≡2`·`1≡3`, 배치 B(출력만 범위 밖)에서 `0≡1`·`2≡3`. �
 | `presets/lightning/particles/presets/thunderbolt.json` | `f33887fc14684a44` | `f53512aab71c3bf1` | **바뀐다**(D2) |
 | `scenes/particleelementpreviews/remapvalue/…/new_particle_system.json` | `80302fc4e29947a8` | `5766b9040fc9416c` | **바뀐다**(D1) |
 
-곧 화면이 바뀌는 것은 **3파일**(thunderbolt 2 + 프리뷰 1)이고 rain 계열은 전건 무회귀다
-(rain 이 무회귀인 이유는 §11.5). 이 컨테이너에 Metal 이 없어 픽셀 A/B 는 못 했다 —
-시뮬 상태 다이제스트까지가 잰 범위다.
+이 표는 **§11.4 후속 배선 전 라운드의 실측**이다. 당시 화면이 바뀌는 것은 3파일
+(thunderbolt 2 + 프리뷰 1)이었고 rain 계열은 그 패치에 한해 비트동일이었다. **2026-08-31에는
+rain speed의 `flags:3`도 Ex 경로로 옮겼으므로 rain 비트동일 판정은 현재 코드에 적용하지 않는다.**
+이 컨테이너에 Metal 이 없어 픽셀 A/B 는 못 했고, 당시 시뮬 상태 다이제스트까지가 잰 범위다.
 
-### 11.4 [미해결] `flags` 가 `extKeys` 에 없다 — 넘길 것
+### 11.4 [해소 2026-08-31] `flags`를 정보보존 경계로 승격
 
 `ParticleSystemDef.parse` 의 `remapvalue` 분기는 **확장 키가 하나도 없고 `output` 이
 `velocity`/`speed`** 이면 레거시 `.remapValue` 케이스로 보낸다(시뮬 비트동일 무회귀 경로).
 레거시 케이스에는 클램프 비트를 실을 자리가 **없다** — `inputrangemin`/`inputrangemax` 를
 확장 키로 넣은 것과 **글자 그대로 같은 이유**로 `flags` 도 확장 키여야 한다.
 
-넣지 않은 이유는 근거가 아니라 **소유권**이다. 넣으면 동봉 `output:"speed"` + `flags:3` **3건**이
-레거시에서 Ex 로 옮겨 가고, 그 셋을 이름으로 못박은 테스트 둘이 소유 밖 파일에 있다.
+종전에는 동봉 `output:"speed"` + `flags:3` **3건**이 레거시에 남아 있었다. 2026-08-31에
+`extKeys`에 `"flags"`를 추가하고 그 테스트를 함께 뒤집어 Ex 경로로 옮겼다.
 
-정확한 패치안(3곳):
+적용한 패치(3곳):
 
 1. `Sources/WapleCore/ParticleSystem.swift` — `extKeys` 배열에 `"flags"` 추가:
    ```swift
@@ -1299,10 +1301,11 @@ flags `0≡2`·`1≡3`, 배치 B(출력만 범위 밖)에서 `0≡1`·`2≡3`. �
    `census["speed/multiply"] == 3` 으로(`operation` 부재 기본이 `.multiply` 라 채널/산술 키가 그렇게 찍힌다),
    `XCTAssertNil(census["velocity/legacy"])` 옆에 `XCTAssertNil(census["speed/legacy"])` 를 더한다.
 
-**옮겼을 때 그림이 어떻게 바뀌는지**(패치를 넣는 쪽이 알아야 할 것): 그 3건은
+**그림이 바뀌는 이유**: 그 3건은
 `outputrangemin: -5` / `outputrangemax: 7` 인데 `flags:3` 의 bit1 이 결과를 `[0,1]` 로 자른다.
-곧 실물의 speed 배수는 `[0,1]`(감속 전용)인데 Waple 은 지금 `[−5, 7]` 이라 **빗줄기가 이따금
-거꾸로, 최대 5배 속도로** 흐른다. 배선하면 그 뒤집힘이 사라진다 — 화면이 바뀌는 변경이다.
+곧 실물의 speed 배수는 `[0,1]`(감속 전용)인데 종전 Waple 은 `[−5, 7]` 이라 **빗줄기가 이따금
+거꾸로, 최대 5배 속도로** 흐를 수 있었다. 현재는 bit1이 출력 배수를 `[0,1]`로 자른다.
+`RemapOperationAxesTests`의 코퍼스 경로 표와 rain 합성 시뮬 테스트가 이를 잠근다.
 
 ### 11.5 [의도적 이탈] `input` 부재에서는 bit0 을 걸지 않는다
 
@@ -1320,7 +1323,6 @@ flags `0≡2`·`1≡3`, 배치 B(출력만 범위 밖)에서 `0≡1`·`2≡3`. �
 
 ### 11.6 이 절이 못 닫은 것
 
-* **[미해결]** §11.4 의 `extKeys` — 소유권 때문에 넘긴다.
 * **[미해결]** 노이즈 둘의 커널 입력. `0.5·n + 0.5` 접기만 실물이고, 위상 솔트 `[op+0x100]` ·
   옥타브 `[op+0x18]` 을 노이즈 함수에 어떻게 넣는지는 여전히 안 뜯었다(§10.9 그대로).
 * **[미해결]** 3성분 입력 파이프라인. Waple 의 값 파이프라인은 스칼라라 성분마다 다른 `t` 를

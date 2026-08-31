@@ -355,6 +355,11 @@ extension SceneRenderer {
 
     /// 레이어를 후→전 순서(JSON 순서)로 GPU 리소스화. 디코드 실패 레이어는 스킵.
     func buildLayers(doc: SceneDocument, package: ScenePackage, device: MTLDevice, sceneID: String) -> [GPULayer] {
+        // W-7: 정사영 씬의 실효 FOV는 general.perspectiveoverridefov다
+        // (`wallpaper64.exe` 0x140189278–0x1401892c4). 인스턴스에 보존해 정적 버퍼와
+        // encodeLayer의 애니/스크립트 재빌드가 같은 값을 소비한다. 클램프는 정점 소비부에서
+        // 매번 적용(W-8, 0x140189b1a–0x140189b4c)하므로 파서의 저작 원문은 훼손하지 않는다.
+        layerPerspectiveFov = doc.perspectiveOverrideFov
         // E1(⑥): SceneRenderer.swift:1122(projW/projH 인스턴스 프로퍼티)와 동일하게 클램프 — 종전엔 이
         // 쿼드 정점 계산만 무클램프 doc.projectionWidth/Height 를 써서, projection 이 0인 씬(파서는
         // 명시적 0을 그대로 통과시킨다, SceneDocument.swift:729-730)에서 pxToNDC 0-나눗셈으로 정적
@@ -437,8 +442,14 @@ extension SceneRenderer {
             }
             // 스프라이트 프레임 있으면 상시 리드로 필요(gif 재생) — needsDisplay 정책은 shouldAnimate 로.
             if !frames.isEmpty { hasAnimations = true }
-            let verts = Self.quadVertices(layer: layer, projW: w, projH: h)
-            guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count) else { continue }
+            let verts = Self.quadVertices(layer: layer, projW: w, projH: h,
+                                          perspectiveFov: layerPerspectiveFov)
+            // 완전 클립된 레이어도 스크립트가 다시 카메라 안으로 옮길 수 있으므로 드롭하지
+            // 않는다. Metal에는 1정점 더미 버퍼를 유지하고 vertexCount=0으로 draw만 막는다.
+            let uploadVerts = verts.isEmpty ? [SIMD4<Float>.zero] : verts
+            guard let vbuf = device.makeBuffer(bytes: uploadVerts,
+                                                length: MemoryLayout<SIMD4<Float>>.stride * uploadVerts.count)
+            else { continue }
             let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
                                     layer.color.z * layer.brightness, layer.alpha)
             // 이펙트 체인 빌드는 buildEffectChain 으로 추출(F741 — 텍스트 경로와 정책 공유, 동작 무수정).
@@ -552,8 +563,10 @@ extension SceneRenderer {
                                 blendAdditive: layer.blendMode == "additive",
                                 isFrameBuffer: layer.isFrameBuffer,
                                 copyBackground: layer.copyBackground,
+                                // perspective parallax는 object origin에 shift를 굽고, lit parallax는 같은
+                                // shifted origin으로 world rect를 재구성해야 하므로 정적이어도 def가 필요하다.
                                 def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty
-                                      && attach == nil) ? nil : layer,
+                                      && attach == nil && !layer.perspective && !layerLit) ? nil : layer,
                                 puppet: puppetModel, propScripts: propScripts,
                                 animLayerScripts: animLayerScripts,
                                 materialScripts: materialScripts,
@@ -572,6 +585,14 @@ extension SceneRenderer {
                                     ? mediaArtworkKind(textureEntryName: layer.textureEntryName, package: package)
                                     : .none,
                                 noInterp: noInterp)
+            gpuLayer.vertexCount = verts.count
+            // CPU perspective 정점은 NDC로 미리 나뉜 값이다. stock v_main이 원래 clip w를
+            // 복원해 UV를 원근 보간하도록 depth 평면을 함께 보존한다. 퍼펫 메시는 별도 2D 경로.
+            if puppetModel == nil {
+                gpuLayer.projectiveDepth = Self.quadProjectiveDepth(
+                    layer: layer, projH: h, perspectiveFov: layerPerspectiveFov
+                )
+            }
             // H1: 커스텀 머티리얼 셰이더 파이프라인 빌드(실패 시 nil → QuadShaders 폴터).
             if layer.materialShader != nil {
                 gpuLayer.customShader = buildCustomLayerShader(layer, texture: mtl, package: package,
@@ -2137,6 +2158,12 @@ extension SceneRenderer {
                 texRatio: Float(tex.height) / Float(max(1, tex.width)), order: sp.order,
                 isTrail: def.renderer.isTrail, childOf: childOf,
                 frames: frames, mapSeqMirror: mirror)
+            // instanceoverride는 씬 오브젝트의 루트 def에만 붙는다. 자식 항목의 sim은 부모 sim 내부
+            // 자식 인스턴스와 별개인 GPU 드로우용 더미이므로 같은 트랙을 중복 주입하지 않는다.
+            if childOf == nil, !sp.instanceOverrideAnimations.isEmpty {
+                g.instanceOverrideAnimations = sp.instanceOverrideAnimations
+                g.sim = g.freshSimulator()
+            }
             // F200: 마우스 시차 가중치(레이어 buildLayers 의 GPULayer.parallaxDepth 배선과 동형) — 2D 전용.
             g.parallaxDepth = SIMD2<Float>(sp.parallaxDepth.x, sp.parallaxDepth.y)
             // 3D 씬 배치(2D 는 위 origin/scale Vec2 만 사용 — 아래 필드 무시).
@@ -2516,36 +2543,30 @@ extension SceneRenderer {
                                             maxWidth: g.def.maxWidth, maxRows: g.def.maxRows,
                                             ellipsis: g.def.overflowEllipsis, justify: g.def.justify,
                                             align: g.def.horizontalAlign) else {
-            g.texture = nil; g.vertexBuffer = nil
+            g.texture = nil; g.vertexBuffer = nil; g.vertexCount = 0
             return
         }
         g.texture = makeTexture(r.rgba, r.width, r.height, device)
         g.rasterWidth = Float(r.width); g.rasterHeight = Float(r.height)
-        let w = Float(r.width) * g.def.scale.x, h = Float(r.height) * g.def.scale.y
-        let x0: Float
-        switch g.def.horizontalAlign {
-        case "left": x0 = g.def.origin.x
-        case "right": x0 = g.def.origin.x - w
-        default: x0 = g.def.origin.x - w / 2
-        }
-        // W1-yaxis: y0 은 항상 "박스의 작은 쪽 scene-y"(y0+h 가 큰 쪽) — top/bottom 케이스는
-        // quadVertices/alignedCenter 의 새 y-up 부호(top→+hh, bottom→−hh)와 정합하도록 스왑
-        // (textAlignmentString 주석의 "정확히 일치" 불변 유지 — encodeText 의 애니 재계산 경로가
-        // quadVertices 를 그대로 쓰므로 이 정적 경로도 같은 관례를 따라야 함).
-        let y0: Float
-        switch g.def.verticalAlign {
-        case "top": y0 = g.def.origin.y - h
-        case "bottom": y0 = g.def.origin.y
-        default: y0 = g.def.origin.y - h / 2
-        }
-        // uv(0,0) 이 화면 위쪽(scene-y 큰 쪽 = y0+h)에 오도록 quadVertices 와 동형으로 재페어링.
-        let tl = sceneToNDC(x0, y0 + h), tr = sceneToNDC(x0 + w, y0 + h)
-        let br = sceneToNDC(x0 + w, y0), bl = sceneToNDC(x0, y0)
-        let verts: [SIMD4<Float>] = [
-            SIMD4(tl.x, tl.y, 0, 0), SIMD4(tr.x, tr.y, 1, 0), SIMD4(br.x, br.y, 1, 1),
-            SIMD4(tl.x, tl.y, 0, 0), SIMD4(br.x, br.y, 1, 1), SIMD4(bl.x, bl.y, 0, 1),
-        ]
-        g.vertexBuffer = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count)
+        // 정적 텍스트도 동적 encodeText 와 같은 정점 소비자를 쓴다. 종전 수기 x0/y0
+        // 경로는 정사영 angle=0에서만 같았고 perspective/originZ/x·y·z angles를 전부 버렸다.
+        let align = Self.textAlignmentString(h: g.def.horizontalAlign, v: g.def.verticalAlign)
+        let verts = Self.quadVertices(
+            origin: g.def.origin, size: Vec2(x: g.rasterWidth, y: g.rasterHeight), scale: g.def.scale,
+            angleZ: g.def.angleZ, alignment: align, projW: projW, projH: projH,
+            perspective: g.def.perspective, perspectiveFov: layerPerspectiveFov,
+            originZ: g.def.originZ, angleX: g.def.angleX, angleY: g.def.angleY
+        )
+        g.vertexCount = verts.count
+        g.projectiveDepth = Self.quadProjectiveDepth(
+            size: Vec2(x: g.rasterWidth, y: g.rasterHeight), scale: g.def.scale,
+            angleZ: g.def.angleZ, alignment: align, projH: projH,
+            perspective: g.def.perspective, perspectiveFov: layerPerspectiveFov,
+            originZ: g.def.originZ, angleX: g.def.angleX, angleY: g.def.angleY
+        )
+        guard !verts.isEmpty else { g.vertexBuffer = nil; return }
+        g.vertexBuffer = device.makeBuffer(bytes: verts,
+                                           length: MemoryLayout<SIMD4<Float>>.stride * verts.count)
     }
 }
 

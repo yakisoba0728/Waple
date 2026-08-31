@@ -29,7 +29,7 @@ import WapleCore
 ///     붙이면 그 호출이 **에러**가 되어 `swift test` 가 통째로 안 선다.~~
 /// 실제 실행 규율은 위 문단(메인 큐 한정 + mountToken 세대 가드)이고, 그것이 이 표기의 근거다.
 @MainActor
-public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
+public final class VideoRenderer: @MainActor WallpaperRenderer, @unchecked Sendable {
     /// Conservative AVFoundation-native containers used directly without conversion.
     /// F230: WapleCore.VideoFormats.nativeExtensions 가 단일 소스 — 여기서 다시 선언하지 않는다.
     nonisolated public static let nativeVideoExtensions: Set<String> = VideoFormats.nativeExtensions
@@ -58,19 +58,24 @@ public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
     private let converterAvailable: () -> Bool
     /// [2026-08-25] 완료 콜백이 `@Sendable` — 주입부와 `FFmpegConverter.convert` 의 시그니처를 맞춘다.
     private let convert: (URL, @escaping @Sendable (URL?) -> Void) -> Void
+    /// AppDelegate가 교체 트랜잭션 전에 성공을 확인한 ffmpeg 결과. 있으면 mount는
+    /// 원본을 다시 비동기 변환하지 않고 이 URL을 즉시 장착한다.
+    private let preparedConversionURL: URL?
 
     private(set) var projectId: String?
     private(set) var lastError: Error?
 
-    public init() {
+    public init(preparedConversionURL: URL? = nil) {
         self.converterAvailable = { FFmpegConverter.isAvailable }
         self.convert = { url, completion in FFmpegConverter.convert(url, completion: completion) }
+        self.preparedConversionURL = preparedConversionURL
     }
 
     init(converterAvailable: @escaping () -> Bool,
          convert: @escaping (URL, @escaping @Sendable (URL?) -> Void) -> Void) {
         self.converterAvailable = converterAvailable
         self.convert = convert
+        self.preparedConversionURL = nil
     }
 
     /// teardown 미호출 경로 안전망(형제 렌더러 전원이 이미 보유: WebRenderer·SceneVideoLayer·SceneRenderer).
@@ -103,6 +108,16 @@ public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else {
             lastError = RendererError.assetMissing
             throw RendererError.assetMissing
+        }
+        if let preparedConversionURL {
+            guard VideoRenderer.isSupportedContainer(preparedConversionURL),
+                  FileManager.default.fileExists(atPath: preparedConversionURL.path) else {
+                lastError = RendererError.unsupportedCodec
+                throw RendererError.unsupportedCodec
+            }
+            try attachPlayer(url: preparedConversionURL, container: container, project: project,
+                             fromConversion: true)
+            return
         }
         if VideoRenderer.isSupportedContainer(url) {
             try attachPlayer(url: url, container: container, project: project)

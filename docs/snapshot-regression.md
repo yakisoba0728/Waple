@@ -21,7 +21,10 @@ VideoRenderer 위임이 다른 레이어를 그리지 않기 때문(전체화면
   매니페스트 스키마, diff 메트릭, 임계 판정, 해시. 유닛 테스트(`Tests/WapleSnapshotTests`).
 
 헤드리스 마운트·프레임 캡처는 기존 테스트 인프라(`RealPackagesGroundTruthTests`,
-`SceneRenderer.captureFrames`)와 **같은 규약**을 재사용한다 — 렌더러 수정 없음.
+`SceneRenderer.captureFrames`)와 같은 렌더 API를 재사용한다 — 렌더러 수정 없음. 다만 두 하네스의
+판정 규약까지 같은 것은 아니다. SnapshotPipeline은 기본 256×144이며 Date·Math.random·포인터를
+모두 고정하지만, RealPackagesGroundTruthTests는 640×360이고 Date·포인터만 고정한다. 따라서 두
+산출물의 픽셀 값이나 결정성 판정을 서로의 기준선으로 직접 사용하면 안 된다.
 
 ## CLI
 
@@ -71,6 +74,9 @@ meanLuma, deterministic, selfMaxDiff, note?`.
 - `setSpectrum(.silent)` 로 오디오-반응 효과를 무신호로 고정 (Screen Recording 권한
   유무와 무관하게 재현 — 머신 간 베이스라인 안정)
 - 파티클 시드는 렌더러가 상수(`0x9E3779B9 &+ index`)로 고정 → 마운트마다 동일
+- JS `Date`를 `2024-01-01 12:00:00 UTC`에 고정
+- JS `Math.random()`을 `0xC0FFEE_1038` 시드로 고정
+- 포인터 UV를 화면 중앙 `(0.5, 0.5)`에 고정
 - `nowPlayingProvider` 스텁으로 미디어 폴링(osascript) 차단
 - `fitMode` 핀(`.fill`), 씬 sound 레이어는 헤드리스(window==nil)라 자동 스킵
 
@@ -109,7 +115,29 @@ H1 수정 후 비디오-백드 24종도 프레임을 낸다(다음 재생성 시
 | --- | --- | --- | --- | --- |
 | 기존 | **release** | 146 캡처 + 24 empty | **≈611s (10.2분)** | 4.2s |
 | `baseline-81098bb` (2026-07-31) | **debug** | **170 캡처 + 0 empty** | **1,694s (28.2분)** | 10.0s |
-| `baseline-31fecaa` (2026-08-02, 현행) | **release** | **170 캡처 + 0 empty** | **165s (2.8분)** | 1.0s |
+| `baseline-31fecaa` (2026-08-02, **이력**) | **release** | **170 캡처 + 0 empty** | **165s (2.8분)** | 1.0s |
+
+> **[정정 2026-08-30] 이 표의 마지막 행은 `현행` 이라고 적혀 있었다 — 트리에 없는 라벨이다.**
+> 종전: ~~`| baseline-31fecaa (2026-08-02, 현행) | …`~~
+>
+> `spec/golden/snapshot/` 에 실재하는 것은 `baseline-6f0bcf0` · `baseline-81098bb` ·
+> `nondet-2026-08-01` 셋이고 `31fecaa` 는 없다. 같은 사실을 sibling 정본이 이미 적는다 —
+> `spec/golden/snapshot/README.md` 가 `31fecaa` 를 "**HEAD 에 없다**" 목록에 넣는다.
+> **이 문서 안에서도 모순이었다**: 위 「베이스라인 저장 위치」가 "HEAD 에는 **현행 + 이식 전 이력
+> 둘만** 둔다" 고 적으므로, 두 줄을 함께 읽으면 존재하지 않는 디렉터리를 가리킨다.
+> `현행` 은 기준선 문서에서 절대 낡아서는 안 되는 단어다.
+>
+> **왜 썩었나.** `88c195e8`(2026-08-02, "오라클을 baseline-31fecaa 로 옮긴다")이 이 태그를 썼고,
+> 그 뒤 네 번의 재베이스라인이 지나가는 동안 이 문서는 갱신되지 않았다.
+>
+> **그래서 라벨 값을 여기 다시 적지 않는다** — 중복이 썩은 원인이다. 판정 라벨의 단일 출처는
+> 코드다: `Tests/WapleRenderTests/GoldenBaselineOracleTests.swift` 의 `GoldenBaseline.currentLabel`.
+> ```bash
+> grep -n 'static let currentLabel' Tests/WapleRenderTests/GoldenBaselineOracleTests.swift
+> ls spec/golden/snapshot/     # 트리에 실재하는 라벨
+> ```
+> 위 행은 그대로 유효한 **2026-08-02 release 빌드 성능 실측**이므로 지우지 않고 `이력` 로 강등했다
+> (아래 캐시 경고도 그 측정에 정확히 스코프된 것이라 그대로 둔다).
 
 debug 오버헤드가 씬당 2.4배다. `empties` 가 24 → 0 으로 바뀐 것은 H1 수정으로
 비디오-백드 씬이 `entries` 에 들어왔기 때문이지 성능 변화가 아니다.

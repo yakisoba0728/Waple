@@ -123,8 +123,13 @@ def scan():
 def build(r):
     scan_ev = specfmt.ev("corpus", f"워크샵 {len(r['scenes'])}종 전수 scene.json",
                          "scripts/spec/measure_composite_refs.py")
-    code_ev = specfmt.ev("file", "Sources/WapleRender/SceneRendererResources.swift:807-822",
-                         "정적 치환 구현부(prefix{isNumber} 로 id 만 읽는다)")
+    code_ev = specfmt.ev("file",
+                         "Sources/WapleRender/SceneRendererResources.swift — `buildPassBindings` 안의 `let "
+                         "digits = n.dropFirst(\"_rt_imageLayerComposite_\".count).prefix { $0.isNumber }` (grep "
+                         "`prefix { $0.isNumber }` — 이 파일에서 유일한 자리다)",
+                         "정적 치환 구현부(prefix{isNumber} 로 id 만 읽는다). **[정정 2026-08-30]** 종전 인용 ~~`:807-822`~~ 는 이 "
+                         "코드의 **호출부**(buildPassMaterial/buildPassBindings 호출)를 가리켰다 — 실코드는 500줄 이상 아래 "
+                         "buildPassBindings 안에 있다. 줄 번호로 다시 박지 않는다(역공학 방법론 함정 22).")
 
     # 가설3 지지 조건: 풀스크린 소비자 × 소스가 화면보다 뚜렷이 작음
     support3 = [x for x in r["rows"]
@@ -160,7 +165,20 @@ def build(r):
                 "predicted": "숨어야 할 컴포지트 소스가 카브아웃 때문에 그려진다",
                 "observed": "6건 전부 visible:true · parent 없음 — 카브아웃 발동 조건이 없다",
                 "refuted": True,
-                "carveoutSites": ["SceneDocument.swift:930", "SceneDocument.swift:1572"],
+                "carveoutSites": [
+                    "SceneDocument.swift — 파스 시점 드롭 가드: `if !initialVisible && visibleScript == nil && "
+                    "!imageLayerCompositeIDs.contains(objectID)`",
+                    "SceneDocument.swift — 조상 상속 가드: `guard "
+                    "!imageLayerCompositeIDs.contains(layers[i].id), "
+                    "hasInvisibleAncestor(layers[i].parent)`",
+                ],
+                "carveoutSitesNote": "**[정정 2026-08-30]** 종전 목록은 ~~`SceneDocument.swift:930`~~ · "
+                    "~~`SceneDocument.swift:1572`~~ 였는데 둘 다 카브아웃이 아니다 — HEAD 에서 :930 은 `SceneLight3D` 유니폼 "
+                    "팩 주석(`라이트 0..2 는 [i].rgb …`)이고 :1572 는 transparentsorting 산문(`정렬 경로(함수 "
+                    "0x14018AAC0–0x14018B22C …)`)이다. 참 자리는 위 두 조건식이고, 둘 다 "
+                    "`imageLayerCompositeIDs.contains` 로 키를 건다 (집합은 `referencedImageLayerCompositeIDs(in: "
+                    "package)` 가 만든다). 이 항목의 `observed`(참조 6건 전부 visible:true · parent 없음)는 그대로 유효하다 — 두 "
+                    "가드는 그 조건에서 발동할 수 없다. `doNotReopen` 도 그대로다. 줄 번호 대신 조건식을 적는다(역공학 방법론 함정 22).",
             },
             "h3_coordinateSpace": {
                 "predicted": "WE 컴포지트 RTT 는 화면 크기, Waple 은 스프라이트 → UV 어긋남",
@@ -205,6 +223,8 @@ def build(r):
 
 
 def main():
+    specfmt.require_inputs("measure_composite_refs",
+                           ("dir", T.WS, "WE_WORKSHOP", "워크샵 코퍼스"))
     r = scan()
     print(f"`_rt_imageLayerComposite_` 사용 씬 {len(r['scenes'])}종 · 참조 {r['refs']}건")
     print(f"  접미사: {dict(r['suffixes'])}")

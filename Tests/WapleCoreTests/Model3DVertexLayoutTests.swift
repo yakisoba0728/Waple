@@ -209,7 +209,92 @@ final class Model3DVertexLayoutTests: XCTestCase {
         XCTAssertEqual(m.meshes[0].vertices[0].uv1, .zero)
     }
 
-    // MARK: MDAT u16 카운트 (디컴파일 FUN_140261950:1092-1099)
+    // MARK: TEXCOORD0 부재 플래그 — 테이블 경로에서 uv0 = (0,0)
+
+    /// 엔진 근거: 입력 레이아웃 조립부 `0x1400d7f90` 이 26엔트리를 돌며 마스크가 선 엔트리에만
+    /// `D3D11_INPUT_ELEMENT_DESC`(`0x140482af0`)를 붙이고 `iVar10 += size[i]`(`0x1404849b0`) 로
+    /// 오프셋을 전진시킨다 — 비트가 없으면 엘리먼트도, 스트라이드 기여도 없다. 즉 WE 에는 그
+    /// 자리에 uv 속성이 **아예 없고** D3D 가 셰이더에 0 을 먹인다.
+    /// 종전 Waple 은 `layout?.uv ?? stride - 8` 로 꼬리 8바이트를 uv0 으로 읽었다 —
+    /// 테이블이 "없다"고 말한 것과 테이블 자체가 없는 것을 구별하지 못해서다.
+    func testNoTexCoordFlagYieldsZeroUV() throws {
+        // 0x03 = a_Position | a_Normal → stride 24, TEXCOORD0 없음. 꼬리 8B 는 normal.yz 다.
+        var vb = Data()
+        f(1, into: &vb); f(2, into: &vb); f(3, into: &vb)                  // pos @0
+        f(0, into: &vb); f(0.6, into: &vb); f(0.8, into: &vb)              // normal @12 (.yz = 꼬리 8B)
+        let m = try XCTUnwrap(Model3D.parse(makeModel(meshFlag: 0x03, vertexBytes: vb, vCount: 1, indices: [0, 0, 0])))
+        let v = m.meshes[0].vertices[0]
+        XCTAssertEqual(v.position, SIMD3(1, 2, 3))
+        XCTAssertEqual(v.normal, SIMD3(0, 0.6, 0.8))
+        XCTAssertEqual(v.uv, .zero, "종전엔 normal.yz = (0.6, 0.8) 이 uv0 으로 새어 나왔다")
+        XCTAssertEqual(v.uv1, .zero)
+    }
+
+    /// 0x07 = pos | normal | tangent → stride 40. 꼬리 8B 는 tangent.zw = (0, -1).
+    func testNoTexCoordWithTangentYieldsZeroUV() throws {
+        var vb = Data()
+        f(1, into: &vb); f(2, into: &vb); f(3, into: &vb)                  // pos @0
+        f(0, into: &vb); f(1, into: &vb); f(0, into: &vb)                  // normal @12
+        f(1, into: &vb); f(0, into: &vb); f(0, into: &vb); f(-1, into: &vb) // tangent @24 (.zw = 꼬리)
+        let m = try XCTUnwrap(Model3D.parse(makeModel(meshFlag: 0x07, vertexBytes: vb, vCount: 1, indices: [0, 0, 0])))
+        let v = m.meshes[0].vertices[0]
+        XCTAssertEqual(v.tangent, SIMD4(1, 0, 0, -1))
+        XCTAssertEqual(v.uv, .zero, "종전엔 tangent.zw = (0, -1) 이 uv0 으로 새어 나왔다")
+    }
+
+    /// TEXCOORD0 없는 **스킨** 플래그는 스키닝을 유지해야 한다 — 본/웨이트 채널의 유무는
+    /// idx5·idx6 비트가 정하고 TEXCOORD0(idx7‥9)과 독립이다. 종전 `skinFieldsFit` 판정에 붙어
+    /// 있던 `l.uv != nil` 이 이 플래그의 본을 통째로 지웠다(skinned=false, 본·웨이트 전부 0).
+    /// 0x01800003 = pos(12) + normal(12) + blendIndices(16) + blendWeights(16) = stride 56.
+    func testSkinnedFlagWithoutTexCoordKeepsSkinning() throws {
+        var vb = Data()
+        f(1, into: &vb); f(2, into: &vb); f(3, into: &vb)                  // pos @0
+        f(0, into: &vb); f(0, into: &vb); f(1, into: &vb)                  // normal @12
+        u(7, into: &vb); u(8, into: &vb); u(9, into: &vb); u(10, into: &vb) // boneIdx @24
+        f(0.5, into: &vb); f(0.25, into: &vb); f(0.125, into: &vb); f(0.125, into: &vb)  // weights @40
+        let m = try XCTUnwrap(Model3D.parse(makeModel(meshFlag: 0x0180_0003, vertexBytes: vb, vCount: 1, indices: [0, 0, 0])))
+        let mesh = m.meshes[0]
+        XCTAssertTrue(mesh.skinned)
+        let v = mesh.vertices[0]
+        XCTAssertEqual(v.position, SIMD3(1, 2, 3))
+        XCTAssertEqual(v.boneIndices, SIMD4<UInt32>(7, 8, 9, 10), "종전엔 (0,0,0,0) — 스키닝이 통째로 사라졌다")
+        XCTAssertEqual(v.weights, SIMD4(0.5, 0.25, 0.125, 0.125))
+        XCTAssertEqual(v.uv, .zero, "종전엔 weights.w 꼬리 = (0.125, ·) 를 uv0 으로 읽었다")
+    }
+
+    /// 무회귀 대칭 핀: 추론 경로(`layout == nil`)는 꼬리고정 폴백을 **유지**해야 한다.
+    /// 테이블 stride 로 정점 블롭이 나뉘지 않으면 `inferStride` 가 stride 를 다시 정하고
+    /// `layout = nil` 이 된다 — 그때는 채널 위치를 모르므로 종전 규칙(uv = stride−8)이 옳다.
+    func testInferredStridePathKeepsTailUVFallback() throws {
+        // 플래그 0x0b(테이블 stride 32)이지만 실제 정점은 stride 36 × 2개 = 72B.
+        // 72 % 32 != 0 → inferStride 가 maxIndex+1 == 2 로 36 을 산출, layout = nil.
+        var vb = Data()
+        for k in 0..<2 {
+            f(Float(k), into: &vb); f(0, into: &vb); f(0, into: &vb)       // pos @0
+            f(0, into: &vb); f(0, into: &vb); f(1, into: &vb)              // normal @12
+            f(0, into: &vb); f(0, into: &vb); f(0, into: &vb)              // 미지 채널 @24
+            f(0.375, into: &vb); f(0.875, into: &vb)                       // 꼬리 8B = uv @28
+        }
+        let m = try XCTUnwrap(Model3D.parse(makeModel(meshFlag: 0x0b, vertexBytes: vb, vCount: 2, indices: [0, 1, 1])))
+        XCTAssertEqual(m.meshes[0].vertices.count, 2)
+        XCTAssertEqual(m.meshes[0].vertices[0].uv, SIMD2(0.375, 0.875), "추론 경로의 꼬리고정 폴백은 유지된다")
+    }
+
+    // MARK: MDAT u16 카운트
+    //
+    // 엔진 근거: `FUN_140261880` 의 서브청크 루프에서 태그가 `strncmp(pcVar20,"MDAT0001",8)`
+    // (완전 8바이트 비교)로 맞으면 `FUN_140261770(…+0x38)` 뒤 **`FUN_140261680(…+0x38)`** 가
+    // 개수를 읽고 `if (uVar10 != 0) do { … } while` 로 그 수만큼 돈다. 항목 안의 이름은
+    // `FUN_14009c500`(cstring)으로 읽는다.
+    //
+    // **[정정 2026-08-30]** 종전 이 MARK 는 ~~`(디컴파일 FUN_140261950:1092-1099)`~~ 였다.
+    // 이름과 줄 번호가 둘 다 폐기본 기준이다: `FUN_140261950` 은 재생성 코퍼스 7,748 함수에
+    // 없고(참 VA 는 −0xD0 한 `0x140261880`), `:1092-1099` 는 MDAT 가 아니라 모프 영역의
+    // `FUN_1401aa940(param_3 + 0x1b, …)` 컨테이너 부기다(진짜 MDAT 파스와 2,000줄 이상 차).
+    // 인용한 `FUN_140261680`·`FUN_14009c500` 도 같은 −0xD0 대응의 참 VA 형태다
+    // (종전 인용형 `FUN_140261750`·`FUN_14009c5d0` 은 manifest 에 부재).
+    // 줄 번호를 다시 적지 않는 이유는 Model3D.swift 의 같은 취지 지침을 따른다 —
+    // 재생성이 줄 번호를 흔들므로 **태그 문자열과 호출 함수 이름**으로 grep 하는 것이 안정적이다.
 
     private func makeMDAT(count: Int, boneCount: Int) -> [UInt8] {
         var d = Data("MDAT0001".utf8)

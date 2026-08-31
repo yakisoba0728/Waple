@@ -13,17 +13,31 @@ import XCTest
 ///
 /// 순수층 오라클은 **판정 규칙**을 지키지만 "그 판정이 올바른 렌더러에 도달하는가" 는 아무
 /// 게이트도 보지 않았다(stage 2 인계 문서 §3). 배선은 한 줄만 지워도 조용히 사라지는 종류이고,
-/// 여기 셋은 특히 그렇다:
+/// 여기 넷은 특히 그렇다:
 ///
 ///   ① `audioPlaying:` 이 다시 리터럴 `false` 가 되면 오디오 축이 통째로 죽는다(stage 2 상태).
 ///   ② 음소거 적용이 빠지면 `policyWantsMute` 가 다시 아무 일도 안 하는 이름이 된다.
 ///   ③ 렌더러 세트 교체 시 음소거 엣지 추적을 리셋하지 않으면, 배경을 바꾸는 순간
 ///      정책 음소거가 조용히 풀린다(새 렌더러는 `policyMuted == false` 로 태어난다).
+///   ④ [2026-08-30 추가] `monitorIndex` 가 마스크와 다른 배열 기준에서 오면, 판정이 맞는데도
+///      **엉뚱한 화면**에 간다. 아래 「못 잡는 것」 의 정정이 그 전말이다.
 ///
 /// ## 못 잡는 것
 ///
-/// **실제로 소리가 꺼지는지, 판정이 맞는 화면에 가는지는 여전히 실기 몫이다.** 이 파일은
-/// "호출부가 존재한다" 까지만 본다. 그 경계를 흐리지 않으려고 여기 적어 둔다.
+/// > ~~**실제로 소리가 꺼지는지, 판정이 맞는 화면에 가는지는 여전히 실기 몫이다.**~~
+///
+/// **[정정 2026-08-30] 둘 중 뒤쪽("판정이 맞는 화면에 가는지")을 이 파일이 실제로 놓쳤고,
+/// 그 자리에 결함이 배송됐다.** `applyPlaybackPolicy` 는 `rendererProjects` 의 **배열 위치**를
+/// `monitorIndex` 로 먹였는데, 그 배열은 `applyResolved` 의 `compactMap` 이 빈 슬롯을 떨어뜨려
+/// 재인덱싱한 것이고 대조되는 `pauseMask` 는 `NSScreen.screens` 위치로 만들어진다 — 즉 첫 빈
+/// 슬롯 이후 모든 화면이 남의 pause 결정을 받았다(`global == nil` 인 화면별 할당 전용 모드에
+/// 한정. 전역 벽지가 걸리면 슬롯이 다 채워져 두 인덱스가 일치했다).
+///
+/// 순수층 오라클(`PlaybackPolicyCompositionTests` 의
+/// `testPerProjectDecideAllUsesRealMonitorIndexNotArrayPosition` 외 2건)이 판정 쪽을 못 박았고,
+/// **배선 쪽은 아래 ④** 가 본다 — 두 인덱스가 같은 `NSScreen.screens` 배열에서 나오는지.
+/// 여전히 실기 몫인 것은 **소리가 실제로 꺼지는지**와, 그 `screens` 배열이 창 순서와 일치하는지다.
+/// 이 파일은 "호출부가 존재한다" 까지만 본다 — 그 경계를 흐리지 않으려고 여기 적어 둔다.
 final class PlaybackPolicyWiringTests: XCTestCase {
 
     private static var repoRoot: URL {
@@ -141,6 +155,41 @@ final class PlaybackPolicyWiringTests: XCTestCase {
             XCTAssertTrue(window.contains("policyMuteState.reset()"),
                           "renderers 대입(:\(index + 1)) 근처에 음소거 추적기 리셋이 없다 — "
                             + "새 렌더러는 policyMuted == false 로 태어나므로 음소거가 조용히 풀린다")
+        }
+    }
+
+    // MARK: - ④ 모니터 인덱스 기준 (2026-08-30)
+
+    /// **판정에 넘기는 `monitorIndex` 가 마스크와 같은 배열에서 나온다.**
+    ///
+    /// `pauseMask` 의 비트 자리는 `screenFrames:`/`visibleFrames:` 로 넘긴 `NSScreen.screens`
+    /// 배열 위치가 정한다. 그래서 `decideAll(projects:)` 에 넘기는 인덱스도 **그 배열에서**
+    /// 나와야 한다. `renderers`/`rendererProjects` 의 배열 위치는 그 기준이 아니다 —
+    /// `applyResolved` 의 `compactMap` 이 빈 슬롯(= `global == nil` 인 화면별 할당 전용 모드에서
+    /// 미할당 화면)을 떨어뜨려 0..<n 으로 재인덱싱한 값이다. 종전에 그 위치를 그대로 먹여
+    /// 첫 빈 슬롯 이후 모든 화면이 남의 pause 결정을 받았다.
+    ///
+    /// **순수층 오라클로는 이 자리를 막을 수 없다.** `AppDelegate` 는 이 스위트에서 한 번도
+    /// 인스턴스화되지 않으므로(파일 머리말), 배선을 되돌리는 회귀 — 예: `monitorIndex: 0` 으로
+    /// 굳히기 — 는 실측으로 WapleAppTests 461개를 통째로 통과한다. 그래서 소스 스캔이다.
+    func testMonitorIndexComesFromTheSameScreenArrayAsTheMasks() throws {
+        let code = stripComments(try body(of: "private func applyPlaybackPolicy() {",
+                                          in: try appDelegateSource()))
+        XCTAssertTrue(code.contains("screenFrames: screens.map"),
+                      "마스크의 비트 자리를 정하는 배열이 바뀌었다 — 이 오라클의 전제가 사라졌다")
+        XCTAssertTrue(code.contains("DesktopWindow.screenKey(for:"),
+                      "실제 모니터 인덱스는 안정 키로 되찾아야 한다 — 배열 위치는 안정 식별자가 아니다(F840)")
+        XCTAssertTrue(code.contains("screens.enumerated()"),
+                      "인덱스가 마스크와 같은 `screens` 배열에서 나오지 않는다 — 두 기준이 갈리면 스큐다")
+        XCTAssertTrue(code.contains("monitorIndex: monitorIndexByKey["),
+                      "판정에 넘기는 monitorIndex 가 키 조회를 거치지 않는다 — 배열 위치로 되돌아갔나?")
+
+        // 배열 위치로 되돌아가는 두 가지 모양을 직접 막는다.
+        XCTAssertFalse(code.contains("projects: rendererProjects,"),
+                       "rendererProjects 를 그대로 넘기면 배열 위치가 다시 monitorIndex 가 된다")
+        for forbidden in ["monitorIndex: 0", "monitorIndex: index", "monitorIndex: offset"] {
+            XCTAssertFalse(code.contains(forbidden),
+                           "monitorIndex 가 상수/배열 위치로 굳었다: \(forbidden)")
         }
     }
 }

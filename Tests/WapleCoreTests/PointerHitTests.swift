@@ -126,6 +126,41 @@ final class PointerHitTests: XCTestCase {
         XCTAssertEqual(shifted.axisY, q.axisY)
     }
 
+    // MARK: - 원근/clip 볼록 다각형
+
+    func testConvexPolygonContainsTrapezoidInteriorAndInclusiveEdgeInEitherWinding() {
+        let vertices = [SIMD2<Float>(0, 0), SIMD2<Float>(8, 1),
+                        SIMD2<Float>(6, 6), SIMD2<Float>(1, 5)]
+        let polygon = PointerHit.ConvexPolygon(vertices: vertices)
+        XCTAssertTrue(PointerHit.contains(polygon, SIMD2(3, 3)))
+        XCTAssertTrue(PointerHit.contains(polygon, SIMD2(0, 0)), "경계 꼭짓점 포함")
+        XCTAssertTrue(PointerHit.contains(polygon, SIMD2(4, 0.5)), "경계 변 포함")
+        XCTAssertFalse(PointerHit.contains(polygon, SIMD2(7.5, 5.5)))
+        XCTAssertTrue(PointerHit.contains(PointerHit.ConvexPolygon(vertices: Array(vertices.reversed())),
+                                          SIMD2(3, 3)), "시계/반시계 순서 모두 허용")
+    }
+
+    func testConvexPolygonRejectsDegenerateAndNonFiniteGeometry() {
+        XCTAssertFalse(PointerHit.contains(
+            PointerHit.ConvexPolygon(vertices: [SIMD2(0, 0), SIMD2(1, 1), SIMD2(2, 2)]),
+            SIMD2(1, 1)))
+        XCTAssertFalse(PointerHit.contains(
+            PointerHit.ConvexPolygon(vertices: [SIMD2(0, 0), SIMD2(.infinity, 1), SIMD2(0, 2)]),
+            SIMD2(0, 1)))
+    }
+
+    func testProjectedDeliveryAndTranslationUsePolygonBoundary() {
+        let polygon = PointerHit.ConvexPolygon(vertices: [
+            SIMD2<Float>(0, 0), SIMD2<Float>(4, 0), SIMD2<Float>(3, 2), SIMD2<Float>(1, 2),
+        ])
+        XCTAssertTrue(PointerHit.delivers(.projected(polygon), to: SIMD2(2, 1)))
+        XCTAssertFalse(PointerHit.delivers(.projected(polygon), to: SIMD2(12, 1)))
+        XCTAssertFalse(PointerHit.delivers(.projected(polygon), to: nil))
+        let shifted = polygon.translated(by: SIMD2(10, 0))
+        XCTAssertTrue(PointerHit.delivers(.projected(shifted), to: SIMD2(12, 1)))
+        XCTAssertEqual(shifted.center, polygon.center + SIMD2<Float>(10, 0))
+    }
+
     // MARK: - 배달 범위(U-W5b) — `0x14018a709`–`0x14018a723`
 
     /// 바인딩된 오브젝트를 덮을 때만 받는다. 이게 종전 브로드캐스트와 갈리는 지점이다.

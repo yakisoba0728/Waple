@@ -38,7 +38,7 @@ def run(runs, jobs=None, tally=None, docs_only=False, argv=("--tests",)):
     m = load()
     m.head_sha = lambda: SHA
 
-    def api(path):
+    def api(path, raw=False):
         if "/jobs" in path:
             return {"jobs": jobs or []}
         if "head_sha=" in path:
@@ -91,6 +91,42 @@ class TestExitCodeContract(unittest.TestCase):
                       tally=(2417, 46, 1), argv=("--tests", "--jobs"))
         self.assertEqual(rc, 1, out)
         self.assertIn("continue-on-error", out)
+
+    def test_default_mode_finds_release_failure_hidden_by_successful_job(self):
+        rc, out = run([CI_OK, SPEC_OK],
+                      jobs=[dict(name="swift · release", id=9, status="completed",
+                                 conclusion="success", steps=[])],
+                      tally=(2417, 46, 1), argv=())
+        self.assertEqual(rc, 1, out)
+        self.assertIn("continue-on-error", out)
+
+    def test_watch_mode_finds_release_failure_hidden_by_successful_job(self):
+        rc, out = run([CI_OK, SPEC_OK],
+                      jobs=[dict(name="swift · release", id=9, status="completed",
+                                 conclusion="success", steps=[])],
+                      tally=(2417, 46, 2), argv=("--watch", "--interval", "0"))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("continue-on-error", out)
+
+    def test_log_excerpt_keeps_typecheck_observation(self):
+        m = load()
+        log = (b"2026-08-31 normal line\n"
+               b"2026-08-31 TYPECHECK_OBSERVATION rc=0 toolchain=Swift 6.3.3\n")
+        m.api = lambda path, raw=False: log if raw else {}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            m.show_log("owner/repo", 9, 40)
+        self.assertIn("TYPECHECK_OBSERVATION rc=0", out.getvalue())
+
+    def test_tally_sums_bundle_failures_instead_of_reading_only_last_bundle(self):
+        m = load()
+        log = b"""Test Suite 'A.xctest' failed at 2026-08-31 00:00:00.
+ Executed 3 tests, with 1 failure (0 unexpected)
+Test Suite 'B.xctest' passed at 2026-08-31 00:00:00.
+ Executed 4 tests, with 0 failures (0 unexpected)
+"""
+        m.api = lambda path, raw=False: log if raw else {}
+        self.assertEqual(m.test_tally("owner/repo", 9), (7, 0, 1))
 
     # ── 종전 동작을 그대로 지켜야 하는 자리 ─────────────────────────────────
     def test_all_success_is_zero(self):
