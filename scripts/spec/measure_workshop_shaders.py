@@ -76,16 +76,26 @@ def parse_pkg(data):
     return magic, entries, p
 
 
-# ---------------------------------------------------------------- ExprEval 포트 (ShaderPreprocessor.swift:483-609)
+# ---------------------------------------------------------------- ExprEval 포트
+# ([정정 2026-09-01] 종전 인용 `ShaderPreprocessor.swift:483-609` 은 전처리기 본문 쪽
+#  줄이었다 — `enum ExprEval` 은 그보다 한참 아래다. 이 절 전체의 인용을 **심볼**로 바꾼다.)
 
 # **[G2/BK 2026-08-30 이식]** 종전 이 두 집합은 pre-G2 판본이었다 — `SINGLE_OPS` 가
 # `% & | ^ ~` 를 빠뜨리고 시프트를 명시 거부했다. HEAD 의 Swift 는 그 전부를 **평가한다**
-# (`ShaderPreprocessor.swift:914` 의 two 집합 · `:922` 의 `"()!*/%+-<>&|^~"`).
+# (`ShaderPreprocessor.swift` 의 `tokenize` 안 `two` 집합과 1글자 연산자 문자열
+#  `"()!*/%+-<>&|^~"`).
 # 두 집합은 이제 `selftest_operator_sets()` 가 그 두 줄을 파싱해 대조한다 —
 # Swift 쪽이 넓어지면 이 파일을 안 고치는 한 셀프테스트가 빨개진다.
+#
+# **[정정 2026-09-01] 여기 있던 줄 번호 세 개가 전부 pre-image 였다.**
+# 인용은 `:891`(접미) · `:914`(two) · `:922`(1글자)였는데 지금 트리의 실제 줄은
+# 각각 942 · 961 · 969 다(3/3 불일치). 줄 번호는 다음 커밋에 바로 썩으므로 **심볼**로
+# 가리킨다 — 어차피 `selftest_operator_sets()` 는 줄 번호가 아니라 패턴으로 찾는다.
 TWO_CHAR_OPS = {"==", "!=", "<=", ">=", "&&", "||", "<<", ">>"}
 SINGLE_OPS = set("()!*/%+-<>&|^~")
-NUMERIC_SUFFIXES = "uUfFlL"        # 실물 접미 집합(ShaderPreprocessor.swift:891 `"uUfFlL"`)
+# 실물 접미 집합 — `ShaderPreprocessor.swift` 의 `tokenize` 안 숫자 리터럴 접미 스킵
+# 루프(`"uUfFlL".contains(chars[i])`).
+NUMERIC_SUFFIXES = "uUfFlL"
 
 INT32_MIN = -(2 ** 31)
 INT32_MAX = 2 ** 31 - 1
@@ -98,7 +108,8 @@ def _w32(v):
 
 
 def _ascii_digit(c, radix):
-    """실물은 `isdigit`/`isxdigit`(ASCII)로 판정한다 — 유니코드 숫자는 배제(Swift:869-872)."""
+    """실물은 `isdigit`/`isxdigit`(ASCII)로 판정한다 — 유니코드 숫자는 배제
+    (Swift: `ExprEval.weNumericLiteral` 안 지역 `asciiDigit`)."""
     if not c.isascii():
         return None
     try:
@@ -109,7 +120,7 @@ def _ascii_digit(c, radix):
 
 
 def we_numeric_literal(s, start):
-    """ExprEval.weNumericLiteral 포트(ShaderPreprocessor.swift:865-897) — (값, 다음 인덱스) 또는 None.
+    """ExprEval.weNumericLiteral 포트 — (값, 다음 인덱스) 또는 None.
 
     · `0x`/`0X` 접두 → 16진 누적, 그 밖엔 10진 누적. 둘 다 **32비트 랩**(`0xFFFFFFFF` = -1).
     · 정수부 뒤 `.` 은 **무조건 소비**하고 이어지는 숫자도 소비하되 값에는 안 넣는다
@@ -157,7 +168,7 @@ def numeric_literal(s):
 
 
 def tokenize(s):
-    """ExprEval.tokenize 포트(ShaderPreprocessor.swift:903-940) — (tokens, unsupported, badChars).
+    """ExprEval.tokenize 포트 — (tokens, unsupported, badChars).
 
     `badChars` 는 렉서가 모른 문자 목록(실물 토큰 코드 0x19) — `classify_refusal` 이 이걸로
     사유를 가른다. 종전에는 식 원문을 정규식으로 되짚어 분류했는데, 그 정규식이 렉서와
@@ -221,7 +232,7 @@ def _wrap(v):
 
 def eval_checked(expr, defines, defined_names=None, suspect=frozenset(), text_defines=None,
                  macro_depth=0):
-    """ExprEval.evalChecked 포트(ShaderPreprocessor.swift:702-853) — 미지원이면 None.
+    """ExprEval.evalChecked 포트 — 미지원이면 None.
 
     **[G2/BK 2026-08-30 이식]** 거부 규약은 유지하고 **아는 문법만 넓혔다**. HEAD 의 Swift 에서
     거부는 이제 셋뿐이다: ① 렉서가 모르는 문자(`? : @ ;` · 수 밖의 `.`) ② 수로 못 읽는 수치

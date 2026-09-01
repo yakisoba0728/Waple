@@ -32,6 +32,18 @@ enum Scene3DMath {
     }
 
     /// 원근 투영(세로 화각 도(度), Metal 뎁스 0..1). 뷰 z=-near → ndc z 0, z=-far → 1.
+    ///
+    /// **`fov` 만 클램프한다 — `nearZ`/`farZ` 는 검증하지 않는다**(r3-O23). `nearZ == farZ` 면
+    /// `zz = far/(near−far)` 가 0 나눗셈으로 ±inf/NaN 이 되고, 부호가 뒤집히거나(`far < near`)
+    /// 0/음수여도 그대로 통과한다. 이건 **의도**다 — 이 함수는 순수 행렬 산술이고, 유효 범위는
+    /// 카메라 값을 아는 호출부가 안다. 실제로 세 호출부의 방어 수준이 다르다:
+    ///  · `Scene3DLighting` 의 큐브 그림자 — `guard let near = nearPlane(radius:) else { return [] }`
+    ///    로 명시 가드(radius 퇴화 시 아예 안 부른다).
+    ///  · `SceneRenderer3D` 의 3D 카메라 · `SceneRendererFrameEncoder` 의 레이어 원근 —
+    ///    `fov` 만 `CameraMotion.clampedFovDegrees` 로 접고 near/far 는 그대로 넘긴다.
+    /// 뒤 둘은 저작값(`camera.nearZ/farZ`)과 파생값(`layerPerspectiveClip`)이라 코퍼스 도달이
+    /// 없지만, 스크립트가 카메라 클립면을 만지면 잠복이 열린다. 가드를 넣는다면 여기가 아니라
+    /// 그 두 호출부다(여기서 조용히 값을 바꾸면 어느 호출부가 퇴화를 넘겼는지 감춘다).
     static func perspective(fovYDegrees: Float, aspect: Float, nearZ: Float, farZ: Float) -> simd_float4x4 {
         // W-8: Scene::updateCamera의 최종 소비 경계와 같은 `[0.1, 179.9]` 클램프.
         // 정적 camera.fov뿐 아니라 프레임별 스크립트 결과와 NaN(minss → 상한)도 여기로 모인다

@@ -40,9 +40,17 @@ final class ThreeDV3CaptureTests: XCTestCase {
             ("3662790108", [0.5]),                   // solar: 플레어 additive
             ("3706286085", [0.0, 1.0]),              // sonic: 카메라
         ]
+        // [정정 2026-09-01] **이 파일은 단언이 0개였다** — 형제 `SingleSceneProbeTests` 와 같은
+        // 부류다. env(`WAPLE_3DV3=1`)를 CI 가 어디서도 세우지 않아 영구 스킵인데 실행 수에는
+        // 잡히면서 무엇도 잠그지 않았다. 아래 오라클은 **모집단**만 본다 — 씬별 실패는
+        // 이 하네스가 의도적으로 관용하는 것(A/B 작업 중 한 씬이 깨져도 나머지를 봐야 한다)이라
+        // catch 를 `XCTFail` 로 바꾸지 않는다. 대신 "코퍼스에 씬이 있는데 프레임이 한 장도
+        // 안 나왔다" 는 하네스 자체의 고장이므로 그것만 실패로 잡는다.
+        var scenesPresent = 0, framesWritten = 0
         for (id, times) in scenes {
             let folder = URL(fileURLWithPath: base).appendingPathComponent(id)
             guard FileManager.default.fileExists(atPath: folder.appendingPathComponent("scene.pkg").path) else { continue }
+            scenesPresent += 1
             do {
                 let project = try ProjectJSONParser.parse(folderURL: folder)
                 let r = SceneRenderer()
@@ -53,6 +61,9 @@ final class ThreeDV3CaptureTests: XCTestCase {
                     let dst = out.appendingPathComponent(name)
                     try? FileManager.default.removeItem(at: dst)
                     try? FileManager.default.moveItem(at: u, to: dst)
+                    XCTAssertTrue(FileManager.default.fileExists(atPath: dst.path),
+                                  "\(id): 캡처 PNG 이동 실패 \(dst.path)")
+                    framesWritten += 1
                     NSLog("%@", "[3DV3] \(dst.path)")
                 }
                 r.teardown()
@@ -60,5 +71,10 @@ final class ThreeDV3CaptureTests: XCTestCase {
                 NSLog("%@", "[3DV3] \(id) FAILED: \(error)")
             }
         }
+        // 세 씬이 전부 이 머신의 코퍼스에 없으면 볼 것이 없다 — 실패가 아니라 스킵이다.
+        guard scenesPresent > 0 else { throw XCTSkip("no 3D v3 scenes under \(base)") }
+        XCTAssertGreaterThan(framesWritten, 0,
+                             "씬 \(scenesPresent)개가 코퍼스에 있는데 프레임이 한 장도 안 나왔다 — "
+                             + "마운트/캡처가 통째로 실패했다(위 [3DV3] FAILED 로그 확인)")
     }
 }

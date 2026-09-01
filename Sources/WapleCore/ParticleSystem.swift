@@ -1373,7 +1373,8 @@ public struct ParticleMaterial: Equatable {
         let albedo = names.first(where: { !$0.isEmpty })
         // combos.REFRACT==1 + textures[1] 노멀맵 + constantshadervalues.ui_editor_properties_refract_amount.
         // 콤보 값은 이 파일의 pint 로 읽는다(종전 `as? NSNumber`.intValue 직접 캐스트 — 헬퍼 우회).
-        // 파티클 규약은 **문자열 스칼라 거부·언랩 없음**(:1115 헬퍼 주석)이라 pint = strictInt 를 쓴다 —
+        // 파티클 규약은 **문자열 스칼라 거부·언랩 없음**(이 파일의 `pint`/`strictInt` 헬퍼 주석)이라
+        // pint = strictInt 를 쓴다 —
         // 씬 경로(SceneDocument 의 intVal)처럼 "1" 을 받아주지 않는 것은 이 파일의 의도된 계약이다.
         var refractComboRaw: Any? = nil
         if let combos = p0["combos"] as? [String: Any] { refractComboRaw = combos["REFRACT"] }
@@ -2324,7 +2325,7 @@ public struct ParticleSystemDef: Equatable {
                 //     UInt32(bitPattern: Int32(truncatingIfNeeded: raw)) >= 8 ? 8 : max(1, raw)
                 //                                                                        ~~~
                 // `octaves: 4294967296`(=2³²) 은 절단하면 0 이라 `>= 8` 을 통과하고, `max(1, raw)`
-                // 가 2³² 을 그대로 살려 보낸다. 이 값은 `ParticleSimulator:1437` 의 `for _ in 0..<octaves`
+                // 가 2³² 을 그대로 살려 보낸다. 이 값은 `ParticleSimulator.fbm` 의 `for _ in 0..<octaves`
                 // 반복 횟수가 되고 그 fbm 은 **스폰 1개당 축마다 호출**되므로, 파티클 하나만 생겨도
                 // 렌더 스레드가 사실상 영구 정지한다. `eax` 는 32비트 레지스터고 실물은 그 폭 위에서만
                 // 판정·소비한다 — 좁힌 값을 **그대로 써야** 실물과 같다.
@@ -2388,8 +2389,14 @@ public struct ParticleSystemDef: Equatable {
     /// "35인스턴스" 라고 적었는데 all 34 · unique 29 로 **어느 쪽도 아니었다**).
     /// 정본은 `spec/assets/particle-corpus.json`(생성기 `measure_particle_corpus.py`)이고
     /// `check_particle_corpus_census.py` 가 자산과의 일치를 CI 에서 강제한다.
+    /// **[2026-09-01 r4-07]** 형제 `ParticleControlPointLimits.clampIndex` 로 위임한다.
+    /// 종전 `(cp < 0 || cp >= 7) ? 7 : cp` 는 **32비트 절단이 없어** 같은 입력에서 형제와 다른
+    /// CP 를 골랐다 — 엔진은 `ecx` 하위 32비트만 보고 `cmp r,7`/`cmovb`(부호 없는 below) 하므로
+    /// `4294967299`(2³²+3) 은 절단하면 3 이라 **3** 이 맞는데 여기서는 7 로 접혔다.
+    /// 판정식(0..<7 유지, 나머지 7)은 그대로다 — 절단만 더해져 실물과 같아진다.
+    /// 도달: 저작 `controlpoint` 는 전부 0..7 이라 동봉·설치 코퍼스 도수 0(spec/assets/particle-corpus.json).
     private static func clampControlPoint(_ cp: Int) -> Int {
-        (cp < 0 || cp >= 7) ? 7 : cp
+        ParticleControlPointLimits.clampIndex(cp)
     }
 
     private static func parseOperators(_ jsonArray: [Any]) -> (ops: [ParticleOperator],
@@ -2704,7 +2711,7 @@ public struct ParticleSystemDef: Equatable {
                         input: (o["input"] as? String).flatMap { RemapInput(rawValue: $0.lowercased()) },
                         transform: (o["transformfunction"] as? String).flatMap { RemapTransform(rawValue: $0.lowercased()) },
                         // [2026-08-25] 상한을 건다. 하한만 있고 상한이 없어서 이 값이
-                        // `ParticleSimulator:1732` 의 `for _ in 0..<max(1, octaves)` 반복 횟수로
+                        // `ParticleSimulator.remapNoiseOctaves` 의 `for _ in 0..<max(1, octaves)` 반복 횟수로
                         // 그대로 들어갔다 — 파티클마다 **매 스텝** 도는 루프라 큰 값 하나로 멈춘다.
                         //
                         // 32 는 발명한 수가 아니라 **수렴점 실측**이다. `remapNoiseOctaves` 는
@@ -3137,10 +3144,11 @@ public struct ParticleSystemDef: Equatable {
                     WapleLog.warn("[Waple] particle child unknown type '\(other ?? "")' → follow 취급: \(path)")
                     trigger = .follow
                 }
-                // 자식 maxInstances 에도 루트 maxCount 와 **같은 상한**을 건다(:1032-1037).
+                // 자식 maxInstances 에도 루트 maxCount 와 **같은 상한**을 건다
+                // (이 파일의 `maxCount = min(65536, maxCount)` 자리와 같은 값·같은 근거).
                 // 루트는 음수 0 클램프 + 65536 상한으로 CPU 시뮬을 묶어두는데 이 자리만 pint 원값을
                 // 그대로 썼다 — 자식 인스턴스는 스폰된 부모 파티클 하나당 ParticleSimulator 를 통째로
-                // 하나씩 할당하므로(ParticleSimulator:305) 루트 파티클 한 개보다 훨씬 비싼 단위인데
+                // 하나씩 할당하므로(`ParticleSimulator.makeInstance`) 루트 파티클 한 개보다 훨씬 비싼 단위인데
                 // 상한이 없었다. 새 한계를 발명하지 않고 루트와 같은 값을 쓰고, 잘리면 로그를 남긴다.
                 // **[2026-08-20] 자식 `maxcount` 부재 기본은 상수 10 이다** — children 주입기
                 // 0x1401c1430 이 `mov r8d, 0xa` → `H_INT` 로 심는다(0x1401c16f5–0x1401c1705).
@@ -3471,9 +3479,19 @@ private func mapSeqBoundsPair(_ v: Any?) -> Vec2 {
 /// (between `0x1401ca435`–`0x1401ca456`, around `0x1401c9b64`–`0x1401c9b75`).
 /// 즉 음수는 거대한 부호 없는 수가 되어 **7 로 접힌다**. 값은 `asUInt`(`0x140085f70`) 로 읽으므로
 /// 불리언도 1/0 으로 받는다(함정 18) — `injectedInt` 가 그 규약이다.
+///
+/// **[2026-09-01 r3-M5]** 종전 식은 **판정과 결과가 서로 다른 값 위에서** 돌았다:
+/// `UInt32(bitPattern: Int32(truncatingIfNeeded: raw)) < 7 ? raw : 7` — 비교만 32비트로 좁히고
+/// 결과로는 안 좁힌 `raw`(Int, 64비트)를 그대로 돌려줬다. `raw = 2³²+1` 이면 절단값 1 이 `< 7` 을
+/// 통과해 **4294967297** 이 CP 인덱스로 나간다. 엔진은 32비트 레지스터라 자연 절단되지만 Swift Int
+/// 는 아니다. 형제 `ParticleControlPointLimits.clampIndex` 가 이 규약의 정본이라 그리로 위임한다.
+///
+/// (`docs/full-audit-2026-08-26.md` 의 반례 "-1 입력 시 -1 반환" 은 틀렸다 —
+///  `UInt32(bitPattern: Int32(-1)) = 4294967295 ≥ 7` 이라 종전 식도 -1 은 7 로 접었다.
+///  실패하는 것은 **절단으로 작아지는** 입력 쪽이다.)
 private func mapSeqClampCP(_ v: Any?, injected constant: Int) -> Int {
     let raw = v == nil ? constant : (pint(v) ?? 0)
-    return UInt32(bitPattern: Int32(truncatingIfNeeded: raw)) < 7 ? raw : 7
+    return ParticleControlPointLimits.clampIndex(raw)
 }
 
 private func pvec3(_ v: Any?) -> Vec3? { stringVec3(v) }

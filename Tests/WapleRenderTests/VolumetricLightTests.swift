@@ -48,8 +48,15 @@ final class VolumetricLightTests: XCTestCase {
     }
 
     /// P④: 호출부가 오일러 각(angles)을 그대로 "방향"으로, 콘 원값(도)을 코사인 슬롯에 바인딩하던
-    /// 버그의 회귀 테스트. angles="0 0 0"(항등 회전)은 SceneLight3D.forwardLightAxis 로 변환하면
+    /// 버그의 회귀 테스트. 픽스처 angles 는 `SceneLight3D.forwardLightAxis` 로 변환하면
     /// 카메라를 정면으로 바라보는 (0,0,1) 이 되어야 한다 — 좁은 콘(10/30도)이 카메라 축과 정렬돼
+    ///
+    /// **[2026-09-01 r2-H1] 그 angles 값이 바뀌었다.** forward 축이 모델행렬 col2 → **col0** 으로
+    /// 정정되면서(근거는 `SceneLight3D.forwardLightAxis` 선언부 — V1 PBR 패커 `FUN_140190c80` 의
+    /// `glm::column(M, 0)`), 항등 회전 `"0 0 0"` 의 축은 이제 (0,0,1) 이 아니라 **(1,0,0)** 이다.
+    /// 이 픽스처가 재려는 것은 "축 변환기를 거치는가" 이지 "어떤 열인가" 가 아니므로,
+    /// **의도(빛이 카메라를 향한다 = (0,0,1))를 유지**하도록 angles 를 `"0 -π/2 0"` 으로 옮겼다:
+    /// col0 = (cz·cy, sz·cy, −sy) 이고 y = −π/2 면 (0, 0, 1) 이다. 픽셀 기대값은 불변이다.
     /// 화면 중앙이 밝아진다. 종전 버그는 angles 원값을 그대로 방향 벡터로 바인딩해 (0,0,0) 이 되고
     /// (셰이더가 코사인 슬롯도 도(度) 원값으로 오염돼) dot(viewRay, -direction)=0 이 항상 콘 임계값보다
     /// 훨씬 작아 화면 전체가 검게(무발화) 남는다.
@@ -65,7 +72,7 @@ final class VolumetricLightTests: XCTestCase {
         {"camera":{"eye":"0 0 10","center":"0 0 0","up":"0 1 0"},
          "general":{"fov":50.0,"clearcolor":"0 0 0"},
          "objects":[{"id":0,"model":"models/missing.mdl"},
-                    {"id":1,"light":"point","origin":"0 0 0","angles":"0 0 0","color":"1 1 1","intensity":6,
+                    {"id":1,"light":"point","origin":"0 0 0","angles":"0 -1.5707963 0","color":"1 1 1","intensity":6,
                      "innercone":10,"outercone":30,"radius":20,
                      "castvolumetrics":true,"density":3,"volumetricsexponent":1},
                     {"id":2,"image":"models/offscreen.json","origin":"1000 1000 1000","size":"1 1"}]}
@@ -175,10 +182,12 @@ final class VolumetricLightTests: XCTestCase {
     ///    (0,0,1) · cos5°/cos15° 를 낸다 — 위 Metal 단언의 기대치가 하드코딩인 근거.
     func testVolumetricMathMirrorsShaderForFixturePixel() throws {
         // (3) 변환기 고정 — 기대치를 손으로 적어도 되는 근거.
-        let axis = SceneLight3D.forwardLightAxis(angles: Vec3(x: 0, y: 0, z: 0))
+        // [2026-09-01 r2-H1] col0 규약이라 픽스처 angles 는 (0, −π/2, 0) 이다(위 Metal 테스트의
+        // scene.json 과 같은 값 — 둘이 갈리면 CPU 미러가 무의미해진다).
+        let axis = SceneLight3D.forwardLightAxis(angles: Vec3(x: 0, y: -Float.pi / 2, z: 0))
         XCTAssertEqual(axis.x, 0, accuracy: 1e-6)
         XCTAssertEqual(axis.y, 0, accuracy: 1e-6)
-        XCTAssertEqual(axis.z, 1, accuracy: 1e-6, "angles=0 은 카메라를 향하는 +Z 여야 한다")
+        XCTAssertEqual(axis.z, 1, accuracy: 1e-6, "이 픽스처의 라이트는 카메라를 향하는 +Z 여야 한다")
         let cone = SceneLight3D.forwardSpotConeCosines(inner: 10, outer: 30)
         // **[2026-08-21 정정]** 저작값이 곧 **광축에서 잰 반각(도)** 이다 — `× 0.5` 는 없다.
         // 셰이더가 `smoothstep(Direction.w, Origin.w, -dot(normalize(lightDelta), Direction.xyz))`

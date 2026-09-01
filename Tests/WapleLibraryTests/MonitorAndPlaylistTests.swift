@@ -246,4 +246,17 @@ final class PlaylistStoreTests: XCTestCase {
             .filter { $0.lastPathComponent.hasPrefix("playlist.json.corrupt") }
         XCTAssertTrue(backups.isEmpty, "누락 필드=corrupt 오판이면 안 됨")
     }
+
+    /// **회귀 핀(r4-28).** `intervalMinutes` 하한이 세터(`max(1, newValue)`)에만 있어서
+    /// 손으로 고친(또는 구버전이 쓴) `playlist.json` 의 0·음수가 디코드 경로로 그대로 들어왔다.
+    /// 0 은 즉시 재발화, 음수는 과거 시각이라 전환이 폭주한다 — 두 경로가 같은 하한을 써야 한다.
+    func testDecodedIntervalMinutesGetsTheSameLowerBoundAsTheSetter() throws {
+        for raw in [0, -5] {
+            let dir = tempDir()
+            let url = dir.appendingPathComponent("playlist.json")
+            try Data(#"{"enabled":true,"intervalMinutes":\#(raw),"ids":["a"]}"#.utf8).write(to: url)
+            let p = PlaylistStore(baseDirectory: dir)
+            XCTAssertEqual(p.intervalMinutes, 1, "디코드 경로도 max(1, ·) 를 거쳐야 한다(raw=\(raw))")
+        }
+    }
 }

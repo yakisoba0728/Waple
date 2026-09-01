@@ -138,7 +138,8 @@ final class EffectShadersNoInterpolationTests: XCTestCase {
 
     // MARK: 씬 end-to-end 배선(Metal 있을 때만)
 
-    /// flags 지정 .tex — TEXV0005/TEXI0001 헤더(42B, flags@22 = TexImage.swift:111 규약) + PNG 페이로드
+    /// flags 지정 .tex — TEXV0005/TEXI0001 헤더(42B, flags@22 = `TexImage` 의 `flags` 선언 주석 규약.
+    /// r3-M56 정정 — 종전 인용 `TexImage.swift:111` 은 `VariantCondition` 선언부라 무관했다) + PNG 페이로드
     /// (TestSupport.solidTex 와 동일 구조, flags 만 가변).
     private func flaggedTex(_ rgba: [UInt8], w: Int, h: Int, flags: Int) -> Data {
         var b = Data("TEXV0005\0".utf8) + Data("TEXI0001\0".utf8)

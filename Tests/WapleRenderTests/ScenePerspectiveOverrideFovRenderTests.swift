@@ -218,15 +218,25 @@ final class ScenePerspectiveOverrideFovRenderTests: XCTestCase {
 
     /// 클램프는 파서가 아니라 렌더 소비에서 일어난다. NaN의 `minss` 피연산자 규칙까지 옮긴
     /// `CameraMotion.clampedFovDegrees`를 실제 정점 경로가 사용해야 한다.
+    ///
+    /// [정정 2026-09-01] 종전 이 테스트는 `originZ = 25`를 썼다. 상한 FOV(179.9°)에서
+    /// `d = H/(2·tan(fov/2)) = 100/tan(89.95°) ≈ 0.087`이므로 `depth = d − 25 < near(5)`라
+    /// **세 결과가 전부 `[]`**였고, 단언 셋은 `[] == []`이 됐다. `clampedFovDegrees` 호출을
+    /// 통째로 지워도 초록이었다 — 잠근다고 적힌 것을 하나도 잠그지 않았다.
+    /// `originZ = −200`이면 `depth = d + 200 ≈ 200.09`로 `[near 5, far 15000]` 안이라
+    /// 상한 FOV가 정점 여섯 개를 낸다. 클램프가 빠지면
+    /// `fov=1000` → `d = 100/tan(500°) ≈ −119.2`로 배율 부호가 갈리고,
+    /// `fov=NaN` → `d`가 NaN이라 near 비교가 거짓이 되어 `[]`가 되므로 두 단언이 모두 깨진다.
     func testPerspectiveFovIsClampedAtRenderConsumption() {
-        let l = layer(perspective: true, originZ: 25)
+        let l = layer(perspective: true, originZ: -200)
         let over = SceneRenderer.quadVertices(layer: l, projW: 400, projH: 200,
                                               perspectiveFov: 1_000)
         let nan = SceneRenderer.quadVertices(layer: l, projW: 400, projH: 200,
                                              perspectiveFov: .nan)
         let capped = SceneRenderer.quadVertices(layer: l, projW: 400, projH: 200,
                                                 perspectiveFov: 179.89999389648438)
-        XCTAssertTrue(capped.isEmpty, "FOV 상한에서 z=25는 카메라 뒤이므로 반전 쿼드 대신 클립")
+        // 모집단 하한 — 세 결과가 전부 빈 배열이면 아래 두 단언은 아무것도 잠그지 않는다.
+        XCTAssertEqual(capped.count, 6, "상한 FOV·z=−200은 near/far 안이라 쿼드가 남아야 한다")
         XCTAssertEqual(over, capped)
         XCTAssertEqual(nan, capped)
     }

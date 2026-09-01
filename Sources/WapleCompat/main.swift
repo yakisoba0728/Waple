@@ -164,9 +164,18 @@ struct WapleCompatCLI {
             rootURL: URL(fileURLWithPath: NSString(string: rootPath).expandingTildeInPath, isDirectory: true)
         )
 
-        // [2026-08-27] 7개 모드 중 **이 기본 스캔만** 0건 가드가 없었다. 형제 여섯은 전부 있다:
-        // --deep(:142) · --capture(SnapshotPipeline:215) · --compare(SnapshotCompare:142) ·
-        // --inventory(ProfilePipeline:86) · --vis-blast(:136) · --profile(:241).
+        // [2026-08-27] 7개 모드 중 **이 기본 스캔만** 0건 가드가 없었다. 형제 여섯은 전부 있다
+        // ([정정 2026-09-01] 종전 이 목록은 줄 번호로 가리켰고 `--deep(:142)` 은 이미 11줄
+        //  어긋나 있었다 — 실제 가드는 이 파일 위쪽 `guard projectsFound else { exit(2) }` 다.
+        //  줄 번호는 다음 커밋에 바로 썩으므로 **심볼**로 적는다):
+        //   --deep       이 파일의 `guard projectsFound else` (DeepScan.run 반환값)
+        //   --capture    SnapshotPipeline.runCapture 의 `guard !folders.isEmpty`
+        //   --compare    SnapshotCompare.runCompare 의 `baseline.entries.isEmpty` 가드와
+        //                그 뒤 compared 비율 하한
+        //   --inventory  ProfilePipeline.runInventory 의 `guard !folders.isEmpty`
+        //   --vis-blast  ProfilePipeline.runVisBlast 의 `guard !folders.isEmpty`
+        //   --profile    ProfilePipeline.runProfile 의 `scene not found` 가드
+        //                (+ 공용 `reportDrops` 의 rows==0 → exit 2)
         //
         // `scan` 은 **컨테이너를 못 읽을 때만** throw 한다. 읽히는데 0건이면 그냥
         // `totalProjects: 0` 리포트를 돌려주므로(WallpaperCompatibilityAnalyzer.swift 참조)

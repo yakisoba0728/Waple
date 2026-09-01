@@ -618,7 +618,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         // 프레임 전에는 닫아 두고 encodeBillboard가 실제 viewProj로 투영한 쿼드만 승격한다.
         // `.geometryUnknown`은 의도적으로 쓰지 않는다 — 그 케이스는 전건 배달 폴백이라, 바인드된
         // 3D 스크립트를 다시 브로드캐스트로 만드는 바로 그 결함을 재도입한다.
-        if !orthographicScene { return (.unhittable, none, none) }
+        //
+        // H6: 이 판정의 기준은 **실제 렌더 경로**(`is3D`)여야 한다. 종전 `!orthographicScene` 은
+        // 프레임 승격 경로와 갈렸다 — 승격은 `SceneRendererFrameEncoder.encodeLayer` 가 하는데
+        // 그 경로는 `is3D == false` 일 때만 도는 2D 인코더라 사실상 `is3D` 게이트를 쓰고 있었다.
+        // 그래서 `orthographic == false && is3D == false`(3D 자원이 하나도 안 올라온 projection-0
+        // 씬 = 2D 폴백 렌더)는 마운트에서 전건 `.unhittable` 인데 첫 프레임에 애니 레이어만
+        // 되살아났다. 두 경로가 같은 술어를 쓰도록 `is3D` 로 통일한다. `is3D` 는 mount 의
+        // build3D 직후(`is3D = !meshRenderables.isEmpty || !billboards.isEmpty`)에 확정되고
+        // buildHoverTargets/buildPointerTargets 는 그보다 뒤에 불리므로 순서도 안전하다.
+        // 시차 채널(`hitCameraParallaxShift`·`renderCameraParallaxOffsetPixels`)은 종전대로
+        // **저작** 플래그 `orthographicScene` 을 계속 쓴다 — 히트와 드로우가 같이 0 이라 정합.
+        if is3D { return (.unhittable, none, none) }
 
         if i >= doc.layers.count {
             // 텍스트 디스크립터 인덱스 = doc.layers.count + uid(F743/S-34, buildTexts와 동일 규약).
@@ -1162,7 +1173,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     var sceneWantsLDRBloom = false
     var ldrBloomParameters = LDRBloomParameters.defaults
     var ldrBloomPass: LDRBloomEncoding?
-    /// #22 HDR bloom authored 게이트(hdr && bloom — 코퍼스 8씬). 패스 생성 실패 시 hdrPost(클램프) 폴백.
+    /// #22 HDR bloom authored 게이트(`hdr && bloom`).
+    ///
+    /// 도달: **설치본 `wallpaper_engine` 3씬** · 동봉 `WEAssets` 1씬 — 짝 선언
+    /// `HDRBloomParameters`(HDRBloomPass.swift)의 "186 중 3" 과 같은 사실이다(그쪽이 정본 표기).
+    /// r2-H6 정정 — 종전 이 줄은 라벨 없는 "코퍼스 8씬" 이라 짝 선언과 8 대 3 으로 갈려 있었다.
+    /// 재현: 각 코퍼스의 `scene.json` 을 순회해 `general.hdr` 과 `general.bloom` 이 **둘 다** 참인
+    /// 씬을 센다(`{"value":…}` 바인딩은 언랩).
+    ///
+    /// 패스 생성 실패 시 hdrPost(클램프) 폴백.
     var sceneWantsHDRBloom = false
     var hdrBloomParameters = HDRBloomParameters.defaults
     var hdrBloomPass: HDRBloomEncoding?
@@ -1220,11 +1239,27 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
     var trailAcc: MTLTexture? = nil
     var trailAccPrimed = false
     /// Wallpaper Engine `scene+0x340/+0x344`: 정사영 씬 픽셀 단위의 카메라 시차 초점.
-    /// 오브젝트 이동과 `g_ParallaxPosition`이 이 한 상태에서 갈라진다. 생성자/마운트 기본은 0.
-    var parallaxFocus = SIMD2<Float>(0, 0)
+    /// 오브젝트 이동과 `g_ParallaxPosition`이 이 한 상태에서 갈라진다.
+    ///
+    /// **중립은 0 이 아니라 캔버스 중앙이다.** 레이어 오프셋 식이 `(origin − focus)`(SceneGeometry
+    /// 의 `parallaxLayerOffset`)라 focus=(0,0) 은 "무이동" 이 아니라 좌상단 기준 **최대 편향**이다.
+    /// `parallaxFocus`(SceneGeometry) 자신도 `mouseInfluence=0` 이면 정확히 캔버스 중앙을 돌려준다.
+    /// 선언 기본은 `projW`/`projH` 선언 기본(1920×1080)의 중앙이고, 실제 씬 크기 기준 중립은
+    /// mount·teardown·captureFrames 가 `resetCameraParallaxNeutral()` 로 한 곳에서 심는다.
+    var parallaxFocus = SIMD2<Float>(960, 540)
     /// Wallpaper Engine renderState `+0x9c/+0xa0`: `clamp01(focus / projectionSize)`.
     /// 포인터 UV(`pointerUV`)와 별도 슬롯이며, EngineU 마지막 float4의 xy로 패킹한다.
-    var parallaxPosition = SIMD2<Float>(0, 0)
+    ///
+    /// **의도적 이탈(비활성 경로 한정).** 실물 renderState 생성자 `0x14017c6d0`(`FUN_14017c6d0`)은
+    /// 이 슬롯도 0 으로 심고, `cameraparallax` 가 꺼져 있으면 매 프레임 갱신 블록 자체를 건너뛴다
+    /// (`0x140189b54 je` — 리포 내 대응 서술은 `CameraMotion.FrameOutput.parallaxUniform` 의
+    /// "시차가 꺼져 있으면 nil, 생성자 값이 남는다"). 그런데 이 슬롯의 유일한 소비자인
+    /// `depthparallax.vert` 는 `vec2 prlxInput = g_ParallaxPosition * 2 - 1;` 로 읽으므로
+    /// 0 은 중립이 아니라 `(-1,-1)` = 최대 음의 편향이다. Waple 은 정본 중립
+    /// `clamp01(focus/projectionSize)` 의 무저작 값(= `(0.5,0.5)`, SceneGeometry `parallaxUniform`
+    /// 주석)을 **비활성 경로에도** 심어 `cameraparallax:false` 씬이 영구 최대 편향으로 그려지는 것을
+    /// 막는다. 활성 경로는 종전대로 `advanceCameraParallax` 가 매 갱신에서 덮어쓴다(거동 불변).
+    var parallaxPosition = SIMD2<Float>(0.5, 0.5)
     /// objects[] order별 최상위 렌더 root. WE draw 경로는 leaf 자신의 origin/depth가 아니라
     /// parent 포인터를 끝까지 따라간 root의 공통 슬롯을 사용한다. interaction은 이 표를 쓰지 않는다.
     var cameraParallaxRootByOrder: [Int: SceneObjectParallaxDescriptor] = [:]
@@ -1306,6 +1341,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         SIMD2(Float(off.x + 1) / 2, 1 - Float(off.y + 1) / 2)
     }
 
+    /// 시차 상태를 **중립(무이동)** 으로 되돌린다 — mount·teardown·captureFrames 공용 단일 소스.
+    /// 초점은 캔버스 중앙(`mouseInfluence=0` 일 때 `SceneCameraMath.parallaxFocus` 가 내는 값과 동일),
+    /// `g_ParallaxPosition` 슬롯은 그 초점의 정규화값 `(0.5,0.5)`(= `parallaxUniform` 의 무저작 중립).
+    /// 이탈 근거(실물 생성자는 0 을 심는다)는 `parallaxPosition` 선언부 주석을 볼 것.
+    /// `parallaxEnabled` 여부와 무관하게 부른다 — 비활성 씬이 중립을 받는 유일한 경로다.
+    func resetCameraParallaxNeutral() {
+        parallaxFocus = SIMD2<Float>(projW * 0.5, projH * 0.5)
+        parallaxPosition = SIMD2<Float>(0.5, 0.5)
+    }
+
     /// 현재 포인터에서 WE 시차 초점을 한 프레임 전진한다. 산술 정본은 WapleCore의
     /// `SceneCameraMath`이고, 이 함수는 렌더러 상태와 EngineU 슬롯을 연결하는 production bridge다.
     /// `eye`는 shake가 이미 더해진 runtime 카메라 좌표여야 한다. 기본값을 두지 않아
@@ -1347,7 +1392,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
             advanceCameraParallax(dt: dt, eye: eyeAt(sampleTime))
             clock = sampleTime
         }
-        // targetTime==0도 renderState 슬롯을 현재(생성자 0) focus에서 명시적으로 산출한다.
+        // targetTime==0도 renderState 슬롯을 현재(중립 = 캔버스 중앙) focus에서 명시적으로 산출한다.
         if targetTime <= 0 { advanceCameraParallax(dt: 0, eye: eyeAt(0)) }
     }
 
@@ -2202,6 +2247,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
 
         parallaxEnabled = doc.parallaxEnabled
         orthographicScene = doc.orthographic
+        // H4/H5: 시차 상태의 마운트 기본은 중립이다. 종전엔 두 슬롯이 선언 기본 0 에 남아
+        // ① `cameraparallax:false` 씬이 `g_ParallaxPosition=(0,0)` → depthparallax 의 `*2−1` 로
+        // 영구 최대 편향이 되고 ② `delay>0` 활성 씬도 좌상단에서 중앙으로 튀어 들어왔다.
+        // projW/projH 는 위(`projW = Float(max(1, doc.projectionWidth))`)에서 이미 확정돼 있다.
+        resetCameraParallaxNeutral()
         parallaxAmount = doc.parallaxAmount
         parallaxMouseInfluence = doc.parallaxMouseInfluence
         parallaxDelay = doc.parallaxDelay
@@ -2746,11 +2796,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
             if let savedHoverTargets { hoverTargets = savedHoverTargets }
             if let savedPendingInteraction { pendingInteractionGeometry = savedPendingInteraction }
         }
-        // 캡처는 라이브 재생 상태를 읽거나 오염시키지 않고 focus=0에서 매 호출을 재현한다.
+        // 캡처는 라이브 재생 상태를 읽거나 오염시키지 않고 **중립 초점**에서 매 호출을 재현한다.
+        // (H4/H5) 종전 `.zero` 는 마운트 기본과는 같았지만 그 기본 자체가 최대 편향이었다.
+        // `advanceCaptureCameraParallax` 는 `parallaxEnabled` 로 게이트되므로 비활성 씬의 캡처는
+        // 이 리셋값이 그대로 프레임에 실린다 — 여기까지 고쳐야 라이브/캡처가 갈리지 않는다.
+        // projW/projH 는 마운트 고정값이라 결정성은 그대로다.
         let savedParallaxFocus = parallaxFocus
         let savedParallaxPosition = parallaxPosition
-        parallaxFocus = .zero
-        parallaxPosition = .zero
+        resetCameraParallaxNeutral()
         defer {
             parallaxFocus = savedParallaxFocus
             parallaxPosition = savedParallaxPosition
@@ -2984,7 +3037,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
         hasVideoLayer = false; videoLayersLive = false
         sceneAudio?.teardown(); sceneAudio = nil
         parallax.stop()
-        parallaxFocus = .zero; parallaxPosition = .zero   // WE focus/renderState 슬롯도 다음 씬으로 누출 금지
+        resetCameraParallaxNeutral()   // WE focus/renderState 슬롯도 다음 씬으로 누출 금지(0 이 아니라 중립)
         cameraParallaxRootByOrder.removeAll(keepingCapacity: false)
         cameraParallaxLeafByOrder.removeAll(keepingCapacity: false)
         cameraParallaxFrameOriginByOrder.removeAll(keepingCapacity: false)

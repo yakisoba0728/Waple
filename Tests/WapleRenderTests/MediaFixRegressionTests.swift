@@ -485,6 +485,49 @@ extension MediaFixRegressionTests {
                        VideoTrackOrientation(quarterTurns: 3, mirroredX: false))
         XCTAssertEqual(VideoTrackOrientation.classify(CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: 64, ty: 0)),
                        VideoTrackOrientation(quarterTurns: 0, mirroredX: true))
+
+        // **[정정 2026-09-01] 이 테스트는 "8원소" 를 자칭하면서 5행만 단언했다.**
+        // 미러 행 넷 중 잠근 것이 `q=0` 하나뿐이라, 어긋난 두 행(`q=1`·`q=3` 미러)이
+        // **미단언 구간에 숨었다** — 그게 r3-M13 이 지목한 자리이고 증상은 90°/270° + 미러
+        // 트랙에서 화면이 180° 뒤집히는 것이다. `q=0`·`q=2` 는 미러와 교환법칙이 성립해
+        // 두 컨벤션이 우연히 같은 값을 내므로 그 둘만으로는 순서를 구분할 수 없다.
+        //
+        // 이 타입의 계약은 `mirroredX` 독스트링 그대로 **회전 "전" 미러**다 → 표는 `T = R_q · M`.
+        // 선형부를 열벡터 기준 `[[a, c], [b, d]]` 로 읽고 `M = [[-1,0],[0,1]]` 로 두면
+        //   R₁·M = [[0,-1],[-1,0]] → (a,b,c,d) = (0,-1,-1,0)
+        //   R₂·M = [[1, 0],[ 0,-1]] → (1, 0, 0,-1)
+        //   R₃·M = [[0, 1],[ 1, 0]] → (0, 1, 1, 0)
+        // (평행이동은 `classify` 가 무시한다 — 64×64 정사각형을 자기 위로 보내는 값을 적었다.)
+        XCTAssertEqual(VideoTrackOrientation.classify(CGAffineTransform(a: 0, b: -1, c: -1, d: 0, tx: 64, ty: 64)),
+                       VideoTrackOrientation(quarterTurns: 1, mirroredX: true),
+                       "R₁·M — 회전 후 미러 순서로 적으면 q=3 으로 잘못 분류된다")
+        XCTAssertEqual(VideoTrackOrientation.classify(CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: 64)),
+                       VideoTrackOrientation(quarterTurns: 2, mirroredX: true))
+        XCTAssertEqual(VideoTrackOrientation.classify(CGAffineTransform(a: 0, b: 1, c: 1, d: 0, tx: 0, ty: 0)),
+                       VideoTrackOrientation(quarterTurns: 3, mirroredX: true),
+                       "R₃·M — 회전 후 미러 순서로 적으면 q=1 로 잘못 분류된다")
+
+        // 모집단·단사성 — 표에서 한 행이 빠지거나 두 행이 같은 값으로 붕괴하면 잡는다.
+        // (값 자체는 위 여덟 단언이 이미 잠근다. 여기서 보는 것은 **8원소가 8개로 남는가** 다.)
+        let dihedral: [CGAffineTransform] = [
+            CGAffineTransform(a:  1, b:  0, c:  0, d:  1, tx:  0, ty:  0),
+            CGAffineTransform(a:  0, b:  1, c: -1, d:  0, tx: 64, ty:  0),
+            CGAffineTransform(a: -1, b:  0, c:  0, d: -1, tx: 64, ty: 64),
+            CGAffineTransform(a:  0, b: -1, c:  1, d:  0, tx:  0, ty: 64),
+            CGAffineTransform(a: -1, b:  0, c:  0, d:  1, tx: 64, ty:  0),
+            CGAffineTransform(a:  0, b: -1, c: -1, d:  0, tx: 64, ty: 64),
+            CGAffineTransform(a:  1, b:  0, c:  0, d: -1, tx:  0, ty: 64),
+            CGAffineTransform(a:  0, b:  1, c:  1, d:  0, tx:  0, ty:  0),
+        ]
+        let classified = dihedral.map { VideoTrackOrientation.classify($0) }
+        XCTAssertEqual(classified.compactMap { $0 }.count, 8, "디헤드럴 8원소 중 분류되지 않은 것이 있다")
+        for i in classified.indices {
+            for j in classified.indices where j > i {
+                XCTAssertNotEqual(classified[i], classified[j],
+                                  "디헤드럴 \(i)·\(j) 번째가 같은 분류로 붕괴했다 — 표에 중복 행이 있다")
+            }
+        }
+
         // 스큐(비-디헤드럴) — 안전 거부(nil), 오분기 대신 폴백.
         XCTAssertNil(VideoTrackOrientation.classify(CGAffineTransform(a: 1, b: 0.3, c: 0, d: 1, tx: 0, ty: 0)))
         // 임의 각도 회전(30°) — 8원소 어디에도 안 맞아야 함.

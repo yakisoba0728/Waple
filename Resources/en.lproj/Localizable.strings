@@ -95,7 +95,7 @@
 "동영상 음량 · 배속" = "Video volume and speed";
 "동영상이 적용 중일 때 메인 창 하단의 스피커 아이콘에서 조절합니다." = "Adjust these from the speaker icon at the bottom of the main window while a video is playing.";
 "둘러보기" = "Discover";
-"디스크의 원본 폴더는 삭제되지 않습니다. 재생목록·모니터 할당·즐겨찾기·폴더에서 함께 제거됩니다." = "The original folder on disk is kept. The item is removed from the playlist, display assignments, favorites and folders.";
+"디스크의 원본 폴더는 삭제되지 않습니다. 재생목록·모니터 할당·즐겨찾기·폴더·속성 편집값이 함께 제거됩니다." = "The original folder on disk is kept. The item is removed from the playlist, display assignments, favorites, folders and its saved property edits.";
 "디스플레이" = "Displays";
 "디스플레이 절전 중" = "While the display sleeps";
 "라이브러리" = "Library";
@@ -153,6 +153,7 @@
 "씬" = "Scenes";
 "아래를 확인하면 바로 배경을 즐길 수 있어요. 모두 나중에 설정에서 바꿀 수 있습니다." = "Check the items below and you are ready to go. You can change all of them later in Settings.";
 "아래에서 배경을 클릭하거나 박스로 드래그하면 바로 적용됩니다" = "Click a wallpaper below, or drag one into the box, to apply it right away";
+"알 수 없는 오류" = "Unknown error";
 "앱 번들에 Waple.saver 가 없습니다 — scripts/package-app.sh 로 패키징한 앱에서 실행하세요." = "The app bundle does not contain Waple.saver — run a build packaged with scripts/package-app.sh.";
 "없음" = "None";
 "에셋·도구" = "Assets and tools";
@@ -160,6 +161,7 @@
 "완료" = "Done";
 "워크샵 검색" = "Search the Workshop";
 "워크샵을 검색하려면 본인 발급 API 키가 필요합니다. 아래에서 발급 후 붙여넣으세요. 키는 Keychain 에만 저장됩니다." = "Searching the Workshop requires your own API key. Get one below and paste it here. The key is stored only in your Keychain.";
+"월페이퍼 미리보기 로딩 중…" = "Loading the wallpaper preview…";
 "웹" = "Web";
 "웹 월페이퍼 조작 (실시간 연동)" = "Web wallpaper input (live mirror)";
 "웹 월페이퍼가 적용되어 있지 않습니다 — 웹 배경을 먼저 적용하세요" = "No web wallpaper is running — apply a web wallpaper first";
@@ -268,6 +270,7 @@
 "%@ · 지원 예정" = "%@ · coming soon";
 "%@ — 지원 예정" = "%@ — coming soon";
 "%@ 할당 해제" = "Unassign %@";
+"%@, 유형 %@" = "%@, type %@";
 "%lld개 중 %lld개만 가져왔습니다. 나머지는 project.json 이 없거나 읽을 수 없습니다." = "Imported %2$lld of %1$lld. The rest have no project.json, or it could not be read.";
 "%lld분마다 전환" = "Switches every %lld min";
 "'%@' 재생목록에 추가" = "Add “%@” to playlist";
@@ -294,6 +297,7 @@
 "배경 %lld개를 가져왔습니다." = "Imported %lld wallpaper(s).";
 "비디오를 재생할 수 없습니다: %@" = "Could not play the video: %@";
 "사용 가능 — %@" = "Available — %@";
+"웹 배경을 불러올 수 없습니다: %@" = "Could not load the web wallpaper: %@";
 "일부 화면만 정지 배경으로 설정했습니다(%lld/%lld)" = "Set the desktop picture on only some displays (%lld/%lld)";
 "잠금화면 스틸 기록 실패(무시): %@" = "Could not write the lock-screen still (ignored): %@";
 "재생목록 %lld개" = "%lld in playlist";

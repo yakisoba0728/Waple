@@ -865,8 +865,7 @@ def main():
                      f"전건 gateWord 0 / 최대 정점수 10,995 라 같은 답을 낸다. 즉 위 '실측' 은 전부 참이지만 "
                      f"그건 **상관**이지 규칙이 아니다 — '이 코퍼스에서 성립한다' 와 '엔진이 이렇게 정한다' 는 "
                      f"다른 명제이고, 후자는 코드를 읽어야만 나온다",
-             "코드 상태": "Sources/WapleCore/Model3D.swift:577 `let iWidth = (gateWord & 1) == 0 ? 2 : 4` "
-                          "— 커밋 0197a2d 로 코드가 먼저 고쳐졌고 이 정본이 뒤늦게 따라왔다"},
+             "코드 상태": "Sources/WapleCore/Model3D.swift `let iWidth = (gateWord & 1) == 0 ? 2 : 4` — 커밋 0197a2d 로 코드가 먼저 고쳐졌고 이 정본이 뒤늦게 따라왔다. **[정정 2026-09-01] 종전 이 자리는 `:577` 을 인용했는데 그 줄은 헬퍼 `func u32(_ o: Int) -> UInt32?` 로 인용 내용과 무관했다**(실측 당시 실제 자리는 :762). 줄 번호를 다시 박지 않고 조건식으로 가리킨다 — `grep -n 'let iWidth = (gateWord' Sources/WapleCore/Model3D.swift`. ⚠️ **생성기가 아직 옛 문자열을 들고 있다** — `scripts/spec/measure_mdl_deep.py` 의 '코드 상태' 리터럴이 여전히 `Model3D.swift:577` 이라, 이 정본을 재생성하면 이 정정이 조용히 되돌아간다. 생성기는 이번 수정 레인의 소유가 아니라 손대지 않았다 — 재생성하는 사람이 함께 고쳐야 한다"},
             "확정", [ev_bin, ev_corpus]),
 
         specfmt.entry(

@@ -205,14 +205,20 @@ private struct DeepScanInputs: @unchecked Sendable {
 public enum DeepScan {
     static let handPortNames: Set<String> = ["opacity", "tint", "pulse", "waterripple", "scroll", "waterwaves", "shake"]
 
+    /// AVAsset 로드 한 건의 상한. `SceneVideoLayer.assetLoadTimeoutSeconds`(5초)와 같은 값·같은 이유다 —
+    /// 손상 미디어에서 로드가 반환하지 않는 경우가 있고, 여기는 워커 스레드라 그 하나가 잡을 세운다.
+    ///
+    /// **[정정 2026-09-01] 이 선언에 F681 ogg 예산 doc 이 붙어 있었다.**
+    /// 종전 배치는 `F681: ogg 디코드 누적 시간 예산…` 4줄 doc **바로 다음**(빈 줄 없이)에
+    /// 이 두 줄이 이어졌고, 그 블록 전체가 `assetLoadTimeoutSeconds` 에 부착됐다. 정작 F681 이
+    /// 설명하는 `oggDecodeTimeBudget` 은 그 앞에 빈 줄이 있어 doc 이 하나도 안 붙었다.
+    /// 두 doc 을 각자의 선언으로 갈랐다.
+    static let assetLoadTimeoutSeconds: Double = 5
+
     /// F681: ogg 디코드 누적 시간 예산(초). 순수 Swift Vorbis 디코드는 Debug 빌드에서 0.9MB ≈ 21s 라
     /// 음악 다수 씬에서 전수 디코드가 스캔 벽시계를 지배한다(실측 2522s 중 2519s). 예산 초과분은
     /// 디코드 없이 참조 존재만 집계(oggSkippedBudget — 실패가 아니라 시간 상한에 의한 걸러넘김).
     /// WAPLE_DEEP_OGG_BUDGET 환경변수로 오버라이드 가능(예산 경로 검증 등 디버그 게이트).
-    /// AVAsset 로드 한 건의 상한. `SceneVideoLayer.assetLoadTimeoutSeconds`(5초)와 같은 값·같은 이유다 —
-    /// 손상 미디어에서 로드가 반환하지 않는 경우가 있고, 여기는 워커 스레드라 그 하나가 잡을 세운다.
-    static let assetLoadTimeoutSeconds: Double = 5
-
     static let oggDecodeTimeBudget: TimeInterval = {
         if let s = ProcessInfo.processInfo.environment["WAPLE_DEEP_OGG_BUDGET"],
            let v = Double(s), v >= 0 { return v }
@@ -546,10 +552,22 @@ public enum DeepScan {
         for o in doc.objects3D { effects.append(contentsOf: o.effects) }
         for eff in effects {
             agg.sync { agg.effectInstances += 1 }
-            if handPortNames.contains(eff.name) {   // stock effects Waple renders via hand-ported MSL (buildHandPortEffect)
-                agg.sync { agg.effectHandPort += 1 }
-                continue
-            }
+            // **[정정 2026-09-01] 스톡 7종을 번역 시도 없이 건너뛰고 있었다 — 렌더러와 순서가 반대다.**
+            // 종전: `if handPortNames.contains(eff.name) { effectHandPort += 1; continue }`.
+            // 그런데 렌더러(`SceneRendererResources` 의 이펙트 빌드 체인)는 **translated 우선**이다 —
+            // `buildTranslatedEffect` 를 먼저 시도하고, 실패했을 때만 `buildHandPortEffect` 로
+            // 폴백한다(그 자리 주석: "pkg 동봉 GLSL 은 실제 WE 셰이더라 손-포팅 근사보다 항상
+            // 정확"). 출생 커밋 시점에도 이미 그 순서였다. 그래서 스캐너는 **렌더러가 실제로
+            // 컴파일하는 셰이더를 쳐다보지도 않은 채** 그 7종을 "hand-port 로 해결" 로 집계했고,
+            // 이 MARK 절의 선언("mirrors buildTranslatedEffect enumeration")과도 어긋났다.
+            //
+            // 이제 스톡 이펙트도 같은 번역 스캔을 통과시키고, **번역이 하나도 안 서는 경우에만**
+            // hand-port 로 센다 — 그래야 `DeepReport` 의 "resolved via hand-port stock effect" 가
+            // 실제 렌더러 결과와 같은 뜻이 된다.
+            // (스캐너는 MSL 컴파일까지는 못 한다. `GLSLTranslator.translate` 성공을 근사로 쓰는
+            //  것은 비-스톡 이펙트에서 종전부터 쓰던 것과 같은 기준이다.)
+            let handPortAvailable = handPortNames.contains(eff.name)
+            var anyTranslated = false
             let manifest = loadManifest(eff, res: res)
             let effectRoot = PkgAssets.effectLocalRoot(eff)
             // **G-B2-06 정정(2026-08-20).** 종전 주석은 "씬 패스 배열은 셰이더 패스만 담는다" 였고
@@ -574,6 +592,7 @@ public enum DeepScan {
                 agg.sync { agg.translateAttempt += 1 }
                 if let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: combos,
                                                     include: { res.scopedInclude($0, root: effectRoot) }) {
+                    anyTranslated = true
                     agg.sync {
                         agg.translateOK += 1
                         if agg.mslJobs[t.msl] == nil { agg.mslJobs[t.msl] = provenance }
@@ -581,6 +600,10 @@ public enum DeepScan {
                 } else {
                     agg.sync { if agg.translateFailSamples.count < 40 { agg.translateFailSamples.append(provenance) } }
                 }
+            }
+            // 렌더러의 폴백 순서 그대로 — translated 가 하나도 안 서야 hand-port 로 간다.
+            if handPortAvailable && !anyTranslated {
+                agg.sync { agg.effectHandPort += 1 }
             }
         }
     }
@@ -908,9 +931,13 @@ public enum DeepScan {
     /// 엄격 파스가 실패하면 그 메시의 `textures`·`blending`·`constantshadervalues` 가 통째로
     /// 유실되므로, 스캐너는 렌더러가 정상 처리하는 자산을 "실패" 로 셌다.
     ///
-    /// `check_lenient_json_reach.py` 의 `WIRED` 표에 **이 파일이 없다** — 그 게이트는 코어·렌더의
-    /// 6파일만 세므로 스캐너의 이 공백을 잡지 못했다(그 스크립트는 이 과제 소유가 아니다.
-    /// 항목 추가안은 보고서로 넘긴다).
+    /// **[정정 2026-09-01] 종전 이 자리는 "`check_lenient_json_reach.py` 의 `WIRED` 표에 이
+    /// 파일이 없다 … 항목 추가안은 보고서로 넘긴다" 였다 — 같은 커밋이 넣어 놓고 없다고 적었다.**
+    /// `git log -S` 로 두 문자열의 출생 커밋이 **둘 다 `95a902e8`** 로 같음을 확인했다: 그 커밋이
+    /// `WIRED` 에 `"Sources/WapleCompatCore/DeepScan.swift": 5` 를 넣으면서 여기에는 "없다" 고
+    /// 적었다. 지금 그 표에 이 파일이 **있고**(리더 5곳: `rawJSON` · 머티리얼 2 · 파티클 2),
+    /// 그래서 이 파일이 `AssetJSON.dictionary/object` 호출을 5건 미만으로 줄이면 그 게이트가
+    /// 빨개진다. 즉 아래 `rawJSON` 이 맨 `JSONSerialization` 으로 되돌아가는 회귀는 이제 잡힌다.
     static func rawJSON(_ url: URL) -> [String: Any]? {
         guard let d = try? Data(contentsOf: url) else { return nil }
         return AssetJSON.dictionary(d)

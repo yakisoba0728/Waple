@@ -9,6 +9,19 @@ import WapleLibrary
 struct WallpaperGridView: View {
     @ObservedObject var viewModel: LibraryViewModel
     @State private var hoveredId: String?
+    /// r2-H16: **키보드 포커스(Tab)를 `focusedId` 에 잇는 유일한 자리.**
+    ///
+    /// `tileAccessibility` 가 이미 타일을 `focusable` 로 만들어 두어 Tab 으로 **닿을 수는**
+    /// 있었는데, 닿아도 아무 데도 반영되지 않았다 — `viewModel.focusedId` 에 값을 쓰는 경로는
+    /// 마우스 탭(`.onTapGesture`) · 우클릭 메뉴/VoiceOver 로터(`selectForPropertiesView`) ·
+    /// 실행 시 초기 1회, 셋뿐이었다. 인스펙터(`SelectionPanelView`)는 `focusedEntry`(=
+    /// `focusedId` 파생)만 보므로, 마우스를 안 쓰는 사용자에게는 속성 편집기·모니터 할당·
+    /// 폴더·재생목록·제거가 전부 닫혀 있었다.
+    ///
+    /// 마우스 탭과 **같은 것만** 한다(= `focusedId` 대입). `panelVisible` 은 건드리지 않는다 —
+    /// Tab 으로 타일을 훑을 때마다 접어 둔 패널이 튀어나오면 그건 다른 결함이 된다. 패널을
+    /// 여는 것은 여전히 명시적 동작(`selectForPropertiesView`)의 몫이다.
+    @FocusState private var keyboardFocusedId: String?
     @State private var newFolderName = ""
     @State private var folderPromptEntry: LibraryEntry?
     @State private var removeConfirmEntry: LibraryEntry?
@@ -45,6 +58,12 @@ struct WallpaperGridView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ColorRole.well)
+        // r2-H16: 키보드 포커스가 옮겨가면 인스펙터도 따라간다(마우스 탭과 동일 효과).
+        // nil(그리드 밖으로 포커스가 나감)일 때는 지우지 않는다 — 툴바로 Tab 하는 순간
+        // 인스펙터가 비면 방금 고른 항목의 컨트롤로 이동할 수가 없다.
+        .onChange(of: keyboardFocusedId) { _, focused in
+            if let focused { viewModel.focusedId = focused }
+        }
         .overlay(alignment: .bottom) { importProgress }
         .onDrop(of: [.fileURL], isTargeted: nil) { handleDrop($0) }
         .alert("새 폴더", isPresented: Binding(get: { folderPromptEntry != nil },
@@ -76,7 +95,7 @@ struct WallpaperGridView: View {
             }
             Button("취소", role: .cancel) { removeConfirmEntry = nil }
         } message: {
-            Text("디스크의 원본 폴더는 삭제되지 않습니다. 재생목록·모니터 할당·즐겨찾기·폴더에서 함께 제거됩니다.")
+            Text("디스크의 원본 폴더는 삭제되지 않습니다. 재생목록·모니터 할당·즐겨찾기·폴더·속성 편집값이 함께 제거됩니다.")
         }
     }
 
@@ -147,6 +166,7 @@ struct WallpaperGridView: View {
         let supported = viewModel.isSupported(entry)
         let applied = viewModel.selectedId == entry.id
         return tileSurface(entry, supported: supported, applied: applied)
+            .focused($keyboardFocusedId, equals: entry.id)
             .modifier(tileActions(entry, supported: supported))
             .contextMenu { contextMenu(for: entry, supported: supported) }
     }
@@ -180,7 +200,7 @@ struct WallpaperGridView: View {
         .onHover { hoveredId = $0 ? entry.id : (hoveredId == entry.id ? nil : hoveredId) }
         .onTapGesture(count: 2) { activate(entry, supported: supported) }
         .onTapGesture { viewModel.focusedId = entry.id }
-        .tileAccessibility(label: Text(entry.title),
+        .tileAccessibility(label: accessibilityName(entry),
                            value: tileStatus(applied: applied, supported: supported, preview: preview),
                            isSelected: applied,
                            onActivate: { activate(entry, supported: supported) })
@@ -230,6 +250,22 @@ struct WallpaperGridView: View {
                 .foregroundStyle(ColorRole.onMedia, ColorRole.selected)
                 .padding(Space.xs)
         }
+    }
+
+    /// 보조기술이 읽는 항목 이름 — **제목 + 유형**.
+    ///
+    /// r3-M26: 유형 배지(`typeBadge`)는 시각 overlay 로만 존재하고, 타일 전체가
+    /// `accessibilityElement(children: .combine)` 로 묶이면서 그 배지의 라벨이 흡수돼
+    /// 보조기술에는 아무것도 전달되지 않았다. 씬/동영상/웹은 이 화면에서 할 수 있는 일이
+    /// 서로 다르므로(웹만 "조작 창 열기", 배속은 동영상만) 유형은 상태가 아니라 **정체**다 —
+    /// 그래서 값(`tileStatus`)이 아니라 이름 쪽에 붙인다. 값에 넣으면 상태가 바뀔 때마다
+    /// 유형까지 다시 읽힌다(아래 `tileStatus` 주석의 같은 판단).
+    ///
+    /// 미지원 배경도 유형을 그대로 말한다 — "지원 예정" 은 이미 값이 말하므로 여기서
+    /// 되풀이하면 한 항목에서 두 번 들린다.
+    private func accessibilityName(_ entry: LibraryEntry) -> Text {
+        Text(verbatim: String(format: NSLocalizedString("%@, 유형 %@", comment: "그리드 타일 접근성 이름 — 제목, 유형"),
+                              entry.title, NowPlayingSubtitle.typeLabel(entry.typeRaw)))
     }
 
     /// 보조기술이 읽는 현재 상태. 라벨(무엇인가)에 이어 붙이지 않는 이유는 상태가 바뀔 때마다
@@ -282,7 +318,16 @@ struct WallpaperGridView: View {
     @ViewBuilder
     private func previewView(_ preview: EntryPreviewState, animating: Bool) -> some View {
         if case .image(let url) = preview, PreviewMedia.isAnimated(url) {
-            AnimatedPreviewView(url: url, animating: animating).scaledToFill()
+            // r3-M67: 호버 라이브 프리뷰도 "동작 줄이기"를 존중한다 — 종전엔 호버 여부만 봤다.
+            // r3-O27: 장식 썸네일은 보조기술에서 가린다. 형제 세 자리가 이미 그 규약이다 —
+            // 정지 이미지 분기의 `PreviewThumbnail` 은 **내부에** `.accessibilityHidden(true)` 를
+            // 갖고 있고(그래서 아래 분기는 여기서 또 가릴 필요가 없다), `SelectionPanelView` 의
+            // 히어로와 `NowPlayingBar` 의 아트워크는 컨테이너에 그것을 건다. 그리드의 gif 분기만
+            // 무차폐라 타일 이름이 읽힌 뒤 의미 없는 이미지 원소가 한 번 더 읽혔다.
+            // 타일의 접근성 이름·액션은 상위(`tileActions` 와 그 라벨)가 소유한다.
+            AnimatedPreviewView(url: url, animating: animating && !SystemPreference.reduceMotion)
+                .scaledToFill()
+                .accessibilityHidden(true)
         } else if case .image(let url) = preview {
             // F500: 정지 프리뷰는 비동기 로드 뷰 — body 평가 중 메인 동기 디스크 읽기 제거.
             PreviewThumbnail(url: url)

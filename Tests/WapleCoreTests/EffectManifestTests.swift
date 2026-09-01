@@ -95,6 +95,24 @@ final class EffectManifestTests: XCTestCase {
         XCTAssertEqual(m.passes[0].binds, [EffectManifest.Bind(name: "mask", index: 0)])
     }
 
+    /// r3-O11: `bind` · `fbos` 도 `passes` 와 같은 **원소별 폴백**이어야 한다. 종전 두 배열은
+    /// `as? [[String: Any]]` 배열 전체 캐스트라 원소 하나가 비객체면 그 배열이 통째로 비었다.
+    func testMalformedBindAndFboElementsDropIndividually() throws {
+        let json = """
+        {"passes":[{"shader":"effects/foo",
+                    "bind":["junk",{"name":"previous","index":0},7,{"name":"mask","index":1}]}],
+         "fbos":["junk",{"name":"_rt_A","scale":1,"format":"rgba8888"},
+                 42,{"name":"_rt_B","scale":2,"format":"rgba8888"}]}
+        """
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertEqual(m.passes[0].binds,
+                       [EffectManifest.Bind(name: "previous", index: 0),
+                        EffectManifest.Bind(name: "mask", index: 1)],
+                       "비객체 bind 원소만 드롭되고 나머지는 살아야")
+        XCTAssertEqual(m.fbos.map(\.name), ["_rt_A", "_rt_B"],
+                       "비객체 fbo 원소만 드롭되고 나머지는 살아야")
+    }
+
     func testHugeFBOScaleDefaultsInsteadOfTrapping() throws {
         let json = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt","scale":1e300,"format":"rgba8888"}]}"#
         let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))

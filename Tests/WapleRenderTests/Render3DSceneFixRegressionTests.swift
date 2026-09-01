@@ -260,13 +260,17 @@ final class Render3DSceneFixRegressionTests: XCTestCase {
         return n > 0 ? total / Double(n) : 0
     }
 
-    /// F661 e2e: directional(angles Ryπ → forward (0,0,-1), L=+Z)이 +Z 평면을 실제로 비춘다.
+    /// F661 e2e: directional(angles Ry 90° → forward (0,0,-1), L=+Z)이 +Z 평면을 실제로 비춘다.
+    /// **[2026-09-01] `angles` 픽스처만 갱신했다** — 라이트 forward 열이 col2(+Z blue)에서
+    /// **col0(+X red)** 으로 정정되면서(`Scene3DLighting.resolveLights` 방향 규약 절: V1 패커
+    /// `FUN_140190c80` 이 `glm::column(M, 0)` 을 쓴다) 같은 월드 방향 (0,0,-1) 을 내는 오일러각이
+    /// Ry π → Ry π/2 로 바뀐다. **월드 forward 는 종전과 동일**하므로 기대 픽셀은 그대로다.
     /// 대조군(라이트 없음)은 ambient 0 이라 검정 — 밝아지면 directional 경로가 GPU 까지 살아있는 것.
     func testF661DirectionalLightIlluminatesPlaneEndToEnd() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         func scene(withLight: Bool) -> String {
             let light = withLight ? """
-            ,{"id":2,"name":"sun","light":"ldirectional","origin":"0 0 4","angles":"0 3.14159265 0",
+            ,{"id":2,"name":"sun","light":"ldirectional","origin":"0 0 4","angles":"0 1.5707963 0",
               "color":"1 1 1","intensity":2,"castshadow":false}
             """ : ""
             return """
@@ -285,7 +289,8 @@ final class Render3DSceneFixRegressionTests: XCTestCase {
     }
 
     /// F661 e2e: castshadow:true directional + 오큘루더 → 리시버가 어두워진다(단일 오소 섀도우 동작).
-    /// 태양을 경사(angles Ry≈2.678 → forward (0.447,0,-0.894))로 두어 오큘루더(x=0)의 그림자가
+    /// 태양을 경사(angles Ry≈1.107 → forward (0.447,0,-0.894))로 두어 오큘루더(x=0)의 그림자가
+    /// — 위 테스트와 같은 이유로 `angles` 만 2.678 → 1.107 로 갱신(월드 forward 불변).
     /// 리시버 x≈+1 로 어긋나게 — 침침 정면이면 그림자 영역이 오큘루더 자체에 가려 관측 불가라 경사 필수.
     /// 오큘루더 뒤(x≈1) 픽셀(화면 열 ≈43)을 비교한다.
     func testF661DirectionalShadowOccluderDarkensReceiver() throws {
@@ -298,7 +303,7 @@ final class Render3DSceneFixRegressionTests: XCTestCase {
              "objects":[
                {"id":1,"name":"receiver","model":"models/plane.mdl","origin":"0 0 0","scale":"4 4 4","castshadow":false},
                {"id":2,"name":"occluder","model":"models/plane.mdl","origin":"0 0 2","scale":"0.55 0.55 0.55","castshadow":true},
-               {"id":3,"name":"sun","light":"ldirectional","origin":"0 0 4","angles":"0 2.6779450 0",
+               {"id":3,"name":"sun","light":"ldirectional","origin":"0 0 4","angles":"0 1.1071487 0",
                 "color":"1 1 1","intensity":2,"castshadow":\(cast ? "true" : "false")}
              ]}
             """

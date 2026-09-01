@@ -104,6 +104,27 @@ final class PropertyAnimationTests: XCTestCase {
         XCTAssertTrue(anim.startPaused, "C⑤: options.startpaused=true 가 파싱돼야")
     }
 
+    /// r3-O5: `options.events` 는 **항목 단위**로 드롭한다. 종전 배열 전체 캐스트
+    /// (`as? [[String: Any]]`)는 원소 하나가 비객체면 마커를 전량 잃었다 — 바로 위 파스 주석의
+    /// "형식 이상 항목은 드롭" 과 실제 동작이 갈렸다.
+    func testParseEventsDropsOnlyMalformedElements() throws {
+        let dict: [String: Any] = [
+            "animation": [
+                "c0": [["frame": 0, "value": 0.0], ["frame": 30, "value": 1.0]] as [[String: Any]],
+                "options": ["fps": 30, "length": 30, "mode": "single",
+                            // 두 번째 원소가 **객체가 아니다** — 종전엔 이 하나로 전량 소실됐다.
+                            "events": ["ignored-string",
+                                       ["frame": 12, "name": "keep"],
+                                       42,
+                                       ["frame": 21, "name": "keep2"]] as [Any]] as [String: Any],
+            ] as [String: Any],
+        ]
+        let anim = try XCTUnwrap(PropertyAnimation.parse(dict))
+        XCTAssertEqual(anim.events, [AnimationMarker(name: "keep", frame: 12),
+                                     AnimationMarker(name: "keep2", frame: 21)],
+                       "비객체 원소만 드롭되고 나머지는 순서대로 살아야")
+    }
+
     // MARK: - C⑤ startpaused(정지 상태로 저작된 애니가 마운트 즉시 재생되는 결함)
 
     /// startpaused=false(기본) → 종전대로 t 그대로 평가(무회귀).

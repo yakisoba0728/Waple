@@ -176,8 +176,21 @@
   **자기** scale 이 만든 것이고 이 크기는 WE 와 같다(확정된 defaultSize 공식대로). 부모로는
   이 씬의 악화를 설명할 수 없다.
 - **교란 ② (비-풀스크린 UV/RT 규약) — 축은 정합, 해상도는 잔여 결함.**
-  `SceneRendererResources.swift:271-272,280-281` 과 `SceneRendererFrameEncoder.swift:510-521,549-553`
-  을 직접 읽어 확인: 솔리드/이펙트-캐리어 레이어의 이펙트 체인 RT 는 항상 `layer.size`(scale
+  `SceneRendererResources.buildLayers` 의 `effW`/`effH` 산출부와
+  `SceneRendererFrameEncoder.quadVertices`(및 형제 `quadProjectiveDepth`)의 `hw`/`hh` 산출부를
+  직접 읽어 확인:
+  ```bash
+  grep -n 'effW = layer.isFrameBuffer' Sources/WapleRender/SceneRendererResources.swift
+  grep -n 'let hw = size.x \* scale.x \* 0.5' Sources/WapleRender/SceneRendererFrameEncoder.swift
+  ```
+  > **[정정 2026-09-01] 종전 이 자리의 인용 두 건은 무관한 코드를 가리켰다.**
+  > `SceneRendererResources.swift:271-272,280-281` 은 `videoLayerProvider`(비디오 .tex 추출)이고
+  > `SceneRendererFrameEncoder.swift:510-521,549-553` 은 `blendModeSnapshotSlot`/`runBlendModeLayer`
+  > (colorBlendMode acc 스냅샷)다 — **둘 다 layer.size/RT 해상도와 아무 상관이 없다.**
+  > 아래 결론 자체는 재확인 결과 **그대로 맞다**(RT 는 `layer.size`, scale 은 드로우 시 half-extent
+  > 에만) — 틀린 것은 근거 좌표뿐이었다. 그래서 결론을 고치지 않고 좌표를 심볼로 바꿨다.
+
+  솔리드/이펙트-캐리어 레이어의 이펙트 체인 RT 는 항상 `layer.size`(scale
   미반영, 예: 2160² 정사각 기본값)로 만들어지고, `scale` 은 draw 시 코너 좌표(half-extent =
   `size*scale*0.5`)에만 들어간다 — UV 는 scale 과 무관하게 항상 레이어-로컬 0..1 이다. 즉
   **축/방향 불일치는 없다**(교란 ②가 원래 의심하던 "WE 엔 없는 하드 엣지" 종류의 축 버그는

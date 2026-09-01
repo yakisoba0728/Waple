@@ -95,7 +95,10 @@ public struct SceneLayer: Equatable {
     /// @`0x1401e06ea`(`mov dword ptr [rbx + 0x30], 2`); 같은 표의 `origin` `+0x128` 태그 2, `angles` `+0x140` 태그 2,
     /// [VA-정정] 2026-08-21 — 종전 표기 `0x1401e06a6` 은 명령 주소가 아니라 그 `lea` 의 **disp32 필드 위치**(+3)였다.
     /// `parallaxDepth` `+0x170` 태그 **1**=vec2)로 등록하고, 씬스크립트 `ILayer.scale` 도
-    /// `Vec3` 이다(`ui/dist/monaco/autocomplete/lib.sceneScript.d.ts:2033`).
+    /// `Vec3` 이다(`ui/dist/monaco/autocomplete/lib.sceneScript.d.ts` 의 **`interface ILayer` 안
+    /// `scale: Vec3;` 선언**. 종전 인용 `:2033` 은 그 선언이 아니라 **바로 위 주석 종료 `*/`** 를
+    /// 가리켰다 — r3-M62 가 지목한 "선언이 아니라 주석·괄호에 착지" 부류다. 짝 저장소의 그 파일은
+    /// 이 리포와 함께 움직이지 않으므로 줄 번호 대신 선언 시그니처로 가리킨다).
     /// 그런데 `scale` 은 2D 합성(`composeParentTransforms`)·쿼드 배치·렌더 인코더까지
     /// `Vec2` 로 흐르는 **소비처 다수**라, 타입을 넓히면 이 세션에 동시 편집 중인
     /// `WapleRender` 소유 파일이 함께 움직인다. `originZ` 가 이미 쓰는 **별 필드** 규약이
@@ -161,7 +164,9 @@ public struct SceneLayer: Equatable {
     public var depthWrite: Bool = true
     /// 머티리얼 패스 `alphawriting`("default"|"enabled" — json-keys.txt:622 A 0x0048a4c0; 코퍼스 실측
     /// 806엔트리 중 enabled 16건). 파스·보존 전용 — 알파 채널 기록 제어 의미로 추정, 렌더 소비 보류.
-    /// 기본 "default"(항등 — :1107 depthtest/depthwrite 와 같은 패스 키 군).
+    /// 기본 "default"(항등 — 바로 위 `depthTest`/`depthWrite` 와 같은 머티리얼 패스 키 군).
+    /// (r3-O25 표본: 종전 자기참조 인용 `:1107` 은 `forwardSpotConeCosines` 의 콘 코사인 산술이라
+    /// 무관했다. 파일 내부 참조는 줄 번호 대신 심볼명으로 적는다 — 줄은 다음 커밋에 썩는다.)
     public var alphaWriting: String = "default"
     /// 오브젝트 colorBlendMode(common_blending.h ApplyBlending enum 0-32; 0=normal).
     /// != 0 이면 렌더러가 acc 스냅샷 대비 블렌드 합성(컴포지션 스냅샷 패턴). 코퍼스 121레이어/30씬.
@@ -562,9 +567,13 @@ public struct SceneTextLayer: Equatable {
     public var spacing: Vec2? = nil
     public var lockTransforms: Bool = false
     public var isSolid: Bool = true
-    /// 텍스트 오브젝트 `depthtest`(scene-json-schema.md:123 텍스트 키 목록 — SceneLayer.depthTest 의
-    /// 머티리얼 패스 키(SceneDocument.swift:1107)와는 별개 오브젝트 레벨). 실측 코퍼스는 문자열
-    /// "enabled"(1394건, 불리언 형태도 관용 파스). 기본 true(항등). 파스·보존 전용 — 2D 텍스트 경로는
+    /// 텍스트 오브젝트 `depthtest`(scene-json-schema.md:123 텍스트 키 목록 — 이 파일 위쪽
+    /// `SceneLayer` 의 `depthTest`/`depthWrite`(머티리얼 패스 키)와는 별개인 오브젝트 레벨.
+    /// 종전 인용 `SceneDocument.swift:1107` 은 `forwardSpotConeCosines` 의 콘 코사인 산술이라
+    /// 무관했다 — 자기참조는 줄 번호 대신 심볼명으로 적는다). 정본
+    /// `spec/corpus/scene-schema.json`(씬 **162**)의 `scene.objects.keysByType.text.depthtest` 는
+    /// n=**1391** · 씬 101 · 값 전건 문자열 "enabled"(불리언 형태도 관용 파스). 종전 "1394건" 은
+    /// 모집단 표기 없이 3 만큼 어긋나 있었다. 기본 true(항등). 파스·보존 전용 — 2D 텍스트 경로는
     /// 페인터 z-순서라 depth 소비 없음(3D 빌보드는 SceneLayer.depthTest 가 담당).
     public var depthTest: Bool = true
     /// C⑥: 오브젝트 colorBlendMode(common_blending.h ApplyBlending enum 0-32; 0=normal) — 이미지
@@ -881,7 +890,13 @@ public struct SceneLight3D: Equatable {
     /// (F691 — composeLightParentTransforms; 레이어 composeParentTransforms 와 동일 규약)라 var.
     /// ltube 는 이 필드가 세그먼트 단점 A(WE g_LTube_OriginA).
     public var origin: Vec3
-    /// ltube 세그먼트 단점 B(scene.json `originb` — wallpaper64.exe 스트링/에디터 키 실측, 소문자).
+    /// ltube 세그먼트 단점 B(scene.json `originb`, 소문자).
+    ///
+    /// **⚠️ "실측" 이 아니다(r4-03).** 종전 이 줄은 "wallpaper64.exe 스트링/에디터 키 실측" 이라
+    /// 단언했지만 같은 리포가 정면으로 반박한다 — `Scene3DLighting.swift` 의 `originb` 반증 블록이
+    /// "바이너리 전체에서 ASCII 0건 / UTF-16 0건", `docs/re/scene-lighting.md` 가 "originb 는
+    /// 존재하지 않는다" 로 적는다. 이 필드는 **가설 스키마의 파스·보존**이며 코퍼스 도달도 0 이다
+    /// (그래서 소비 경로가 없어도 무회귀다). 근거가 생기기 전까지 "실측" 표기를 쓰지 말 것.
     /// WE 셰이더 g_LTube_OriginB(A2-pbr-lighting.md §4.3). origin 과 같은 부모-로컬 공간이라
     /// 2D 씬은 origin 과 함께 월드로 덮어쓴다(composeLightParentTransforms). nil = 미저작(비-tube 포함).
     public var originB: Vec3? = nil
@@ -1036,15 +1051,40 @@ public extension SceneLight3D {
         }
     }
 
-    /// F800(S-9): 라이트 월드 forward — Scene3DMath.modelMatrix(WapleRender)의 회전부(Rz·Ry·Rx)와
-    /// 동일 수식의 blue축(col2) 포트(WapleCore 라 직접 참조 불가). 회전 열이라 단위 — 비유한 입력만
-    /// (0,0,1) 폴터(3D normalizedOr 와 동일 시맨틱). 스케일 미포함(방향 전용).
+    /// F800(S-9): 라이트 월드 forward — `Scene3DMath.modelMatrix`(WapleRender)의 회전부(Rz·Ry·Rx)와
+    /// 동일 수식의 **red축(+X, col0)** 포트(WapleCore 라 직접 참조 불가). 회전 열이라 단위 —
+    /// 비유한 입력만 `(1,0,0)`(항등 회전의 col0) 폴터(3D `normalizedOr` 와 동일 시맨틱).
+    /// 스케일 미포함(방향 전용).
+    ///
+    /// ## [2026-09-01 정정] col2 → col0 (r2-H1)
+    /// 근거는 **V1 PBR 유니폼 패커 `wallpaper64.exe` `FUN_140190c80`(0x140190c80)** 이다 —
+    /// 이 함수가 `glm::column(M, 0)` 을 라이트 방향으로 뽑는다:
+    ///   · directional `0x140191162 xor r8d,r8d`(**열 0**) → `0x1401911a6 call 0x14019d3e0`(= `glm::column`)
+    ///   · spot `0x140192dfa mov r8d,3`(열 3 = origin) 뒤 `0x140192e79 xor r8d,r8d`(**열 0** = direction)
+    /// 상세 디스어셈은 `Scene3DLighting.resolveLights` 의 방향 규약 절(3D PBR 레인 정본)에 있다.
+    ///
+    /// ### 왜 종전에 col2 였나 — 이 기록을 지우지 마라
+    /// 원래 이 자리는 WE **스크립트 API**(`lib.sceneScript.d.ts`)의 `Mat4.forward() = "Blue axis"`,
+    /// `right = Red(+X)`, `up = Green(+Y)`, `compose = T*R*S` 를 근거로 col2 를 골랐다.
+    /// **그 인용 자체는 지금도 참이지만 이 자리를 구속하지 않는다.** `Mat4.forward()` 는
+    /// *스크립트가 행렬에서 전방축을 꺼내 쓰는* 헬퍼의 규약이고, 여기서 필요한 것은
+    /// *엔진이 라이트 유니폼을 채울 때 실제로 고르는 열*이다. 둘은 같은 행렬을 보지만 서로 다른
+    /// 코드 경로이며, 패커는 그 헬퍼를 거치지 않고 `glm::column(M, 0)` 을 직접 부른다.
+    /// 결함이 이 혼동에서 났으므로 근거를 지우지 않고 남긴다 — 없으면 다음 사람이 되돌린다.
+    ///
+    /// **부호는 여기서 되돌리지 않는다**(3D 레인과 동일 규약). 소비 셰이더가 자기 안에서 맞춘다:
+    /// spot `spotCookie = -dot(normalize(lightDelta), 축)`, directional `L = -forward`.
+    /// 이 정정은 **열 인덱스 하나**뿐이다.
+    ///
+    /// 소비처 둘(아래 `forwardUniforms` 의 2D 포워드 팩 · `SceneRenderer3D` 볼류메트릭 스팟 축)이
+    /// 이 함수를 그대로 쓰므로, 이 교체로 세 레인(3D PBR · 2D 포워드 · 볼류메트릭)이 같은 축을 본다.
     static func forwardLightAxis(angles: Vec3) -> SIMD3<Float> {
-        let (sx, cx) = (sin(angles.x), cos(angles.x))
+        // col0 = (r00, r10, r20) = (cz·cy, sz·cy, −sy). Rx 는 col0 에 기여하지 않는다
+        // (R = Rz·Ry·Rx 에서 Rx 의 첫 열이 (1,0,0)) — 그래서 sx/cx 가 수식에서 사라진다.
         let (sy, cy) = (sin(angles.y), cos(angles.y))
         let (sz, cz) = (sin(angles.z), cos(angles.z))
-        let f = SIMD3<Float>(cz * sy * cx + sz * sx, sz * sy * cx - cz * sx, cy * cx)
-        guard f.x.isFinite, f.y.isFinite, f.z.isFinite else { return SIMD3(0, 0, 1) }
+        let f = SIMD3<Float>(cz * cy, sz * cy, -sy)
+        guard f.x.isFinite, f.y.isFinite, f.z.isFinite else { return SIMD3(1, 0, 0) }
         return f
     }
 
@@ -2547,7 +2587,17 @@ extension SceneDocument {
         // (parseLayer 의 동일 루프. 이펙트 캐리어는 텍스처가 없으니 material 계열은 해당 없음).
         // 5키 고정 목록의 근거(코퍼스 실측 + 소비처 키 목록)는 parseLayer 의 같은 루프 주석 참조.
         for key in ["origin", "scale", "alpha", "angles", "color"] {
-            guard let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String else { continue }
+            guard let bind = obj[key] as? [String: Any] else { continue }
+            // r4-01: **키프레임 애니도** parseLayer 와 같이 캡처한다. 종전엔 `script` 만 봐서
+            // shape/이펙트 캐리어 쿼드의 저작 애니가 출생 시점부터 통째로 버려졌다 —
+            // 정적 value 만 맞고 이동/페이드/회전이 멈춘다. 키 목록이 parseLayer 의 5키와
+            // 같으므로 "소비 안 되는 키의 애니를 담아 상시 리드로만 켜는" 부작용도 없다.
+            // 도달(2026-09-01 실측): 이 분기를 타는 오브젝트(= image/text/particle/model/light/
+            // camera 아님)는 동봉 코퍼스 171 씬 중 **4개**, 설치본 186 씬 중 **6개**뿐이고
+            // 그중 5키에 키프레임 애니를 저작한 것은 **양쪽 다 0건**이다 — 즉 이 수정으로
+            // 값이 달라지는 동봉·설치본 씬은 없다(워크샵 대비 잠복 복구).
+            if let a = PropertyAnimation.parse(bind) { layer.animations[key] = a }
+            guard let sc = bind["script"] as? String else { continue }
             layer.propertyScripts[key] = sc
             if let j = Self.scriptPropsJSON(bind["scriptproperties"]) { layer.propertyScriptProps[key] = j }
         }
@@ -3107,6 +3157,12 @@ extension SceneDocument {
         var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
         var parentOf: [Int: Int] = [:]
         // F437 후속: 승자는 카테고리가 아니라 **`objects[]` 순서**가 정한다(claimObjectID 주석).
+        //
+        // r3-O6: 이 맵의 소스는 아래 `put()` 호출자 셋 — layers · nodes3D · texts 뿐이다.
+        // **파티클 · model · sprite 오브젝트는 들어오지 않는다.** 셋 다 부모 체인 합성 대상이
+        // 될 수 있는데도 여기서 빠져 있어, 그 셋을 부모로 지목한 자식은 로컬 트랜스폼으로만
+        // 해석된다. (원 발견의 제목은 "가시성 맵에는 파티클만 있다" 는 사실과 섞여 있었다 —
+        // 가시성 맵과 이 트랜스폼 맵은 별개이고, 이 맵 기준으로는 세 타입 모두 부재다.)
         var owner: [Int: Int] = [:]
         func put(_ id: Int, _ order: Int, _ t: (origin: Vec2, scale: Vec2, angle: Float), _ parent: Int?) {
             guard claimObjectID(id, order: order, owner: &owner) else { return }
@@ -4069,7 +4125,11 @@ extension SceneDocument {
     ///   · version 부재 3씬은 옛 guard 가 general 을 그대로 반환한 **무게이트** 집합이라 v≥임계
     ///     씬과 함께 제외한다. 따라서 159 − (126+3) = **최소 30씬이 v3 미만인데
     ///     `hdr`/`zoom` 을 저작한다**(`bloomtint` 13, `perspectiveoverridefov` 1도 같은 방향).
-    ///     109 − (95+3) = **최소 11씬이 v4 미만인데 wind/gravity 를 저작한다.** 하한은 모두
+    ///     109 − (95+3) = **최소 11씬이 v4 미만인데 wind/gravity 를 저작한다.**
+    ///     (모집단 = `spec/corpus/scene-schema.json` 의 씬 **162**. 짝 저장소
+    ///     `corpus_scan/scene-json-schema.md` 는 같은 문장을 "at least 13" 으로 적어 두었는데,
+    ///     그 값은 이 정본으로 재현되지 않는다 — 위 세는 명령이 11 을 낸다. 짝 저장소는 이 레인의
+    ///     소유가 아니라 여기서 고치지 않았다.) 하한은 모두
     ///     양수이므로 게이트의 전제는 어느 방향으로도 성립할 수 없다.
     ///   · 세는 명령: `spec/corpus/scene-schema.json` 의 `scene.corpus.population.version` 과
     ///     `scene.general.keys[*].n` 을 읽어 `n − (v≥임계 씬수 + version 부재 씬수)` 를 뺀다.

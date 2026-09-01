@@ -115,8 +115,9 @@ public enum FFmpegConverter {
     /// [2026-08-25] `completion` 이 `@Sendable` 이다. 이 콜백은 **호출 큐를 두 번 건넌다** —
     /// 호출자 → `workQueue`(백그라운드) → `DispatchQueue.main`. 그 사실은 종전에도 참이었고
     /// 위 주석이 이미 적고 있었지만 **타입이 그것을 말하지 않아** 컴파일러가 검사할 수 없었다.
-    /// 진단이 나던 자리는 `:121`·`:138` 의 캡처 지점이지 이 선언 줄이 아니다 — 원인과 증상이
-    /// 다른 줄에 있다는 뜻이라, 고칠 때 헷갈리지 않게 여기 적어 둔다.
+    /// 진단이 나던 자리는 `completion` **캡처 지점**(아래 `workQueue.async` 클로저와
+    /// `completeOnMain` 호출)이지 이 선언 줄이 아니다 — 원인과 증상이 다른 줄에 있다는 뜻이라,
+    /// 고칠 때 헷갈리지 않게 여기 적어 둔다. (자기참조 줄 번호는 다음 커밋에 썩는다.)
     public static func convert(_ source: URL, timeout: TimeInterval = 300,
                               completion: @escaping @Sendable (URL?) -> Void) {
         workQueue.async {
@@ -159,6 +160,13 @@ public enum FFmpegConverter {
         // F840: 무한 대기 금지. 여기는 **직렬** workQueue 위라, Task 가 완료되지 않으면(협조 스레드풀
         // 고갈·응답 없는 볼륨) 그 큐가 영구히 막혀 이후 모든 변환 요청이 조용히 사라진다.
         // 타임아웃 시 박스를 읽지 않는다(락이 없어 늦게 도착한 쓰기와 경합) — 재사용 불가로 처리.
+        //
+        // ⚠️ r3-O13: "재사용 불가" 의 **실제 결과는 삭제**다. 이 false 를 받는 `convert(_:timeout:)`
+        // 의 캐시 히트 분기가 `ignoring invalid ffmpeg cache output` 로그와 함께 `removeItem` 으로
+        // 캐시 파일을 지운다. 즉 프로브가 5초(`assetProbeTimeoutSeconds`) 안에 안 끝나면 **파일이
+        // 실제로 유효해도** 삭제되고 전체 재변환이 걸린다. 종전 이 주석은 삭제를 적지 않아
+        // "이번 재생만 캐시를 안 쓴다" 로 읽혔다. 타임아웃(느린 볼륨·협조 스레드풀 포화)과
+        // 손상(진짜 무효)을 구분하려면 반환 타입을 3값으로 넓혀야 한다 — 이번 라운드 범위 밖.
         guard sem.wait(timeout: .now() + assetProbeTimeoutSeconds) == .success else {
             WapleLog.warn("[Waple] ffmpeg cache probe timed out: \(url.lastPathComponent)")
             return false
@@ -168,6 +176,12 @@ public enum FFmpegConverter {
 
     /// 실제 변환(백그라운드). videotoolbox 실패 시 libx264 재시도. 부분 파일이 캐시로 남지 않도록
     /// 임시 파일에 쓰고 exit 0 에만 캐시 경로로 원자적 이동.
+    ///
+    /// **벽시계 상한은 `timeout` 이 아니라 `2·(timeout + 5)` 다**(r3-M15). 아래 `for useVT in
+    /// [true, false]` 가 `runOnce` 를 **최대 2회** 부르고, 각 회의 상한은 `runOnce` 의
+    /// `timeout` 후 `terminate()` + **5초 유예** 뒤 `SIGKILL` 이다. 기본 `timeout: 300`(convert 의
+    /// 기본 인자)이면 **최대 약 610초**. 선행 감사 문서(`docs/audit-r2-lanes/lane08-app.md`)가
+    /// "최대 300초" 라고 적은 것은 재시도와 유예를 빠뜨린 값이라 실제의 절반이다.
     private static func run(ff: URL, source: URL, output: URL, timeout: TimeInterval) -> URL? {
         try? FileManager.default.createDirectory(at: cacheDir(), withIntermediateDirectories: true)
         let tmp = cacheDir().appendingPathComponent("\(UUID().uuidString).part.mp4")

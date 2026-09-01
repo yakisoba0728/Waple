@@ -311,8 +311,16 @@ public struct PointerClickLatch: Equatable {
 /// 유니폼 핸들러 `0x1400d9e2c`–`0x1400d9e8b`:
 /// `x = y = (s & 1) ? 1 : 0` · `z = ((s & 1) && !(s & 2)) ? 1 : 0` · `w = 0`.
 /// 즉 **`.z` 는 누른 첫 프레임에만 1** 인 클릭 임펄스다(유지 아님).
-/// 동봉 셰이더 4파일이 전부 `.z` **만** 읽는다(`cursorripple_apply_force.frag:83` 이 `× 5.0`,
-/// `fluidsimulation_vorticity.frag:198` 이 게인 1 — 각 preview 사본 포함).
+/// 동봉 셰이더 **4파일**이 전부 `.z` 만 읽고, 넷 다 같은 자리
+/// (`inputStrength = pointerDist * timeAmt * (pointerMoveAmt + g_PointerState.z …)`)에서 쓴다.
+/// r4-44 정정 — 게인과 줄이 사본별로 다르므로 **정본과 preview 를 구분해 적는다**:
+///   · `effects/cursorripple/shaders/effects/cursorripple_apply_force.frag` — 게인 **×5.0**
+///   · `effects/cursorripple/preview/…/cursorripple_apply_force.frag` — 게인 **1**
+///     (죽은 주석 `// * g_PointerState.z;` 가 남아 있어 ×5.0 처럼 보이지만 실코드는 곱하지 않는다)
+///   · `effects/fluidsimulation/shaders/effects/fluidsimulation_vorticity.frag` — 게인 1
+///   · `effects/fluidsimulation/preview/…/fluidsimulation_vorticity.frag` — 게인 1
+/// 종전 이 주석은 "각 preview 사본 포함" 이라고 묶어 두 사본의 게인 차이를 감췄다.
+/// 재현: `grep -rn g_PointerState Sources/WapleRender/Resources/WEAssets`.
 public struct PointerButtonState: Equatable {
     /// renderState `+0xa4` bit0.
     public private(set) var isDown: Bool

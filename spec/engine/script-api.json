@@ -5273,7 +5273,7 @@
     "ILayer.extraNonWE": "Waple shim 은 WE 에 없는 이름을 다수 만든다(getName/setName/getOrigin/setOrigin/setAngles/setScale/setVisible/setAlpha/setText/getTexture/addChild/playAnimation/…). 실물 스크립트는 이것들을 부르지 않으므로 무해하지만 정본은 아니다",
     "WEMath": "smoothStep/mix/deg2rad/rad2deg 4개 — 실제 wemath.js 와 표면 일치. 갭 없음",
     "WEVector": "angleVector2/vectorAngle2 2개 — wevector.js 와 일치. 갭 없음",
-    "WEColor": "rgb2hsv/hsv2rgb 2개. wecolor.js 는 normalizeColor/expandColor 도 export 한다",
+    "WEColor": "rgb2hsv/hsv2rgb/normalizeColor/expandColor 4개 — wecolor.js 의 export 전부를 심이 낸다(2026-08-20 에 뒤 둘을 메웠다). 갭 없음",
     "input.cursorScreenPosition": "Waple 은 Vec3 로 만든다. d.ts 는 Vec2 — .z 접근 시 동작이 갈린다",
     "engine.userProperties": "Waple 은 원시값 맵으로 주입한다 — _Internal.convertUserProperties 결과와 일치(정합)"
    },

@@ -24,7 +24,8 @@ private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
-public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, WKNavigationDelegate, WKScriptMessageHandler,
+public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMediaSettingsApplying,
+                                WKNavigationDelegate, WKScriptMessageHandler,
                                 NSWindowDelegate {
     public enum Mode { case web; case videoFallback }
 
@@ -53,9 +54,18 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, WKNaviga
     /// 재생정책 음소거(stage 3①). `<video>`/`<audio>` 의 `muted` 만 건드린다 —
     /// 사용자 음량(`volume`)은 그대로 두므로 음소거를 풀면 원래 값이 돌아온다.
     private var policyMuted = false
-    /// `.videoFallback` 로 마운트할 때 페이지에 심은 음량. 오디오 축이 "우리가 소리를 내는가" 를
-    /// 이 값으로 정확히 답한다(`.web` 은 알 수 없어 과대보고 — `isPlayingAudio` 주석).
+    /// `.videoFallback` 페이지에 현재 반영돼 있는 음량. 마운트 때 HTML 에 심고, 그 뒤
+    /// `applyLiveMediaSettings(volume:rate:)` 가 라이브로 갱신할 때 함께 갱신한다
+    /// (r2-H8 이전에는 마운트 시점 1회로 끝이라 이 값도 페이지도 설정 변경을 못 따라갔다).
+    /// 오디오 축이 "우리가 소리를 내는가" 를 이 값으로 정확히 답한다(`.web` 은 알 수 없어
+    /// 과대보고 — `isPlayingAudio` 주석).
     private var mountedVolume: Float = 0
+    /// `.videoFallback` 페이지에 현재 반영돼 있는 배속(r3-M14). 음량과 같은 규약으로
+    /// 마운트 시점에 심고 라이브 갱신을 따라간다. `.web` 에서는 쓰이지 않는다.
+    private var mountedRate: Float = 1
+    /// WebKit 내비게이션 실패 기록(r3-M38). 형제 `VideoRenderer.lastError` 와 같은 역할 —
+    /// 진단·테스트가 마지막 실패를 되읽는 자리다.
+    private(set) var lastError: Error?
     private var userSelectedResourceOverrides: [String: String] = [:]
 
     // MARK: F840 — 페이지 유발 파일시스템 열거 상한
@@ -97,6 +107,7 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, WKNaviga
         // occlusionObserver/mouseMonitor 핸들이 덮여 teardown 로도 해제 불가능하게 누수된다
         // (SceneRenderer.mount/VideoRenderer.mount 와 대칭). teardown 은 멱등이라 첫 마운트도 안전.
         teardown()
+        lastError = nil   // r3-M38: 새 마운트는 새 시도다(VideoRenderer.mount 의 같은 자리와 대칭)
         guard let fileName = WallpaperPathSecurity.normalizedRelativePath(project.fileName),
               let fileURL = WallpaperPathSecurity.containedFileURL(fileName, root: project.folderURL) else {
             throw RendererError.assetMissing
@@ -172,10 +183,14 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, WKNaviga
             guard let baseURL = URL(string: base) else { throw RendererError.assetMissing }
             // F576: 정상 경로(VideoRenderer)와 같은 배경별 음량을 폴터 <video> 에도 적용.
             // 감사 V06: 화면 맞춤(fitMode)도 정상 경로와 같은 설정을 object-fit 으로 전달.
+            // r3-M14: 배속도 같은 소스에서 심는다 — 종전엔 이 경로만 배속 축이 통째로 빠져
+            // 항상 1× 였다.
             mountedVolume = VideoSettings.volume(id: project.id)
+            mountedRate = VideoSettings.rate(id: project.id)
             web.loadHTMLString(
                 VideoFallbackHTML.html(forVideoFile: fileName,
                                        volume: mountedVolume,
+                                       rate: mountedRate,
                                        fitMode: SceneRenderSettings.fitMode),
                 baseURL: baseURL
             )
@@ -232,8 +247,14 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, WKNaviga
         //
         // 이게 오래 남은 이유는 **오라클의 사각지대**였기 때문이다: `LocalizationCoverageTests` 는
         // `Sources/Waple` 만 훑었고 이 파일은 `Sources/WapleRender` 다. 같은 커밋에서 스캔 루트를
-        // `Sources/` 전체로 넓히고 `.title = "…"` 대입 패턴을 추가했다 — 실측 결과 `Sources/Waple`
-        // 밖의 한국어 UI 리터럴은 **이 한 건뿐**이라 넓혀도 소음이 없다.
+        // `Sources/` 전체로 넓히고 `.title = "…"` 대입 패턴을 추가했다.
+        //
+        // **[정정 r2-H17] "밖의 한국어 UI 리터럴은 이 한 건뿐" 은 자기확인이었다.** 그 도수는
+        // 방금 사각지대가 드러난 **바로 그 스캐너**로 잰 것이라 순환이다 — 스캐너가 못 보는
+        // 형태는 도수에도 안 잡힌다. 실제로 형제 파일 `WebInputProxyView.draw(_:)` 에
+        // `NSString.draw` 로 그리는 한국어 안내 문구가 하나 더 있었고(네 패턴 전부 통과),
+        // 지금은 그것도 `NSLocalizedString` 으로 감쌌다. **패턴으로 잰 도수를 "전부다" 의
+        // 근거로 쓰지 마라** — 패턴이 못 보는 형태가 남는다는 사실이 이 자리의 교훈이다.
         win.title = NSLocalizedString("웹 월페이퍼 조작 (실시간 연동)",
                                       comment: "웹 월페이퍼 입력 미러 창 제목")
         win.contentView = proxy
@@ -338,6 +359,65 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, WKNaviga
     public func setPolicyMuted(_ muted: Bool) {
         policyMuted = muted
         setMutedJS(muted)
+    }
+
+    // MARK: - F820 라이브 반영 (r2-H8 · r3-M14)
+
+    /// 사용자 음량/배속 변경을 **마운트된 페이지에 그대로** 먹인다.
+    ///
+    /// 종전 `AppDelegate.applyLiveVideoSettings` 는 `renderers.compactMap { $0 as? VideoRenderer }`
+    /// 로 걸러서 이 클래스에 **한 번도 닿지 않았다**. ffmpeg 이 없고 배경이 webm/mkv 면
+    /// `RendererFactory` 가 `WebRenderer(mode: .videoFallback)` 를 돌려주는데, 그 페이지의 음량은
+    /// 마운트 시점 HTML 에 구워지므로 하단 바에서 음량을 바꿔도 **체크마크만 옮겨가고 소리는
+    /// 그대로**였다. 배속은 그 위에 아예 심긴 적조차 없었다(r3-M14).
+    ///
+    /// `.web` 은 대상이 아니다 — 웹 벽지의 소리는 페이지가 자기 설정으로 들고 있고
+    /// (`isPlayingAudio` 주석의 "`.web` 은 모른다"와 같은 이유), 하단 바도 그 유형에는 음량
+    /// 컨트롤 자체를 열지 않는다(`NowPlayingSubtitle.showsVolumeControl` = video·scene).
+    public func applyLiveMediaSettings(volume: Float, rate: Float) {
+        guard mode == .videoFallback, let webView else { return }
+        mountedVolume = max(0, min(1, volume))
+        mountedRate = max(VideoSettings.minRate, min(VideoSettings.maxRate, rate))
+        webView.evaluateJavaScript(
+            Self.liveMediaJS(volume: mountedVolume, rate: mountedRate, policyMuted: policyMuted)
+        ) { _, error in
+            if let error {
+                NSLog("%@", "[Waple] live media settings injection failed: \(error)")
+            }
+        }
+    }
+
+    /// 라이브 반영 주입문 — **순수**라 WKWebView 없이 오라클을 쓸 수 있다(`muteJS` 와 같은 형태).
+    ///
+    /// **정책 음소거 중에는 `muted` 를 건드리지 않는다.** `muteJS` 가 요소마다 정책 이전 값을
+    /// `__wapleWasMuted` 에 적어 두고 해제할 때 그 값으로 되돌리기 때문이다. 여기서 `muted` 를
+    /// 직접 쓰면 두 층이 같은 비트를 다투게 되고, 정책 해제가 **옛** 사용자 의도를 복원해
+    /// 방금 올린 음량이 조용히 사라진다. 그래서 정책이 켜져 있으면 새 사용자 의도를
+    /// `__wapleWasMuted` 쪽에 적는다 — 해제 시 그 값이 살아난다.
+    ///
+    /// `defaultPlaybackRate` 를 함께 세우는 이유는 `VideoFallbackHTML` 의 watchdog 과 같다:
+    /// `onerror` 의 `src` 재설정이 `playbackRate` 를 기본값으로 되돌린다.
+    static func liveMediaJS(volume: Float, rate: Float, policyMuted: Bool) -> String {
+        let v = String(format: "%.3f", max(0, min(1, volume)))
+        let r = String(format: "%.3f", max(VideoSettings.minRate, min(VideoSettings.maxRate, rate)))
+        let wantsMute = volume <= 0 ? "true" : "false"
+        let muteBranch = policyMuted
+            ? "el.__wapleWasMuted = \(wantsMute); el.muted = true;"
+            : "el.__wapleWasMuted = undefined; el.muted = \(wantsMute);"
+        return """
+        (function () {
+          var els = document.querySelectorAll('video, audio');
+          for (var i = 0; i < els.length; i += 1) {
+            var el = els[i];
+            try {
+              el.volume = \(v);
+              el.defaultPlaybackRate = \(r);
+              el.playbackRate = \(r);
+              \(muteBranch)
+            } catch (e) {}
+          }
+        })();
+        """
     }
 
     /// 오디오 축의 뺄셈 항.
@@ -449,6 +529,39 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, WKNaviga
         if hadConsumers {
             synchronizeEffectivePause()
         }
+    }
+
+    // MARK: - 내비게이션 실패 (r3-M38)
+
+    /// 커밋 **전** 실패(스킴 핸들러가 자산을 못 내줌·로드 거부 등).
+    /// 형제 `VideoRenderer` 는 재생/변환 실패마다 `NSLog` + `lastError` + 알림을 남기는데
+    /// 이 클래스만 `didFail*` 구현이 0건이라, WebKit 이 실패하면 **검은 화면 + 무표시** 였다.
+    public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+                        withError error: Error) {
+        recordNavigationFailure(error, phase: "provisional")
+    }
+
+    /// 커밋 **후** 실패(문서 로드 중단).
+    public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        recordNavigationFailure(error, phase: "navigation")
+    }
+
+    /// 실패 기록 + 표면화 한 자리.
+    ///
+    /// **취소는 실패가 아니다.** `teardown()`·재마운트·`loadHTMLString` 재호출은 진행 중이던
+    /// 내비게이션을 `NSURLErrorCancelled(-999)` 로 끝낸다 — 정상 교체마다 배너가 뜨면 알림
+    /// 채널이 못 쓰게 된다. 그 코드만 걸러 로그로도 남기지 않는다.
+    ///
+    /// **자동 재시도는 하지 않는다.** 이 경로의 흔한 원인(자산 없음·경로 봉쇄 위반)은 결정적이라
+    /// 재로드가 같은 실패를 무한 반복한다. 페이지 내부의 미디어 오류는 `VideoFallbackHTML` 의
+    /// watchdog(`onerror` → `src` 재설정)이 이미 따로 덮는다.
+    private func recordNavigationFailure(_ error: Error, phase: String) {
+        let ns = error as NSError
+        guard !(ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled) else { return }
+        lastError = error
+        NSLog("%@", "[Waple] web wallpaper \(phase) failed: \(error)")
+        NotificationCenter.default.post(name: .wapleWebWallpaperFailed, object: nil,
+                                        userInfo: ["error": error])
     }
 
     /// 톱/서브프레임 내비게이션 게이트.
@@ -831,6 +944,7 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, WKNaviga
         pausedManually = false
         pausedByOcclusion = false
         mountedVolume = 0
+        mountedRate = 1
         // `policyMuted` 는 **남긴다** — 정책은 렌더러가 아니라 앱 전역의 상태다
         // (`VideoRenderer.teardown` 의 같은 판단과 짝).
         hasAudioListener = false
@@ -842,4 +956,12 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, WKNaviga
         webView?.removeFromSuperview()
         webView = nil
     }
+}
+
+extension Notification.Name {
+    /// r3-M38: 웹 배경의 WebKit 내비게이션 실패(자산 없음·로드 거부·문서 로드 중단) 직후 post.
+    /// userInfo["error"]: Error. 형제 `.wapleVideoPlaybackFailed`(비디오 축)와 같은 역할이고,
+    /// 앱 계층(`AppDelegate`)이 구독해 배너로 표면화한다 — 종전엔 이 축의 발행자가 아예 없었다.
+    /// 취소(`NSURLErrorCancelled`)는 발행하지 않는다(`recordNavigationFailure` 주석).
+    public static let wapleWebWallpaperFailed = Notification.Name("wapleWebWallpaperFailed")
 }

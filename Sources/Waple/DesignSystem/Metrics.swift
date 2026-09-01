@@ -16,11 +16,23 @@ import SwiftUI
 /// - 모서리·테두리·그림자·재질 → `Surface`
 /// - 시스템 접근성 설정 조회 → `SystemPreference`
 ///
-/// 실측(2026-08-17): 아래 20개 상수 중 실제로 여러 화면이 공유하는 것은 4개뿐이고
-/// (`gap`·`tileCorner`·`tileThumbHeight`·`gridSpacing`) 11개는 사용처가 하나다.
-/// 단일 사용처 상수는 토큰이라기보다 "그 화면의 숫자에 이름을 붙인 것" 이다 — 나쁘지 않지만,
-/// 공유 토큰과 섞여 있으면 무엇이 규약이고 무엇이 지역 상수인지 흐려진다. 정리는 개편 마감
-/// 단계(Phase 3)에서 판단한다.
+/// **[정정 r3-M25] 자기 실측이 스테일했다.** 종전 이 문단은 "아래 20개 상수 중 …
+/// 공유하는 것은 4개(`gap`·`tileCorner`·`tileThumbHeight`·`gridSpacing`)" 라고 적었는데,
+/// 두 수가 다 틀렸다. 다시 잰다(2026-09-01, 모집단 = `Sources/` 전체의 `Metrics.<이름>` 참조):
+///
+/// - 상수는 **28개**다(`grep -c 'static let'`).
+/// - 예시로 든 "공유 토큰" 넷 중 **`gap` 과 `tileCorner` 은 프로덕션 참조가 0건**이다
+///   (`Metrics.gap` 이 걸리는 두 자리는 `Space.swift` 의 **주석** 안이고, `Metrics.tileCorner`
+///   은 어디에서도 안 쓰인다 — 둘 다 `Space`/`Surface` 로 이관하며 남긴 별칭이다).
+///   실제로 여러 화면이 공유하는 것은 `tileWidth`·`tileThumbHeight`(각 4) ·
+///   `settingsSize`(7) · `windowMin`(5) · `gridSpacing`·`gridRowSpacing`(각 3) 쪽이다.
+/// - 참조 0건이 하나 더 있다: `searchFieldWidth`.
+///
+/// 그래도 지우지 않는다 — 별칭 셋(`gap`·`tileCorner`)은 이관 경로를 문서로 남기는 값이고,
+/// 삭제는 이 파일 하나로 끝나지 않는다. 요지는 종전과 같다: 단일 사용처 상수는 토큰이라기보다
+/// "그 화면의 숫자에 이름을 붙인 것" 이라, 공유 토큰과 섞여 있으면 무엇이 규약이고 무엇이
+/// 지역 상수인지 흐려진다. 정리는 개편 마감 단계(Phase 3)에서 판단한다.
+/// **도수를 다시 적을 때는 모집단(`Sources/` 전체)과 잰 날짜를 함께 적어라.**
 enum Metrics {
     // 그리드 타일(16:10 썸네일 + 아래 제목)
     static let tileWidth: CGFloat = 200
@@ -68,11 +80,17 @@ enum Metrics {
     static let keyGateTextWidth: CGFloat = 420
 
     // 설정 창 (SP5′)
-    // ⚠️ 종전 주석 "5섹션+푸터가 스크롤 없이 한눈에" 는 **스테일하고, 지금은 실제로 잘린다**.
-    // 섹션이 6개로 늘었는데 SettingsView 가 .frame(height:)로 이 값을 고정하고 창도 리사이즈
-    // 불가(styleMask 에 .resizable 없음)라, 마지막 '에셋·도구' 섹션이 화면 밖으로 밀린다
-    // (2026-08-17 실측). 높이를 키우는 게 아니라 스크롤 가능하게 만드는 것이 옳다 — 항목은
-    // 앞으로도 늘고, Dynamic Type 큰 글씨에서는 어떤 고정 높이도 결국 넘친다(F090 선례).
+    // **[정정 r3-M22] 이 자리에 있던 경고는 전제 둘이 다 거짓이 됐다.**
+    // 종전 문구는 "SettingsView 가 .frame(height:)로 이 값을 고정하고 창도 리사이즈 불가
+    // (styleMask 에 .resizable 없음)라 마지막 '에셋·도구' 섹션이 화면 밖으로 밀린다" 였다.
+    // 지금 트리에서는 둘 다 성립하지 않는다:
+    //  · `AppDelegate` 의 설정 창 `styleMask` 에 `.resizable` 이 **있다**.
+    //  · `SettingsView.body` 는 고정 높이가 아니라
+    //    `.frame(minHeight:idealHeight:maxHeight: .infinity)` 로 가변이다(그 뷰의 긴 독스트링이
+    //    왜 그렇게 바뀌었는지를 적어 두고 있다).
+    // 그래서 이 값은 "창을 열 때의 **이상** 높이" 이지 상한이 아니다. 잘림은 해소됐고,
+    // 남은 규약만 적어 둔다: 섹션이 늘어도 이 숫자를 키워 대응하지 마라 — Dynamic Type 큰
+    // 글씨에서는 어떤 고정 높이도 결국 넘치고, 폼은 이미 스스로 스크롤한다(F090 선례).
     static let settingsSize = NSSize(width: 560, height: 820)
 
     // 최초 실행 온보딩 시트 (앱셸 스코프 B)

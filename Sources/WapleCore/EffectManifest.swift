@@ -499,7 +499,9 @@ public struct EffectManifest: Equatable {
         functions.first { $0.name == name }
     }
 
-    /// WE 의 JSON 파서는 관용이다 — 자기 자산이 그 관용에 의존한다. 동봉 WEAssets 실측:
+    /// WE 의 JSON 파서는 관용이다 — 자기 자산이 그 관용에 의존한다. 동봉 WEAssets 실측
+    /// (모집단 = `WEAssets/effects/**` 의 effect.json **122개**. WEAssets 전수는 128 로
+    /// `presets/` 4 · `scenes/` 2 가 더 있다 — 이 절의 도수는 전부 122 기준이다):
     /// effect.json 122개 중 **27개가 RFC 엄격 파스에 실패**한다(최상위 `fluidsimulation` 1개는
     /// `dependencies` 배열의 트레일링 콤마, 나머지 26개 preview 는 `//` 줄 주석). 27개 전부
     /// 아래 전처리로 복구된다.
@@ -538,8 +540,12 @@ public struct EffectManifest: Equatable {
         var passes: [Pass] = []
         for p in rawPasses {
             var binds: [Bind] = []
-            for b in (p["bind"] as? [[String: Any]]) ?? [] {
-                guard let name = b["name"] as? String, let idx = safeInt(b["index"]), idx >= 0 else { continue }
+            // r3-O11: 바로 위 `rawPasses` 와 **같은 원소별 폴백**이다. 종전 `as? [[String: Any]]` 는
+            // 배열 전체 캐스트라 원소 하나가 비객체면 그 패스의 bind 가 전량 소실됐다(passes 만
+            // 고쳐지고 bind/fbos 는 남아 있던 비대칭).
+            for raw in (p["bind"] as? [Any]) ?? [] {
+                guard let b = raw as? [String: Any],
+                      let name = b["name"] as? String, let idx = safeInt(b["index"]), idx >= 0 else { continue }
                 binds.append(Bind(name: name, index: idx, conditions: parseConditions(b["conditions"])))
             }
             passes.append(Pass(material: p["material"] as? String,
@@ -558,9 +564,16 @@ public struct EffectManifest: Equatable {
         // X-①-sweep: **개수**도 상한을 둔다. 종전엔 치수(8192)만 클램프했는데, 소비처
         // (`SceneRendererFrameEncoder.swift:1958-1963`, `:301-315`)가 선언된 FBO 를 **사용 여부와
         // 무관하게 매 프레임 체크아웃**하므로 개수만으로 GPU 메모리와 프레임 시간을 밀어낼 수 있다.
-        // 64 인 이유: 동봉 자산 101개 effect.json 의 최대가 한 자릿수라 정상 저작은 근처에도 안 온다.
+        // 64 인 이유(r4-20 — 모집단 라벨): **동봉 코퍼스** `Sources/WapleRender/Resources/WEAssets`
+        // 의 effect.json **128개 전수**(= `effects/` 122 + `presets/` 4 + `scenes/` 2)를 2026-09-01
+        // 에 다시 세면 `fbos` 개수 분포가 {0:105, 1:5, 2:16, 9:2} 이고 최대는 **9**
+        // (`effects/fluidsimulation`)다. 즉 정상 저작은 64 근처에도 안 온다. (종전 이 줄의 "101개"
+        // 는 라벨 없는 부분집합이었고 지금 트리의 어떤 모집단과도 맞지 않는다 — 같은 파일이
+        // 다른 자리에서 쓰는 122 는 `effects/` 서브트리, 파일 헤더 표의 128 은 WEAssets 전수다.)
         let maxFBOs = 64
-        for f in (obj["fbos"] as? [[String: Any]]) ?? [] {
+        // r3-O11: bind 와 같은 이유로 원소별 폴백.
+        for raw in (obj["fbos"] as? [Any]) ?? [] {
+            guard let f = raw as? [String: Any] else { continue }
             guard fbos.count < maxFBOs else { break }
             // X-⑧: 원본은 `name` **또는** `format` 이 없거나 문자열이 아니면 그 FBO 선언을 통째로
             // 버린다(`0x1401e7440`/`0x1401e744f` → `jne 0x1401e7964`, 벡터에 push 안 함).

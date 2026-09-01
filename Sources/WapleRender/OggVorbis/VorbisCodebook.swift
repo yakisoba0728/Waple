@@ -98,6 +98,17 @@ struct VorbisCodebook {
             // 다 읽은 뒤에야 EOP 를 봤기 때문에, 100바이트짜리 setup 패킷 하나가
             // entries*dimensions(상한 2^24) 개의 Double = 134MB 할당을 그대로 유발했다.
             // 남은 비트로 lookupValues×valueBits 를 채울 수 없으면 어차피 EOP 이므로 지금 거절한다.
+            //
+            // **[정정 r4-29] 이 게이트가 덮는 것은 `multiplicands` 뿐이다.** 바로 아래
+            // `reconstructVQ` 가 잡는 `out` 은 `entries * dimensions` 크기이고 그 수는 여기서
+            // 검증되지 않는다. `lookupType == 2` 면 두 수가 같아 게이트가 실효적으로 덮지만,
+            // `lookupType == 1` 은 `lookupValues = lookup1Values(entries, dimensions)`
+            // (≈ entries^(1/dimensions)) 라 `entries * dimensions` 보다 **훨씬 작게** 자란다 —
+            // 즉 패킷 크기 게이트를 통과하고도 그보다 큰 배열을 잡을 수 있다.
+            // 무한 폭발은 아니다: `VorbisDecoder` 의 `totalCells <= 1 << 24` 총량 캡이
+            // `entries * dimensions` 에 상한(≈67 MB, Float 기준)을 건다. 그래서 이 자리는
+            // "DoS 가드가 일관되게 방어한다" 가 아니라 **"두 축을 서로 다른 가드가 덮는다"** 로
+            // 읽어야 한다 — 총량 캡을 걷어내면 이 경로가 먼저 무너진다.
             if r.endOfPacket { throw VorbisError.corrupt("EOP before codebook VQ") }
             guard lookupValues > 0, lookupValues <= r.bitsRemaining / valueBits else {
                 throw VorbisError.corrupt("codebook VQ lookupValues \(lookupValues) exceeds packet")

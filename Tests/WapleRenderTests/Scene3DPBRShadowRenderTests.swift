@@ -148,7 +148,11 @@ final class Scene3DPBRShadowRenderTests: XCTestCase {
 
     // spot 콘 축이 평면 중앙을 향하는 합성 씬. 카메라 정면(+Z), 평면 scale 4로 프레임 전체를 채워
     // 모든 픽셀이 평면 위에 있음(콘 밖 어두운 픽셀이 배경 검정과 혼동되지 않도록). ambient=skylight=0.03
-    // 균일 플로어로 지오메트리 존재를 증명. 광원 forward=(0,0,-1)(Ry 180°) → 평면 중앙(0,0,0) 조준.
+    // 균일 플로어로 지오메트리 존재를 증명. 광원 forward=(0,0,-1)(Ry 90°) → 평면 중앙(0,0,0) 조준.
+    // **[2026-09-01] `angles` 픽스처만 갱신**: 라이트 forward 열이 col2(+Z)에서 col0(+X)로
+    // 정정돼(`Scene3DLighting.resolveLights` 방향 규약 절 — V1 패커 `glm::column(M, 0)`)
+    // 같은 월드 방향 (0,0,-1) 을 내는 각이 Ry 180° → Ry 90° 다. 월드 forward 는 불변이라
+    // 아래 실측 luminance 프로파일도 그대로다.
     private func spotScene(inner: Float, outer: Float) -> String {
         """
         {"camera":{"eye":"0 0 6","center":"0 0 0","up":"0 1 0"},
@@ -156,7 +160,7 @@ final class Scene3DPBRShadowRenderTests: XCTestCase {
                     "clearcolor":"0 0 0","ambientcolor":"0.03 0.03 0.03","skylightcolor":"0.03 0.03 0.03"},
          "objects":[
            {"id":1,"name":"receiver","model":"models/plane.mdl","origin":"0 0 0","scale":"4 4 4","castshadow":false},
-           {"id":2,"name":"spot","light":"lspot","origin":"0 0 4","angles":"0 3.14159265 0",
+           {"id":2,"name":"spot","light":"lspot","origin":"0 0 4","angles":"0 1.5707963 0",
             "color":"1 1 1","intensity":3,"radius":20,"exponent":2,
             "innercone":\(inner),"outercone":\(outer),"castshadow":false}
          ]}

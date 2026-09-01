@@ -196,7 +196,7 @@
     "consumedByWaple": [
      "bit1"
     ],
-    "consumeSite": "Sources/WapleRender/SceneRenderer3D.swift:2557 — `let worldspace = (sys.def.flags & 1) != 0` (빌보드 드로우 경로). **줄 번호는 조건식에서 되짚은 것이다** — 종전 :2050 · :2183 이 차례로 드리프트해 각각 무관한 줄을 가리켰다(정정 2026-08-20 · 2026-08-30). 다시 인용할 때도 줄 번호가 아니라 이 조건식으로 찾아라.",
+    "consumeSite": "Sources/WapleRender/SceneRenderer3D.swift:2591 — `let worldspace = (sys.def.flags & 1) != 0` (빌보드 드로우 경로). **줄 번호는 조건식에서 되짚은 것이다** — 종전 :2050 · :2183 이 차례로 드리프트해 각각 무관한 줄을 가리켰다(정정 2026-08-20 · 2026-08-30). 다시 인용할 때도 줄 번호가 아니라 이 조건식으로 찾아라.",
     "notConsumed": [
      "bit2",
      "bit4",
@@ -216,7 +216,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleRender/SceneRenderer3D.swift:2557",
+     "ref": "Sources/WapleRender/SceneRenderer3D.swift:2591",
      "note": "최상위 flags bit1(worldspace) 소비 자리 — 조건식 `(sys.def.flags & 1)` 으로 매 실행 되짚는다"
     },
     {

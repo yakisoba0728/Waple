@@ -38,16 +38,32 @@ struct LibraryFilterCriteria: Equatable {
 
 /// 그리드 표시용 순수 필터/정렬 — 스토어 순서(추가순)를 입력으로 받는다.
 enum LibraryFiltering {
+    /// - Parameters:
+    ///   - availableTags: "전체 선택 = 무필터" 판정의 모집단. **팝오버가 나열하는 것과 같은
+    ///     집합이어야 한다.** nil 이면 입력 엔트리에서 유도한다(순수 단위 테스트 편의 — 폴더
+    ///     스코프가 없는 호출부에서는 두 값이 같다).
+    ///   - availableRatings: 나이등급 축의 같은 것.
     static func apply(_ entries: [LibraryEntry], search: String,
                       criteria: LibraryFilterCriteria, sort: LibrarySortOrder,
-                      isFavorite: (String) -> Bool) -> [LibraryEntry] {
+                      isFavorite: (String) -> Bool,
+                      availableTags: Set<String>? = nil,
+                      availableRatings: Set<String>? = nil) -> [LibraryEntry] {
         var out = entries
         // 감사 V06: 선택 집합이 그 축의 available 전체를 덮으면(사이드바 '전체' 버튼 또는 개별 토글
         // 전부 체크) 그 축은 무필터로 간주 — 종전엔 이 상태도 필터 활성이라 태그/등급 없는 배경이 전부
-        // 숨겨졌다. available 목록은 입력 엔트리에서 유도(LibraryViewModel.availableTags/Ratings 와 동일
-        // 산식 — 필터가 켜진 상태에선 입력이 전체 엔트리라 같은 집합이 된다).
-        let allTags = Set(entries.flatMap { $0.tags ?? [] })
-        let allRatings = Set(entries.compactMap(\.contentRating))
+        // 숨겨졌다.
+        //
+        // **[r3-M24] 그 모집단은 호출부가 준다 — 입력 엔트리에서 유도하면 안 된다.**
+        // 종전 주석은 "필터가 켜진 상태에선 입력이 전체 엔트리라 같은 집합이 된다" 는 전제로
+        // `entries` 에서 유도했는데, 사이드바 폴더가 생기면서 그 전제가 깨졌다:
+        // `LibraryViewModel.filteredEntries` 는 `LibraryFolders.scoped` 로 **폴더 범위만** 넘긴다.
+        // 반면 태그/등급 팝오버 목록은 `availableTags`/`availableRatings`(전체 엔트리)에서 온다.
+        // 그래서 폴더를 고르면 좁아진 쪽이 모집단이 되고, 사용자가 팝오버에서 고른 집합이
+        // `isSuperset(of:)` 를 **쉽게** 만족해 그 축이 통째로 건너뛰어졌다 — 필터를 켰는데
+        // 아무것도 걸러지지 않는 조용한 붕괴다(극단: 폴더 안 배경에 태그가 하나도 없으면
+        // 모집단이 빈 집합이라 어떤 선택도 superset 이 된다).
+        let allTags = availableTags ?? Set(entries.flatMap { $0.tags ?? [] })
+        let allRatings = availableRatings ?? Set(entries.compactMap(\.contentRating))
         // 감사 V07: 유형 축도 동일 규약 — available 은 사이드바가 나열하는 고정 3종(동적 유도 불필요).
         // 3종 전부 체크 = 무필터 — entryType 이 .all 로 매핑되는 배경(preset 등)도 그대로 보인다.
         let allTypes: Set<LibraryTypeFilter> = [.scene, .video, .web]

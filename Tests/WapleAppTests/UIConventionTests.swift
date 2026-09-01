@@ -264,7 +264,23 @@ final class UIConventionTests: XCTestCase {
                 depth -= 1
                 chunk.append(ch)
                 i = body.index(after: i)
-                if depth == 0 && sawBody { return (chunk, i) }
+                if depth == 0 && sawBody {
+                    // **[정정 2026-09-01] `Button { 액션 } label: { 라벨 }` 을 여기서 잘라
+                    // 라벨을 통째로 잃고 있었다.**
+                    // 그 표기는 **액션** 클로저가 닫히는 이 지점에서 깊이 0으로 돌아온다.
+                    // 종전엔 그대로 반환해 chunk 에 `label:` 절이 없었고, 그러면
+                    // `labelRegion` 이 첫 괄호 그룹 — 액션 클로저 안의 함수 호출 인자
+                    // (예: `togglePlaylist(entry)`) — 만 보게 되어 문자열 리터럴이 0개가
+                    // 된다. 그 결과 호출부의 `guard !item.labels.isEmpty` 가 그 항목을
+                    // **조용히 건너뛰었다**. 바로 위 `topLevelItems` 의 doc 이 "label: 클로저의
+                    // Text 리터럴은 그 항목의 라벨이므로 항목에 귀속시킨다" 고 적어 둔 것과
+                    // 코드가 어긋나 있었다. 실재 면제 두 자리: `WallpaperGridView` 의
+                    // 재생목록 토글·즐겨찾기 토글(둘 다 `Button { … } label: { Text … }`).
+                    var j = i
+                    while j < body.endIndex, body[j].isWhitespace { j = body.index(after: j) }
+                    if body[j...].hasPrefix("label:") { continue }
+                    return (chunk, i)
+                }
                 continue
             }
             // 중첩·괄호 밖에서 개행을 만나고 이미 인자 목록이 닫혔으면 항목이 끝난 것
@@ -467,7 +483,18 @@ final class UIConventionTests: XCTestCase {
                 let sameChain = isChainLine(next) && indent(next) == depth
                 let comment = isCommentLine(next) && indent(next) >= depth
                 let closer = isChainCloser(next) && indent(next) == depth
-                let continuation = indent(next) > depth
+                // **[정정 2026-09-01] 더 깊은 줄을 전부 삼켜 자식 뷰의 접근성 표현이
+                // 부모의 준수 근거가 됐다.**
+                // 종전 `continuation = indent(next) > depth` 는 `.overlay { … }` 안의
+                // **자식 뷰가 붙인** `.accessibilityLabel(...)` 까지 체인에 흡수했다.
+                // 그러면 탭 대상 뷰 자신은 아무것도 선언하지 않았는데 자식 배지 하나로
+                // 준수 판정이 났다(합성 재현: 자식 오버레이에만 라벨을 둔 탭 뷰가 통과).
+                // 더 깊으면서 `.` 로 시작하는 줄은 **자식의 모디파이어 체인**이므로 흡수하지
+                // 않는다. 모디파이어 인자의 여러 줄 본문(`.overlay(…) {` 안의 뷰 식 등)은
+                // `.` 로 시작하지 않으므로 종전대로 이어진다.
+                // (현재 트리 실측: 이 조임 전후 모두 `Sources/Waple` 의 탭 자리 4곳이 전부
+                //  준수 — 오탐이 새로 생기지 않는다.)
+                let continuation = (indent(next) > depth && !isChainLine(next))
                     || next.trimmingCharacters(in: .whitespaces).isEmpty
                 guard sameChain || comment || closer || continuation else { break }
                 hi += 1

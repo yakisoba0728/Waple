@@ -158,6 +158,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // F555: 비디오 비동기 실패 Notification 구독 핸들(블록 옵저버는 retain 필요).
     private var videoFailureObserver: NSObjectProtocol?
+    /// r3-M38: 웹 배경의 WebKit 내비게이션 실패 구독. 비디오 축(`videoFailureObserver`)과
+    /// 대칭이고, 발행자는 `WebRenderer.recordNavigationFailure` 하나다.
+    private var webFailureObserver: NSObjectProtocol?
 
     // 최근 배경 서브메뉴(작업 6): 열 때마다 최신 목록으로 다시 채운다(NSMenuDelegate).
     private weak var recentMenu: NSMenu?
@@ -289,13 +292,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         libraryVM.onOpenSettings = { [weak self] in self?.openSettings() }
         libraryVM.onAdvancePlaylist = { [weak self] in self?.advancePlaylist() }
         libraryVM.onTogglePause = { [weak self] in self?.toggleGlobalPause() ?? false }
-        // w5d-settings-ia: 음량/배속 조절이 설정 창에서 하단 바로 이관 — SettingsViewModel 이 쓰던 것과
-        // 동일 소스(VideoSettingsTarget.projectIds)를 libraryVM 에도 주입.
-        libraryVM.videoTargetIds = { [weak self] in
-            guard let self else { return [] }
-            return VideoSettingsTarget.projectIds(currentProjectId: self.currentProjectId,
-                                                  activeVideoProjectIds: self.activeVideoProjectIds)
-        }
+        // w5d-settings-ia: 음량/배속 조절이 설정 창에서 하단 바로 이관 —
+        // 대상 선택은 mediaSettingsTargetIds() 한 자리로 모은다(그 함수 주석 참조).
+        libraryVM.videoTargetIds = { [weak self] in self?.mediaSettingsTargetIds() ?? [] }
         // F820: 음량/배속 변경은 살아있는 플레이어에 라이브 반영 — 종전 applyCurrentSelection()
         // 전체 리마운트는 mkv/webm 에서 ffmpeg 재변환 대기+재생 리셋(t=0)을 유발했다.
         libraryVM.onVideoSettingsChanged = { [weak self] in self?.applyLiveVideoSettings() }
@@ -330,6 +329,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MainActor.assumeIsolated {
                     _ = self.notify(String(format: NSLocalizedString("비디오를 재생할 수 없습니다: %@",
                                                                      comment: "비디오 비동기 실패"), name))
+                }
+            }
+        }
+
+        // r3-M38: 웹 배경의 WebKit 실패(자산 없음·로드 거부·문서 로드 중단)를 같은 배너로 표면화.
+        // 종전에는 `WebRenderer` 만 `didFail*` 구현이 0건이라 이 축의 발행자 자체가 없었고,
+        // 웹 배경이 안 뜨면 화면도 로그도 조용했다. 취소(`NSURLErrorCancelled`)는 발행자 쪽에서
+        // 이미 걸러진다 — 정상 교체마다 배너가 뜨면 채널이 못 쓰게 되기 때문이다.
+        // 형제 비디오 옵저버와 같은 이유로 메인으로 홉한다(발행 스레드 미보장).
+        webFailureObserver = NotificationCenter.default.addObserver(
+            forName: .wapleWebWallpaperFailed, object: nil, queue: nil
+        ) { [weak self] note in
+            let reason = (note.userInfo?["error"] as? Error)?.localizedDescription
+                ?? NSLocalizedString("알 수 없는 오류", comment: "웹 배경 실패 — 사유 미상")
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                MainActor.assumeIsolated {
+                    _ = self.notify(String(format: NSLocalizedString("웹 배경을 불러올 수 없습니다: %@",
+                                                                     comment: "웹 배경 로드 실패"), reason))
                 }
             }
         }
@@ -645,12 +663,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return applyResolved(global: nil, folderURL: nil, completion: completion)
     }
 
-    /// F820: 음량/배속 변경 라이브 반영 — 살아있는 VideoRenderer 의 AVPlayer.volume/defaultRate 를
-    /// 직접 조정해 전체 리마운트(mkv/webm 은 ffmpeg 재변환 대기+재생 리셋)를 피한다.
+    /// 하단 바 음량/배속 메뉴의 **대상** 배경 id 들.
+    ///
+    /// **노출 판정과 같은 소스를 쓴다.** 종전에는 두 결정이 갈라져 있었다 —
+    /// 노출(`NowPlayingSubtitle.showsVolumeControl`)은 하단 바가 **표시 중인 엔트리**의 유형을
+    /// 보고, 대상(`VideoSettingsTarget.projectIds`)은 마운트된 **동영상 전부**를 골랐다.
+    /// 멀티모니터에서 그 둘이 어긋난다: A 화면이 씬(전역 선택), B 화면이 할당된 동영상이면
+    /// 메뉴는 씬 때문에 열리는데 대상은 B 의 동영상이라 **씬 음량을 올리면 다른 화면 동영상의
+    /// 음량이 바뀌었다**(씬 자신은 대상 목록에 아예 없어 조용히 무시됐다).
+    ///
+    /// 그래서 표시 엔트리를 하단 바와 **같은 함수**(`displayedEntry`)로 구하고, 마운트된 화면
+    /// 중 **그 유형인 것만** 고른다. 같은 유형이 여러 화면에 있으면 전부 대상이다(설정 창
+    /// 시절부터의 "모니터별 할당 포함" 규약 유지).
+    ///
+    /// 아직 아무것도 마운트되지 않았으면(`rendererProjects` 비어 있음) 종전 소스로 떨어진다 —
+    /// F487 이 화면 재구성 중 이 목록을 선-소거하지 않는 이유와 같은 보호다.
+    private func mediaSettingsTargetIds() -> [String] {
+        let displayed = NowPlayingSubtitle.displayedEntry(
+            global: libraryVM.globalEntry,
+            assignedIds: NowPlayingSubtitle.sortedAssignedIds(monitorStore.all),
+            entries: libraryVM.entries)
+        if let displayed {
+            let type = WallpaperType.from(displayed.typeRaw)
+            let ids = rendererProjects.filter { $0.project.type == type }.map { $0.project.id }
+            if !ids.isEmpty { return VideoSettingsTarget.projectIds(currentProjectId: nil,
+                                                                    activeVideoProjectIds: ids) }
+        }
+        return VideoSettingsTarget.projectIds(currentProjectId: currentProjectId,
+                                              activeVideoProjectIds: activeVideoProjectIds)
+    }
+
+    /// F820: 음량/배속 변경 라이브 반영 — 살아있는 재생 객체를 직접 조정해 전체 리마운트
+    /// (mkv/webm 은 ffmpeg 재변환 대기+재생 리셋)를 피한다.
     /// 값 저장은 호출자(NowPlayingBar)가 이미 마쳤고, 마운트 중(변환 대기)인 렌더러는
     /// attachPlayer 시 새 값을 읽으므로 별도의 재적용은 필요 없다.
+    ///
+    /// **[r2-H8 · r3-M14] 대상이 `VideoRenderer` 하나가 아니다.** 종전 필터
+    /// `renderers.compactMap { $0 as? VideoRenderer }` 는 두 경로를 통째로 빠뜨렸다:
+    ///  · `WebRenderer(mode: .videoFallback)` — ffmpeg 이 없고 컨테이너가 webm/mkv 면
+    ///    `RendererFactory` 가 돌려주는 정식 재생 경로인데, 음량이 마운트 시점 HTML 에 구워져
+    ///    설정을 바꿔도 **메뉴 체크마크만 옮겨가고 소리는 그대로**였다. 배속은 그 경로에 심긴
+    ///    적조차 없었다.
+    ///  · 씬 오디오(`SceneRenderer.sceneAudio`) — `SceneAudioPlayer` 는 마운트 시점
+    ///    `settingVolume` 을 잡고 끝이라 같은 증상이었다(하단 바는 씬에도 음량을 연다 —
+    ///    `NowPlayingSubtitle.showsVolumeControl`).
+    /// 셋을 `LiveMediaSettingsApplying` 한 프로토콜로 모으고 값은 **호출부가 푼다** — 씬 경로가
+    /// 자기 프로젝트 id 를 들고 있지 않기 때문이다(프로토콜 선언 주석).
+    ///
+    /// id 는 `rendererProjects` 에서 온다. 그 선언부가 적어 둔 불변식대로 `renderers` 와
+    /// **같은 순서·같은 길이**라 `zip` 이 화면별로 정확히 짝지어진다 — 화면마다 다른 배경이
+    /// 붙어 있으면 화면별로 다른 값이 나가야 옳다(전역 하나로 밀면 A 화면 설정이 B 를 덮는다).
     private func applyLiveVideoSettings() {
-        renderers.compactMap { $0 as? VideoRenderer }.forEach { $0.applyLiveVideoSettings() }
+        for (renderer, slot) in zip(renderers, rendererProjects) {
+            guard let live = renderer as? LiveMediaSettingsApplying else { continue }
+            live.applyLiveMediaSettings(volume: VideoSettings.volume(id: slot.project.id),
+                                        rate: VideoSettings.rate(id: slot.project.id))
+        }
     }
 
     @discardableResult
@@ -991,21 +1059,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// secondary 후보 전용 단일 apply. `applyCurrentSelection`은 스테일한 **전역** 선택 실패에서
-    /// 화면별 할당 폴백을 한 번 더 여는 복구 경로인데, staging 후보 실패에 그 폴백을 쓰면
+    /// 화면별 할당 폴백을 한 번 더 여는 복구 경로인데, staging 후보 실패에 그 폴백을 통째로 쓰면
     /// `effectiveAssignment`가 같은 staging 값을 다시 읽어 동일 ffmpeg 변환을 2회 시도한다.
     /// 여기서는 RendererSwap 자체가 기존 렌더러를 보존하므로 후보를 정확히 한 번만 시도한다.
+    ///
+    /// **[r2-H3] 전역 선택이 스테일해도 후보는 마운트돼야 한다.** 종전에는 전역 preflight
+    /// (`projectForMount` + `RendererFactory.makeRenderer`)가 실패하면 곧장 `.failed` 를 반환했다.
+    /// 그 판정은 **후보 entryId 와 무관**해서, `currentFolderURL` 이 한 번 썩으면(폴더 외부
+    /// 삭제/이동) 부 화면의 모든 후보가 똑같이 실패했다. `PlaylistDriver.continueAdvance` 는
+    /// 동기 `.failed` 를 받으면 즉시 다음 후보로 재귀하므로 **한 틱에 셔플백 전체가 타 버리고**,
+    /// 커밋이 없어 다음 초에 같은 일이 반복된다(실패 경로에 통지가 없어 사용자에게는 조용하다).
+    ///
+    /// F482 가 `applyCurrentSelection` 에 넣어 둔 `global: nil` 폴백을 여기서도 되살린다 —
+    /// 전역만 떨어뜨리고 화면별 할당(= staging 후보 포함)으로 한 번 더 연다. 폴백은
+    /// `requestAssignedSelection` 을 그대로 쓴다: 마운트 가능한 슬롯이 하나도 없으면 열지 않는
+    /// F035/F036 롤백 보호가 그 안에 이미 있다(빈 슬롯 성공이 살아있는 렌더러를 teardown 하는
+    /// 역효과 차단). 전역 preflight 가 실패한 뒤라 후보는 여전히 **정확히 한 번만** 시도된다.
     private func requestStagedSecondarySelection(
         completion: @escaping (WallpaperApplyResolution) -> Void
     ) -> WallpaperApplyDisposition {
-        let global: WallpaperProject?
-        if let folder = currentFolderURL {
+        // 전역 preflight. 실패하면 **전역만 떨어뜨린다** — 후보는 자기 폴더로 계속 마운트된다.
+        let global: WallpaperProject? = currentFolderURL.flatMap { folder in
             guard let resolved = projectForMount(folderURL: folder),
-                  RendererFactory.makeRenderer(for: resolved) != nil else { return .failed }
-            global = resolved
-        } else {
-            global = nil
+                  RendererFactory.makeRenderer(for: resolved) != nil else { return nil }
+            return resolved
         }
-        return applyResolved(global: global, folderURL: currentFolderURL, completion: completion)
+        // 전역이 없는 상태로 여는 것은 F482 폴백과 같은 모양이라 같은 보호를 쓴다: 마운트 가능한
+        // 슬롯이 하나도 없으면 열지 않는다(빈 슬롯 "성공" 이 살아있는 렌더러를 teardown 하는
+        // 역효과 차단 — F035/F036 롤백 보호). `requestAssignedSelection` 을 부르지 않고 같은
+        // 판정을 여기 인라인하는 이유는 위 문단 그대로다: 그 함수는 **두 번째** applyResolved 를
+        // 여는 재시도 경로이고, 여기서는 후보를 정확히 한 번만 시도해야 한다.
+        if global == nil, !resolvedScreenProjectSlots(global: nil).contains(where: { $0.project != nil }) {
+            cancelPendingRendererApply()
+            return .failed
+        }
+        return applyResolved(global: global, folderURL: global == nil ? nil : currentFolderURL,
+                             completion: completion)
     }
 
     private func finishStagedPlaylistOverride(entryId: String, screenKey: String,
@@ -1169,7 +1258,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 키를 못 찾으면(마운트 뒤 그 화면이 빠졌고 재구성 전인 틱) 음수를 넘긴다 —
         // `PlaybackVerdict.isPaused` 가 음수를 거짓으로 떨어뜨리므로 "정책이 이 화면을 멈추라고
-        // 하지 않았다" 가 된다. 사라진 화면에 남의 결정을 먹이는 것보다 무동작이 옳다(:913 가드와
+        // 하지 않았다" 가 된다. 사라진 화면에 남의 결정을 먹이는 것보다 무동작이 옳다
+        // (`performScreensChanged` 의 F036/F035 롤백 보존 가드와
         // 같은 판단이고, 화면 변경은 `performScreensChanged` 가 0.5초 뒤 전체 재적용으로 정리한다).
         let decisions = RenderPauseComposition.decideAll(
             globallyPaused: pauseGate.isPaused,
@@ -1470,9 +1560,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 그 코드는 WapleRender(SceneRenderer)에 있고 이 파일에서 표현할 수 없다 — F486 을 유지하려면
     /// 그쪽이 뷰 생성 경로를 오프메인에서 부를 수 있는 형태로 남겨야 한다.
     nonisolated private func captureSceneStill(project: WallpaperProject, size: CGSize, scale: CGFloat, to dir: URL, output: URL) -> URL? {
-        // [2026-08-25] **팩토리를 거치지 않는다.** `RendererFactory.swift:13` 이 이 선택지를
-        // 직접 지정해 뒀다 — "캡처 경로가 씬 전용이므로 팩토리를 거치지 않고 SceneRenderer 를
-        // 직접 만들게 한다(호출부 수정)".
+        // [2026-08-25] **팩토리를 거치지 않는다.** `RendererFactory.makeRenderer` 의 머리말이
+        // 이 선택지를 직접 지정해 뒀다 — "캡처 경로가 씬 전용이므로 팩토리를 거치지 않고
+        // SceneRenderer 를 직접 만들게 한다(호출부 수정)".
         //
         // 판정 동치성의 근거: 이 함수는 `.sceneCapture` 소스에서만 불리고, `StillWallpaper` 는
         // 그 값을 **`case .scene:` 에서만** 낸다. 즉 여기 오는 프로젝트는 항상 씬이고,
@@ -1515,15 +1605,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         defer { renderer.teardown() }
         // [2026-08-27] **골든 하네스와 같은 정지 시퀀스**(BACKLOG "캡처 경로 잔여 갭" ②).
-        // `SnapshotPipeline.captureFrame`(:157-158)·`ProfilePipeline.runProfile`(:304)는 마운트
-        // 직후 이 둘을 부른다. 세 캡처 하네스 중 **여기만** 안 불렀다.
+        // `SnapshotPipeline.captureFrame`·`ProfilePipeline.runProfile` 은 마운트 직후 이 둘을
+        // 부른다. 세 캡처 하네스 중 **여기만** 안 불렀다.
+        // (r3-M18: 이 문단의 줄 번호 인용은 PR #8 에서 전부 어긋났다 — 심볼명으로 갈음한다.)
         //
         // **실측 정정 — 백로그가 적은 증상은 현행 코드에서 도달 불가다.** "그 순간의 스펙트럼이
         // 스틸 픽셀에 구워져 같은 씬이 매번 다른 이미지를 낸다" 는 서술은 과대평가였다. 근거 사슬:
-        //  ① `SceneRenderer.currentSpectrum` 의 선언 초기값이 `.silent` 다(SceneRenderer.swift:1385).
-        //  ② `setSpectrum*` 밖에서 그 값을 쓰는 자리는 `SystemAudioSpectrumProvider.onFrame`
-        //     두 줄뿐이다(SceneRenderer.swift:2170·:2178).
-        //  ③ 그 공급자는 `mount` 의 `if hasAudio, container.window != nil`(:2151) 안에서만
+        //  ① `SceneRenderer.currentSpectrum` 의 선언 초기값이 `.silent` 다.
+        //  ② `setSpectrum*` 밖에서 그 값을 쓰는 자리는 그 공급자(`SystemAudioSpectrumProvider`)의
+        //     `onFrame` 두 줄뿐이다.
+        //  ③ 그 공급자는 `SceneRenderer.mount` 말미의 `if hasAudio, mountWindow != nil` 안에서만
         //     만들어진다 — 위에서 만든 컨테이너는 어떤 창에도 안 들어가는 오프스크린 `NSView` 라
         //     `window` 가 항상 nil 이고, 따라서 이 인스턴스에는 스펙트럼 공급원이 아예 없다.
         //  ④ 이 인스턴스에 `setSpectrum*` 를 부르는 코드도 없다.
@@ -1534,10 +1625,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 그래도 맞춘다. 실효 게이트가 "창 유무" **하나뿐**인데 세 하네스가 서로 다른 모양으로
         // 그 사실에 기대고 있으면, 그 게이트가 흔들리는 날 여기 하나만 조용히 라이브 값을 굽는다.
         // 계약을 지키는 오라클은 `CaptureAudioDeterminismTests` 에 있다(이 함수가 앱 타깃 private
-        // 라 렌더러 수준에서 잡는다 — `CapturePointerPinTests:120` 과 같은 구조적 한계다).
+        // 라 렌더러 수준에서 잡는다 — `CapturePointerPinTests.testPinnedMountDoesNotStartMediaPoller`
+        // 와 같은 구조적 한계다).
         //
         // 남는 차이 하나: 골든 하네스는 `nowPlayingProvider = StoppedNowPlaying()` 도 건다.
-        // 여기서는 불필요하다 — 위 포인터 핀이 `startMediaPollingIfNeeded`(:953) 머리에서
+        // 여기서는 불필요하다 — 위 포인터 핀이 `SceneRenderer.startMediaPollingIfNeeded` 머리에서
         // 폴러 자체를 막으므로 이 인스턴스는 프로바이더를 한 번도 조회하지 않는다.
         renderer.pause()               // 라이브 입력(오디오 캡처·시차) 정지 → 결정성
         renderer.setSpectrum(.silent)  // 오디오-반응 효과를 무신호로 고정
@@ -1565,10 +1657,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("%@", "[Waple] \(message)")
         // [2026-08-25] **설정 창에도 흘린다.** 종전 배너는 라이브러리 창 전용이라, 트레이에서
         // 설정 창만 열어 놓고 "바탕화면 굽기"·"화면보호기 켜기" 를 누르면 성공도 실패도 화면
-        // 어디에도 안 떴다 — 로그(`NSLog`)에만 남았다. 이 함수는 이 앱에서 사실상 **실패 채널**이다
-        // (호출부: 마운트 실패 · 타입 미지원 · preset 해석 실패 · 웹 배경 없음 · 화면보호기 설치 실패 ·
-        //  비디오 비동기 실패 · 잠금화면 스틸 실패). 그래서 설정 창의 기존 상태 줄에 그대로 싣는다 —
-        // 그 줄은 이미 `ColorRole.destructive` 로 그려진다(`SettingsView:165`).
+        // 어디에도 안 떴다 — 로그(`NSLog`)에만 남았다. 그래서 설정 창의 기존 상태 줄에 그대로 싣는다.
+        //
+        // **[정정 r3-M37] 실패 전용 채널이 아니다.** 종전 이 문단은 "이 함수는 사실상 실패
+        // 채널이다" 라고 단언하며 호출부를 실패 계열로만 열거했고, 그 전제 위에서 설정 창
+        // 상태 줄이 `ColorRole.destructive`(빨강)로 그려지는 것을 근거로 삼았다. 그런데
+        // `setStillWallpaper` 는 `StillWallpaperNotice.message(successCount:totalScreens:)` 를
+        // 이 함수에 넘기고, 그 함수는 전 화면 성공 시 "정지 배경으로 설정했습니다" 를 돌려준다 —
+        // **성공 문구가 빨강으로 표시되고 있었다.** 순환 논증이기도 했다(빨강인 이유가 실패
+        // 전용이고, 실패 전용의 근거가 빨강). 색 쪽은 `SettingsView` 의 상태 줄에서 중립으로
+        // 고쳤다. 이 채널은 실패가 **다수**일 뿐 실패 전용이 아니다(성공/부분 성공도 온다) —
+        // 새 호출부를 추가할 때 "여긴 실패만 온다" 를 전제하지 마라.
         //
         // **`settingsWindow` 를 먼저 본다.** `settingsVM` 은 `lazy` 라 여기서 먼저 건드리면
         // 설정 창을 한 번도 안 연 세션에서도 조기 생성된다. 창이 있다는 것은 VM 이 이미 있다는 뜻이다.
@@ -1805,7 +1904,8 @@ extension AppDelegate {
 
     /// 종료 시 원본 복원(force-quit 엔 호출 안 됨 — 토글 오프도 복원 경로라 최선 노력으로 충분).
     /// F481: 자동 동기화가 켜진 채 종료될 때만 복원한다 — 동기화 OFF 에서의 수동 "정지 배경으로 설정"
-    /// 은 사용자의 명시적 1회 액션이라(:616 독스트링) 종료와 함께 되돌리면 그 의도와 모순된다.
+    /// 은 사용자의 명시적 1회 액션이라(`setStillWallpaper` 독스트링) 종료와 함께 되돌리면
+    /// 그 의도와 모순된다.
     /// (백업 자체는 F042 오염 방지용으로 수동 경로도 남긴다 — 복원 여부만 여기서 가드.)
     public func applicationWillTerminate(_ notification: Notification) {
         // 재생목록 경과시간을 마지막으로 한 번 쓴다. 틱 안의 주기 저장(60초)만 있으면 종료
@@ -1815,20 +1915,29 @@ extension AppDelegate {
 
         // [2026-08-28] 렌더러 teardown 을 종료 경로에 넣는다 — **여기만 비대칭이었다.**
         //
+        // **[정정 r3-M18] 이 문단의 줄 번호 인용은 PR #8(b883386e)에서 전부 썩었다.** 인용값은
+        // 그 부모 커밋(70a8a708) 트리에서는 정확했고, PR #8 이 같은 파일들을 크게 움직이면서
+        // 어긋났다(그런데 `docs/audit-r2-lanes/lane08-app.md` 는 "드리프트 0" 이라고 적었다 —
+        // 그 판정의 반례가 바로 이 문단이다). 줄 번호는 다음 커밋에 바로 썩으므로 **심볼명으로
+        // 바꿔 적는다.** 아래 인용에 줄 번호를 다시 넣지 마라.
+        //
         // `ScriptLocalStorage.flush()` 의 호출부는 리포 전체에 둘뿐이다:
-        // `SceneRenderer.swift:2797`(teardown 안) 과 `TextScriptEngine.swift:354`(deinit).
-        // 그런데 종료 경로가 teardown 을 안 불렀고, **프로세스 종료 시에는 ARC 해제가 일어나지
-        // 않으므로 deinit 도 안 돈다** — 즉 종료로 끝난 세션의 스크립트 저장소는 통째로 유실됐다.
-        // 대체 경로도 없다(실측: `applicationShouldTerminate` 0건 · `willTerminateNotification`
-        // 옵저버 0건 · `applicationWillResignActive` 0건 · `SceneRenderer.deinit(:1617-1622)` 은
-        // 모니터/폴러/오디오만 정리하고 teardown 도 flush 도 부르지 않음 · autosave 타이머 없음).
+        // `SceneRenderer.teardown()` 안의 `sceneScript?.localStorageStore?.flush()` 와
+        // `ScriptLocalStorage.deinit`(`TextScriptEngine.swift`). 그런데 종료 경로가 teardown 을
+        // 안 불렀고, **프로세스 종료 시에는 ARC 해제가 일어나지 않으므로 deinit 도 안 돈다** —
+        // 즉 종료로 끝난 세션의 스크립트 저장소는 통째로 유실됐다. 대체 경로도 없다(실측:
+        // `applicationShouldTerminate` 0건 · `willTerminateNotification` 옵저버 0건 ·
+        // `applicationWillResignActive` 0건 · `SceneRenderer.deinit` 은 모니터/폴러/오디오만
+        // 정리하고 teardown 도 flush 도 부르지 않음 · autosave 타이머 없음).
         //
-        // 유실 폭을 키우는 게 하나 더 있다: 저장 디바운스(`TextScriptEngine.swift:420-428`)가
-        // **max-wait 없는 트레일링**이라 기본 0.75초(`:333`)보다 잦게 쓰는 스크립트는 매번
-        // 재예약되어 애초에 한 번도 발화하지 않는다. 그 경우 유실은 "마지막 0.75초"가 아니라 전부다.
+        // 유실 폭을 키우는 게 하나 더 있다: 저장 디바운스(`ScriptLocalStorage.scheduleSave`)가
+        // **max-wait 없는 트레일링**이라 기본 0.75초(`ScriptLocalStorage.init` 의 `debounce`
+        // 기본값)보다 잦게 쓰는 스크립트는 매번 재예약되어 애초에 한 번도 발화하지 않는다.
+        // 그 경우 유실은 "마지막 0.75초"가 아니라 전부다.
         //
-        // 다른 teardown 호출부(`:610` RendererSwap · `:728` 적용 실패 정리 · `:1284` 캡처 defer)와
-        // 같은 형태다. **아래 guard 보다 앞이어야 한다** — 그 guard 는 정적 배경 복원 조건이지
+        // 다른 teardown 호출부(`applyResolved` 의 `RendererSwap.apply(teardown:)` ·
+        // `cleanupAfterFailedScreenRebuild` · `captureSceneStill` 의 `defer`)와 같은 형태다.
+        // **아래 guard 보다 앞이어야 한다** — 그 guard 는 정적 배경 복원 조건이지
         // 자원 정리와 무관하고, 복원 전에 우리 렌더를 내리는 것이 순서상으로도 맞다.
         renderers.forEach { $0.teardown() }
 
@@ -1891,6 +2000,11 @@ extension AppDelegate: NSMenuDelegate {
                 ? NSLocalizedString("재개", comment: "트레이 일시정지 항목 — 정지 중")
                 : NSLocalizedString("일시정지", comment: "트레이 일시정지 항목 — 재생 중")
             // w5d-tray: 하단 바 NowPlayingBar 의 .disabled(ids.count < 2) 와 대칭.
+            // **이 대입만으로는 부족하다(r3-M19)** — `NSMenu.autoenablesItems` 기본값이 true 라
+            // AppKit 이 그리기 직전 대상 응답 여부로 활성 상태를 다시 계산해 이 값을 덮는다.
+            // 실효 게이트는 아래 `validateMenuItem(_:)` 이고, 이 대입은 그 값이 아직 안 물어진
+            // 순간(메뉴 열기 직후 첫 그리기 전)의 초기값으로 남긴다. 두 자리가 같은 판정을
+            // 쓰도록 산식은 `PlaylistScheduling.canAdvance` 한 곳에서만 온다.
             nextMenuItem?.isEnabled = PlaylistScheduling.canAdvance(count: playlistStore.ids.count)
             // F840: 창 밖에서 발생한 마지막 실패를 트레이에서도 볼 수 있게 한다(없으면 숨김).
             noticeMenuItem?.title = pendingNotice ?? ""
@@ -1917,5 +2031,30 @@ extension AppDelegate: NSMenuDelegate {
         guard let id = sender.representedObject as? String,
               let entry = store.entries.first(where: { $0.id == id }) else { return }
         _ = libraryVM.apply(entry)   // 기존 적용 경로 재사용(선택 영속·강조 포함)
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// MARK: - 메뉴 항목 활성화 (r3-M19)
+// ═════════════════════════════════════════════════════════════════════════════
+extension AppDelegate: NSMenuItemValidation {
+    /// 트레이 "다음 배경" 의 실효 활성화 게이트.
+    ///
+    /// `menuNeedsUpdate` 에서 `isEnabled` 를 세우는 것만으로는 안 된다. `NSMenu.autoenablesItems`
+    /// 는 기본이 true 이고, 그 모드에서 AppKit 은 메뉴를 그리기 직전 **각 항목의 대상이 액션에
+    /// 응답하는지**로 활성 상태를 다시 계산한다 — `advanceFromMenu` 는 이 클래스가 응답하므로
+    /// 항상 참이 되어, 재생목록이 비어 있어도 항목이 눌린다(그 클릭은 조용한 no-op 이다).
+    /// 자동 활성화를 통째로 끄는(`autoenablesItems = false`) 대신 이 훅을 구현하는 이유는,
+    /// 끄는 순간 **나머지 항목 전부**의 활성 상태를 우리가 손으로 관리해야 하기 때문이다.
+    ///
+    /// 우리가 판정하는 항목은 하나뿐이고 나머지는 종전 동작(자동 활성화)을 그대로 돌려준다 —
+    /// 이 훅은 대상이 액션에 응답하는 항목에만 물어지므로, `true` 는 그 항목들에 대해
+    /// AppKit 의 기본 판정과 같은 값이다(무회귀).
+    ///
+    /// ⚠️ 실기 GUI 로는 확인하지 못했다(원 발견도 같은 유보를 달았다). 다만 어느 쪽이든
+    /// 이 구현은 안전하다: 자동 활성화가 문제가 아니었다면 이 훅은 같은 값을 한 번 더 말할 뿐이다.
+    public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem === nextMenuItem else { return true }
+        return PlaylistScheduling.canAdvance(count: playlistStore.ids.count)
     }
 }

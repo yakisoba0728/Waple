@@ -38,6 +38,21 @@ Waple 의 소스·정본은 `FUN_140xxxxxx` 형태로 wallpaper64.exe 의 주소
 원본이 아니라 주입본과 바이트 동일하다(실측). 리포가 사라지면 보정을 검증할 근거도
 사라지므로, 해시와 분류 결과를 여기 남긴다. 바이너리 자체는 커밋하지 않는다(독점 소프트웨어).
 
+## 인용 census 는 **리포가 인용을 하나 더 적을 때마다** 낡는다 (2026-09-01)
+
+`decomp.citedAddressClassification.total` 은 `CITATION_ROOTS` 아래의 `FUN_140xxxxxx` 고유
+주소 수다. 즉 **소스·테스트·문서에 근거 인용을 하나 추가하면 그 순간 정본이 낡고**
+`scripts/spec/check_cited_address_census.py` 가 rc=1 을 낸다(실측 2026-09-01:
+정본 95 vs 실측 104). 그런데 갱신은 원본 바이너리(+재생성 코퍼스)를 요구하므로 **CI 러너에서
+자가 복구가 불가능**하다 — 게이트가 빨간 채로 남고, 그 빨강은 "인용이 틀렸다" 가 아니라
+"인용이 늘었다" 다.
+
+그래서 값만 먼저 확인할 수 있게 `--census` 를 둔다. **바이너리 없이 돌고 아무것도 쓰지
+않는다.** 정본 갱신은 여전히 아래 「재실행」이며, 여러 사람이 동시에 인용을 늘리는
+라운드에서는 **전부 끝난 뒤 한 번** 돌리는 것이 맞다(중간에 돌리면 곧바로 다시 낡는다).
+
+    python3 scripts/spec/measure_decompilation_provenance.py --census
+
 ## 재실행
 
     WE_BINARY=/path/to/wallpaper64.exe \
@@ -149,6 +164,15 @@ def cited_addresses():
 
 
 def main():
+    if "--census" in sys.argv:
+        # 바이너리 없이 도는 진단 전용 경로 — **아무것도 쓰지 않는다.**
+        # `check_cited_address_census.py` 가 rc=1 을 낼 때 "정본이 낡았는가" 를
+        # 러너에서도 바로 확인할 수 있게 한다(위 doc 「인용 census …」 참조).
+        cited = cited_addresses()
+        print(f"인용 고유 주소 {len(cited)}개 "
+              f"(모집단: {' '.join(CITATION_ROOTS)} 아래 FUN_140xxxxxx)")
+        print("  정본 갱신은 원본 바이너리가 필요하다 — 위 「재실행」.")
+        return
     if not os.path.isfile(BIN):
         raise SystemExit(
             f"[decomp-provenance] 바이너리가 없다: {BIN}\n"
