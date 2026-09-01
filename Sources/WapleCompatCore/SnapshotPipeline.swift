@@ -209,6 +209,18 @@ public enum SnapshotPipeline {
 
     /// 셀프체크 패스를 별도 프로세스로 실행한다. 호출부가 이 함수 하나를 거치므로 테스트에서
     /// 실제 새 PID와 경로 인자 보존을 검증할 수 있다.
+    ///
+    /// **⚠️ 벽시계 상한이 없다**(r3-O4). `waitUntilExit()` 만 쓰므로 자식이 걸리면 영구 블록이다.
+    /// 리포의 `Process()` 7자리 중 이 자리 · 아래 `gitSHA()` · `AppDelegate` 의 헬퍼 기동
+    /// **3자리**가 무상한이고, 나머지 4자리(`FFmpegConverter.runOnce` ·
+    /// `NowPlayingProvider` · `ZipImporter` · `SteamCmdDownloader`)는 timeout 을 받는다.
+    /// 재현: `grep -rn 'Process()' Sources` → 7, 각 자리 앞뒤에서 `timeout` 유무 확인.
+    ///
+    /// 여기는 **의도적으로** 남긴다: 이 경로는 개발자가 손으로 돌리는 코퍼스 캡처 CLI 이고
+    /// (`--capture` 셀프체크), 자식이 부모와 같은 실행파일이라 걸리면 Ctrl-C 가 정답이다.
+    /// 상한을 붙이면 대형 코퍼스(수백 씬)의 정상 실행을 잘라 거짓 실패를 만든다.
+    /// 앱 수명주기 안에서 도는 자리(`AppDelegate`)에는 같은 논리가 성립하지 않는다 — 그쪽은
+    /// 이 레인 소유가 아니라 보고서로 넘긴다.
     static func launchSelfCheckPass(executableURL: URL, root: String, outDir: URL) throws -> Int32 {
         let process = Process()
         process.executableURL = executableURL
@@ -317,6 +329,8 @@ public enum SnapshotPipeline {
         }
         var entries: [SnapshotEntry] = [], empties: [String] = [], failures: [String] = []
         var nonDet: [String] = []
+        // H13(2026-09-01): 셀프체크 2차 캡처가 실제로 픽셀을 낸 씬 수. 아래 하한의 모집단이다.
+        var selfChecked = 0
 
         for folder in folders {
             let id = folder.lastPathComponent
@@ -346,15 +360,27 @@ public enum SnapshotPipeline {
                             try? fm.copyItem(at: src, to: dst)
                         }
                     }
-                    // 셀프체크: 위에서 독립 WapleCompat 프로세스가 산출한 같은 씬의
-                    // 프레임과 대조한다. 이제 프로세스별 RNG/해시 시드와 정적 캐시도 공유하지 않아
-                    // `deterministic`이 실행 간 재현성을 답한다. 실측으로 기존 프로세스 내 재마운트는
-                    // 실행 간 다른 29종을 전부 deterministic=true/selfMaxDiff=0으로 오분류했다.
+                    // 셀프체크: 위에서 독립 WapleCompat 프로세스가 산출한 같은 씬의 프레임과 대조한다.
+                    //
+                    // **[정정 2026-09-01] 이 필드가 답하는 축을 과장해 적고 있었다.**
+                    // 종전 주석은 "이제 … `deterministic`이 실행 간 재현성을 답한다" 였다. 이 저장소
+                    // 자신의 통제 실험이 그 반대를 이미 확정해 뒀다 —
+                    // `spec/golden/gate-analysis.json` 의 `oracle.gate.selfCheckIsIntraProcess`
+                    // (`empiricalClaimResolved.controlledProbe`: 같은 날 별도 프로세스 2회 캡처
+                    // runA/runB 각 170종 → **차이 0종**; `status`: "축이 '실행 간'이 아니라
+                    // **'세션 간'** 이다 — 같은 세션 안에서는 프로세스를 갈라도 전 코퍼스가 비트동일").
+                    // 즉 프로세스 분리는 **같은 세션 안에서는 그 29종을 원리적으로 못 잡는다.**
+                    // 이 필드가 실제로 답하는 것은 "같은 세션 안에서 두 프로세스가 같은 픽셀을
+                    // 내는가" 다. 세션을 건너뛴 재현성(불안정 29종, `oracle.nondet.unstableSet`)은
+                    // 여기서 재지 못하며 커밋된 기준선 대조에서만 드러난다.
+                    // 프로세스 분리 자체는 유지한다 — 정본의 `fixDirection` 이 지시한 방향이고
+                    // 프로세스 내 재마운트보다 좁게 틀리지 않는다. 다만 **잡는다고 적지 않는다.**
                     // F522: 스키마 규약(SnapshotEntry.selfMaxDiff "셀프체크 안 했으면 -1")에 맞춰 2차 캡처가
                     // 픽셀을 내지 못하면 -1 유지 — 종전엔 0 이 기록돼 "실행했는데 최대차 0"과 구분 불가였다.
                     var deterministic = true, selfMax = -1, note: String? = nil
                     let selfCheckPNG = selfCheckDir.appendingPathComponent("\(id).png")
                     if let rgba2 = pngToRGBA(selfCheckPNG, width: thumbW, height: thumbH) {
+                        selfChecked += 1
                         let sd = diffRGBA(rgba1, rgba2)
                         selfMax = sd.maxAbsDiff
                         deterministic = passes(sd, .selfConsistent)
@@ -389,10 +415,35 @@ public enum SnapshotPipeline {
         [snap capture] \(lbl)  (git \(sha))
           scenes=\(folders.count)  captured=\(entries.count)  empty=\(empties.count)  failed=\(failures.count)
           determinism: 결정 \(det) / 비결정 \(nonDet.count)\(nonDet.isEmpty ? "" : "  " + nonDet.prefix(12).joined(separator: ","))
+          셀프체크 성립: \(selfChecked)/\(entries.count) (2차 캡처가 픽셀을 낸 씬)
           empties(범위 밖 비디오-백드 추정 포함): \(empties.prefix(20).joined(separator: ","))\(empties.count > 20 ? " …+\(empties.count - 20)" : "")
           elapsed=\(String(format: "%.1f", dt))s  →  \(dst.path)
         """)
         if !failures.isEmpty { fputs("[snap] ⚠️ \(failures.count) 씬 마운트 실패: \(failures.joined(separator: ","))\n", stderr) }
+
+        // **H13(2026-09-01) 셀프체크 모집단 하한.**
+        // 종전엔 helper 프로세스가 못 뜨거나(위 catch) 곧바로 죽으면 `selfCheckDir` 에 PNG 가
+        // 하나도 없고, 그러면 아래 else 분기가 **기준선 전건**을 deterministic=false /
+        // selfMaxDiff=-1 로 내려놓은 뒤 그대로 exit 0 이었다. 그 매니페스트가 설치되면
+        // `--compare` 는 전건을 lax 로 판정한다(`Snapshot.swift` 의 goldenVerdict:
+        // strict mean 1.5 / frac 0.004 → lax 14.0 / 0.20). 즉 경고 한 줄만 stderr 로 흐르고
+        // 게이트가 통째로 관대해진 채 초록이 나온다 — 이 저장소가 반복해 물린 "모집단 0에서
+        // 나오는 초록" 그 자체다.
+        //
+        // 90% 인 이유는 `SnapshotCompare.runCompare` 의 compared 하한과 같다 — 판정 임계가
+        // 아니라 **하네스 온전성** 기준이라 느슨해도 잡으려는 것(전건/대량 소실)을 놓치지 않는다.
+        // 정수 산술로 쓴다(비율을 Double 로 냈다가 되돌리면
+        // `scripts/spec/check_int_narrowing.py` 가 막는 부류가 된다).
+        let minSelfCheckedPercent = 90
+        if !entries.isEmpty, selfChecked * 100 < entries.count * minSelfCheckedPercent {
+            let pct = selfChecked * 100 / entries.count
+            fputs("[snap] ❌ 셀프체크가 \(selfChecked)/\(entries.count) (\(pct)%) 씬에서만 성립 — "
+                  + "하한 \(minSelfCheckedPercent)% 미만. 별도 프로세스 셀프체크 helper 가 못 떴거나 "
+                  + "중간에 죽었다(WAPLE_SNAPSHOT_HELPER 확인). 이 매니페스트는 결정성 분류가 "
+                  + "없는 것과 같고, 설치되면 `--compare` 가 전건을 lax 임계로 판정한다 — "
+                  + "기준선으로 쓰지 마라.\n", stderr)
+            return 2
+        }
         return failures.isEmpty ? 0 : 1
     }
 

@@ -92,7 +92,12 @@ struct SelectionPanelView: View {
     private func heroContent(_ entry: LibraryEntry) -> some View {
         let url = viewModel.previewURL(for: entry)
         if let url, PreviewMedia.isAnimated(url) {
-            AnimatedPreviewView(url: url, animating: true).scaledToFill()
+            // r3-M67: `animating: true` 하드코딩이었다 — 인스펙터 히어로는 화면에서 가장 큰
+            // 프리뷰인데 열려 있는 내내 무조건 루프 재생했고, "동작 줄이기"를 한 번도 보지
+            // 않았다(`AnimatedPreviewView` 소비처 세 곳 어디에도 참조가 0건이었다).
+            // 조회는 `SystemPreference` 가 한다 — `Motion` 토큰이 곡선을 감싸는 것과 같은 이유로,
+            // 화면 코드가 접근성 설정을 직접 읽는 자리를 늘리지 않는다.
+            AnimatedPreviewView(url: url, animating: !SystemPreference.reduceMotion).scaledToFill()
         } else {
             // 플레이스홀더는 공유 썸네일이 내장한다 — 종전에는 이 자리에 같은 ZStack 을
             // 다시 적어서 채움 불투명도가 그리드(0.25)와 어긋나 있었다(0.3).
@@ -363,7 +368,7 @@ private struct InspectorDialogs: ViewModifier {
                 Button("제거(파일은 유지)", role: .destructive, action: remove)
                 Button("취소", role: .cancel) {}
             } message: {
-                Text("디스크의 원본 폴더는 삭제되지 않습니다. 재생목록·모니터 할당·즐겨찾기·폴더에서 함께 제거됩니다.")
+                Text("디스크의 원본 폴더는 삭제되지 않습니다. 재생목록·모니터 할당·즐겨찾기·폴더·속성 편집값이 함께 제거됩니다.")
             }
             .confirmationDialog("속성을 기본값으로 되돌릴까요?", isPresented: $confirmReset) {
                 Button("초기화", role: .destructive, action: reset)

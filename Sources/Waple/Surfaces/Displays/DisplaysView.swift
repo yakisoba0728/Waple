@@ -75,6 +75,16 @@ struct DisplaysView: View {
                                                        container: geo.size,
                                                        padding: Metrics.diagramPadding)
                 ZStack(alignment: .topLeading) {
+                    // ⚠️ r3-O16: `screens` 와 `rects` 는 **서로 다른 소스**를 위치로 재짝짓는다.
+                    // `screens` = `LibraryViewModel.screensProvider` → `desktopController.screenViews`
+                    // (Waple 이 실제로 붙인 화면 뷰의 순서), `rects` = 주입 클로저 `screenFrames()`
+                    // → `NSScreen.screens.map(\.frame)`(AppKit 순서). 둘은 다른 시점·다른 경로에서
+                    // 얻어지므로 순서가 어긋나면 **모니터 상자에 다른 화면의 이름·드롭 타깃이 붙는다**
+                    // (핫플러그·재배치 직후, 또는 screenViews 가 아직 새 화면을 못 만든 창).
+                    // 지금 고치지 않는 이유: 올바른 짝짓기는 `screenKey` 기준 조인이라
+                    // `screenFrames` 의 타입을 `[(key: String, frame: CGRect)]` 로 바꿔야 하고,
+                    // 그 주입점(`AppDelegate`)과 `DisplayDiagramLayout.rects` 가 이 레인 소유가
+                    // 아니다. 짝짓기 키를 넓히는 것이 해소 조건이다(보고 경계).
                     ForEach(Array(zip(screens, rects)), id: \.0.key) { screen, rect in
                         monitorBox(screen: screen, rect: rect)
                     }

@@ -14,7 +14,10 @@ extension SceneRenderer {
         let fov: Float
     }
 
-    /// 서브메시 1개 = 드로우콜 1개. vbuf 는 pos3+normal3+uv2 인터리브(8 float/정점), ibuf 는 u16.
+    /// 서브메시 1개 = 드로우콜 1개. vbuf 는 pos3+normal3+uv2 인터리브(8 float/정점),
+    /// **ibuf 는 u32** — `Model3D.indices` 가 `[UInt32]` 이고 이 파일의 드로 인코딩 4곳이 전부
+    /// `indexType: .uint32` 다(`drawIndexedPrimitives`/간접 드로 인자). 종전 독트링의 "u16" 은
+    /// 인덱스 폭이 `gateWord & 1` 로 u16/u32 를 가르게 되기 전의 서술이 남은 것이다.
     struct GPU3DMesh {
         let vbuf: MTLBuffer
         let ibuf: MTLBuffer
@@ -947,7 +950,13 @@ extension SceneRenderer {
                 if let v = combos.first(where: { $0.key.lowercased() == "refract" })?.value {
                     refract = ((v as? Int) ?? (v as? Double).flatMap { safeInt($0) } ?? 0) != 0
                 }
-                // M6(⑥): REFLECTION 콤보(WE 기본 0 — generic4.frag:3 [COMBO] default:0).
+                // r2-4.3-shader2 의 짝 인용(`genericparticle.frag:84` → 실제 `:86`,
+                // `ParticleShaders.swift` 의 노멀맵 주석)은 **이 레인 소유가 아니라 남겨 뒀다.**
+                //
+                // M6(⑥): REFLECTION 콤보(WE 기본 0 — generic4.frag 의
+                // `[COMBO] {"combo":"REFLECTION","default":0}` 선언. 종전 인용 `:3` 은 한 줄 밀려
+                // **FOG(default:1)** 를 가리켰다 — 값이 정반대라 오독을 유발했다. 지금 트리에서
+                // REFLECTION 은 `:4`, FOG 가 `:3` 이다).
                 if let v = combos.first(where: { $0.key.lowercased() == "reflection" })?.value {
                     reflection = ((v as? Int) ?? (v as? Double).flatMap { safeInt($0) } ?? 0) != 0
                 }
@@ -1177,10 +1186,17 @@ extension SceneRenderer {
     /// 꽂는다(법선은 메시 8f 정점의 오프셋 12 에 이미 있다). 즉 위 문단의 "MSL 컴파일 단계에서
     /// 실패" 는 `a_Normal` 한 이름에 대해서는 더 이상 사실이 아니다 —
     /// 다만 이 화이트리스트(env 게이트 `WAPLE_BUILTIN_MESH_SHADERS`)와 **독립**이라, 게이트가 꺼져
-    /// 있으면 여기 4개는 여전히 pkg 밖 소스라 이 경로에 들어오지 않는다. 저작레인 8건
-    /// (`audiophile` · `demon_core` · `dna_fragment` · `fantasticcar` · `ricepod` · `techno` ·
-    /// `shimmering_particles`)은 pkg 안 셰이더라 게이트와 무관하게 수혜를 받는다.
-    /// 도달 수치는 `docs/re/shader-uniforms.md` §7.6 의 표.
+    /// 있으면 여기 4개는 여전히 pkg 밖 소스라 이 경로에 들어오지 않는다.
+    ///
+    /// **저작레인 8건은 `.vert` 파일 8개다**(프로젝트 **6** · `docs/re/shader-uniforms.md` §7.6 표):
+    /// `audiophile/{audiophile,grid}.vert` · `demon_core/core.vert` · `dna_fragment/dna.vert` ·
+    /// `fantasticcar/{car,grid}.vert` · `ricepod/ricepod.vert` · `techno/technohex.vert`.
+    /// 전부 pkg 안 셰이더라 게이트와 무관하게 수혜를 받는다.
+    /// **[2026-09-01 정정]** 종전 열거는 프로젝트 이름 **7개**만 적어 놓고 "8건" 이라 했고,
+    /// 거기에 `shimmering_particles` 가 섞여 있었다 — 그 프로젝트의 `shaders/particle.vert` 는
+    /// attribute 가 `a_Position`/`a_TexCoordVec4`/`a_Color`/`a_TexCoordVec4C1`/`a_TexCoordC2` 뿐이라
+    /// **`a_Normal` 을 아예 갖지 않는다**(수혜 대상이 아니다). §7.6 의 정본 목록에도 없다 —
+    /// 코드 주석과 정본이 작성 시점(`bdf7a4e4`)부터 어긋나 있었다.
     private static let builtinMeshShaderWhitelist: Set<String> = ["generic", "generic2", "generic3", "generic4"]
 
     /// G①: 순수 판정 함수(테스트 편의 — env 뮤테이션 없이 화이트리스트/게이트 조합을 직접 검증).
@@ -1283,7 +1299,12 @@ extension SceneRenderer {
         var texWrap = [Float](repeating: 0, count: 8)
         var texFilter = [Float](repeating: 0, count: 8)
         texRes[0] = SIMD4(lw, lh, lw, lh)
-        let albedoName: String? = mat.customTextures.first { $0 != nil } ?? nil
+        // **[2026-09-01 r4-43]** 알베도는 **슬롯 0 전용**이다. 종전 `first { $0 != nil }`(첫 non-null)
+        // 은 슬롯을 무시해 `{"textures":[null,"foil_silver_normal"]}` 같은 재질에서 슬롯 1 노멀맵의
+        // 이름이 슬롯 0 의 `clampuvs`/`nointerpolation` 판정에 쓰였다 — `loadMesh3DMaterial` 이
+        // 이미 같은 결함으로 지목·수정한(③) 구규약이 이 자리에만 남아 있었다.
+        // 아래 aux 루프가 `mat.customTextures[slot]` 로 슬롯 인덱싱하는 것과도 이제 동형이다.
+        let albedoName: String? = mat.customTextures.first ?? nil
         texWrap[0] = resolveTextureClampUVs(albedoName, package: package) ? 1 : 0
         texFilter[0] = resolveTextureNoInterpolation(albedoName, package: package) ? 1 : 0
         var aux: [(slot: Int, tex: MTLTexture)] = []
@@ -1670,7 +1691,13 @@ extension SceneRenderer {
         let eye = cameraFrame.eye
         let ctr = cameraFrame.center
         let upv = cameraFrame.up
-        let fov = cameraFrame.fov
+        // **[2026-09-01 r3-M39]** 여기서 한 번 클램프한다. 이 지역변수는 소비처가 둘인데
+        // (`Scene3DMath.perspective(fovYDegrees:)` · 아래 `volumetricLightPass.encode(fovY:)`)
+        // 클램프는 `perspective` **안**(`CameraMotion.clampedFovDegrees`, `[0.1, 179.9]`)에만
+        // 있어서 볼류메트릭 경로는 스크립트가 낸 0/음수/NaN fov 를 그대로 받았다 —
+        // 레이 마치 방향이 발산하거나 NaN 이 된다.
+        // `perspective` 가 안에서 한 번 더 클램프하지만 클램프는 멱등이라 투영 경로는 비트동일이다.
+        let fov = CameraMotion.clampedFovDegrees(cameraFrame.fov)
         let view = Scene3DMath.lookAt(eye: eye, center: ctr, up: upv)
         let proj = Scene3DMath.perspective(fovYDegrees: fov, aspect: aspect,
                                            nearZ: cam.nearZ, farZ: cam.farZ)
@@ -2072,6 +2099,13 @@ extension SceneRenderer {
         // 코사인 슬롯을 기대하는데 종전엔 오일러 각·도 원값을 그대로 넘겨 방향/콘 감쇠가 무의미했다.
         // 그 뒤로도 이 호출부와 3D PBR 레인(Scene3DLighting.resolveLights)이 **서로 다른 콘 변환기**를
         // 써서 같은 라이트가 포워드와 갓레이에서 폭이 2배 갈렸는데, 지금은 두 이름이 한 구현이다.
+        //
+        // ⚠️ **[2026-09-01] 콘은 합쳤지만 축은 아직 갈려 있다.** `Scene3DLighting.resolveLights` 는
+        // 라이트 forward 를 모델행렬 **col0(+X)** 로 정정했다(V1 PBR 유니폼 패커
+        // `wallpaper64.exe FUN_140190c80` 의 `glm::column(M, 0)` — 그 파일의 방향 규약 절 참조).
+        // 여기가 쓰는 `SceneLight3D.forwardLightAxis`(`SceneDocument.swift`, WapleCore)는 아직
+        // **col2(+Z)** 라, 같은 spot 이 메시 셰이딩과 볼류메트릭에서 다른 방향을 본다.
+        // 그 파일은 이 수정 레인의 소유가 아니라 함께 옮기지 못했다 — 옮길 때 이 주석도 같이 지운다.
         //
         // W-17 단계 1: `depthTex` 를 넘긴다 — 위 needsDepthStore(hasVolumetrics 포함)가 이 텍스처를
         // .store 로 남겨 두므로 내용이 유효하다. 진입 조건은 hasVolumetrics 와 같은 식이어야 한다.

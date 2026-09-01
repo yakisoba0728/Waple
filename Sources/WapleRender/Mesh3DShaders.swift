@@ -33,7 +33,14 @@ enum Mesh3DShaders {
         float4 positionExponent;
         float4 colorRadius;
         float4 shadow;        // x=slice, y=vp start, z=kind(0=point,1=directional,2=spot,4=tube), w=spot inner cos
-        float4 axis;          // xyz=forward(+Z blue축, 광자 진행 방향), w=spot outer cos | tube: xyz=단점B(g_LTube_OriginB)
+        // xyz=forward(**모델행렬 col0 = +X red축**, 광자 진행 방향), w=spot outer cos
+        // | tube: xyz=단점B(g_LTube_OriginB).
+        // 열 인덱스 근거는 `Scene3DLighting.resolveLights` 의 방향 규약 절(V1 PBR 유니폼 패커
+        // `wallpaper64.exe FUN_140190c80` 의 `glm::column(M, 0)`). 이 셰이더는 실린 벡터를
+        // 그대로 쓰므로(`L = -axis.xyz`, spot `dot(axis, -L)`) 열 정정에 **소스 변경이 없다** —
+        // 아래 퇴화 폴백 상수(`float3(0,0,1)`)만 옛 규약의 흔적이고, resolveLights 가
+        // `normalizedOr` 로 이미 유한 단위벡터를 보장해 도달하지 않는다.
+        float4 axis;
         float4 cascades;      // F780: directional CSM far 경계 xyz, w=캐스케이드 수(3=CSM, 0=단일 오소)
     };
     struct VOut {
@@ -596,7 +603,11 @@ enum Mesh3DShaders {
         // 반대로 보이지만 원문이 그렇다. WE 는 정점에서 계산해 보간(varying v_LightAmbientColor)하고
         // 우리는 픽셀에서 푼다(로우폴리 메시에서만 갈리는 보간 차이 — 의도적).
         // mode 2(=image flat)는 genericimage4 레인이라 평평한 g_LightAmbientColor 만 쓴다.
-        // (아래 mf_normal/mf_skinned* 의 같은 블록도 이 주석을 따른다.)
+        // (이 파일의 fragment 함수는 `mf_main`·`mf_normal`·`mf_refract`·`mf_reflect` 넷이고,
+        //  같은 앰비언트 블록이 넷 모두에 복제돼 있다 — 나머지 셋도 이 주석을 따른다.
+        //  **[2026-09-01 정정]** 종전 열거의 `mf_skinned*` 는 이 리포에 **존재한 적이 없다**
+        //  — 출생 커밋 `f0fcc99c` 시점에도 이미 이 네 함수 구조였고 그 이름은 이 주석 한 줄
+        //  밖에서 grep 0건이다. 실제로 빠져 있던 것은 `mf_refract`/`mf_reflect` 였다.)
         float3 ambientColor = frame.ambient.xyz;
         if (mode < 1.5) {
             float hemisphere = clamp(dot(N, float3(0.0, 1.0, 0.0)) * 0.5 + 0.5, 0.0, 1.0);

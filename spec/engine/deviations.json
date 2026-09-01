@@ -11,9 +11,10 @@
     "we": "float denominator = (NH * NH * (rSqr2 - 1.0) + 1.0); return rSqr2 / (M_PI * denominator * denominator);",
     "waple": "float denominator = max(rawDenominator, 1e-4); return r4 / (pi * denominator * denominator);",
     "where": [
-     "Sources/WapleRender/Mesh3DShaders.swift:171 (라이브)",
-     "Sources/WapleCore/ScenePBRLighting.swift:15 (데드코드 미러 — Sources 참조 0건)"
+     "Sources/WapleRender/Mesh3DShaders.swift `Distribution_GGX` 안의 `float denominator = max(rawDenominator, 1e-4);` (라이브)",
+     "Sources/WapleCore/ScenePBRLighting.swift `ggxDenominatorFloor` 상수 선언과 그 사용부 (데드코드 미러 — Sources 참조 0건)"
     ],
+    "whereWasLineNumbered": "[정정 2026-09-01] 종전 이 두 자리는 `Mesh3DShaders.swift:171` · `ScenePBRLighting.swift:15` 였고 **둘 다 드리프트해 있었다** — :171 은 빈 줄, :15 는 `genericimage4.frag` 를 언급하는 문서 주석이었다(실측 당시 실제 자리는 :191 · :38/:46). 줄 번호를 다시 박지 않는다: `grep -n 'max(rawDenominator' Sources/WapleRender/Mesh3DShaders.swift` · `grep -n 'ggxDenominatorFloor' Sources/WapleCore/ScenePBRLighting.swift`",
     "divergesWhen": "roughness=0 이고 N·H=1 일 때. 그 지점에서 WE 는 0/0 = NaN, Waple 은 0",
     "abResult": {
      "targets": [
@@ -35,7 +36,8 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleRender/Mesh3DShaders.swift:165-173"
+     "ref": "Sources/WapleRender/Mesh3DShaders.swift",
+     "note": "`Distribution_GGX` 함수 — 종전 `:165-173` 은 point 라이트 감쇠(`pow(falloff…)`) 주석을 가리켜 무관했다"
     },
     {
      "kind": "file",
@@ -93,9 +95,10 @@
      "22 Glow"
     ],
     "where": [
-     "Sources/WapleRender/BlendMSL.swift:9,10,16",
-     "Sources/WapleCore/BuiltinShaderIncludes.swift:29,32,52"
+     "Sources/WapleRender/BlendMSL.swift — `we_colorburn` · `we_colordodge` · `we_reflect` (그리고 이 셋을 합성하는 `we_vividlight` · 모드 22 의 인자 뒤집기)",
+     "Sources/WapleCore/BuiltinShaderIncludes.swift — `BlendColorBurnEx` · `BlendColorDodgeEx` · `BlendReflectEx` (GLSL 미러)"
     ],
+    "whereWasLineNumbered": "[정정 2026-09-01] 종전 이 두 자리는 `BlendMSL.swift:9,10,16` · `BuiltinShaderIncludes.swift:29,32,52` 였는데 **BlendMSL 쪽은 파일 머리의 설명 주석**을 가리켰다(:9 는 `ApplyBlending` 이 32개 `#if` 를 갖는다는 서술). 실제 구현은 `we_*` 인라인 함수들이다. 줄 번호를 다시 박지 않는다: `grep -n 'we_colorburn\\|we_colordodge\\|we_reflect' Sources/WapleRender/BlendMSL.swift`",
     "abResult": {
      "pixelChange": "0",
      "sampleThinness": "패치된 모드를 쓰는 씬이 8종/18레이어인데 그중 HDR 은 3287715210 하나뿐이다. D3 는 [0,1] 밖에서만 갈리므로 실질 표본이 1종이다 — 근거가 얇다"
@@ -109,7 +112,8 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleRender/BlendMSL.swift:8-16"
+     "ref": "Sources/WapleRender/BlendMSL.swift",
+     "note": "`we_colorburn`/`we_colordodge`/`we_reflect` 와 `applyBlending` 의 모드 디스패치 — 종전 `:8-16` 은 파일 머리 설명 주석이었다"
     },
     {
      "kind": "file",

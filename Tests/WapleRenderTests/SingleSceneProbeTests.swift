@@ -46,13 +46,27 @@ final class SingleSceneProbeTests: XCTestCase {
         // WAPLE_PROBE_SETTLE=n: 컨트롤러 체인(shared 사이드이펙트) 정착용 선행 프레임 n개(라이브 동형).
         let settle = Int(ProcessInfo.processInfo.environment["WAPLE_PROBE_SETTLE"] ?? "") ?? 0
         let times = (settle > 0 ? (1...settle).map { time - Float($0) * 0.1 }.reversed() + [time] : [time])
-        let urls = r.captureFrames(width: capW, height: capH, times: Array(times), toDir: out)
+        let requested = Array(times)
+        let urls = r.captureFrames(width: capW, height: capH, times: requested, toDir: out)
+        // [정정 2026-09-01] **이 파일은 단언이 0개였다.** env 가 없으면 스킵, 있으면 `NSLog` 만
+        // 찍고 끝났다 — 실행 수(`Executed`)에는 잡히면서 무엇도 잠그지 않는다. CI 는 게이트 env
+        // (`WAPLE_PROBE_ID`)를 어디서도 세우지 않아 영구 스킵이므로 CI 판정은 그대로지만,
+        // 실제로 도는 개발 세션에서는 "돌았다" 와 "돌아서 무언가를 확인했다" 가 구분돼야 한다.
+        // 프로브의 계약은 "요청한 시각마다 디코드 가능한 프레임을 하나씩 낸다" 다 —
+        // 마운트가 조용히 무픽셀을 내면(디바이스/파이프라인 없음) `captureFrames` 가 `[]` 를
+        // 돌려주는데, 종전엔 for 루프가 0회 돌고 통과했다.
+        XCTAssertEqual(urls.count, requested.count,
+                       "요청 시각 \(requested.count)개에 대해 프레임 \(urls.count)장 — 캡처가 무픽셀이다")
         for u in urls {
             let tag = ProcessInfo.processInfo.environment["WAPLE_PROBE_TAG"] ?? "probe"
             let dst = out.appendingPathComponent("\(id)_\(tag).png")
             try? FileManager.default.removeItem(at: dst)
             try? FileManager.default.moveItem(at: u, to: dst)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: dst.path),
+                          "캡처 PNG 이동 실패: \(dst.path)")
             let l = RealPackagesGroundTruthTests.meanLuma(dst) ?? -1
+            // luma < 0 은 "PNG 를 못 읽었다"(meanLuma 의 nil 폴백)다 — 어두운 씬(luma 0)과 다르다.
+            XCTAssertGreaterThanOrEqual(l, 0, "캡처 PNG 를 디코드하지 못했다: \(dst.path)")
             NSLog("%@", "[Probe] \(id) luma=\(l) \(dst.path)")
         }
         r.teardown()

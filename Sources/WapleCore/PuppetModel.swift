@@ -167,6 +167,14 @@ public struct PuppetModel: Equatable {
         guard bytes.count > 30 else { return nil }
         func u32(_ o: Int) -> UInt32? { readU32LE(bytes, at: o) }
         func f32(_ o: Int) -> Float? { u32(o).map { Float(bitPattern: $0) } }
+        /// 그 위치가 **이벤트 블록의 `u32 count`** 로 성립하는가. 아래 클립 파스의 실제 게이트
+        /// (`u32(o)` 가 읽히고 `<= 4096`)와 **같은 판정**이라 이 함수가 nil 을 주는 위치는
+        /// 파스가 어차피 `break` 로 버리던 자리다 — flags bit0 건너뛰기를 여기에 걸어 두면
+        /// 종전에 통과하던 입력의 거동을 바꾸지 않는다.
+        func eventCountLooksValid(at o: Int) -> UInt32? {
+            guard let count = u32(o), count <= 4096 else { return nil }
+            return count
+        }
 
         // 13B 헤더 스킵 → cstring 머티리얼(UTF-8 — CJK 경로 보존, 종전 Latin-1 은 mojibake).
         var o = 8 + 13
@@ -306,6 +314,8 @@ public struct PuppetModel: Equatable {
         // 키 해석을 바꾸지 않으므로 여기서는 읽고 버린다.
         // MDLA0001 은 버전 1 이라 v≥2..v≥6 게이트 블록은 전부 꺼져 있다. 단 이벤트 블록은
         // 버전 게이트 밖이라 본 트랙 뒤의 `u32 count + count×(f32 time,cstring JSON)`을 항상 소비한다.
+        // **클립 헤더의 `u32 flags` 도 버전 게이트 밖에서 소비된다** — bit0 이면 이벤트 블록 앞에
+        // 0xC0(192)바이트 레코드가 하나 더 붙는다(아래 `clipFlags & 1` 분기, §6.2 근거 인용).
         if o + 8 <= bytes.count, String(bytes: bytes[o..<o+8], encoding: .utf8) == "MDLA0001" {
             o += 8 + 1  // magic + u8(0)
             guard let _ = u32(o), let animCount = u32(o + 4) else { return model }
@@ -322,8 +332,9 @@ public struct PuppetModel: Equatable {
                 o += 8
                 let clipId = Int(exactly: UInt64(idHi) << 32 | UInt64(idLo))
                 guard let name = cstr(), let mode = cstr(),
-                      let fps = f32(o), let length = u32(o + 4), let boneCount = u32(o + 12) else { break }
-                o += 16  // fps, frameCount, flags, boneCount
+                      let fps = f32(o), let length = u32(o + 4),
+                      let clipFlags = u32(o + 8), let boneCount = u32(o + 12) else { break }
+                o += 16  // fps, frameCount, flags(clipFlags), boneCount
                 var tracks: [[Key]] = []
                 var ok = true
                 for _ in 0..<boneCount {
@@ -346,6 +357,24 @@ public struct PuppetModel: Equatable {
                     tracks.append(keys)
                 }
                 guard ok, tracks.count == Int(boneCount) else { break }  // 부분 애니는 드롭, 누적분 유지
+                // **클립 flags bit0 → 꼬리 0xC0(192)바이트 레코드**(docs/re/skeleton-animation.md §6.2:
+                // `0x140264fc9 test byte [rbp+0xc0],1` → `0x140264fdb call 0x14028af20`, 기본값에
+                // -1(`0x140264ff7`)과 1.0f 가 깔린다). 버전 게이트 밖이라 MDLA0001 에도 붙고,
+                // 그 뒤 이벤트 블록으로 합류한다. 종전 파서는 `flags` 를 아예 읽지 않아
+                // (헤더 넷 중 셋만 바인딩하고 `o += 16` 으로 밀었다) 이 레코드의 첫 u32 를
+                // 이벤트 수로 오독했다. 형제 `Model3D` 는 가변 트레일러 리싱크(`d ≤ 256`)를 써서
+                // 이 자리를 우연히 넘긴다.
+                //
+                // **보수적 게이트.** 이 결함의 도달 모집단(MDLA 클립 중 flags bit0)은 이 머신의
+                // 어떤 코퍼스에도 없다 — 설치본 .mdl 28개에 MDLS/MDLA 매직 0건이고 워크샵
+                // 코퍼스(446)는 이 머신에 없다. 그래서 **건너뛰지 않은 자리에서 이벤트 블록이
+                // 성립하지 않을 때만** 건너뛴다. 종전에 통과하던 입력은 첫 조건에서 걸러지므로
+                // 거동이 그대로다(순수 추가).
+                if clipFlags & 1 != 0,
+                   eventCountLooksValid(at: o) == nil,
+                   eventCountLooksValid(at: o + 0xC0) != nil {
+                    o += 0xC0
+                }
                 // 이벤트 블록은 MDLA 버전과 무관하다(0x14026536d count,
                 // 0x1402653bd time, 0x1402653e0 JSON cstring). time은 JSON frame과 중복이라
                 // 소비만 하고, 공개 마커 값은 다른 애니 경로와 같은 JSON payload를 정본으로 삼는다.

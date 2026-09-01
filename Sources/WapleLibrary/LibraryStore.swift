@@ -383,14 +383,30 @@ public final class LibraryStore: @unchecked Sendable {
     }
 
     /// 구버전 인덱스(tags==nil) 엔트리의 tags/contentRating 을 디스크 project.json 에서 1회 백필.
-    /// 폴더 해석 실패 엔트리는 빈 값([])으로 마킹해 매 실행 재시도 I/O 를 막는다.
+    ///
+    /// **[2026-09-01 r3-M64] 실패 두 종류를 가른다.**
+    /// `tags == nil` 은 "아직 백필 안 함" 이고 `[]` 는 "백필했는데 태그가 없더라" 다 —
+    /// 재시도 조건이 `== nil` 이라 **`[]` 로 마킹하면 영영 다시 안 본다.** 그런데 종전에는
+    /// **북마크 해석 실패도** 같은 `[]` 로 마킹했다. 북마크 해석 실패는 외장 볼륨 미마운트·
+    /// 네트워크 볼륨 미연결처럼 **일시적**일 수 있는데(그래서 `resolveFolderURL` 은 stale
+    /// 북마크를 재생성·영속화하는 경로까지 갖고 있다), `init` 이 무조건 이 함수를 부르므로
+    /// **볼륨을 안 꽂은 채 한 번만 기동해도 그 배경의 태그가 영구 소실**됐다.
+    ///
+    /// 이제 해석 실패(`resolveFolderURL == nil`)는 `nil` 로 남겨 다음 실행에 다시 시도한다.
+    /// 폴더는 열렸는데 `project.json` 파스가 실패한 경우만 `[]` 로 못 박는다 — 그쪽은
+    /// 볼륨이 붙어 있는 상태에서 관측한 **안정적** 결과다.
+    ///
+    /// 비용: 미해석 엔트리 수만큼 북마크 해석이 매 실행 1회 더 돈다(디스크 읽기는 없다).
+    /// 종전의 "매 실행 재시도 I/O 를 막는다" 는 목적은 **파스 I/O** 쪽에서 그대로 유지된다.
     func backfillMetadataIfNeeded() {
         var changed = false
         for i in entries.indices where entries[i].tags == nil {
+            guard let folder = resolveFolderURL(for: entries[i]) else {
+                continue   // 일시적일 수 있다 — nil 로 남겨 다음 실행에 재시도
+            }
             changed = true
-            guard let folder = resolveFolderURL(for: entries[i]),
-                  let project = try? ProjectJSONParser.parse(folderURL: folder) else {
-                entries[i].tags = []
+            guard let project = try? ProjectJSONParser.parse(folderURL: folder) else {
+                entries[i].tags = []   // 볼륨은 붙어 있는데 project.json 이 없거나 깨졌다(안정적)
                 continue
             }
             entries[i].tags = project.tags

@@ -173,20 +173,38 @@ final class RealPackagesGroundTruthTests: XCTestCase {
     static let lumaDriftTolerance: Double = 0.02
 
     /// PNG 평균 luma(0..1). 디코드 실패 → nil.
+    ///
+    /// **[정정 2026-09-01] `CGContext(data: &px, …)` 는 UB 였다.**
+    /// 배열에 `&` 를 붙여 넘기면 그 포인터는 **그 호출이 끝나는 순간까지만** 유효하다는 것이
+    /// Swift 의 계약이다(inout-to-pointer 변환). `CGContext` 는 그 포인터를 **보관**해서
+    /// 이후 `draw(_:in:)` 이 거기에 쓴다 — 즉 수명이 끝난 포인터에 쓰는 셈이고, 배열이
+    /// 재할당되거나 옵티마이저가 임시 버퍼를 쓰면 조용히 엉뚱한 메모리를 읽는다.
+    /// 이 luma 는 골든 GT 판정의 오라클 값이라, 값이 조용히 어긋나면 **회귀를 못 잡는
+    /// 방향으로** 초록이 난다. 버퍼의 수명을 명시적으로 잡는 형태로 바꾼다.
     static func meanLuma(_ url: URL) -> Float? {
         guard let img = NSImage(contentsOf: url),
               let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
         let w = min(cg.width, 160), h = min(cg.height, 90)  // 다운샘플로 충분(평균)
+        guard w > 0, h > 0 else { return nil }
         var px = [UInt8](repeating: 0, count: w * h * 4)
-        guard let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                                  space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        ctx.interpolationQuality = .low
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-        var sum: Double = 0
-        for i in stride(from: 0, to: px.count, by: 4) {
-            sum += 0.299 * Double(px[i]) + 0.587 * Double(px[i + 1]) + 0.114 * Double(px[i + 2])
+        // 그리기와 읽기를 **같은 클로저 안**에서 끝낸다 — 포인터가 살아 있는 구간이 명시적이다.
+        let sum: Double? = px.withUnsafeMutableBytes { raw -> Double? in
+            guard let base = raw.baseAddress,
+                  let ctx = CGContext(data: base, width: w, height: h, bitsPerComponent: 8,
+                                      bytesPerRow: w * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return nil }
+            ctx.interpolationQuality = .low
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            let buf = raw.bindMemory(to: UInt8.self)
+            var acc: Double = 0
+            for i in stride(from: 0, to: buf.count, by: 4) {
+                acc += 0.299 * Double(buf[i]) + 0.587 * Double(buf[i + 1]) + 0.114 * Double(buf[i + 2])
+            }
+            return acc
         }
+        guard let sum else { return nil }
         return Float(sum / Double(w * h) / 255.0)
     }
 }

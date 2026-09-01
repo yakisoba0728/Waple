@@ -26,11 +26,24 @@ struct VideoTrackOrientation: Equatable {
         let eps: CGFloat = 0.01
         func near(_ x: CGFloat, _ y: CGFloat) -> Bool { abs(x - y) < eps }
         // (quarterTurns, mirroredX, a, b, c, d) — tx/ty(평행이동)는 재래스터라이즈라 무관.
+        //
+        // **[정정 r3-M13] 미러 행 둘(q=1·q=3)이 서로 뒤바뀌어 있었다.**
+        // 이 타입의 계약은 `mirroredX` 독스트링이 적은 대로 **"회전 전 미러"** 이고,
+        // 소비자(`orientedTexture`)도 그 순서로 적용한다(그 함수의 "미러(회전 "전" 적용)").
+        // 즉 표는 T = R_q · M 을 담아야 한다. CGAffineTransform 의 선형부를 열벡터 기준
+        // `[[a, c], [b, d]]` 로 읽고 M = mirrorX = [[-1,0],[0,1]] 로 두면:
+        //   R₁·M = [[0,-1],[1,0]]·[[-1,0],[0,1]] = [[0,-1],[-1,0]] → (a,b,c,d) = (0,-1,-1,0)
+        //   R₃·M = [[0, 1],[-1,0]]·[[-1,0],[0,1]] = [[0, 1],[ 1,0]] → (a,b,c,d) = (0, 1, 1,0)
+        // 종전 표는 이 둘을 맞바꿔 적고 있었다(= 회전 **후** 미러 순서의 값). q=0·q=2 는 M 과
+        // 교환법칙이 성립해 순서와 무관하므로 두 행만 틀렸고, 증상은 **90°/270° + 미러 트랙에서
+        // 180° 뒤집힌 화면**이다. 기존 앵커 테스트
+        // (`MediaFixRegressionTests.testVideoTrackOrientationClassifiesDihedralTransforms`)는
+        // 미러 행 중 q=0 하나만 잠그고 있어 이 뒤바뀜을 못 봤다.
         let candidates: [(Int, Bool, CGFloat, CGFloat, CGFloat, CGFloat)] = [
             (0, false,  1,  0,  0,  1), (1, false,  0,  1, -1,  0),
             (2, false, -1,  0,  0, -1), (3, false,  0, -1,  1,  0),
-            (0, true,  -1,  0,  0,  1), (1, true,   0,  1,  1,  0),
-            (2, true,   1,  0,  0, -1), (3, true,   0, -1, -1,  0),
+            (0, true,  -1,  0,  0,  1), (1, true,   0, -1, -1,  0),
+            (2, true,   1,  0,  0, -1), (3, true,   0,  1,  1,  0),
         ]
         for (q, m, a, b, c, d) in candidates
         where near(t.a, a) && near(t.b, b) && near(t.c, c) && near(t.d, d) {
@@ -182,9 +195,17 @@ public final class SceneVideoLayer {
         p.actionAtItemEnd = .none
         // 루프: AVPlayerLooper 는 매 루프 아이템을 교체 → 부착한 output 이 새 아이템을 못 따라간다.
         // 단일 아이템 + 종료 시 seek(0) 수동 루프(output-기반 재생의 표준 패턴).
+        // r3-O14: **정지 상태를 본다.** 종전엔 조건 없이 `seek(0)` + `play()` 라, 씬이
+        // 정지 중(수동 pause·가림 절전)인데 종료 알림이 도착하면 비디오 레이어만 혼자
+        // 되살아났다(알림은 메인 큐에 실려 오므로 `pause()` 와 도착 사이에 창이 있다).
+        // 되감기는 그대로 한다 — 재개하면 처음부터가 옳고, 그 자체로는 소리도 그림도 없다.
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
-        ) { [weak p] _ in p?.seek(to: .zero); p?.play() }
+        ) { [weak self, weak p] _ in
+            p?.seek(to: .zero)
+            guard self?.paused != true else { return }
+            p?.play()
+        }
         player = p
         p.play()
     }
@@ -308,8 +329,12 @@ public final class SceneVideoLayer {
         return tex
     }
 
-    public func pause() { player?.pause() }
-    public func resume() { player?.play() }
+    /// r3-O14: 정지 여부. 루프 옵저버가 "종료 → 무조건 재생" 을 하지 않도록 이 플래그를 본다.
+    /// `AVPlayer.rate` 대신 별도 플래그를 두는 이유는 형제 `WebRenderer`/`VideoRenderer` 와 같다 —
+    /// `rate` 는 seek·이음매에서 0 을 스치는 **순간 상태**라 의도를 답하지 못한다.
+    private var paused = false
+    public func pause() { paused = true; player?.pause() }
+    public func resume() { paused = false; player?.play() }
 
     // MARK: 라이브 실패 정적 폴 백 (감사 V06)
 
@@ -331,6 +356,7 @@ public final class SceneVideoLayer {
         endObserver = nil
         player?.pause()
         player = nil
+        paused = false   // r3-O14: 다음 startLive 가 깨끗한 상태에서 시작하도록
         output = nil
         frameHold.removeAll()
         lastLiveTexture = nil

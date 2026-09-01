@@ -62,7 +62,15 @@ public final class AppleScriptNowPlayingProvider: NowPlayingProvider {
         """
     }
 
-    /// 스크립트 출력 파싱(순수). Spotify 는 duration 이 ms — 1000 초과 & Spotify 는 초로 환산.
+    /// 스크립트 출력 파싱(순수). Spotify 는 duration 이 ms 라 초로 환산한다.
+    ///
+    /// **[정정 r3-O15] "1000 초과 &" 조건은 코드에도 이력에도 없다.** 종전 이 줄은
+    /// "1000 초과 & Spotify 는 초로 환산" 이라고 적었는데, 아래 분기는 `app == "Spotify"` 만
+    /// 보는 **무조건** 환산이다. `git log -p --follow` 로 이 파일 전 이력을 훑어도 `1000` 이
+    /// 등장하는 줄은 그 나눗셈 한 줄뿐이라, 그런 가드가 존재했다가 지워진 것도 아니다.
+    /// 조건을 코드에 넣지 않고 주석만 고치는 이유: Spotify AppleScript 의 `duration` 은
+    /// 단위가 ms 로 **고정**이라 값 크기로 단위를 추측하는 것이 오히려 틀린다(1초 미만
+    /// 트랙이면 1000 이하가 나오고, 그때 환산을 건너뛰면 1000배 틀린 값이 된다).
     static func parse(_ output: String, app: String) -> NowPlayingInfo? {
         let line = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty else { return nil }

@@ -92,6 +92,9 @@ enum EffectShaders {
             // 이 손포팅의 단일탭 모델에서는 애니메이션 구동원 슬롯(P[3])을 animationspeed 가 맡는다(WE
             // vert: v_TexCoordRipple = coords + g_Time*g_AnimationSpeed² + scroll — scroll 은 scrollspeed
             // 이지만 통상 0이라 animationspeed 가 주 구동). 구 키는 폴백으로 유지(무회귀).
+            // P[3] 은 **원시값**이다 — 제곱(`g_AnimationSpeed²`)은 자매 항 strength(`P[1]*P[1]`)와
+            // 같은 자리, 즉 MSL 쪽(`frags["waterripple"]`)에서 한다. 여기서 제곱하면 파라미터
+            // 오라클(EffectShadersTests.testWaterrippleParams 의 0.2/0.15 고정)이 의미를 잃는다.
             // (Float 명시: 구형 컴파일러(Swift 5.10)는 ?? 체인의 리터럴을 오추론해 에러 — CI macos-14 대응)
             let strength: Float = c["ripplestrength"]?.first ?? c["ripple_strength"]?.first ?? c["strength"]?.first ?? 0.1
             let scale: Float = c["scale"]?.first ?? c["ripple_scale"]?.first ?? 1
@@ -133,7 +136,14 @@ enum EffectShaders {
             // F-X8: WE shake.frag g_Speed 실 기본값은 1(구코드 폴백 5 는 실물과 5배 어긋남 — 코퍼스
             // 실측: speed 미지정 씬이 상례). bounds(g_Bounds, 기본 "0 1")는 문턱 리매핑
             // (offset = saturate((offset-bounds.x)/(bounds.y-bounds.x)))용 슬롯 추가 — P[2]/P[3].
-            let amp: Float = c["amplitude"]?.first ?? c["amount"]?.first ?? c["strength"]?.first ?? 0.006
+            // r3-M61: 진폭 기본은 **0.1** — WE `shake.frag` 의 어노테이션
+            // `uniform float g_Amp; // {"material":"strength","default":0.1,"range":[0.01, 0.5]}` 이
+            // 정본이다. 종전 0.006 은 WE `range` 하한(0.01)보다도 작아 **에디터에서 저작조차
+            // 불가능한 값**이었고, 양쪽이 제곱이므로 실효 변위가 (0.1/0.006)² = 277.8배 어긋났다.
+            // 바로 위 `spd` 는 F-X8 이 같은 어노테이션으로 이미 고쳤는데(5 → 1) 진폭만 건너뛴
+            // 비대칭이었다. 도달: 동봉·설치본 각각 shake 인스턴스 3건이고 그중 2건이 `Strength` 를
+            // 명시 저작(0.3 / 0.14)하므로 기본값에 걸리는 것은 각 1건(전부 shake preview 씬)이다.
+            let amp: Float = c["amplitude"]?.first ?? c["amount"]?.first ?? c["strength"]?.first ?? 0.1
             let spd: Float = c["speed"]?.first ?? c["roughness"]?.first ?? 1
             let bounds = c["bounds"] ?? [0, 1]
             let boundsLo = bounds.count > 0 ? bounds[0] : 0
@@ -204,12 +214,18 @@ enum EffectShaders {
                                 constant float* P [[buffer(0)]]) {
             constexpr sampler s(filter::linear, address::repeat);
             constexpr sampler sc(filter::linear, address::clamp_to_edge);
-            // P[0]=time, P[1]=strength, P[2]=scale, P[3]=scrollSpeed(≈animationspeed).
+            // P[0]=time, P[1]=strength, P[2]=scale, P[3]=animationspeed(raw — 아래서 제곱).
             // F412: 노멀맵 미바인드 폴터는 중립 (128,128,255)(SceneRendererResources) — 흰색이면
             // 언팩 후 n=(1,1,1) 이라 마스크 유효 영역이 상시 대각 변위.
             // F-X8: WE waterripple.frag `texCoord += normal.xy * g_Strength * g_Strength * mask` — 강도
             // 제곱(선형이면 기본값에서 10배 과대 변위, 자매 waterwaves 는 이미 제곱 적용 — 파일내 정합).
-            float2 nUV = in.uv * P[2] + float2(P[0] * P[3], P[0] * P[3] * 0.5);
+            // r4/L2: 구동 속도도 **제곱**이다 — WE waterripple.vert 의
+            // `v_TexCoordRipple.xy = coordsRotated + g_Time * g_AnimationSpeed * g_AnimationSpeed + scroll`
+            // (같은 파일 .frag 의 PERSPECTIVE==1 분기도 동일). 폴백 키 `scrollspeed` 도 WE 가
+            // `g_ScrollSpeed * g_ScrollSpeed * g_Time` 로 제곱하므로 같은 슬롯 처리로 옳다.
+            // 종전 선형이면 기본 0.15 에서 1/0.15 = 6.667 배 빠르게 흘렀다.
+            float speed = P[3] * P[3];
+            float2 nUV = in.uv * P[2] + float2(P[0] * speed, P[0] * speed * 0.5);
             float3 n = normalMap.sample(s, nUV).rgb * 2.0 - 1.0;
             float maskV = mask.sample(sc, in.uv).r;
             float2 distort = n.xy * (P[1] * P[1]) * maskV;

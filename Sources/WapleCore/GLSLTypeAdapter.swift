@@ -565,9 +565,16 @@ public enum GLSLTypeAdapter {
         if let n = typeSize(name), n > 0 { return n }               // vecN/floatN 생성자
         if name == "texSample2D" || name == "texSample2DLod" || name == "texLoad2D"
             || name == "texSample2DBackBuffer"
-            // texSample3D(shim :68) 는 `s.Sample` = float4, texSample2DCompare(shim :64) 는 HLSL 상
-            // 스칼라지만 번역기가 float4 로 감싸므로(translateBody 2a4) 여기서도 4 다 — 이 값이
-            // `vec3 x = texSample3D(...)`(실물 ccsimple.frag:32) 의 암시적 절단(.xyz)을 만든다.
+            // texSample3D(shim `0x00486f43` `s.Sample(s ## SamplerState, u)`) 는 float4,
+            // texSample2DCompare(shim `0x00486eb1` `s.SampleCmpLevelZero(...)`) 는 HLSL 상
+            // 스칼라지만 번역기가 float4 로 감싸므로(`GLSLTranslator` translateBody 2a4) 여기서도
+            // 4 다 — 이 값이 `vec3 x = texSample3D(...)`(실물 ccsimple.frag:32) 의 암시적 절단(.xyz)을 만든다.
+            //
+            // [r3-M8 정정] 종전 인용 `shim :68`/`:64` 는 짝 저장소
+            // `analysis/strings/shader-strings.txt` 기준으로 **정확히 ±1 어긋났다**(실제 :67/:65,
+            // 방향도 반대). 같은 두 매크로를 `GLSLTranslator` 가 `WE shim :65`/`:67` 로 옳게
+            // 인용하고 있어 두 파일이 자기모순이었다. 그 파일은 이 리포와 함께 움직이지 않으므로
+            // 줄 번호 대신 **VA + 매크로 원문**으로 가리킨다(줄은 다음 덤프에 바로 썩는다).
             || name == "texSample3D" || name == "texSample2DCompare" { return 4 }
         if name == "cross" { return 3 }
         if scalarFns.contains(name) { return 1 }

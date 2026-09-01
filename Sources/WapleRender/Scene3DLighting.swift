@@ -205,8 +205,10 @@ struct Scene3DResolvedLight: Equatable {
     var colorRadius: SIMD4<Float>
     var castsShadow: Bool
     var kind: Scene3DLightKind = .point
-    /// 월드 forward(+Z blue축 = 광자 진행 방향). directional/spot 만 유효. point 는 미사용.
-    var forward: SIMD3<Float> = SIMD3(0, 0, 1)
+    /// 월드 forward(**+X red축**, col0 = 광자 진행 방향). directional/spot 만 유효. point 는 미사용.
+    /// 열 인덱스 근거는 `resolveLights` 의 방향 규약 절(V1 패커 `glm::column(M, 0)`).
+    /// 기본값은 항등 회전의 col0 = (1,0,0) 이다.
+    var forward: SIMD3<Float> = SIMD3(1, 0, 0)
     /// spot 콘 코사인(축 기준). point/directional 미사용(기본 0 → 셰이더가 kind 로 분기).
     var coneInnerCos: Float = 0
     var coneOuterCos: Float = 0
@@ -255,7 +257,7 @@ struct Scene3DLightUniform {
     var colorRadius: SIMD4<Float>
     /// x=shadow array slice(-1이면 비활성), y=shadow VP 시작 인덱스, z=kind(0/1/2/4), w=spot 콘 inner cos.
     var shadow: SIMD4<Float>
-    /// xyz=월드 forward(+Z blue축), w=spot 콘 outer cos. directional/spot 전용.
+    /// xyz=월드 forward(+X red축 = 모델행렬 col0), w=spot 콘 outer cos. directional/spot 전용.
     /// tube(kind 4)는 xyz=세그먼트 단점 B(WE g_LTube_OriginB — cone/forward 미사용 슬롯 재활용), w=0.
     var axis: SIMD4<Float>
     /// F780: directional CSM far 경계 xyz + w=캐스케이드 수(3=CSM, 0=단일 오소/기타).
@@ -303,10 +305,34 @@ enum Scene3DLighting {
     /// lpoint / ldirectional / lspot / ltube 를 월드 공간으로 해석한다. 입력 순서를 보존하고(first-N 정책),
     /// 부모가 있으면 그 부모의 현재 월드행렬/가시성을 적용한다.
     ///
-    /// 방향 규약(2026-07 확정): scene.json `angles`(라디안) → Scene3DMath 모델행렬(T·Rz·Ry·Rx·S,
-    /// 오브젝트와 동일 규약)의 **blue축(+Z, col2)** 이 라이트 forward. 근거: WE 스크립트 API
-    /// (`lib.sceneScript.d.ts`) `Mat4.forward() = Blue axis`, `right=Red(+X)`, `up=Green(+Y)`,
-    /// `compose = T*R*S`. directional 은 무감쇠(radiance=color×intensity), L=-forward.
+    /// 방향 규약(**2026-09-01 정정**): scene.json `angles`(라디안) → Scene3DMath 모델행렬
+    /// (T·Rz·Ry·Rx·S, 오브젝트와 동일 규약)의 **red축(+X, col0)** 이 라이트 forward다.
+    /// directional 은 무감쇠(radiance=color×intensity), L=-forward.
+    ///
+    /// 근거는 **V1 PBR 유니폼 패커 `wallpaper64.exe` `FUN_140190c80`(0x140190c80)** 이다 —
+    /// 이 함수가 `glm::column(M, 0)` 을 라이트 방향으로 뽑는다(디스어셈 확정):
+    ///   · directional: `0x140191095 xorps xmm9,xmm9`(s=0) → `0x140191162 xor r8d,r8d`(**열 0**)
+    ///     → `0x1401911a6 call 0x14019d3e0`(= `glm::column`: `ebx<4` assert · `rax=col*2` ·
+    ///     `movups [rsi+rax*8]`) → 4×`subss`(s−col0) → `0x140191208/15/24` store.
+    ///   · spot: `0x140192dfa mov r8d,3`(열 3 = origin) 뒤 `0x140192e79 xor r8d,r8d`(**열 0**
+    ///     = direction) — directional 과 같은 열이다.
+    ///
+    /// ### 종전 근거(`Mat4.forward() = Blue axis`)를 왜 지우지 않는가
+    /// 이 자리는 원래 WE 스크립트 API(`lib.sceneScript.d.ts`)의 `Mat4.forward() = Blue axis`,
+    /// `right = Red(+X)`, `up = Green(+Y)`, `compose = T*R*S` 를 근거로 col2 를 골랐다.
+    /// **그 인용 자체는 지금도 참이지만 이 자리를 구속하지 않는다.** `Mat4.forward()` 는
+    /// *스크립트가 행렬에서 전방축을 꺼내 쓰는* 헬퍼의 규약이고, 여기서 필요한 것은
+    /// *엔진이 라이트 유니폼을 채울 때 실제로 고르는 열*이다. 그 둘은 같은 행렬을 보지만
+    /// 서로 다른 코드 경로이고, 패커는 스크립트 헬퍼를 거치지 않고 `glm::column(M, 0)` 을
+    /// 직접 부른다. 결함이 이 혼동에서 났으므로 근거를 지우지 않고 남긴다.
+    ///
+    /// **부호는 여기서 되돌리지 않는다.** 소비 셰이더가 이미 자기 안에서 규약을 맞춰 두었다
+    /// (spot `spotCookie = -dot(normalize(lightDelta), 축)`, directional `L = -forward`).
+    /// 이 정정은 **열 인덱스 하나**뿐이다.
+    ///
+    /// **2D 포워드 레인(`SceneLight3D.forwardLightAxis`, WapleCore)은 아직 col2 다** — 그 파일은
+    /// 이 레인 소유가 아니라 여기서 함께 고치지 못했다. 두 레인이 어긋나 있다는 사실을 여기 적어
+    /// 둔다(`SceneRenderer3D` 의 볼류메트릭 스팟 축도 그 함수를 쓴다).
     /// spot 섀도우는 스코프 밖(코퍼스 spot 전원 castshadow:false) → castShadow 는 point/directional 만 존중.
     /// ltube: origin=단점A / `controlpoint`=단점B(부모-로컬 동일 공간, 위 originB 필드 주석의 반증 참조),
     /// 무섀도우(WE 정본 — 스니펫 0x14048c9e0 의 shadowFactor 인자가 리터럴 1.0).
@@ -334,7 +360,8 @@ enum Scene3DLighting {
             }
 
             // 라이트 자체 회전 포함 로컬행렬(scale=1: 위치·방향에 스케일 오염 방지) → 부모 체인 합성.
-            // col3=위치, col2=forward. point 위치는 회전 무관(T·R·S 의 col3 = origin)이라 무회귀.
+            // col3=위치, **col0=forward**(V1 패커 `glm::column(M, 0)` — 위 방향 규약 절 참조).
+            // point 위치는 회전 무관(T·R·S 의 col3 = origin)이라 무회귀.
             let localMatrix = Scene3DMath.modelMatrix(
                 origin: SIMD3(light.origin.x, light.origin.y, light.origin.z),
                 angles: SIMD3(light.angles.x, light.angles.y, light.angles.z),
@@ -353,8 +380,8 @@ enum Scene3DLighting {
             let worldMatrix = parentMatrix * localMatrix
             let position = SIMD3(worldMatrix.columns.3.x, worldMatrix.columns.3.y, worldMatrix.columns.3.z)
             let forward = normalizedOr(
-                SIMD3(worldMatrix.columns.2.x, worldMatrix.columns.2.y, worldMatrix.columns.2.z),
-                SIMD3(0, 0, 1))
+                SIMD3(worldMatrix.columns.0.x, worldMatrix.columns.0.y, worldMatrix.columns.0.z),
+                SIMD3(1, 0, 0))
             guard position.x.isFinite, position.y.isFinite, position.z.isFinite,
                   forward.x.isFinite, forward.y.isFinite, forward.z.isFinite else { continue }
 

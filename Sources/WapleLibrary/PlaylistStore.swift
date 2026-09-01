@@ -17,7 +17,11 @@ public final class PlaylistStore {
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
-            intervalMinutes = try c.decodeIfPresent(Int.self, forKey: .intervalMinutes) ?? 30
+            // **[2026-09-01 r4-28]** 세터(`intervalMinutes` 의 `max(1, newValue)`)와 **같은 하한**을
+            // 디코드에도 건다. 종전에는 세터에만 있어서, 손으로 고친 playlist.json(또는 구버전이
+            // 쓴 값)의 `0`·음수가 그대로 살아 스케줄러에 들어갔다 — 0 은 즉시 재발화, 음수는
+            // 과거 시각이라 전환이 폭주한다. 부재 기본 30 은 그대로다.
+            intervalMinutes = max(1, try c.decodeIfPresent(Int.self, forKey: .intervalMinutes) ?? 30)
             ids = try c.decodeIfPresent([String].self, forKey: .ids) ?? []
             shuffle = try c.decodeIfPresent(Bool.self, forKey: .shuffle) ?? false
         }

@@ -126,7 +126,7 @@ public enum Model3DPose {
 
     /// animationlayers 레이어 → 파스된 애니 인덱스. C③: clipId(scene.json animationlayers[].animation,
     /// 모델 클립의 실제 id — Model3D.Animation.id, 클립 레코드 선두 u64 경유)가 있고 매칭되는 클립이
-    /// 있으면 최우선(저작 도구가 클립명을 "动画 1/2/3" 같은 제네�릭으로 남기고 레이어 이름만 의미
+    /// 있으면 최우선(저작 도구가 클립명을 "动画 1/2/3" 같은 제네릭으로 남기고 레이어 이름만 의미
     /// 부여하는 실물 사례 — 이름 휴리스틱은 오선택). 없거나 미매칭이면 종전 이름 서브스트링 매칭 →
     /// "idle" 폴백 → 인덱스 0 폴백(무회귀: clipId nil 인 씬은 100% 종전 경로).
     public static func resolveAnimation(model: Model3D, layerName: String?, clipId: Int? = nil) -> Int {

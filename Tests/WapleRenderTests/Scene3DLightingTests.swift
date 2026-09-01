@@ -267,8 +267,17 @@ final class Scene3DLightingTests: XCTestCase {
         XCTAssertTrue(Scene3DLighting.resolveLights([tiny], nodes: [:]).isEmpty)
     }
 
-    func testLightForwardIsBlueAxisOfEulerRotation() {
-        // 방향 규약 잠금: forward = 월드행렬 blue축(+Z, R=Rz·Ry·Rx). WE Mat4.forward()="Blue axis".
+    /// 방향 규약 잠금(**2026-09-01 정정**): forward = 월드행렬 **red축(+X, col0)**, R=Rz·Ry·Rx.
+    /// 근거는 V1 PBR 패커 `wallpaper64.exe FUN_140190c80` 이 `glm::column(M, 0)` 을 부르는 것이다
+    /// (directional `0x140191162 xor r8d,r8d` → `0x1401911a6 call 0x14019d3e0`,
+    ///  spot `0x140192e79` 동일 · `0x140192dfa mov r8d,3` 은 origin 열).
+    /// 종전 잠금값은 col2(+Z blue축)였고 근거로 WE 스크립트 API `Mat4.forward()="Blue axis"` 를
+    /// 들었는데, 그것은 **스크립트 헬퍼의 규약**이지 유니폼 패커가 고르는 열이 아니다
+    /// (`Scene3DLighting.resolveLights` 방향 규약 절의 정정 사유 참조).
+    ///
+    /// `Scene3DMath.modelMatrix` 의 col0 = (cz·cy, sz·cy, −sy) 라 **x(pitch) 회전에 불변**이다 —
+    /// 종전 표본에 있던 pitch 케이스는 판별력이 없어져 z(roll) 케이스로 갈음한다.
+    func testLightForwardIsRedAxisOfEulerRotation() {
         func forward(_ angles: SIMD3<Float>) -> SIMD3<Float> {
             let d = light(id: 1, type: "ldirectional", origin: .zero, parent: nil,
                           radius: 0, angles: angles)
@@ -276,9 +285,10 @@ final class Scene3DLightingTests: XCTestCase {
             XCTAssertEqual(resolved.count, 1)  // directional 은 무감쇠 → radius 0 이어도 통과
             return resolved[0].forward
         }
-        assertVec(forward(.zero), SIMD3(0, 0, 1))                 // 회전 없음 → +Z
-        assertVec(forward(SIMD3(0, .pi / 2, 0)), SIMD3(1, 0, 0))  // yaw +90°(Y) → +X
-        assertVec(forward(SIMD3(.pi / 2, 0, 0)), SIMD3(0, -1, 0)) // pitch +90°(X) → -Y
+        assertVec(forward(.zero), SIMD3(1, 0, 0))                  // 회전 없음 → +X
+        assertVec(forward(SIMD3(0, .pi / 2, 0)), SIMD3(0, 0, -1))  // yaw +90°(Y) → -Z
+        assertVec(forward(SIMD3(0, 0, .pi / 2)), SIMD3(0, 1, 0))   // roll +90°(Z) → +Y
+        assertVec(forward(SIMD3(.pi / 2, 0, 0)), SIMD3(1, 0, 0))   // pitch(X) 는 col0 을 안 움직인다
     }
 
     func testDirectionalRadianceIsColorTimesIntensityWithoutRadius() {

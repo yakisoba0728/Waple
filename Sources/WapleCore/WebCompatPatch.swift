@@ -148,8 +148,15 @@ public enum WebCompatPatch {
     ///    모든 경로 스캐너가 `0x2f`(`/`)와 `0x5c`(`\`)를 동등하게 본다).
     ///  - 선행 `/`·`./` 제거, 중복 `/` 접기.
     ///  - **소문자화** : WE 는 문자열 비교가 아니라 그 경로로 파일을 열고, 윈도우 파일시스템은
-    ///    대소문자를 구분하지 않는다. 즉 실제 동작이 대소문자 무시다. 동봉 5건은 전부
-    ///    소문자라 이 선택으로 달라지는 항목은 없다.
+    ///    대소문자를 구분하지 않는다. 즉 실제 동작이 대소문자 무시다.
+    ///
+    ///    **[정정 r4-21] "동봉 5건은 전부 소문자" 는 거짓이다.** 동봉 코퍼스
+    ///    (`Sources/WapleRender/Resources/WEAssets/zcompat/web`, JSON 5개 / 액션 17개)를 전수
+    ///    파스하면 **4개 파일**의 `file` 이 `index_files/index.min.js.Download` 로 대문자 `D` 를
+    ///    포함한다(780658164 · 780662613 · 780675904 · 854685299). 즉 소문자화는 "달라지는 항목이
+    ///    없는" 무해한 정규화가 아니라, 그 4건을 **실제로 바꿔서** 요청 경로와 맞춰 주는 자리다.
+    ///    결론(소문자화가 옳다)은 그대로지만 근거를 뒤집어 적어야 한다 — 소문자화를 빼면
+    ///    동봉 자산의 다수가 매치에 실패한다.
     static func normalizedRelativePath(_ path: String) -> String {
         var out: [Substring] = []
         for part in path.replacingOccurrences(of: "\\", with: "/").split(separator: "/") {
@@ -190,7 +197,10 @@ public enum WebCompatPatch {
     }
 
     /// `haystack[from...]` 에서 `needle` 의 첫 위치. 없으면 nil.
-    /// 단순 스캔이다 — needle 이 짧고(동봉 최대 63바이트) 파일도 수백 KB 라 충분하다.
+    /// 단순 스캔이다 — needle 이 짧고 파일도 수백 KB 라 충분하다.
+    /// **[정정 r4-21] 동봉 최대 길이는 63 이 아니라 68 바이트**다(`784979889.json` 의
+    /// `renderer = new THREE.WebGLRenderer({alpha: true, antialias: ` — 동봉 코퍼스 17액션 전수).
+    /// 상한을 쓰는 코드는 없고 이 문장 하나가 근거였으므로 값만 바로잡는다.
     static func firstIndex(of needle: [UInt8], in haystack: [UInt8], from: Int) -> Int? {
         guard !needle.isEmpty, from >= 0 else { return nil }
         let last = haystack.count - needle.count

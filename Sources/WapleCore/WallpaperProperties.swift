@@ -281,8 +281,12 @@ public enum WallpaperProperties {
 
         for candidate in candidates {
             if let table = exactLocalizationTable(localization, key: candidate) { return table }
+            // r3-O7: `Dictionary.keys` 는 순서 비보장이라 같은 언어의 지역 표가 둘 이상이면
+            // (예: `ko-kr` 과 `ko-kp`) 실행마다 다른 표가 뽑힐 수 있었다. 아래 최종 폴백이 이미
+            // `keys.sorted()` 를 쓰므로 같은 규약으로 맞춘다 — 선택 자체는 여전히 임의지만
+            // **결정적**이다(같은 입력 → 같은 표).
             if candidate.count == 2,
-               let key = localization.keys.first(where: { $0.lowercased().hasPrefix(candidate + "-") }),
+               let key = localization.keys.sorted().first(where: { $0.lowercased().hasPrefix(candidate + "-") }),
                let table = exactLocalizationTable(localization, key: key) {
                 return table
             }

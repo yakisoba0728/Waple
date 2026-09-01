@@ -18,8 +18,13 @@ struct SettingsView: View {
 
     /// ## 왜 높이를 프레임에 박지 않나 — 마지막 섹션이 접혀 있었다
     ///
-    /// 섹션이 6개로 늘면서 콘텐츠가 약 953pt 가 됐는데 창 안쪽은 820pt 다. 그래서 마지막
+    /// 섹션이 늘면서 콘텐츠가 약 953pt 가 됐는데 창 안쪽은 820pt 다. 그래서 마지막
     /// `에셋·도구` 가 첫 화면에서 반쯤 잘린 채로 보인다(청사진 §9.2).
+    /// **[정정 r4-08]** 종전 이 문단은 "6개" 라고 못 박았는데 아래 `body` 의 섹션은 **7개**다
+    /// (playback · playbackPolicy · playlist · video · system · desktopSync · assets).
+    /// 953pt 는 6개 시절의 실측이므로 지금 값은 더 크다 — 아래 결론(고정 높이를 걷어낸다)은
+    /// 섹션 수와 무관하게 유효하다. 섹션을 더 넣더라도 이 수를 다시 세어 적지 마라, 세지 말고
+    /// **`body` 를 보라**.
     ///
     /// **먼저 청사진의 전제 하나를 정정한다 — 그 섹션은 도달 불가가 아니었다.** 스크롤바를
     /// 항상 보이게 켜고 찍어 보면 종전 빌드에도 스크롤 트랙이 있고, 썸이 트랙의 약 86% 를
@@ -36,7 +41,7 @@ struct SettingsView: View {
     ///
     /// - 고정 높이를 그대로 둔 뷰 → 창이 **560×848 로 되돌아간다.** 뷰의 경직된 요구가
     ///   창이 요청한 크기를 이긴다. 즉 창만 고쳐서는 아무 것도 달라지지 않는다.
-    /// - 고정 높이를 걷어낸 뷰 → 창이 **560×1028** 로 열리고 6개 섹션이 전부 보인다.
+    /// - 고정 높이를 걷어낸 뷰 → 창이 **560×1028** 로 열리고 (그 시점의) 섹션이 전부 보인다.
     ///
     /// 그래서 높이는 최소·이상·최대로만 말한다. 이상값을 비워 두면 이번엔 반대로 콘텐츠
     /// 전체 높이가 위로 전파돼 작은 화면에서 창이 화면 밖까지 자란다 — 디스플레이 시트가
@@ -46,8 +51,9 @@ struct SettingsView: View {
     /// 스크롤바 썸 기하가 픽셀 단위로 같았고(이미 스크롤되니 당연하다), 창이 콘텐츠보다
     /// 커졌을 때 폼 배경이 따라 늘지 않아 아래가 빈 판으로 남는 단점만 남는다.
     ///
-    /// 남은 절반(스타일마스크에 `.resizable`, 그리고 못 박는 `setContentSize`)은
-    /// `AppDelegate` 소유라 여기서 손대지 않는다.
+    /// 남은 절반은 `AppDelegate` 소유다. **[정정 r3-M22] 그중 스타일마스크는 이미 됐다** —
+    /// 설정 창 `styleMask` 에 `.resizable` 이 들어가 있다. 남은 것은 `setContentSize` 로
+    /// 초기 크기를 못 박는 부분뿐이고, 그건 이상 높이라 잘림을 만들지 않는다.
     var body: some View {
         Form {
             playbackSection
@@ -146,14 +152,20 @@ struct SettingsView: View {
     //
     // `FitMode.label` / `SceneFPSCap.label` 은 `String` 을 돌려주므로 `Text($0.label)` 이
     // 비현지화 오버로드로 해석된다 — 영어 시스템에서도 한국어로 남고, 그 리터럴은 스캔
-    // 패턴에도 안 걸린다(청사진 §5.0·§5.3). 정석은 열거형 쪽을 `NSLocalizedString` 으로
-    // 감싸는 것이지만 그 둘은 `WapleRender` 에 있고, 커버리지 오라클의 스캔 루트는
-    // `Sources/Waple` 하나다. 거기서 감싸면 키가 스캔되지 않아 번역을 넣는 순간
-    // `testNoOrphanTranslations` 가 고아로 신고한다 — 런타임을 고치면서 오라클을 깨는 셈이다.
-    // 그래서 표시 라벨만 이 화면이 `Text` 리터럴로 들고, 열거형은 저장 값의 출처로 남긴다.
+    // 패턴에도 안 걸린다(청사진 §5.0·§5.3). 그래서 표시 라벨만 이 화면이 `Text` 리터럴로
+    // 들고, 열거형은 저장 값의 출처로 남긴다.
     //
-    // 같은 병이 `SettingsPresentation`(가려지면 일시정지·화면보호기·ffmpeg 상태)에도 있지만
-    // 그 파일(`AppLogic.swift`)은 Phase 2 동안 동결이라 손대지 않는다.
+    // **[정정 r3-M23] 이 선택을 정당화하던 근거 두 개가 지금은 둘 다 거짓이다.**
+    //  ① "커버리지 오라클의 스캔 루트는 `Sources/Waple` 하나라 `WapleRender` 에서 감싸면
+    //     키가 스캔되지 않는다" — 스캔 루트는 2026-08-25 에 `Sources/` 전체로 넓어졌다
+    //     (`LocalizationCoverageTests` 의 `hangulUILiterals` 독스트링이 그 변경을 적어 둔다).
+    //     이제 `WapleRender` 에서 감싸도 키가 스캔되므로 `testNoOrphanTranslations` 는 안 깨진다.
+    //  ② "같은 병이 `SettingsPresentation` 에도 있다" — 그쪽 `volumeSteps`·`occlusionOptions`
+    //     는 이미 `NSLocalizedString` 으로 생산 지점에서 완성해 넘긴다(`AppLogic.swift` 의
+    //     `SettingsPresentation` 머리말이 그 판단을 적어 둔다).
+    // 즉 지금 이 자리의 `Text` 리터럴은 **어쩔 수 없어서가 아니라 아직 안 옮겨서** 남아 있다.
+    // 옮기려면 `FitMode.label`/`SceneFPSCap.label` 쪽을 `SettingsPresentation` 과 같은 형태로
+    // 고치고 여기 라벨 함수를 지우면 된다(이번 라운드 범위 밖 — 그 두 열거형은 다른 소유다).
 
     private static func fitLabel(_ mode: FitMode) -> Text {
         switch mode {
@@ -220,7 +232,15 @@ struct SettingsView: View {
             if let message = vm.statusMessage {
                 // 이 문자열은 **생산 지점(SettingsViewModel)에서 이미 현지화됐다** — Text(String)
                 // 오버로드는 번역하지 않으므로 여기서 감싸 봐야 늦다(청사진 §5.0 의 권장 (a)).
-                Text(message).font(Typography.caption).foregroundStyle(ColorRole.destructive)
+                //
+                // **[r3-M37] 빨강이 아니다.** 종전엔 `ColorRole.destructive` 로 무조건 그렸고,
+                // `AppDelegate.notify` 가 그 사실을 "이 채널은 실패 전용" 의 근거로 인용했다.
+                // 그런데 그 채널에는 성공 문구도 들어온다 — `StillWallpaperNotice.message` 는
+                // 전 화면 성공 시 "정지 배경으로 설정했습니다" 를 돌려주고 그것도 여기로 흐른다.
+                // 즉 **성공을 빨강으로** 그리고 있었다. 심각도를 실어 나를 자리가 없으므로
+                // (`SettingsViewModel.statusMessage` 는 문자열 하나다) 색으로 심각도를 주장하지
+                // 않는다 — 같은 문구를 받는 라이브러리 배너도 중립 스타일이라 그쪽과도 맞는다.
+                Text(message).font(Typography.caption).foregroundStyle(.primary)
             }
         } header: {
             Text("시스템 연동")

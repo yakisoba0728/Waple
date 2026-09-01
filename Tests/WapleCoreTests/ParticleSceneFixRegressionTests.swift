@@ -58,14 +58,25 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
     }
 
     /// speedmin 만 있는 실물(lightning2glow 류 — speedmax 부재) → 고정속도(speedmin 승계).
+    ///
+    /// **[정정 2026-09-01] 픽스처가 이름·주석이 말하는 분기를 타지 않았다.**
+    /// 종전 JSON 리터럴은 `"speedmin":250,"speedmax":250` 으로 **speedmax 를 명시**했다.
+    /// 그러면 `ParticleSystemDef.parse` 의 `let speedMax = pfloat(e["speedmax"]) ?? speedMin`
+    /// 에서 `pfloat` 이 성공해 **`??` 폴백이 호출되지 않는다** — 즉 "speedmax 부재 시
+    /// speedmin 승계" 라는 F620 의 잠금 대상이 실행되지 않은 채, 두 값이 같아서 결과만
+    /// 우연히 맞았다. 폴백을 통째로 지워도 이 테스트는 초록이었다.
+    /// 이제 `speedmax` 키를 **뺀다** — 그래야 실물(lightning2glow 류)과 같은 입력이 된다.
     func testF620_SpeedMinOnlyIsFixedSpeed() {
         let def = ParticleSystemDef.parse(json("""
-        {"emitter":[{"name":"sphererandom","rate":0,"distancemax":0,"instantaneous":3,"speedmin":250,"speedmax":250}],
+        {"emitter":[{"name":"sphererandom","rate":0,"distancemax":0,"instantaneous":3,"speedmin":250}],
          "initializer":[{"name":"lifetimerandom","min":100,"max":100}],
          "renderer":[{"name":"sprite"}],"maxcount":5}
         """), material: nil)
         var sim = ParticleSimulator(def: def, seed: 1)
-        for p in sim.step(0.001) {
+        let burst = sim.step(0.001)
+        // 모집단 하한 — 버스트가 0개면 아래 루프가 0회 돌아 이 테스트는 공짜로 통과한다.
+        XCTAssertFalse(burst.isEmpty, "instantaneous:3 인데 첫 스텝에서 파티클이 0개다")
+        for p in burst {
             XCTAssertEqual(simd_length(SIMD3<Float>(p.vel.x, p.vel.y, p.vel.z)), 250, accuracy: 0.01)
         }
     }

@@ -1,7 +1,18 @@
 import Foundation
 
-/// 손상된 스토어 JSON 을 덮어쓰기 전 1회 백업(rename). 복구 가능한 사용자 설정의 무음 파괴를 막는다.
-/// Library/Playlist/Monitor 스토어가 공유한다.
+/// 손상된 스토어 JSON 을 덮어쓰기 전 1회 백업(rename). Library/Playlist/Monitor 스토어가 공유한다.
+///
+/// **[2026-09-01 r2-H20] 이 백업이 실제로 보장하는 것은 "무음 파괴를 막는다" 까지다.**
+/// 남긴 `<파일>.corrupt-<ms>` 를 **다시 읽거나 사용자에게 알리는 코드는 리포 전체에 0건**이다
+/// (`Sources/`·`Tests/`·`scripts/` 전수 grep). 즉 여기서 말하는 "복구 가능" 은
+///   · ○ 원본 바이트가 디스크에 **남아 있다**(사용자가 Finder/터미널로 직접 꺼낼 수 있다),
+///   · ○ 아래 `NSLog` 로 **경로가 콘솔에 남는다**,
+///   · ✗ 앱 안에 복구 UI 도, 자동 재시도도, 알림도 **없다**
+/// 는 뜻이다. 종전 문면("복구 가능한 사용자 설정의 무음 파괴를 막는다")은 앱이 복구 경로를
+/// 제공하는 것처럼 읽혔다 — 복구 UI 는 `Sources/Waple` 소관이라 여기서 만들지 않고 사실만 적는다.
+///
+/// 백업 파일은 **누적된다**(정리·회전 코드도 없다). 반복 손상 시 스토어 디렉터리에
+/// `.corrupt-*` 가 계속 쌓인다는 점도 함께 기록해 둔다.
 func backupCorruptStoreFile(_ url: URL, _ corrupt: inout Bool) -> Bool {
     guard corrupt else { return true }
     // ms 해상도: 같은 초 내 재손상 시 백업 파일명 충돌 → moveItem 실패 → 원본 유실 방지.

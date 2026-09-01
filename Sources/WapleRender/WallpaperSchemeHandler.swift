@@ -110,6 +110,11 @@ public final class WallpaperSchemeHandler: NSObject, @MainActor WKURLSchemeHandl
               url.scheme == WallpaperSchemeHandler.scheme,
               url.host == WallpaperSchemeHandler.host,
               let fileURL = WallpaperSchemeHandler.fileURL(forRequestPath: url.path, root: root) else {
+            // r3-O22: 이 파일 전체에 로그가 한 줄도 없었다. 웹 배경화면이 "그냥 빈 화면" 으로
+            // 끝날 때 진단할 단서가 0 이라, **거부 사유가 갈리는 이 관문 하나**에만 경고를 남긴다
+            // (경로 탈출 · 스킴/호스트 불일치 · 잘못된 URL). 파일별 404 는 정상 트래픽에도 흔해
+            // 로그를 채우므로 여기서만 찍는다. 형제 `WebRenderer` 도 같은 훅(`WapleLog.warn`)을 쓴다.
+            WapleLog.warn("[Waple] scheme handler rejected request: \(requestURL?.absoluteString ?? "<nil>")")
             deliverNotFound(id: id, requestURL: requestURL)
             return
         }
@@ -218,9 +223,18 @@ public final class WallpaperSchemeHandler: NSObject, @MainActor WKURLSchemeHandl
         // `0x14011ce4b`). 여기엔 크기 검사밖에 없어서 FIFO 같은 비정규 노드가 요청되면
         // `FileHandle(forReadingFrom:)` 이 열리고 읽기에서 블록한다.
         //
-        // 형제 규약이 이미 둘 있다 — `WebRenderer.swift:657` 이 `.isRegularFileKey` 와
-        // `.isSymbolicLinkKey` 를 **함께** 요청하고, `ZipImporter.swift:22-25` 가
-        // "심링크 미추종(fileExists 는 링크를 따라간다)" 을 명시한다. 그 형태에 맞춘다.
+        // **[r3-M35 정정] 이 자리는 형제의 심링크 규약을 따르지 않는다 — 따를 필요가 없다.**
+        // 종전 주석은 "`WebRenderer.swift:657` 이 `.isRegularFileKey` 와 `.isSymbolicLinkKey` 를
+        // 함께 요청하고 … 그 형태에 맞춘다" 고 적었지만 아래 호출은 `.isSymbolicLinkKey` 를
+        // 요청하지 않는다(줄 인용도 무효였다 — 실제 자리는 `WebRenderer.regularFiles(in:)`).
+        //
+        // 형제 둘(`WebRenderer.regularFiles(in:)` · `ScenePackage` 의 디렉터리 워커 ·
+        // `ZipImporter` 의 `walk`)이 그 키를 쓰는 목적은 **탈출 방지**다 — 링크를 타고 루트 밖을
+        // 걷지 않기 위해서다. 이 경로의 탈출 방지는 **상류에서 이미 끝난다**:
+        // `fileURL(forRequestPath:root:)` → `WallpaperPathSecurity.containedFileURL` 이
+        // `resolvingSymlinksInPath()` 로 **해소한 실경로**가 실루트 안인지 검사한다.
+        // 즉 루트 안을 가리키는 심링크는 서빙해도 안전하고, 밖을 가리키면 여기 오기 전에 nil 이다.
+        // 남은 위험은 "비정규 노드(FIFO 등)에서 읽기가 블록" 뿐이고 그건 `.isRegularFileKey` 가 막는다.
         guard let rv = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
               rv.isRegularFile == true,
               let size = rv.fileSize,

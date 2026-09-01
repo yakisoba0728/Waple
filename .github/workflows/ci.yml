@@ -135,6 +135,20 @@ jobs:
           TOTAL=$(grep -c "warning:" build-output.log || true)
           SOURCE_WARNINGS=$(grep -E '(^|/)Sources/.*:[0-9]+:[0-9]+: warning:' build-output.log \
             | sed -E 's|^.*(/Sources/)|Sources/|' | sort -u | wc -l | tr -d ' ')
+
+          # **[2026-09-01] 패턴 생존 확인(양성 대조) — 이 census 에는 상한밖에 없었다.**
+          # 상한만 있으면 `SOURCE_WARNINGS=0` 이 "진단을 다 고쳤다" 인지 "grep/sed 파이프라인이
+          # 깨져서 아무것도 못 본다" 인지 **구분할 수 없다.** 0 은 언제나 상한을 통과한다.
+          # (로그 형식은 실제로 바뀐다 — 위 sed 의 러너 경로 접두 제거가 그 증거다.)
+          # 그래서 합성 한 줄에 **같은 파이프라인**을 돌려 1 이 나오는지 본다. 이 대조가
+          # 깨지면 census 값 자체를 믿을 수 없으므로 즉시 실패다. 상한 값은 건드리지 않는다.
+          PROBE=$(printf '%s\n' "/Users/runner/work/Waple/Waple/Sources/Zz/Probe.swift:1:1: warning: synthetic positive control" \
+            | grep -E '(^|/)Sources/.*:[0-9]+:[0-9]+: warning:' \
+            | sed -E 's|^.*(/Sources/)|Sources/|' | sort -u | wc -l | tr -d ' ')
+          if [ "${PROBE:-0}" -ne 1 ]; then
+            echo "::error::진단 census 의 grep/sed 파이프라인이 합성 양성 대조에서 ${PROBE:-0}건을 냈다 — 1 이어야 한다. 패턴이 로그 형식 변화를 못 따라갔다: 이 스텝의 0 은 '고쳤다' 가 아니라 '못 본다' 일 수 있다."
+            exit 1
+          fi
           echo "### 엄격 동시성 진단 (${{ matrix.configuration }})" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "총 warning: \`${TOTAL:-0}\`" >> "$GITHUB_STEP_SUMMARY"
@@ -158,6 +172,14 @@ jobs:
           if [ "${SOURCE_WARNINGS:-0}" -gt 25 ]; then
             echo "::error::Sources warning ${SOURCE_WARNINGS}자리 — Swift 6 전환 기준선 25 초과."
             exit 1
+          fi
+          # 래칫 알림 — 위 주석의 "진단을 고친 커밋은 아래 상한도 함께 낮춘다" 를 사람이 기억에
+          # 의존해 지키고 있었다. 실측이 상한보다 낮으면 그 사실을 요약에 남긴다(실패는 아니다 —
+          # 같은 PR 안에서 낮추라는 지시다). 상한을 낮춰도 형제 계약 테스트
+          # (`scripts/dev/tests/test_workflow_contracts.py`)가 깨지지 않게 그쪽도 숫자를 파싱한다.
+          if [ "${SOURCE_WARNINGS:-0}" -lt 25 ]; then
+            echo "::notice::Sources warning ${SOURCE_WARNINGS}자리 — 상한 25 보다 낮다. 이 스텝의 상한도 ${SOURCE_WARNINGS} 로 낮춰라(증가 금지 래칫)."
+            echo "- 상한 인하 권고: \`25\` → \`${SOURCE_WARNINGS}\`" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # release 빌드 로그도 올린다 — 이 레인의 존재 이유가 최적화 의존 결함인데
@@ -266,6 +288,18 @@ jobs:
       # 세 번 돌린다 — 경합은 한 번으로는 안 잡힌다. 실패하면 원인이 하나 더 남아 있는 것이다.
       # 전 스위트가 아니라 이 두 클래스만 돌리므로 비용은 수십 초다.
       #
+      # **[한계 명시 2026-09-01] 이 게이트는 클래스 *안*의 경합만 본다 — 교차-클래스 경합은
+      # 원리적으로 못 본다.**
+      # 아래 루프는 `for cls in …` 안에서 매번 `--filter "$cls"` 로 **한 클래스만** 병렬
+      # 실행한다. 한 번에 한 클래스만 프로세스에 있으니 다른 클래스와의 경합은 애초에 일어날
+      # 수 없다. 그런데 이 게이트가 잠그려는 두 원인은 **둘 다 프로세스/사용자 전역 자원**
+      # (`UserDefaults.standard` · 전역 `fitMode`)이라, 같은 자원을 만지는 **제3의 클래스**가
+      # 들어오면 여기서는 영원히 보이지 않는다. 위 "두 클래스가 병렬 3/3 실패" 를 해소했다는
+      # 주장의 범위도 그만큼이다 — 전량 `--parallel` 이 초록이라는 뜻이 아니다.
+      # (전량 `--parallel` 을 게이트로 올리는 것은 별개의 작업이다. 여기에 두 클래스를 한
+      #  `--filter` 정규식으로 합쳐 넣는 것만으로는 그 제3자 문제가 안 닫히고, 이 스텝의
+      #  실행 시간만 늘면서 "닫혔다" 는 인상만 준다. 그래서 **범위를 넓히는 대신 적어 둔다.**)
+      #
       # **판정은 로그 문자열이 아니라 `--xunit-output` XML 로 한다.** 1차 판이 로그를 보다가
       # 오판했다 — `--parallel` 은 전부 통과하면 XCTest 의 `Executed N tests` 줄을 안 찍는데
       # 그걸 "필터가 0건 매치" 로 읽어 통과한 클래스를 실패로 보고했다. 이 리포가 반복해서
@@ -292,7 +326,8 @@ jobs:
       #
       # 어떤 실패가 여기를 그냥 통과하나 — 교정된 형태로 적는다. 러너에서 Metal 이
       # 통째로 사라지는 양상은 이 게이트가 아니라 아래 census 의 **상한 100** 이 잡는다
-      # (Metal 가드가 걸린 파일에 거주하는 테스트가 575건이라 기준선 63 을 훌쩍 넘긴다).
+      # (Metal 가드가 걸린 파일에 거주하는 테스트가 630건이라 기준선 63 을 훌쩍 넘긴다
+      #  — 2026-09-01 실측, 세는 법은 아래 census 주석. 종전 인용 575 는 낡은 값이었다).
       # 여기를 빠져나가는 것은 **좁은 쪽**이다: 이 두 클래스의 가드만 넓히면
       # (예: `XCTSkipUnless(hasMetal && hasDisplay)`) 스킵이 16 늘어 63+16=79 로 상한
       # 아래에 머물고, `Executed` 는 스킵을 포함하므로 하한도 못 본다. 즉 이 게이트는
@@ -418,19 +453,26 @@ jobs:
       # [2026-08-19] 스킵 가시화 **및 게이트**.
       #
       # XCTSkip("no Metal") 의 규모 — **세는 법을 함께 적는다. 값만 적으면 반드시 썩는다.**
-      # (2026-08-27 실측)
-      #   파일 77   grep -rlE 'XCTSkip[^(]*\([^)]*no Metal' Tests/ --include=*.swift | wc -l
-      #   사이트 324  같은 패턴의 -c 합
-      #   그 파일들에 **거주하는** 테스트 575   위 파일 목록 × 정본 레시피(AGENTS.md 「빌드와 테스트」)
+      # (2026-09-01 실측)
+      #   파일 82   grep -rlE 'XCTSkip[^(]*\([^)]*no Metal' Tests/ --include=*.swift | wc -l
+      #   사이트 365  같은 패턴의 -c 합
+      #   그 파일들에 **거주하는** 테스트 630   위 파일 목록 × 정본 레시피(AGENTS.md 「빌드와 테스트」)
       #
       # [2026-08-27 정정] 종전 이 자리는 "**77개 파일 322곳**에 걸쳐 있고 그 아래 테스트가 561개다"
       # 였다. 파일 77 만 맞고 나머지 둘이 틀렸으며, 더 나쁜 것은 561 이 **게이트에 걸린 테스트가
-      # 아니라 게이트가 하나라도 있는 파일 안의 모든 테스트**(= 거주 수, 지금 575)를 센 값이라는
+      # 아니라 게이트가 하나라도 있는 파일 안의 모든 테스트**(= 거주 수)를 센 값이라는
       # 점이다. "그 아래 테스트" 라는 한 문장에 두 개념이 섞여 있었다. 게이트에 실제로 걸린 수는
-      # 헬퍼 체인을 어디까지 따라가느냐에 따라 330~350 으로 갈려 단일 값으로 적을 수 없다.
-      # 상한 100 의 정당화에는 거주 수(575)면 충분하다 — 대량 무음 스킵을 잡는 것이 목적이므로.
-      # (파일 수 정정 이력 2026-08-21: 76 → 77. 커밋 2642488 시점에도 이미 77 이었으니
-      #  76 은 그전부터 낡아 있던 값이다 — 게이트 동작과는 무관하고 근거 숫자만 틀렸다.)
+      # 헬퍼 체인을 어디까지 따라가느냐에 따라 갈려 단일 값으로 적을 수 없다.
+      # 상한 100 의 정당화에는 거주 수(수백 자리)면 충분하다 — 대량 무음 스킵을 잡는 것이 목적이므로.
+      #
+      # **[정정 2026-09-01] 위 세 값이 신설 시점부터 낡아 있었다.**
+      # 종전 값 77/324/575 는 `575` 를 신설한 그 커밋(PR #8)이 **자기 부모 시점의 값**을 그대로
+      # 박아 넣은 것이고, 같은 PR 이 추가한 테스트로 즉시 어긋났다(부모 70a8a708 의 Tests/ 를
+      # 복원해 같은 grep 을 돌리면 정확히 77/324 가 나온다). 지금 트리 실측은 82/365/630 이다.
+      # **이 셋은 게이트가 아니라 스냅샷이다** — 위 레시피가 정본이고, 값은 세는 시점의 것이다.
+      # 그래서 이 값이 몇 건 어긋나는 것 자체는 게이트 동작에 영향이 없다. 문제는 "낡은 숫자가
+      # 근거로 재인용되는 것" 이므로, 값을 고칠 때는 **날짜와 레시피를 함께** 갱신하라.
+      # (파일 수 정정 이력: 2026-08-21 76 → 77, 2026-09-01 77 → 82.)
       # 스킵은 통과로 집계되므로, 러너 이미지가 바뀌거나 GPU 가 없는 세션에서 돌면
       # **전부 스킵된 채 초록**이 뜬다 — 통과 수를 세는 것만으로는 알아챌 수 없다.
       # 처음엔 숫자만 남기는 단계로 뒀고, 두 번의 실측(run 32219037798 debug·release)으로
@@ -592,7 +634,8 @@ jobs:
       # 테스트 62개가 사라져도 통과한다. 래칫 규약(하한 = 직전 실측치)대로 2452 로 되돌린다.
       #
       # 막으려는 것은 **대량 무음 스킵**이다. XCTSkip("no Metal") 게이트가 걸린 파일에
-      # 거주하는 테스트가 575개(위 census 주석의 세는 법 참조)인데 스킵은 통과로 집계되므로,
+      # 거주하는 테스트가 630개(2026-09-01 실측 — 위 census 주석의 세는 법 참조)인데
+      # 스킵은 통과로 집계되므로,
       # 러너 이미지가 바뀌거나 GPU 없는 세션에서 돌면 전부 스킵된 채 초록이 뜬다 —
       # 통과 수만 봐서는 알아챌 수 없다. 상한 100 은 그 실패 양상(수백 건 스킵)을 확실히 잡는다.
       #
@@ -683,6 +726,20 @@ jobs:
       # 정본 레시피의 정적 개수도 정확히 4,016이므로 위 3,875의 원격 근거를 마감하고,
       # 같은 실측치로 새 오라클까지 여유 0으로 래칫한다.
       #
+      # **[2026-09-01 — 4016 → 4042 래칫]** 감사 4라운드 + 검증 라운드가 확정한 185건을
+      # 5개 레인이 일괄 수정하면서 오라클이 26개 늘었다(삭제 0). 로컬 실측:
+      # `swift test --skip-build` 가 실패 0 · 스킵 63 · **executed 4,042**(7번들 합
+      # 26+1229+74+60+2144+30+479)이고, 정본 레시피의 정적 개수도 정확히 4,042다.
+      # 레인별 증분: L1 엔진 +12(ParticleChildren 3 · PuppetMDLAFraming 2 ·
+      # ParticleControlPointFrame 1 · ZipImportAudit 3 · LibraryMetadata 2 · MonitorAndPlaylist 1) ·
+      # L2 렌더 +8(waterripple 1 · parallax 중립 2 · orthographic 게이트 2 · events 1 ·
+      # bind/fbos 1 · forwardLightAxis 동형 1) · L3 앱 +6(L3MediaFixRegression 3 ·
+      # L3LibraryFilterScope 3) · L4 하네스 ±0(단언만 보강) · L6 문서 ±0.
+      # **[근거 마감 2026-09-01]** PR #9 의 커밋 `f3e37732` 를 PR/push 두 이벤트가 각각
+      # 검증했다(run `33464170650` · `33464122819`). debug·release 네 잡 모두
+      # `executed=4042` · 실패 0 이고 skipped 만 63/64 로 갈렸다(스킵은 `executed` 에
+      # 포함되므로 이 수는 안 흔들린다). 정적 개수도 정확히 4,042 라 두 세는 법이 일치한다.
+      #
       # 순증 +141의 출처: CameraParallaxRender +16 · ScenePerspectiveOverrideFovRender +15 ·
       # ParticleMapSequenceOracle +14 · ParticleInstanceOverrideAnimationRuntime +11 ·
       # Scene3DPointerTarget +10 · ParticleEmitterControlPoint +8 · ParticleChildren +6 = +80,
@@ -751,6 +808,25 @@ jobs:
       # 아니라 **사고**이므로 실패다. `continue` 자체는 남긴다 — 선언되지 않은 디렉터리
       # (진짜 지원 전용)가 거짓 실패를 내지 않게 하는 것이 그 예외의 원래 목적이었다.
       # 선언 목록을 소스에서 뽑는 것은 위 "이름을 하드코딩하지 않는 이유" 와 같은 이유다.
+      #
+      # **[정정 2026-09-01] 이 게이트는 `XCTSkip` 을 통과로 읽고 있었다 — 위 세 문단이 막았다고
+      # 적은 구멍이 그대로 열려 있었다.**
+      # 종전 두 정규식은 결과 절(`passed`/`failed`/`skipped`)을 전혀 보지 않았다:
+      #   ⓐ `Test Case '-\[[A-Za-z0-9_]+\.([A-Za-z0-9_]+) ` 는 **접두만** 매칭한다. XCTest 는
+      #      스킵된 테스트에도 같은 접두를 찍는다(실측 형태:
+      #      `Test Case '-[WapleRenderTests.FooTests testBar]' skipped (0.001 seconds).`).
+      #   ⓑ `Test Suite '(\w+)'` 는 결과와 무관하다. 전건 스킵이어도 스위트는 `passed` 로 닫힌다.
+      # 그래서 **타깃 하나를 통째로 `XCTSkip` 해도 세 게이트가 전부 초록**이었다:
+      # `Executed` 는 스킵을 포함하니 하한 4042 가 안 움직이고, 스킵 상한 100 에는
+      # 그때 여유가 37 이라 26·30 짜리 타깃(`WapleSnapshotTests`·`WapleCompatCoreTests`)이
+      # 그 안에 들어간다. 즉 "개수가 아니라 존재를 본다" 던 이 게이트가 **존재가 아니라
+      # 로그 줄의 존재**를 보고 있었다.
+      # 고침: `ran` 을 `... method]' passed|failed` 로만 만든다. 스위트 정규식은 **버린다** —
+      # 전건 스킵과 전건 통과를 원리적으로 구분할 수 없어 살릴 방법이 없다. 스킵만 나타난
+      # 클래스는 따로 모아 오류 메시지가 "로그에 없음" 과 "전건 스킵" 을 구분해 보고한다.
+      # (러너에 Metal 이 있는 한 이 강화는 오탐을 내지 않는다 — `Tests/WapleRenderTests` 조차
+      #  Metal 없이 도는 순수 수학 클래스를 여럿 갖는다. Metal 이 통째로 사라지는 양상은
+      #  위 상한 100 이 먼저 잡는다.)
       # ══════════════════════════════════════════════════════════════════════
       - name: Skip / execution census
         if: always()
@@ -777,10 +853,10 @@ jobs:
             echo "::error::스킵 ${SKIPPED}건 — 상한 100 초과. GPU/코퍼스 없이 대량 스킵되고 있을 가능성이 크다."
             exit 1
           fi
-          # (하한 4016 — 실행 수 래칫과 그 이력) — 근거는 이 스텝 위 YAML 주석에 있다.
+          # (하한 4042 — 실행 수 래칫과 그 이력) — 근거는 이 스텝 위 YAML 주석에 있다.
           # run 블록 밖으로 옮긴 이유도 거기 적었다(21,000바이트 한도).
-          if [ "${EXECUTED:-0}" -lt 4016 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 4016 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
+          if [ "${EXECUTED:-0}" -lt 4042 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 4042 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
             exit 1
           fi
 
@@ -790,8 +866,12 @@ jobs:
           import pathlib, re, sys
 
           log = pathlib.Path("test-output.log").read_text(encoding="utf-8", errors="replace")
-          ran = set(re.findall(r"Test Suite '([A-Za-z0-9_]+)'", log))
-          ran |= set(re.findall(r"Test Case '-\[[A-Za-z0-9_]+\.([A-Za-z0-9_]+) ", log))
+          # [정정 2026-09-01] 종전 두 정규식은 **결과 절을 보지 않았다** — 근거는 이 스텝 위
+          # YAML 주석의 같은 날짜 항목. 이제 몸통이 실제로 돈 것(`passed`/`failed`)만 센다.
+          CASE = r"Test Case '-\[[A-Za-z0-9_]+\.([A-Za-z0-9_]+) [A-Za-z0-9_]+\]' "
+          ran = set(re.findall(CASE + r"(?:passed|failed)", log))
+          # 스킵만 나타난 클래스는 아래 오류 메시지가 "로그에 없음" 과 구분해 보고한다.
+          skipped_only = set(re.findall(CASE + r"skipped", log)) - ran
 
           # 기대 목록의 정본은 `Package.swift` 의 `.testTarget` 선언이다 — `Tests/` 순회가
           # 아니다. 근거는 위 [정정 2026-08-30]. 뽑기 자체가 실패하면 그것도 사고다.
@@ -830,10 +910,10 @@ jobs:
               hit = classes & ran
               rows.append((d.name, len(classes), len(hit)))
               if not hit:
-                  missing.append((d.name, sorted(classes)[:5]))
+                  missing.append((d.name, sorted(classes)[:5], sorted(classes & skipped_only)[:5]))
 
           for name, total, hit in rows:
-              print(f"  {name}: 선언 {total} · 로그에서 확인 {hit}")
+              print(f"  {name}: 선언 {total} · 실행(통과/실패) 확인 {hit}")
           if empty:
               for name in empty:
                   print(f"::error::타깃 `{name}` 은 Package.swift 가 `.testTarget` 으로 선언했는데 "
@@ -841,12 +921,14 @@ jobs:
                         f"소스가 지워졌다. 선언된 타깃에는 지원 전용 예외를 적용하지 않는다.")
               raise SystemExit(1)
           if missing:
-              for name, sample in missing:
-                  print(f"::error::타깃 `{name}` 의 테스트 클래스가 실행 로그에 **하나도** 없다 — "
-                        f"번들이 안 실렸거나 타깃이 빠졌다. 예: {sample}")
+              for name, sample, skipped in missing:
+                  why = (f"로그에는 **스킵만** 나타난다(예: {skipped}) — 게이트가 타깃 전체에 걸렸다"
+                         if skipped else "번들이 안 실렸거나 타깃이 빠졌다")
+                  print(f"::error::타깃 `{name}` 에서 **실제로 실행된**(통과/실패) 테스트 클래스가 "
+                        f"하나도 없다 — {why}. 선언 예: {sample}")
               raise SystemExit(1)
           print(f"타깃 존재 게이트 통과 — 선언 {len(declared)}개 · 검사 {len(rows)}개 타깃 "
-                f"전부 실행 로그에 나타난다.")
+                f"전부 실행 로그에 통과/실패로 나타난다(스킵은 통과로 세지 않는다).")
           PYEOF
 
       # [주석 정정 2026-08-21] **고아 주석 회수 — `1fb7ad2` 가 잡은 것과 같은 부류의 세 번째 건.**

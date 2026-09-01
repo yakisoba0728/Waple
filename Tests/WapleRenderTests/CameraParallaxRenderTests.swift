@@ -89,6 +89,52 @@ final class CameraParallaxRenderTests: XCTestCase {
         XCTAssertLessThan(renderer.parallaxFocus.y, 50)
     }
 
+    /// H4/H5: 시차 상태의 중립은 0 이 아니다. 오프셋 식이 `(origin − focus)` 라 focus=(0,0) 은
+    /// 좌상단 기준 최대 편향이고, `g_ParallaxPosition` 은 `depthparallax.vert` 의 `*2−1` 을 거쳐
+    /// (0,0) → (-1,-1) 로 읽힌다. 정본 중립은 캔버스 중앙 / `(0.5,0.5)`(SceneGeometry).
+    func testNeutralResetPinsCanvasCenterAndHalfUniform() {
+        let renderer = SceneRenderer()
+        renderer.projW = 200
+        renderer.projH = 100
+        renderer.parallaxFocus = .zero
+        renderer.parallaxPosition = .zero
+        renderer.resetCameraParallaxNeutral()
+        XCTAssertEqual(renderer.parallaxFocus.x, 100, accuracy: 1e-6)
+        XCTAssertEqual(renderer.parallaxFocus.y, 50, accuracy: 1e-6)
+        XCTAssertEqual(renderer.parallaxPosition.x, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(renderer.parallaxPosition.y, 0.5, accuracy: 1e-6)
+    }
+
+    /// H4: `cameraparallax:false` 씬은 `advanceCameraParallax` 의 guard 에 막혀 이 슬롯의 유일한
+    /// 기록자를 평생 못 탄다. 그래도 마운트가 중립을 심어야 depthparallax 계열이 최대 편향으로
+    /// 그려지지 않는다(실물 생성자는 0 을 심지만 그 값은 이 셰이더에서 중립이 아니다 —
+    /// 근거는 `SceneRenderer.parallaxPosition` 선언부 주석).
+    func testParallaxDisabledSceneMountsNeutralUniform() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":200,"height":100},"clearcolor":"0 0 0",
+                    "cameraparallax":false},
+         "objects":[
+          {"id":1,"image":"models/red.json","origin":"50 50 0","size":"10 10","scale":"1 1 1","angles":"0 0 0",
+           "parallaxDepth":"1 1","alpha":1,"color":"1 1 1","brightness":1,"visible":true}]}
+        """
+        let model = #"{"width":10,"height":10,"material":"materials/red.json"}"#
+        let material = #"{"passes":[{"textures":["red"]}]}"#
+        let renderer = SceneRenderer()
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 100)),
+                           project: try project(files: [
+                            ("scene.json", Data(scene.utf8)), ("models/red.json", Data(model.utf8)),
+                            ("materials/red.json", Data(material.utf8)),
+                            ("materials/red.tex", solidTex(255, 0, 0, w: 10, h: 10)),
+                           ], id: "disabled_neutral"))
+        defer { renderer.teardown() }
+        XCTAssertFalse(renderer.parallaxEnabled)
+        XCTAssertEqual(renderer.parallaxPosition.x, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(renderer.parallaxPosition.y, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(renderer.parallaxFocus.x, 100, accuracy: 1e-6)
+        XCTAssertEqual(renderer.parallaxFocus.y, 50, accuracy: 1e-6)
+    }
+
     func testCaptureSubstepsResampleRuntimeEyeAtEachStep() {
         let renderer = SceneRenderer()
         renderer.projW = 100

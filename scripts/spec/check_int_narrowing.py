@@ -26,10 +26,23 @@ R4 가 핵심이다. R1~R3 는 아는 형태만 잡지만 R4 는 **모르는 새
 가드를 태우거나, 기준선을 올리면서 **왜 안전한지 여기에 적거나**.
 후자를 귀찮게 만드는 게 목적이다. 침묵이 기본값이면 안 된다.
 
+## 모집단 하한과 셀프테스트 (2026-09-01)
+
+R4 는 **상한**이다. 상한만 있으면 정규식이 죽어 `census = 0` 이 나와도 조용히 통과한다
+(`0 > 350` 은 거짓이다). 실제로 이 저장소가 반복해 물린 함정이 그것이다 — 형제
+`check_particle_corpus_census.py` 도 같은 결함이었다. 그래서 둘을 더한다:
+
+  ·  **모집단 하한** — 스캔한 `.swift` 파일 수와 census 가 하한 아래면 실패. "고쳐서 0" 과
+     "패턴이 깨져서 0" 을 구분한다. 하한은 판정 임계가 아니라 **스캔 온전성** 기준이라
+     현재값(174 파일 / 350건)보다 한참 낮게 잡아도 잡으려는 것을 놓치지 않는다.
+  ·  **`--selftest`** — 합성 양성/음성 대조. R1·R2·CONV·GUARDS 가 각각 무엇을 잡고 무엇을
+     안 잡는지 고정한다. 정규식을 건드린 커밋이 조용히 무력화되지 않게 한다.
+
 ## 재실행
 
     python3 scripts/spec/check_int_narrowing.py            # 검사
     python3 scripts/spec/check_int_narrowing.py --census   # 현재 수치만 출력(기준선 갱신용)
+    python3 scripts/spec/check_int_narrowing.py --selftest # 정규식 양성/음성 대조
 """
 import os
 import re
@@ -119,7 +132,20 @@ PINS = [
 # 둘 다 `Int(StringProtocol)`의 **실패 가능 이니셜라이저**라 숫자가 너무 크거나 잘못되면
 # 트랩하지 않고 nil을 낸다. 이어지는 가드가 정확한 키 재구성과 0...7 범위까지
 # 검증하며, 비정상·범위 밖 키 회귀는 `ParticleInstanceOverrideAnimationRuntimeTests`가 지킨다.
-CENSUS_BASELINE = 350
+# [2026-09-01] 350 → 355. `Model3D.inferStride` 가 인덱스 폭을 본경로와 같은 규칙
+# (`gateWord & 1` → 2 or 4)으로 받도록 고치면서(r4-40) 좁힘 5자리가 늘었다. 전건 안전하다:
+# ① `UInt32(indexWidth)` 1자리 — 바로 위 `guard indexWidth == 2 || indexWidth == 4` 가
+#    두 값으로 고정한다(그 외는 nil 반환).
+# ② `Int(bytes[k])` 4자리 — `UInt8` → `Int` 는 **넓히기**라 손실이 원리적으로 불가능하다.
+# 종전엔 이 함수만 u16 쌍 고정 파스라 본경로가 u32 로 읽는 파일에서 maxIndex 를 잘못 셌다.
+CENSUS_BASELINE = 355
+
+# ── 모집단 하한(2026-09-01) — 상한만으로는 "0" 이 두 가지 뜻을 갖는다 ──────────
+# 현재값은 파일 174 / census 350 이다. 하한은 그 근처로 잡으면 정상적인 가드 도입 커밋마다
+# 빨개지므로 **한참 아래**로 둔다 — 잡으려는 것은 "패턴이 깨져 0/한 자리" 이지 "조금 줄었다"
+# 가 아니다. 이 둘은 줄이는 방향으로 갱신할 일이 없다(늘리려면 현재값을 다시 재고 적어라).
+MIN_FILES_SCANNED = 100
+MIN_CENSUS = 100
 
 
 def swift_files():
@@ -172,10 +198,52 @@ def code_lines(path):
                 yield i, code
 
 
+# ── 셀프테스트: 정규식 양성/음성 대조 ────────────────────────────────────────
+# (라벨, 소스 한 줄, R1 기대, R2 기대, 가드 없는 좁힘 기대 수)
+SELFTEST_CASES = [
+    ("R1 정방향", 'let n = Int(x as? Double ?? 0)', True, False, 1),
+    ("R1 역방향", 'let d = obj["k"] as? Double; let n = Int32(d!)', True, False, 1),
+    # R1 의 정방향(`as? Double … Int(`)이 map 형태도 함께 문다 — 같은 줄이 두 번 보고되는
+    # 것은 종전부터의 실동작이다. 여기서는 그 사실을 그대로 고정한다(둘 중 하나가 조용히
+    # 죽는 것을 잡는 것이 목적이지, 중복 보고를 없애는 것이 목적이 아니다).
+    ("R2 map",    'let n = (obj["k"] as? Double).map { Int($0) }', True, True, 1),
+    ("가드 경유", 'let n = safeInt(obj["k"] as? Double)', False, False, 0),
+    ("clamping",  'let n = Int32(clamping: big)', False, False, 0),
+    ("좁힘 없음", 'let s = String(describing: value)', False, False, 0),
+    ("한 줄 2건", 'let a = Int(p), b = Int(q)', False, False, 2),
+]
+
+
+def selftest():
+    fails = []
+    for label, line, want_r1, want_r2, want_census in SELFTEST_CASES:
+        code = strip_trailing_comment(line)
+        got_r1 = bool(R1.search(code)) and not any(g in code for g in GUARDS)
+        got_r2 = bool(R2.search(code))
+        got_census = 0 if any(g in code for g in GUARDS) else len(CONV.findall(code))
+        for name, got, want in (("R1", got_r1, want_r1), ("R2", got_r2, want_r2),
+                                ("census", got_census, want_census)):
+            if got != want:
+                fails.append(f"  {label}: {name} 기대 {want} 실측 {got}   `{line}`")
+    # 줄 끝 주석으로 가드 판정이 뚫리지 않는지(위 strip_trailing_comment 의 이력).
+    tricky = 'let n = Int(x as? Double ?? 0)  // clamping: 을 쓸 수 없는 자리다'
+    code = strip_trailing_comment(tricky)
+    if any(g in code for g in GUARDS):
+        fails.append("  주석 면제: 줄 끝 주석의 가드 이름이 여전히 면제로 읽힌다")
+    if fails:
+        print("[int-narrowing] --selftest 실패\n" + "\n".join(fails))
+        raise SystemExit(1)
+    print(f"[int-narrowing] --selftest 통과 — 대조 {len(SELFTEST_CASES)}건")
+
+
 def main():
-    census, errors = 0, []
+    if "--selftest" in sys.argv:
+        selftest()
+        return
+    census, errors, scanned = 0, [], 0
     for path in swift_files():
         rel = os.path.relpath(path, REPO)
+        scanned += 1
         for lineno, line in code_lines(path):
             if not CONV.search(line):
                 continue
@@ -201,8 +269,19 @@ def main():
                           f"    이유: {why}")
 
     if "--census" in sys.argv:
-        print(f"가드 없는 정수 좁힘 총수: {census}  (기준선 {CENSUS_BASELINE})")
+        print(f"가드 없는 정수 좁힘 총수: {census}  (기준선 {CENSUS_BASELINE}, "
+              f"파일 {scanned})")
         return
+
+    # 모집단 하한 — 상한만 있으면 `census = 0` 이 통과한다(위 doc 참조).
+    if scanned < MIN_FILES_SCANNED:
+        errors.append(f"[R0] Sources 에서 스캔한 .swift 가 {scanned}개 — 하한 "
+                      f"{MIN_FILES_SCANNED} 미만. 스캔 루트({SRC})가 틀렸거나 소스가 사라졌다.")
+    elif census < MIN_CENSUS:
+        errors.append(f"[R0] 가드 없는 좁힘이 {census}건 — 하한 {MIN_CENSUS} 미만.\n"
+                      f"    이만큼 줄었다면 축하할 일이지만, 정규식(CONV/GUARDS)이 깨져서\n"
+                      f"    아무것도 못 보는 상태와 구분되지 않는다. `--selftest` 를 먼저 돌리고,\n"
+                      f"    실제로 줄었다면 MIN_CENSUS 와 CENSUS_BASELINE 을 함께 갱신할 것.")
 
     if census > CENSUS_BASELINE:
         errors.append(

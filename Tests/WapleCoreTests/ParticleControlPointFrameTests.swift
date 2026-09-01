@@ -547,4 +547,41 @@ final class ParticleControlPointFrameTests: XCTestCase {
         XCTAssertTrue(r.skipped)
         XCTAssertEqual(update(flags, index: slot, world: true), .untouched)
     }
+
+    // MARK: - CP 인덱스 클램프의 단일 정본 (r3-M5 · r4-07)
+
+    /// 파스 경로 둘이 `clampIndex` 와 **같은** CP 를 골라야 한다.
+    ///
+    /// - `mapSeqClampCP`(r3-M5)는 비교만 32비트로 좁히고 **결과로는 안 좁힌 원값**을 돌려줬다 —
+    ///   `2³²+3` 은 절단값 3 이 `< 7` 을 통과해 `4294967299` 가 CP 인덱스로 나갔다.
+    /// - `clampControlPoint`(r4-07)는 **절단 자체가 없어** 같은 입력을 7 로 접었다.
+    ///
+    /// 엔진은 `ecx` 하위 32비트에 `cmp r,7`/`cmovb`(부호 없는 below)를 걸므로 정답은 **3** 이다.
+    /// 저작 코퍼스 도달은 0(동봉·설치 전건 `controlpoint` 가 0..7) — 워크샵 코퍼스(446)는 이
+    /// 머신에 없어 재지 못했다. 그래서 이 단언은 코퍼스가 아니라 **엔진 규약**을 잠근다.
+    func testParsedControlPointIndicesFoldThroughClampIndex() {
+        XCTAssertEqual(ParticleControlPointLimits.clampIndex(4_294_967_299), 3)
+        XCTAssertEqual(ParticleControlPointLimits.clampIndex(4_294_967_296), 0)
+
+        let def = ParticleSystemDef.parse(json("""
+        {"initializer":[{"name":"mapsequencebetweencontrolpoints",
+                         "controlpointstart":4294967299,"controlpointend":4294967296}],
+         "operator":[{"name":"maintaindistancebetweencontrolpoints",
+                      "controlpointstart":4294967299,"controlpointend":4294967296}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """), material: nil)
+
+        XCTAssertEqual(def.mapSequenceBetween.count, 1)
+        XCTAssertEqual(def.mapSequenceBetween[0].cpStart, 3, "mapSeqClampCP 는 절단값을 돌려줘야 한다")
+        XCTAssertEqual(def.mapSequenceBetween[0].cpEnd, 0)
+
+        var maintained: (start: Int, end: Int)? = nil
+        for op in def.operators {
+            if case let .maintainDistanceBetweenControlPoints(start, end) = op { maintained = (start, end) }
+        }
+        let m = maintained
+        XCTAssertNotNil(m)
+        XCTAssertEqual(m?.start, 3, "clampControlPoint 도 같은 절단을 거쳐야 한다(형제와 불일치 금지)")
+        XCTAssertEqual(m?.end, 0)
+    }
 }

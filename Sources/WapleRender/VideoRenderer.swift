@@ -2,6 +2,38 @@ import AppKit
 import AVFoundation
 import WapleCore
 
+/// F820 라이브 반영의 **공통 진입점**. 음량/배속 변경을 리마운트 없이 살아 있는 재생 객체에 먹인다.
+///
+/// **왜 `WallpaperRenderer` 가 아니라 별도 프로토콜인가.** `WallpaperRenderer` 는 "배경을 붙이고
+/// 떼는" 계약이고 이 축은 그 위에 겹치는 선택적 능력이다. 소리를 낼 수 없는 렌더러까지
+/// 빈 구현을 강요하지 않으려고 분리한다 — 호출부는 `as?` 로 능력을 묻는다.
+///
+/// **인자로 받는다 — 구현이 `VideoSettings` 를 직접 읽지 않는다.** 종전 `VideoRenderer` 전용
+/// 훅은 자기 `projectId` 로 값을 되읽었는데, 씬 경로(`SceneRenderer`)는 마운트한 프로젝트 id 를
+/// 저장하지 않아 같은 방식을 쓸 수 없다. 호출부(`AppDelegate`)는 `renderers` 와 같은 순서·같은
+/// 길이인 `rendererProjects`(그 선언부의 불변식)를 이미 들고 있으므로 거기서 id 를 풀어 값을
+/// 넘긴다. 그러면 이 프로토콜의 구현체는 "받은 값을 반영" 하기만 하면 된다.
+///
+/// **배속은 축이 다르다.** 씬 오디오(`SceneAudioPlayer`)에는 배속 개념이 없다 — 그쪽 구현은
+/// `rate` 를 문서화된 no-op 으로 무시한다. 음량만 라이브로 따라간다.
+///
+/// **요구사항에 `@MainActor` 를 붙이고 적합 선언은 평범하게 둔다.** 형제 `WallpaperRenderer`
+/// 는 반대로 되어 있다(비격리 요구사항 + `@MainActor` 적합 = 격리 적합). 여기서 그 형태를
+/// 따르지 않는 이유는 이 프로토콜의 유일한 소비 방식이 **동적 캐스팅**(`as?`)이기 때문이다 —
+/// 격리 적합은 캐스트가 그 액터 위에서 실행될 때만 성사되므로, 실패하면 컴파일 오류가 아니라
+/// **조용한 no-op** 이 된다. 이 축의 결함(r2-H8)이 바로 "설정이 UI만 바꾸고 실제로는 무효" 였던
+/// 만큼 같은 실패 양식을 다시 만들지 않는다. 요구사항 쪽에 격리를 두면 적합은 평범해지고
+/// 캐스트는 언제나 성사되며, 호출은 메인 액터에서만 가능하다는 사실이 타입으로 남는다.
+/// 세 구현체는 전부 메인 전용이다(`VideoRenderer`·`WebRenderer` 는 `@MainActor`,
+/// `SceneRenderer` 는 비격리 클래스라 확장에서 `@MainActor` 를 명시한다).
+public protocol LiveMediaSettingsApplying: AnyObject {
+    /// - Parameters:
+    ///   - volume: `VideoSettings.volume(id:)` (0…1). 정책 음소거는 **덮지 않는다** — 구현은
+    ///     자기 정책 층과 합성한다.
+    ///   - rate: `VideoSettings.rate(id:)`. 배속 개념이 없는 구현은 무시한다.
+    @MainActor func applyLiveMediaSettings(volume: Float, rate: Float)
+}
+
 /// @unchecked Sendable: 이 렌더러의 상태는 **메인 큐 한정**이다 — mount/attachPlayer/pause/resume/
 /// teardown 은 메인에서 불리고, 비동기로 들어오는 세 경로(ffmpeg 변환 완료, AVPlayerItem.status KVO,
 /// asset.load Task)는 전부 첫 줄에서 DispatchQueue.main.async 로 홉한 뒤에야 필드를 만진다.
@@ -29,7 +61,8 @@ import WapleCore
 ///     붙이면 그 호출이 **에러**가 되어 `swift test` 가 통째로 안 선다.~~
 /// 실제 실행 규율은 위 문단(메인 큐 한정 + mountToken 세대 가드)이고, 그것이 이 표기의 근거다.
 @MainActor
-public final class VideoRenderer: @MainActor WallpaperRenderer, @unchecked Sendable {
+public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSettingsApplying,
+                                  @unchecked Sendable {
     /// Conservative AVFoundation-native containers used directly without conversion.
     /// F230: WapleCore.VideoFormats.nativeExtensions 가 단일 소스 — 여기서 다시 선언하지 않는다.
     nonisolated public static let nativeVideoExtensions: Set<String> = VideoFormats.nativeExtensions
@@ -256,7 +289,15 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, @unchecked Senda
                 if win.occlusionState.contains(.visible) {
                     if self.pausedByOcclusion, !self.pausedManually { self.player?.play() }
                     self.pausedByOcclusion = false
-                } else if self.player?.rate != 0 {
+                } else {
+                    // r4-16: 종전 가드는 `player?.rate != 0` 이었다 — **이미 정지 중이면 가림
+                    // 플래그를 안 세운다**는 뜻이라, 수동 정지(pause()) 상태에서 창이 가려지면
+                    // `pausedByOcclusion` 이 false 로 남았다. 그 뒤 resume() 은
+                    // `isEffectivelyPaused` 를 false 로 읽고 **가려진 창의 영상을 되살린다**
+                    // (F840 이 resume() 에서 막으려던 바로 그 경로가 상태 누락으로 되돌아온다).
+                    // 형제 `WebRenderer.occlusionChanged` 는 rate 를 보지 않고 플래그 전이만
+                    // 본다 — 같은 모델로 맞춘다. pause() 는 멱등이라 중복 호출이 안전하다.
+                    guard !self.pausedByOcclusion else { return }
                     self.pausedByOcclusion = true
                     self.player?.pause()
                 }
@@ -350,15 +391,22 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, @unchecked Senda
         player?.play()
     }
 
-    /// F820: 음량/배속 라이브 반영 — UserDefaults 에 이미 저장된 새 값을 실행 중인 플레이어에
-    /// 직접 적용해, apply() 전체 리마운트(mkv/webm 은 ffmpeg 재변환 대기+재생 리셋) 없이 즉시 반영.
+    /// F820: 음량/배속 라이브 반영(자기 `projectId` 로 값을 되읽는 편의 진입점).
+    /// 값을 밖에서 받는 공통 경로는 `applyLiveMediaSettings(volume:rate:)` 다 — 호출부
+    /// (`AppDelegate.applyLiveVideoSettings`)는 그쪽을 쓴다.
     /// 플레이어가 아직 없으면(ffmpeg 변환 대기 중) no-op — attachPlayer 가 장착 시 새 값을 읽는다.
     public func applyLiveVideoSettings() {
-        guard let player, let id = projectId else { return }
-        let volume = VideoSettings.volume(id: id)
+        guard let id = projectId else { return }
+        applyLiveMediaSettings(volume: VideoSettings.volume(id: id), rate: VideoSettings.rate(id: id))
+    }
+
+    /// F820 공통 진입점(`LiveMediaSettingsApplying`) — UserDefaults 에 이미 저장된 새 값을 실행 중인
+    /// 플레이어에 직접 적용해, apply() 전체 리마운트(mkv/webm 은 ffmpeg 재변환 대기+재생 리셋) 없이
+    /// 즉시 반영한다.
+    public func applyLiveMediaSettings(volume: Float, rate: Float) {
+        guard let player else { return }
         player.volume = volume
         player.isMuted = Self.effectiveMute(volume: volume, policyMuted: policyMuted)
-        let rate = VideoSettings.rate(id: id)
         player.defaultRate = rate
         // defaultRate 는 다음 play() 부터 적용 — 재생 중이면 현재 rate 도 즉시 맞춘다.
         // 정지(수동/가림, rate==0) 중 대입은 재생 재개를 뜻하므로 건드리지 않는다.

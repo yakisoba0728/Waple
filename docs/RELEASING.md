@@ -173,9 +173,17 @@ end
   갖춰진 뒤 별도 SP 로 다룬다 — 현재는 미구현.
 - **릴리스 자동 공개**: 현재 워크플로는 **정식 태그만** draft 로 생성한다.
 
-⚠️ **프리릴리즈 태그는 draft 가 아니라 즉시 공개된다.** `.github/workflows/release.yml:187-190`
-가 `FLAGS="--draft"` 로 시작한 뒤 `case "$GITHUB_REF_NAME" in *-*) FLAGS="--prerelease" ;;` 로
+⚠️ **프리릴리즈 태그는 draft 가 아니라 즉시 공개된다.** `.github/workflows/release.yml` 의
+릴리스 생성 스텝이 `FLAGS="--draft"` 로 시작한 뒤 `case "$GITHUB_REF_NAME" in *-*) FLAGS="--prerelease" ;;` 로
 **교체**하므로, 태그에 하이픈이 있으면(이 문서가 예시로 드는 `v0.1.0-beta.1` 포함) 검토 단계
 없이 prerelease 로 바로 나간다. 검토 후 공개하려면 하이픈 없는 태그를 쓰거나 워크플로에서
 `--draft` 를 함께 붙일 것. 자동 공개는 운영 안정화 후
   `--draft` 제거로 전환.
+
+  > **[정정 2026-09-01] 종전 이 문단은 `release.yml:187-190` 을 인용했는데 106줄 밀려 있었다**
+  > (실제 자리는 293·295행). 줄 번호를 다시 박지 않는다 — 워크플로는 스텝이 추가될 때마다
+  > 통째로 밀리는 파일이라 이 인용이 특히 빨리 썩는다. 확인은 문자열로 해라:
+  >
+  > ```bash
+  > grep -n 'FLAGS="--draft"\|FLAGS="--prerelease"' .github/workflows/release.yml
+  > ```

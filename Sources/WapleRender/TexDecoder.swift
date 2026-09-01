@@ -255,8 +255,16 @@ public enum TexDecoder {
             //
             // 종전 `(v,v,v,255)` 는 마스크 경로만 보고 정한 것이었다(주석에 그렇게 적혀 있었다).
             // 파티클에서는 알파가 항상 255 라 **마스킹이 통째로 사라져 불투명 사각형**이 됐다.
-            // WE 번들 공유 파티클 텍스처 60개 중 56개가 r8 이다(fire/smoke/fog/lightning/rain/
-            // debris/shape) — 실물 영향이 큰 자리다.
+            // 도달(2026-09-01 재계수, `.tex` 헤더 offset 18 의 format i32 전수):
+            //   · 동봉 `WEAssets/materials/particle/**` — **164**개 중 r8(fmt 9) **51**
+            //     (나머지: lz4RGBA(0) 56 · rg88(8) 51 · bc3(4) 6). fire/smoke/fog/lightning/
+            //     rain/debris/shape 계열이다.
+            //   · 동봉 `WEAssets` 전수 — **311**개 중 r8 **60**.
+            // r4-17 정정: 종전 "60개 중 56개가 r8" 은 **서로 다른 census 행을 한 문장에 섞은
+            // 것**이다 — 60 은 WEAssets **전수의 r8 총수**이고 56 은 particle 폴더의 **lz4RGBA
+            // 개수**다. 어느 모집단에서도 "60 중 56 이 r8" 은 성립하지 않는다.
+            // 재현: `materials/particle/**/*.tex` 를 순회해 `struct.unpack_from('<i', data, 18)`
+            // 로 format 을 읽고 값별로 센다.
             //
             // rgb 를 흰색(255)이 아니라 v 로 두는 것은 마스크 경로의 `.r` 을 지키기 위해서다.
             // 파티클에서는 `t.rgb * color.rgb` 로 곱해져 WE(rgb=1) 대비 어두워질 수 있는데,

@@ -71,6 +71,18 @@ struct StatusBanner: View {
                 .background(Surface.overlay, in: Capsule())
                 .overlay(Capsule().stroke(ColorRole.hairline, lineWidth: Surface.strokeHairline))
                 .padding(.top, Space.md)
+                // r3-O28: 이 배너가 사용자 통지의 **유일한 경로**인데 4초 뒤 사라지는 시각 요소라,
+                // VoiceOver 사용자는 포커스가 우연히 여기 있지 않는 한 통지를 통째로 놓쳤다
+                // (리포 전체 `NSAccessibilityPostNotification` 호출 0건). SwiftUI 의 라이브 리전
+                // 규약으로 알린다 — 포커스를 뺏지 않고 내용 변경만 읽어 준다(`.polite`).
+                // `model.generation` 이 매 메시지마다 증가하므로 같은 문구가 연속으로 와도
+                // 뷰가 갱신돼 다시 읽힌다.
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.updatesFrequently)
+                // `verbatim:` — msg 는 위 ⚠️ 주석대로 **이미 현지화된** String 이다.
+                // (`Text(msg)` 도 StringProtocol 오버로드로 붙지만, 리터럴 스캔 패턴이
+                //  이 자리를 번역 대상으로 오인하지 않도록 의도를 타입으로 못박는다.)
+                .accessibilityLabel(Text(verbatim: msg))
                 .task(id: model.generation) { await model.autoDismissAfterDelay() }
                 .transition(Motion.revealTransition(edge: .top))
         }

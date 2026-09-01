@@ -105,7 +105,12 @@ public enum AudioResponse {
     ///   `"default":"0.0, 360.0"` · `"default":"0.315, 0.135, 0.1125"`(동봉 2파일 4건)이 있고,
     ///   공백만으로 쪼개면 `Float("0.0,")` 가 nil 이라 성분이 **소리 없이 사라진다**.
     /// - `//` 앞이 `uniform` 으로 시작하는 줄만 본다 — 주석 처리된 선언
-    ///   (`//uniform float g_AudioSpectrum16[16];`, 동봉 2건)을 집지 않기 위해서다.
+    ///   (`//uniform float g_AudioSpectrum16[16];`)을 집지 않기 위해서다.
+    ///   **[정정 r3-M10] 그 "동봉 2건" 은 모집단을 잘못 적은 것이다.** 동봉 코퍼스
+    ///   (`Sources/WapleRender/Resources/WEAssets`)에는 이 형태가 **0건**이고, 실제 출처는
+    ///   **설치본**(`wallpaper_engine/projects/defaultprojects`)의 **3줄 / 2파일**이다:
+    ///   `neon_sunset/shaders/neongrid.vert`(g_AudioSpectrum16Left·Right 2줄) ·
+    ///   `techno/shaders/technohex.vert`(g_AudioSpectrum16 1줄). 2026-09-01 재측정.
     public static func declaredDefaults(shaderSource: String) -> ShaderDefaults? {
         var out = pulseDefaults
         var found = false

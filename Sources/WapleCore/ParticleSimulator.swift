@@ -105,6 +105,18 @@ public struct ParticleSimulator {
     private var rng: SplitMix64
     private var particles: [Particle] = []
     private var acc: [Float]
+    /// 누적 시뮬 시간(초). **`time += dt` 로 누산하는 IEEE binary32 라 상한이 있다.**
+    ///
+    /// dt = 1/60 s 기준 실측(파이썬 binary32 왕복): 누적 오차가 0.76일에 −6.25%, 3.03일에 +87.5%,
+    /// **6.07일에 `time + dt == time` 이 되어 시계가 완전히 선다** — 그 뒤 age 기반 파생값
+    /// (페이드·진동·시퀀스)이 전부 얼어붙는다. 씬 시계는 매 프레임 `Float(now − startTime)` 로
+    /// **재계산**되므로 같은 문제가 없다(누산이 아니다) — 이 비대칭이 결함의 표지다.
+    ///
+    /// **[의도적 미수정]** Double 누산으로 바꾸면 **첫 초부터** 값이 달라진다 — 같은 dt 를
+    /// binary32 로 누산한 값과 binary64 누산 후 좁힌 값은 6스텝(0.1초)째에 이미 갈린다
+    /// (0.10000000149011612 vs 0.10000000894069672). 이 리포는 파티클 결과를 픽셀 골든과
+    /// GT luma 기준선으로 잠그고 있어서, 그 차이가 어디까지 번지는지 **이 머신에서 확인할 수
+    /// 없다**(빌드·테스트 금지 라운드). 도달(6일 연속 가동)과 회귀 폭을 함께 잰 뒤 별건으로 다룬다.
     private var time: Float = 0
     /// `mapsequencebetweencontrolpoints` 선언별 VM 레코드 상태(`t`/`step`). 파티클마다 새로
     /// 만들면 모든 스폰이 시퀀스 시작점에 겹치므로, 시스템 수명 동안 선언별로 하나씩 유지한다.
@@ -127,6 +139,19 @@ public struct ParticleSimulator {
     /// 부모 시스템/부모 파티클이 child.step 직전에 CP를 갱신했는지. 첫 외부 쓰기에서만 previous를
     /// 잡아, 부모부착+링크피드+자체 위치 애니메이션이 한 프레임에 겹쳐도 직전 프레임을 잃지 않는다.
     private var controlPointsUpdatedBeforeStep = false
+    /// `applyParentControlPointFeed`가 **부모 파티클 위치로 덮은** CP 슬롯.
+    ///
+    /// **한 번 표시된 슬롯은 지우지 않는다(sticky).** 피드가 줄거나 부모가 죽어도 그 슬롯에는
+    /// 마지막 부모 위치가 그대로 남으므로, 억제를 프레임 단위로 껐다 켜면 같은 결함이 되살아난다.
+    /// 루트 시스템은 `applyParentControlPointFeed` 가 아예 안 불려 항상 비어 있다 →
+    /// `emitOrigin == 0` 경로와 함께 거동이 비트동일이다.
+    private var parentFedControlPointSlots: Set<Int> = []
+    /// `emitOrigin` 이 **부모 파티클 위치를 싣고 있는가**. `makeInstance` 가 링크 트리거로 정한다:
+    /// follow/spawnBurst/deathBurst 는 `p.pos + link.origin` 이라 실려 있고, `always`(static)는
+    /// `link.origin` 뿐이라 실려 있지 않다. 위 `parentFedControlPointSlots` 와 **둘 다** 참일 때만
+    /// 이미터 CP 평행이동을 눌러 이중가산을 막는다(`emitterControlPointFrame`).
+    /// 루트 시스템은 항상 false.
+    private var emitOriginCarriesParentParticle = false
 
     // 파생 오퍼레이터(스폰 시/표시 시 참조) 캐시.
     /// `movement` 오퍼레이터 캐시. `worldGravity` = 오퍼레이터 `flags & 1`(중력이 월드 벡터).
@@ -503,6 +528,9 @@ public struct ParticleSimulator {
         let mix = UInt64(UInt(bitPattern: uid &* 31 &+ li &+ 1))
         var s = ParticleSimulator(def: link.def, seed: parentSeed &+ 0x9E37_79B9_7F4A_7C15 &* mix)
         s.emitOrigin = origin
+        // `always`(static)만 origin 이 링크 origin 뿐이다 — 나머지 셋은 `p.pos + link.origin`
+        // 이라 부모 파티클 위치가 실려 있다(follow 는 stepChildren 이 매 프레임 갱신도 한다).
+        s.emitOriginCarriesParentParticle = link.trigger != .always
         s.worldBasis = worldBasis   // 자식은 부모와 같은 오브젝트에 얹히므로 기저도 같다
         return ChildInstance(sim: s, parentUID: uid,
                              oneShot: link.trigger == .spawnBurst || link.trigger == .deathBurst)
@@ -524,12 +552,28 @@ public struct ParticleSimulator {
         time += dt
         let hadExternalControlPointUpdate = controlPointsUpdatedBeforeStep
         controlPointsUpdatedBeforeStep = false
-        updateControlPointPositionAnimations(capturePrevious: !hadExternalControlPointUpdate)
+        // **[2026-09-01 r2-H7]** 외부(부모) 쓰기가 없던 프레임에는 여기서 previous 를 현재값에
+        // 맞춘다. 종전에는 이 동기화가 `updateControlPointPositionAnimations` **안**에 있었고
+        // 그 함수는 `controlPointPositionAnimations` 가 비면 즉시 반환한다 — 씬 `instanceoverride.
+        // controlpointN` 을 저작하지 않은 시스템(자식 시스템 전건)에서는 동기화가 아예 안 돌았다.
+        //
+        // 그래서 부모 CP 피드가 **끊기면**(부모 파티클 사망 → `childControlPointFeed` 가 빈 배열 →
+        // `applyParentControlPointFeed` 의 `guard !feed.isEmpty` 조기 반환 → `beginExternal
+        // ControlPointUpdate` 미호출) previous 와 runtime 이 **서로 다른 값에 영구 고정**됐다.
+        // 그러면 `maintaindistancebetweencontrolpoints` 의 정적 분기 검사(`ap == a, bp == b`)가
+        // 매 프레임 실패해 "선분이 움직였다" 분기로 낡은 재사상을 무한 재적용한다.
+        //
+        // 무회귀: CP 애니메이션도 외부 쓰기도 없는 시스템은 두 배열이 `def.controlPoints` 로
+        // 같이 초기화된 뒤 변하지 않으므로 이 대입이 항등이다. 외부 쓰기가 있던 프레임은
+        // 종전처럼 `beginExternalControlPointUpdate` 가 잡아 둔 값을 그대로 쓴다.
+        if !hadExternalControlPointUpdate { previousRuntimeControlPoints = runtimeControlPoints }
+        updateControlPointPositionAnimations()
         updateControlPointAngleAnimations()
         let countBeforeEmission = particles.count
         // 방출(starttime 이후, 자식 원샷/고아는 정지). burst(실물 instantaneous)는 생성 1회 일괄 스폰,
         // rate(연속)와 독립 병행(F621).
-        // F438: dt==0(정지/재드로 스냅샷 재방출 — SceneRenderer3D:1096/SceneRenderer:1451)은 실행 이력
+        // F438: dt==0(정지/재드로 스냅샷 재방출 — `SceneRenderer3D.stepParticleSnapshots` 의
+        // `sim.step(0)` 갈래, `SceneRenderer.captureFrames` 의 같은 호출)은 실행 이력
         // (time>0)이 있는 sim 에서만 방출 금지 — step(0) 이 acc/RNG/전멸 후 버스트 재발화 상태를 변이하지
         // 않게. 무이력(time==0) sim 의 초기 버스트는 종전대로 발화(기존 스위트·최초 드로 호환).
         if !emissionPaused, dt > 0 || time == 0, time >= def.startTime {
@@ -550,7 +594,7 @@ public struct ParticleSimulator {
                 if e.burst > 0, wasEmpty {
                     // ponytail: 전멸 시 재버스트 루프 — 실 WE 는 자식(eventfollow) 트리거가 주 용법,
                     // Stage B(children)에서 트리거 발화로 대체 예정.
-                    // max(0, …): periodicEnterOn(:539)의 동형 식과 맞춘다 — particles.count 가
+                    // max(0, …): `periodicEnterOn` 의 동형 식과 맞춘다 — particles.count 가
                     // def.maxCount 를 넘은 순간(자식 병합·인스턴스 오버라이드로 상한이 줄어든 경우)
                     // 우변이 음수가 되고 `0..<음수` 는 Range 생성에서 곧바로 트랩한다.
                     for _ in 0..<max(0, min(e.burst, def.maxCount - particles.count)) {
@@ -617,9 +661,10 @@ public struct ParticleSimulator {
 
     /// 동적 씬 override는 정적 `value`가 이미 반영된 def 값을 매번 base로 평가한다.
     /// 직전 runtime 값을 base로 쓰면 relative 트랙이 프레임마다 누적되므로 반드시 def에서 다시 시작한다.
-    private mutating func updateControlPointPositionAnimations(capturePrevious: Bool) {
+    /// previous 스냅샷은 호출자(`_step`)가 잡는다 — 이 함수는 애니메이션이 없으면 즉시 반환하므로
+    /// 안에 두면 CP 애니메이션 미저작 시스템에서 동기화가 통째로 빠진다(r2-H7).
+    private mutating func updateControlPointPositionAnimations() {
         guard !controlPointPositionAnimations.isEmpty else { return }
-        if capturePrevious { previousRuntimeControlPoints = runtimeControlPoints }
         for item in controlPointPositionAnimations {
             let base = def.controlPoints[item.slot]
             runtimeControlPoints[item.slot] = Vec3(
@@ -908,11 +953,12 @@ public struct ParticleSimulator {
             let fraction = min(max(axial / prevLen, 0), 1)
             particles[k].pos = a + fraction * len * u + perpendicular
         }
-        // F431/F439: 선형 movement(위 280-283행)와 동형 — force/drag 는 전 오퍼레이터에 누적하고
+        // F431/F439: 같은 함수 위쪽의 선형 movement 루프(`for (mi, m) in movements.enumerated()`)와
+        // 동형 — force/drag 는 전 오퍼레이터에 누적하고
         // rotation 적분은 스텝당 1회. 종전엔 루프 안에서 적분해 angularmovement N개면 N회 중복
         // 적분(F439), 0개면 angularvelocityrandom 의 초기 각속도가 영구 사장(F431)됐다.
         for a in angulars {
-            // 선형 movement(위 280-283행)와 대칭인 drag 감쇠(F188) — drag 미지정(0)이면 종전대로
+            // 같은 함수의 선형 movement 루프와 대칭인 drag 감쇠(F188) — drag 미지정(0)이면 종전대로
             // 등가속 무감쇠 누적(무회귀).
             particles[k].angularVel += a.force * dt
             // 실물 0x14023ffce: 회전 적분은 생 dt(0x14023ffc7), drag 만 dtScaled. movement 와 동형.
@@ -992,6 +1038,7 @@ public struct ParticleSimulator {
             && parentParticles.indices.contains(item.parentParticle) {
             let p = parentParticles[item.parentParticle].pos
             runtimeControlPoints[item.slot] = Vec3(x: p.x, y: p.y, z: p.z)
+            parentFedControlPointSlots.insert(item.slot)
         }
     }
 
@@ -1182,7 +1229,26 @@ public struct ParticleSimulator {
             ? def.emitterControlPoints[emitterIndex]
             : 0
         let slot = ParticleControlPointLimits.clampIndex(raw)
-        let translation = runtimeControlPoints.indices.contains(slot)
+        // **이중가산 억제.** 부모 CP 피드(`children[].flags & 1`)가 덮은 슬롯을 이미터가 읽는데
+        // `emitOrigin` 도 같은 부모 파티클 위치를 싣고 있으면, 이 평행이동은 실지 않는다 —
+        // 남은 식이 `p.pos = emitter.origin + emitOrigin + framedDisplacement` 라 부모 위치가
+        // 정확히 1회 들어간다(PR #8 이 `frame.translation` 항을 넣기 전과 같은 산술).
+        // 누르지 않으면 동봉 `presets/lightning/particles/presets/thunderbolt.json` 체인
+        // (자식 링크 `type:"eventfollow"` · `flags:1` · `controlpointstartindex:null`→슬롯0,
+        //  CP id1 `offset:"0 -450 0"`)에서 자식이 최대 450px 어긋난다.
+        //
+        // 두 조건은 **AND** 다. `type:"static"`(→`.always`) 링크는 `emitOrigin` 이 링크 origin
+        // 뿐이라 피드가 실은 부모 위치가 유일한 경로다 — 그 경우 눌러 버리면 자식이 부모를
+        // 놓친다. 루트 시스템(피드 없음·`emitOrigin == 0`)은 두 조건 모두 거짓이라 비트동일.
+        //
+        // 회전(`rotation`)/기저 적용(`appliesBasis`)은 건드리지 않는다 — 피드는 위치만 쓴다
+        // (`applyParentControlPointFeed` 가 `runtimeControlPoints[slot]` 만 대입하고
+        //  `runtimeControlPointFrameAngles` 는 손대지 않는다).
+        // `runtimeControlPoints` 자체도 그대로 둔다 — `maintaindistancebetweencontrolpoints`
+        // 와 `mapsequencebetweencontrolpoints` 가 그 부모 위치를 선분 단점으로 소비한다.
+        let suppressesFedTranslation = emitOriginCarriesParentParticle
+            && parentFedControlPointSlots.contains(slot)
+        let translation = runtimeControlPoints.indices.contains(slot) && !suppressesFedTranslation
             ? s3(runtimeControlPoints[slot])
             : SIMD3<Float>(repeating: 0)
         let rotation = runtimeControlPointFrameAngles.indices.contains(slot)
@@ -1216,6 +1282,8 @@ public struct ParticleSimulator {
                 ? applyEmitterBasis(localDisplacement, frame.rotation)
                 : localDisplacement
             // 실물은 local·M3 뒤 row3(CP 평행이동), 그 뒤 emitter.origin을 더한다.
+            // 단, `emitOrigin` 이 이미 부모 위치를 실은 자식에서 그 슬롯이 부모 CP 피드로
+            // 덮여 있으면 `frame.translation` 은 0 이다(`emitterControlPointFrame` 의 이중가산 억제).
             p.pos = s3(origin) + frame.translation + framedDisplacement
             // F620: 이미터 speedmin/speedmax = 방출 방향(dir) 초기속도(WE 문서: movement 오퍼레이터와
             // 결합하는 particle speed). 실물도 이미터가 먼저 속도를 쓰고 그 뒤 스폰 VM 이 돈다 —
@@ -1259,7 +1327,10 @@ public struct ParticleSimulator {
                 p.vel = framedDirection * speed
             }
         }
-        p.pos += emitOrigin   // 자식 인스턴스: 부모 위치(또는 링크 origin) 오프셋. 루트는 0.
+        // 자식 인스턴스: 부모 위치(또는 링크 origin) 오프셋. 루트는 0.
+        // **부모 위치는 여기서 정확히 1회만 실린다** — 부모 CP 피드가 같은 값을 CP 슬롯에도
+        // 쓰는 경우 `emitterControlPointFrame` 이 그 슬롯의 평행이동을 0 으로 눌러 둔다.
+        p.pos += emitOrigin
         p.uid = nextUID; nextUID += 1
         // F622: animationmode=randomframe — 스폰 시 시퀀스 인덱스 1개 확정(sheetFrameIndex 가
         // 프레임 수로 접는다).
@@ -1300,6 +1371,13 @@ public struct ParticleSimulator {
             // `mulps` 0x1402404fd · 0x140240505 · 0x14024050d + `addps` 0x140240512 · 0x140240517 ·
             // 0x14024051f — 같은 r 에 서로 다른 (base, span) 세 쌍이 걸린다.
             p.oscPosFreq = lerp(o.fmin, o.fmax, r)
+            // **[2026-09-01 도수 정정]** 진폭에 `r` 을 태우는 이 줄은 PR #8 이 넣은 것이 아니다 —
+            // 커밋 `1df0738a`(2026-08-21) 이후 무변경이다. 그래서 "진동 3종 전건이 진폭 난수를
+            // 얻었다" 는 서술은 **oscillateposition 에 대해서는 거짓**이고, PR #8 이 실제로 고친
+            // 것은 `display(_:)` 의 size·alpha 두 분기뿐이다.
+            // 도수(**모집단: 동봉 코퍼스** `spec/assets/particle-corpus.json` 의
+            // `instances.all`): alpha 36 · size 8 · position 17 = 61 중 **해당은 44**(= 61 − 17).
+            // 설치본(191)·워크샵 코퍼스(446, 이 머신에 없음) 도수는 재지 않았다.
             p.oscPosScale = lerp(o.smin, o.smax, r)
             p.oscPosPhase = lerp(o.pmin, o.pmax, r)   // 초 단위 — ×2π 금지(oscPositionOffset 주석)
             p.oscPosMask = o.mask
@@ -1352,6 +1430,13 @@ public struct ParticleSimulator {
     ///   step  *= w                             ; 0x1402418e9 (블렌드 창, 기본 w ≡ 1)
     ///   if (inRange) vel −= (d/dist)·step      ; 0x1402418f0–0x140241929
     /// ```
+    /// **[2026-09-01 정정 — `step *= w` 는 아직 안 옮겼다]** 위 "두 핸들러는 블렌드 가중 곱
+    /// 하나만 다르다" 는 **실물 두 핸들러 사이의** 차이를 적은 것이고, 아래 `applyAttract` 구현은
+    /// **base 핸들러(op 0x0a)만** 옮겼다 — `step = (1 - dist/a.threshold) * a.scale * dtScaled` 에
+    /// `w` 곱 항이 없고, 파스도 이 오퍼레이터의 블렌드 창을 싣지 않는다.
+    /// 형제 넷(`oscPosBlend`·`oscAlphaBlend` 등)이 실제로 blend 필드를 받는 것과 비대칭이다.
+    /// 기본 `w ≡ 1` 이라 블렌드 창을 저작하지 않은 입력에서는 결과가 같다 — 저작 도달을 재고
+    /// 파스를 함께 넓히는 별건이다.
     /// **[2026-08-20 수식 정정]** 종전의 `min(1, threshold/dist)` 는 모양이 반대였다:
     ///  · 사거리 — 종전은 무한(threshold 밖에서도 1/r 로 계속 당김), 실물은 **하드 컷오프**
     ///  · 근접부 — 종전은 threshold 안쪽 전부 1.0 포화, 실물은 dist→0 에서 1, threshold 에서 **0**
@@ -1618,7 +1703,8 @@ public struct ParticleSimulator {
             // 이 동작을 **의도된 무회귀**라고 적었는데, 그건 실물 확인 전의 보수적 선택이었다.
             // 도달(동봉 자산 실측): 이미터 speed 가 0이 아니면서 velocityrandom 을 함께 쓰는 시스템
             // 3파일 / 고유 2건 — `exampleturbolence3d`(sphere −6..−2), `presets/stars/starfield`
-            // (sphere 1.0 고정, 프리뷰 사본 포함 2). speed 기본값이 0 이라(:1445) 나머지는 무영향.
+            // (sphere 1.0 고정, 프리뷰 사본 포함 2). speed 기본값이 0 이라(`emitterSpeedSample` 의
+            // `guard index < def.emitterSpeed.count else { return 0 }`) 나머지는 무영향.
             p.vel += SIMD3(x, y, z)
         case let .rotationRandom(mn, mx, exp):
             let x = randomRange(mn.x, mx.x, exponent: exp)
@@ -1853,9 +1939,6 @@ public struct ParticleSimulator {
         return d
     }
 
-    /// 진동 위치 오프셋(절대식, base pos 불변) — display() 스냅샷과 트레일 히스토리 기록(_step 291행·
-    /// spawn 404행)이 동일 공식을 공유한다(F177: 히스토리가 base pos 만 기록하면 spriteTrail/rope
-    /// 리본이 oscillateposition 진동을 반영하지 못해 sprite 쿼드[d.pos 사용]와 비대칭이 생긴다).
     /// boids — 실물 VM op 0x11 @0x140244121 을 그대로 옮긴다.
     ///
     /// 스칼라로 옮기면서 지킨 것 둘:
@@ -1914,7 +1997,7 @@ public struct ParticleSimulator {
                     // **Waple 에 그 마스크를 옮겨 심으면 죽은 코드가 된다.** 이유가 둘이고 둘 다 독립이다:
                     // (a) `particles` 는 매 스텝 `removeAll { age > lifetime }` 으로 **압축**돼 빈 슬롯이
                     //     없다 — 실물 마스크가 하려는 일을 자료구조가 이미 한다.
-                    // (b) `lifetimeRandom` 이 `max(0.0001, ·)` 로 **바닥을 깐다**(:923). 그래서
+                    // (b) `lifetimeRandom` 이 `p.lifetime = max(0.0001, randomRange(…))` 로 **바닥을 깐다**. 그래서
                     //     `lifetimerandom(min:0,max:0)` 이라도 lifetime 은 0 이 아니라 1e-4 다.
                     // 2026-08-20 에 `guard particles[j].lifetime != 0` 을 넣었다가 되돌린다 — 실측
                     // (dt 5e-5, lifetimerandom 0/0)에서 lifetime 이 1e-4 로 나와 가드가 한 번도 서지
@@ -2003,6 +2086,10 @@ public struct ParticleSimulator {
     /// 여기 `oscPositionOffset` 은 세 축에 같은 θ 를 쓴다. 옮기려면 축별 θ 가 필요한데 그러면
     /// `p.oscPosMask` 곱셈 한 번으로 끝나던 자리가 축 분해로 바뀌므로, 도달을 먼저 재고
     /// 회귀 폭을 확인한 뒤 별건으로 다룬다.
+    /// 진동 위치 오프셋(절대식, base pos 불변) — `display(_:)` 스냅샷과 `_integrateParticle` 의
+    /// 트레일 히스토리 기록이 이 함수 하나를 공유한다(F177: 히스토리가 base pos 만 기록하면
+    /// spriteTrail/rope 리본이 oscillateposition 진동을 반영하지 못해 sprite 쿼드[`d.pos` 사용]와
+    /// 비대칭이 생긴다).
     private func oscPositionOffset(_ p: Particle) -> SIMD3<Float> {
         guard p.oscPosScale != 0 else { return SIMD3(0, 0, 0) }
         let n = p.lifetime > 0 ? min(1, p.age / p.lifetime) : 1

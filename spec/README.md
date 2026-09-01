@@ -15,10 +15,26 @@
 > `FUN_140261950` 은 **사라진 게 아니라 이름이 바뀌었다.** 그 이름은 rich header 주입본의
 > 변위된 주소였고, 재생성된 코퍼스는 참 VA 로 이름 붙어 `…FUN_140261880.c` 다.
 >
-> 즉 오늘의 부채는 "산출물이 없다" 가 아니라 **"재생성이 이름과 주소 공간을 바꿨는데 인용이
-> 안 따라왔다"** 이다(`Sources/WapleCore/Model3D.swift:110`, `ProjectJSONParser.swift:208`).
-> 정본 자신은 깨끗하다 — `spec/` 의 evidence 중 `analysis/`·`corpus_scan/` 을 가리키는 것은
-> **0건**이다. 이 절이 만든 규약이 실제로 작동했다는 뜻이다.
+> 즉 그때의 부채는 "산출물이 없다" 가 아니라 **"재생성이 이름과 주소 공간을 바꿨는데 인용이
+> 안 따라왔다"** 였다. 정본 자신은 깨끗하다 — `spec/` 의 evidence `ref` 중 `analysis/`·
+> `corpus_scan/` 을 가리키는 것은 **0건**이다. 이 절이 만든 규약이 실제로 작동했다는 뜻이다.
+>
+> **[정정 2026-09-01] 이 부채는 닫혔다 — 위 문단이 현재형으로 남아 썩었다.** 종전 이 자리는
+> "`Model3D.swift:110`·`ProjectJSONParser.swift:208` 이 `FUN_140261950` 을 가리킨다" 고
+> **현재형으로** 적고 있었으나, 그 두 자리는 2026-08-27 자로 이미 참 VA 로 교정돼 있다.
+> 지금 코드가 인용하는 이름은 `FUN_140261880`(MDL 디코더)·`FUN_140046f20`(project.json 수집)
+> 이고, 두 산출물 다 짝 저장소에 실재한다. `FUN_140261950` 이라는 문자열이 `Sources/` 에
+> 남은 곳은 **2건뿐이고 둘 다 "종전엔 이 이름을 인용했다" 는 메타 설명문**이다 —
+> 살아 있는 근거 인용이 아니다(`Model3DFormat.swift` 의 `Model3DFormat` enum 주석,
+> `Model3D.swift` 의 `Model3D` 타입 주석). 줄 번호로 적지 않는 이유는 이 문단이 정확히
+> 그 방식으로 썩었기 때문이다.
+>
+> ```bash
+> grep -rn 'FUN_140261950' Sources/    # 2건 — 둘 다 "종전엔…" 메타 설명
+> grep -rn 'FUN_140261880' Sources/WapleCore/Model3D.swift | head -2
+> grep -rn 'FUN_140046f20' Sources/WapleCore/ProjectJSONParser.swift
+> ls ../Waple-wallpaper-source/analysis/decompiled/all/ | grep '140261880\|140046f20'
+> ```
 
 ## 규약
 

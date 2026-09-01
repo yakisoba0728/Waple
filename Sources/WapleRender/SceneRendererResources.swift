@@ -360,10 +360,17 @@ extension SceneRenderer {
         // encodeLayer의 애니/스크립트 재빌드가 같은 값을 소비한다. 클램프는 정점 소비부에서
         // 매번 적용(W-8, 0x140189b1a–0x140189b4c)하므로 파서의 저작 원문은 훼손하지 않는다.
         layerPerspectiveFov = doc.perspectiveOverrideFov
-        // E1(⑥): SceneRenderer.swift:1122(projW/projH 인스턴스 프로퍼티)와 동일하게 클램프 — 종전엔 이
-        // 쿼드 정점 계산만 무클램프 doc.projectionWidth/Height 를 써서, projection 이 0인 씬(파서는
-        // 명시적 0을 그대로 통과시킨다, SceneDocument.swift:729-730)에서 pxToNDC 0-나눗셈으로 정적
-        // 레이어만 NaN 소실되는 비대칭이 있었다(애니/스크립트 경로는 이미 클램프된 projW/projH 사용).
+        // E1(⑥): `SceneRenderer` 의 `projW`/`projH` 인스턴스 프로퍼티와 **동일한 클램프**를 쓴다
+        // (`Float(max(1, doc.projectionWidth))`). 종전엔 이 쿼드 정점 계산만 무클램프
+        // `doc.projectionWidth/Height` 를 써서 두 경로가 갈릴 수 있었다.
+        //
+        // r2-4.1-lane1 정정: 종전 주석은 "파서는 명시적 0을 그대로 통과시킨다
+        // (SceneDocument.swift:729-730)" 고 적었는데 **둘 다 틀렸다**. ① 그 두 줄은 camera
+        // 오브젝트의 `queuemode`/`path` 등록부 설명이지 projection 이야기가 아니다. ② 주장 자체가
+        // 반증됐다 — `SceneDocument` 의 `orthoAuto` 선언부 주석이 "**Waple 은 여기서
+        // projectionWidth/Height 를 0 으로 만들지 않는다**"(0 은 씬을 붕괴시키므로 폴백
+        // 1920×1080 으로 접는다)고 명시한다. 즉 파서가 0 을 통과시키는 경로는 지금 없고,
+        // 이 클램프는 그 규약을 재확인하는 방어선(depth-in-depth)으로 남긴다.
         let w = Float(max(1, doc.projectionWidth)), h = Float(max(1, doc.projectionHeight))
         var out: [GPULayer] = []
         // attachment 자식들이 공유하는 부모 퍼펫 캐시(경로→파스 결과, 실패도 캐시 — 재파스 방지).
@@ -844,8 +851,12 @@ extension SceneRenderer {
                                          scripts: passScripts, fullFrameSlots: plan.fullFrameSlots, swapPair: nil,
                                          mediaArtworkSlots: plan.mediaArtworkSlots, animations: passAnimations))
         }
-        // 출력(타깃 없는 패스)이 하나도 없으면 화면에 아무것도 못 쓴다 → 폴백.
-        guard passes.contains(where: { $0.target == nil }) else { return nil }
+        // 출력(= fbo 타깃 없음 **그리고** swap 아님)이 하나도 없으면 화면에 아무것도 못 쓴다 → 폴백.
+        // r4-23: `makeSwapPass` 가 만드는 `command:"swap"` 패스도 `target == nil` 이지만 드로우가
+        // 없고 fbo 포인터만 맞바꾸므로 출력 후보가 아니다. 형제 라우터
+        // `EffectChainRouting.plan` 이 같은 이유로 `!$0.hasFBOTarget && !$0.isSwap` 로 세는 것과
+        // 같은 셈법이다. 종전엔 swap 이 출력으로 카운트돼 "출력 패스 0" 인 이펙트가 폴백을 못 탔다.
+        guard passes.contains(where: { $0.target == nil && $0.swapPair == nil }) else { return nil }
         if anyAudio { hasAudio = true }
         NSLog("%@", "[Waple] effect via GLSL→MSL translator: \(eff.name) (passes=\(passes.count)/\(manifest.passes.count) fbos=\(liveFbos.count)/\(manifest.fbos.count) audio=\(anyAudio))")
         // DIRECTDRAW 체인 결과는 premultiplied — 합성서(f_main)가 알파를 한 번 더 곱하지 않도록 표시한다.
@@ -1379,7 +1390,10 @@ extension SceneRenderer {
         return (binds, texRes, aux, texWrap, texFilter, target, fullFrameSlots, mediaArtworkSlots)
     }
 
-    /// F162/F163: 텍스처 자산의 ClampUVs 헤더 플래그(TexImage.swift:126, WE tex Flags bit0x2)만 저비용
+    /// F162/F163: 텍스처 자산의 ClampUVs 헤더 플래그(`TexImage.clampUVs` = `flags & 0x2`,
+    /// 비트 정본은 그 파일의 `flags` 선언 주석 + `spec/formats/tex-deep.json`
+    /// `format.tex.flags.bits`. r3-M56 정정 — 종전 인용 `TexImage.swift:126` 은
+    /// `VariantCondition` JSON 파서라 tex 헤더 Flags 와 무관했다)만 저비용
     /// 조회 — 헤더만 재파스(디코드 없음, 씬 빌드 1 회성이라 무해). 실패/부재는 false(=repeat, WE 기본 어드레싱).
     /// P⑥: internal 로 완화(기존 private) — SceneRenderer3D.buildCustomMeshShader 가 2D buildCustomLayerShader
     /// 와 동형의 aux 텍스처 wrap/filter 산출에 재사용(다른 파일의 같은 타입 extension이라 private 미접근).
@@ -1403,7 +1417,8 @@ extension SceneRenderer {
         return false
     }
 
-    /// 감사 V06: 텍스처 자산의 NoInterpolation 헤더 플래그(TexImage.swift:126, WE tex Flags bit0x1)만 저비용
+    /// 감사 V06: 텍스처 자산의 NoInterpolation 헤더 플래그(`TexImage.noInterpolation` = `flags & 0x1`.
+    /// r3-M56 정정 — 종전 인용 `TexImage.swift:126` 은 `VariantCondition` 파서라 무관했다)만 저비용
     /// 조회 — 헤더만 재파스(resolveTextureClampUVs 와 동일 패턴). 실패/부재는 false(=linear, WE 기본 필터).
     /// F1: `root` 규약은 `resolveTextureClampUVs` 와 동일(기본 nil = 종전 동작 그대로).
     func resolveTextureNoInterpolation(_ name: String?, package: ScenePackage, root: String? = nil) -> Bool {
@@ -1814,7 +1829,14 @@ extension SceneRenderer {
             NSLog("%@", "[Waple] custom layer shader source missing: \(shaderName)")
             return nil
         }
-        var combos = layer.materialCombos
+        // r4-26: 정확일치 게이트(`combos[comboName] == nil`) 앞에서 키를 접는다 — `resolvePassCombos`
+        // 가 이미 하는 것과 같은 규약이다. 접지 않으면 워크샵이 `"normalmap":1` 로 저작했을 때
+        // 번역기는 접어서(`GLSLTranslator.translate` 진입의 `uppercasedComboKeys`) `NORMALMAP` 으로
+        // 보는데 이 게이트만 못 봐서, 텍스처가 안 물린 슬롯에 1 을 덧씌우거나 그 반대가 된다.
+        // 동봉+설치본은 `[COMBO]` 선언 전건 대문자라 도달 0(비트동일). 형제 자리
+        // `SceneRenderer3D` 의 커스텀 메시 경로도 같은 미접힘이 남아 있으나 그 파일은 이 레인
+        // 소유가 아니다(보고서에 넘김).
+        var combos = GLSLTranslator.uppercasedComboKeys(layer.materialCombos)
         for (slot, comboName) in GLSLTranslator.samplerCombos(frag) where combos[comboName] == nil {
             let bound = slot < layer.materialTextureNames.count && layer.materialTextureNames[slot] != nil
             if bound { combos[comboName] = 1 }

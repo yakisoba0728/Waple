@@ -102,4 +102,50 @@ final class ZipImportAuditRegressionTests: XCTestCase {
         // --keepParent 픽스처는 최상위에 pkg 래퍼가 한 단계 더 있다 — 재귀 탐색으로 확인한다.
         XCTAssertEqual(ZipImporter.findProjectRoots(in: dest).count, 1, "해제물에 배경 루트가 있어야 한다")
     }
+
+    // MARK: - r2-H19 / r4-27: 용량 방어와 종료 핸들러 레이스
+
+    /// **회귀 핀(r4-27).** `terminationHandler` 는 `run()` **뒤에** 설치되므로 그 사이에 프로세스가
+    /// 끝나 버리면 핸들러가 영영 불리지 않는다 — 종전 구현은 이미 죽은 프로세스를 상대로 상한을
+    /// 꼬박 기다린 뒤 타임아웃을 오탐했다. 여기서는 호출 **전에** 프로세스가 확실히 죽어 있게
+    /// 만들어(`waitUntilExit`) 그 창을 100% 재현한다.
+    func testWaitForExitOrKillReturnsImmediatelyForAnAlreadyExitedProcess() throws {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        try p.run()
+        p.waitUntilExit()
+        XCTAssertFalse(p.isRunning)
+
+        let start = Date()
+        XCTAssertNoThrow(try ZipImporter.waitForExitOrKill(p, timeout: 30, terminateGrace: 1))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5,
+                          "이미 끝난 프로세스에 상한을 꼬박 기다리면 타임아웃 오탐이다")
+    }
+
+    /// **회귀 핀(r2-H19).** 해제 중 여유공간 하한을 넘기면 프로세스를 회수하고
+    /// `insufficientDiskSpace` 를 던져야 한다 — 종전 방어는 300초 시간 상한뿐이라 압축폭탄이
+    /// 그 안에 디스크를 채우는 것을 막지 못했다. 실제 디스크를 채울 수는 없으므로 가드 클로저를
+    /// 주입해 **배선**(폴링 → 회수 → 그 에러 전파)을 잠근다.
+    func testWaitForExitOrKillAbortsWhenTheCapacityGuardTrips() throws {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        p.arguments = ["60"]
+        try p.run()
+
+        let start = Date()
+        XCTAssertThrowsError(try ZipImporter.waitForExitOrKill(
+            p, timeout: 30, terminateGrace: 1, abortIf: { .insufficientDiskSpace })) { error in
+            XCTAssertEqual(error as? ZipImporter.ZipImportError, .insufficientDiskSpace)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 10,
+                          "가드가 서면 시간 상한을 기다리지 않고 즉시 회수해야 한다")
+        XCTAssertFalse(p.isRunning, "가드 발동 시에도 프로세스를 회수(SIGTERM→SIGKILL)해야 한다")
+    }
+
+    /// 가드는 **fail-open** 이다 — 볼륨 속성을 읽을 수 없는 경로에서는 nil(방어 미적용)이어야 한다.
+    /// 여기서 에러를 내면 정상 import 가 환경에 따라 막힌다(무회귀 우선).
+    func testFreeCapacityGuardFailsOpenOnAnUnreadablePath() {
+        XCTAssertNil(ZipImporter.freeCapacityGuard(
+            URL(fileURLWithPath: "/no-such-volume-\(UUID().uuidString)/dest")))
+    }
 }

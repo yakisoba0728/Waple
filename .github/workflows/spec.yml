@@ -56,6 +56,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # [2026-09-01] **node 를 고정한다.**
+      # 아래 `JS shim / baseclasses coexistence` 는 node vm 으로 심을 평가하는데, 종전엔
+      # 러너 이미지의 기본 node 에 기대고 있었고 스크립트 쪽은 node 가 없으면 `rc=0` 으로
+      # **조용히 통과**했다 — 러너에서 node 가 사라지거나 PATH 가 바뀌면 게이트가 없는 채로
+      # 초록이 뜬다. 스크립트는 같은 날 fail-closed(환경 오류 2)로 바꿨고, 여기서는 위
+      # `runs-on: ubuntu-24.04` 고정과 같은 이유로 **버전을 이름으로 고정**한다.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Validate spec canon
         run: python3 scripts/spec/validate.py
 
@@ -71,6 +81,10 @@ jobs:
           python3 scripts/spec/tests/test_measure_prerequisites.py
           # Python 재귀 하한이 Swift 포트의 MAX_DEPTH보다 먼저 터지는 회귀를 포함한다.
           python3 scripts/spec/measure_workshop_shaders.py --selftest
+          # [2026-09-01] 이 둘은 **상한만 있던 게이트**다 — 정규식/스캔이 깨져 모집단이 0 이
+          # 되면 조용히 초록을 냈다. 각자 음성 대조(`--selftest`)를 갖게 했으니 여기서 돌린다.
+          python3 scripts/spec/check_int_narrowing.py --selftest
+          python3 scripts/spec/check_particle_corpus_census.py --selftest
 
       # macOS 백엔드가 필요 없는 CI/개발 도구 회귀를 Linux 자체검사에서
       # 한 번에 돌린다. 파일만 리포에 있고 workflow 에서 안 돌면 특히
@@ -466,9 +480,20 @@ jobs:
       # 이미 하드 실패한다(실측: 경로를 없는 곳으로 돌리면 missing 2940 · fileCount 0 vs
       # 2940 으로 exit 1). 남는 위험은 "그쪽 리터럴만 고치고 이 두 줄을 잊는" 인접 누락뿐이다.
       # 그래도 거는 이유는 `5fa313ee`("0 입력에서 초록을 내던 두 자리에 하한을 건다")가
-      # 세운 관례다 — 형제 게이트는 전부 하한을 둔다(`check_canon_entry_refs` MIN_SCANNED=40 ·
-      # `check_effect_texture_resolution` MIN_REFS=3 · `verify_rosetta.py` MIN_PAIRS=16 …).
-      # 이 스텝이 그 관례 밖에 남은 마지막 자리였다.
+      # 세운 관례다 — 형제 게이트 여럿이 하한을 둔다(실재 확인: `check_canon_entry_refs`
+      # MIN_SCANNED=40 · `check_effect_texture_resolution` MIN_REFS=3 · `verify_rosetta.py`
+      # MIN_PAIRS=16).
+      #
+      # **[정정 2026-09-01] 종전 이 자리는 "형제 게이트는 **전부** 하한을 둔다 … 이 스텝이
+      # 그 관례 밖에 남은 **마지막** 자리였다" 였다 — 두 전칭 다 거짓이었다.**
+      # 같은 날 실측으로 하한이 없던 자리가 둘 더 있었다:
+      #   · `scripts/spec/check_int_narrowing.py` — R4 는 **상한만**(`census > BASELINE`)이라
+      #     정규식이 죽어 `census = 0` 이 나오면 조용히 통과했다.
+      #   · `scripts/spec/check_particle_corpus_census.py` — `fails` 가 비면 무조건 rc=0 이라
+      #     `gen.scan()` 이 빈 리스트를 내도 "통과" 였다.
+      # 둘 다 이 커밋에서 모집단 하한과 `--selftest` 를 붙였다(위 `Spec self-tests` 에서 돈다).
+      # 교훈은 관례 자체가 아니라 **적는 법**이다: "전부" · "마지막" 같은 전칭은 적는 순간
+      # 반증 대상이 된다. 열거를 적을 거면 **세는 법과 날짜를 함께** 적어라.
       #
       # 하한 2900 은 현재 2,940(실측: `git ls-files -- <경로> | wc -l`)에 여유 40 이다.
       # 정확한 개수는 위 매니페스트 검사가 이미 못 박으므로 여기서는 **경로가 살아 있는가**
@@ -506,8 +531,14 @@ jobs:
       #     `/usr/local/bin/{swift,swiftc}` 로 심링크, `SWIFT_PATH=/usr/share/swift/usr/bin`.
       #
       # 미해결(그래서 아직 게이트가 아니다):
-      #   · 이 도구를 검증한 로컬 툴체인은 **6.0.3** 이다. 6.3.3 이 **손으로 적은** 심 15종에
+      #   · 이 도구를 검증한 로컬 툴체인은 **6.0.3** 이다. 6.3.3 이 **손으로 적은** 심에
       #     새 진단을 내는지 여기서는 잴 수 없다.
+      #     ([정정 2026-09-01] 종전 이 자리는 "심 15종", 아래 두 자리는 "심 17종" 이라 같은
+      #      파일 안에서 값이 갈렸다. **세는 법을 적는다** — 2026-09-01 실측:
+      #        ls scripts/dev/linux-shim/*.swift | wc -l          → 30 (파일)
+      #      그 30 중 `zz-*` 3개는 암시적 import/URL 북마크 보조이고, `appkit-app.swift` 와
+      #      `simd-extra.swift` 는 각각 `appkit`·`simd` 의 확장이다 → **프레임워크 25종**.
+      #      값이 갈렸던 이유가 바로 이것이다: 무엇을 한 "종" 으로 셀지 규약이 없었다.)
       #   · 도구가 `-swift-version` 을 넘기지 않으므로 러너의 **기본 언어 모드가 5** 라는 전제가
       #     깨지면 그대로 무너진다. 아래 스니펫이 그것을 잰다.
       #   · `install-swift.sh` 는 이미지 빌드 시점의 `apple/swift` **releases/latest** 를 따라간다 —
@@ -553,7 +584,8 @@ jobs:
       #
       # 위 프로브가 러너 툴체인(Swift 6.3.3 · 기본 언어 모드 5 · flock 있음 · 4코어)을 확정했고,
       # `0a9755e` 가 커버를 55/55(제외 0)로 닫아 "도구가 움직이는 중" 이라는 보류 사유도 없앴다.
-      # 남은 미해결은 하나다: **로컬 6.0.3 ↔ 러너 6.3.3.** 심 17종은 애플 헤더에서 뽑은 것이
+      # 남은 미해결은 하나다: **로컬 6.0.3 ↔ 러너 6.3.3.** 심(프레임워크 25종 · 파일 30개,
+      # 세는 법은 위 스텝 A 주석)은 애플 헤더에서 뽑은 것이
       # 아니라 손으로 적은 것이라(`docs/dev/linux-typecheck.md` 한계 ②), 새 컴파일러가 진단을
       # 추가하면 그대로 빨간불이 된다. **그 차이를 초록을 깨지 않고 재는 것이 이 스텝의 전부다.**
       # 여기서 나오는 진단이 곧 4단계(차단 게이트) 승격의 작업 목록이다.
@@ -624,7 +656,7 @@ jobs:
               echo "게이트 승격 전에 러너에서의 실제 소요부터 다시 재라."
             else
               echo "진단이 나왔다. **심(shim)이 러너 컴파일러와 어긋난 것인지 실제 코드 결함인지 먼저 가른 뒤에**"
-              echo "게이트로 올려라 — 심 17종은 애플 헤더에서 뽑은 것이 아니라 손으로 적은 것이다"
+              echo "게이트로 올려라 — 심(scripts/dev/linux-shim/)은 애플 헤더에서 뽑은 것이 아니라 손으로 적은 것이다"
               echo "(\`docs/dev/linux-typecheck.md\` 한계 ②)."
               echo ""
               PERFILE=$(grep -oE "[^/ ]+\.swift:[0-9]+:[0-9]+: error:" "$RUNNER_TEMP/typecheck.log" \

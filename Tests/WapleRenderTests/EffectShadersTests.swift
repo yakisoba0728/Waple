@@ -24,6 +24,12 @@ final class EffectShadersTests: XCTestCase {
         // F-X8: WE shake.frag g_Speed 실 기본값 1(구코드 5 는 실물과 5배 어긋남 — 코퍼스 실측 상례).
         XCTAssertEqual(d?[1], 1, "speed 기본값은 WE 실물(shake.frag default:1) 과 일치해야 함")
         XCTAssertEqual(d?[2], 0); XCTAssertEqual(d?[3], 1)  // bounds 기본 "0 1"
+        // r3-M61: 진폭 기본도 같은 어노테이션이 정본이다 —
+        // `uniform float g_Amp; // {"material":"strength","default":0.1,"range":[0.01, 0.5]}`.
+        // 종전 0.006 은 range 하한(0.01)보다 작아 WE 에서 저작 불가능했고, 양쪽 제곱이라
+        // 실효 변위가 (0.1/0.006)² = 277.8배 어긋났다.
+        XCTAssertEqual(d?[0] ?? -1, 0.1, accuracy: 1e-6,
+                       "amplitude 기본값은 WE 실물(shake.frag g_Amp default:0.1) 과 일치해야 함")
     }
     /// F-X8: bounds 키(WE shake.vert g_Bounds, 기본 "0 1")가 파라미터 슬롯으로 실제 전달돼야 한다.
     func testShakeBoundsParam() {
@@ -96,6 +102,15 @@ final class EffectShadersTests: XCTestCase {
     func testWaterrippleUsesSquaredStrength() throws {
         let src = try XCTUnwrap(EffectShaders.source(for: "waterripple"))
         XCTAssertTrue(src.contains("P[1] * P[1]"), "강도는 제곱(g_Strength*g_Strength)이어야 함: \(src)")
+    }
+    /// L2/r4: WE waterripple.vert `coordsRotated + g_Time * g_AnimationSpeed * g_AnimationSpeed + scroll`
+    /// — 구동 속도도 제곱이다(자매 항 strength 와 같은 자리). 선형이면 기본 0.15 에서 6.667배 빠르다.
+    func testWaterrippleUsesSquaredAnimationSpeed() throws {
+        let src = try XCTUnwrap(EffectShaders.source(for: "waterripple"))
+        XCTAssertTrue(src.contains("float speed = P[3] * P[3];"),
+                      "구동 속도는 제곱(g_AnimationSpeed*g_AnimationSpeed)이어야 함: \(src)")
+        XCTAssertFalse(src.contains("float2(P[0] * P[3], P[0] * P[3] * 0.5)"),
+                       "선형 구동 속도가 남아 있으면 안 됨")
     }
     func testWaterrippleSourceExists() {
         let src = EffectShaders.source(for: "waterripple")
