@@ -141,11 +141,16 @@ public enum ShaderPreprocessor {
         // `LIGHTING` 만 — FOG/REFLECTION/RIMLIGHTING/SHADINGGRADIENT/INSTANCECOUNT 전부 유실).
         // `[COMBO]` 가 2개 이상인 동봉 셰이더가 **59개**다.
         //
-        // 왜 여태 안 터졌나: `preprocessStrict`(:20-22)가 **자기 입력만** CRLF 정규화하고 그 안에서
+        // 왜 여태 안 터졌나: `preprocessStrict` 가 **자기 입력만** CRLF 정규화하고 그 안에서
         // 다시 부르므로 단일 스테이지 기본값은 복구된다. 구멍은 **정규화 밖의 호출부**다 —
-        // `GLSLTranslator._translate`(:173)의 교차스테이지 union 과
-        // `WapleRender/SceneRendererResources.swift` 의 `resolvePassCombos`(선언 :1042 · 호출부 :784,
-        // 2026-08-21 기준 — 이제 `frag` **하나만** 넘긴다)가 raw 소스를 넘긴다.
+        // `GLSLTranslator._translate` 의 교차스테이지 union(`for src in [vertex, fragment]` 루프)이
+        // raw 소스를 넘긴다.
+        //
+        // [r4-06 정정] 종전 이 자리는 호출부를 **둘**로 적고 그중 하나로
+        // `SceneRendererResources.resolvePassCombos` 를 지목했지만, 그 함수는 이 함수를 **부르지
+        // 않는다**. 전수 재현: `grep -rn 'parseComboDefaults' Sources` → 이 파일 자신(2자리)과
+        // `GLSLTranslator._translate` 하나뿐이다. 줄 번호 인용(`:20-22` `:173` `:1042` `:784`)도
+        // 전부 무효라 심볼 인용으로 바꿨다.
         // 형제 함수 `GLSLTranslator.samplerCombos`/`formatComboSlots` 는 이미 `isNewline` 로 쪼개고
         // 그 이유를 주석에 적어 두었다 — 그 수정이 이 함수로 전파되지 않았던 것이다.
         for line in source.split(whereSeparator: { $0.isNewline }) {
@@ -512,8 +517,13 @@ public enum ShaderPreprocessor {
                             // 중복 키는 **뒤가 이긴다**(uniquingKeysWith). `#define FOO(a,a)` 는 애초에
                             // 불법 GLSL 이지만, pkg 안의 셰이더는 신뢰 경계 밖이라 파서가 죽는 대신
                             // 뭐라도 내야 한다 — 종전 `uniqueKeysWithValues` 는 그 입력에서 그대로 트랩했다.
-                            // 형제 `PropertyConditionEvaluator.swift:12` 가 2026-08 에 같은 이유로 같은
-                            // 선택을 했는데 이 자리로 오지 않았다(수정의 전파 누락).
+                            // 형제 `PropertyConditionEvaluator.isVisible` 이 2026-08 에 같은 이유로
+                            // 같은 선택(`uniquingKeysWith: { _, later in later }`)을 했는데 이 자리로
+                            // 오지 않았다(수정의 전파 누락).
+                            // (r3-M55 정정: 종전 인용 `PropertyConditionEvaluator.swift:12` 는
+                            //  AngularJS 문법 우선순위 사슬 주석이라 `uniquingKeysWith` 와 무관했다.
+                            //  같은 무효 인용이 `WebRenderer.swift` 와 `ShaderPreprocessorTests.swift`
+                            //  에도 있었다 — 세 자리 모두 심볼 인용으로 바꿨다.)
                             return GLSLTranslator.replaceIdentifiers(
                                 m.body,
                                 Dictionary(zip(m.params, args), uniquingKeysWith: { _, later in later }))
@@ -635,16 +645,21 @@ public enum ShaderPreprocessor {
     /// 그래서 `#ifdef HQ\tenable hq` 의 이름이 `"HQ\tenable"` 로 나와 어떤 define 키에도 안 맞고
     /// `isDefined` 가 false — 지시문 인식은 성공했으므로 **아무 것도 새지 않고 조용히 반대 분기**를
     /// 골랐다(실측 프로브: FALSE_BRANCH, 공백형은 TRUE_BRANCH. `#undef K\ttrailing` 은 무동작).
-    /// 위 :261 의 탭 접기(H1)로는 닫히지 않는다 — 그쪽은 **키워드 뒤** 구분자를 고치고, 이건
-    /// **인자 뒤** 구분자 문제라 접기 뒤에도 남는다. 같은 뿌리(공백)지만 실패 지점이 다르다.
-    /// 실물 줄 인식 정규식 `^\s*#\s*([a-z]+)\b\s*(.*)`(이 파일 :6-12)의 `\s*` 가 탭을 포함하므로
-    /// 임의 공백 분리가 실물 형태다.
+    /// 위 `#` 뒤 **탭 접기**(H1 — `let rest = t.dropFirst().drop(while: …)` 블록)로는 닫히지 않는다.
+    /// 그쪽은 **키워드 뒤** 구분자를 고치고, 이건 **인자 뒤** 구분자 문제라 접기 뒤에도 남는다.
+    /// 같은 뿌리(공백)지만 실패 지점이 다르다.
+    /// (r2-4.1-lane4 정정: 종전 인용 `:261` 은 그 접기 코드가 아니었다 — 자기참조 줄 번호가
+    ///  썩은 자리라 심볼·코드 인용으로 바꿨다.)
+    /// 실물 줄 인식 정규식 `^\s*#\s*([a-z]+)\b\s*(.*)`(이 파일 헤더 주석에 인용)의 `\s*` 가 탭을
+    /// 포함하므로 임의 공백 분리가 실물 형태다.
     ///
-    /// **범위 주의 — 이것은 트레일링 주석과 무관하다.** `#ifdef HQ\t// comment` 는 :251-252 의
+    /// **범위 주의 — 이것은 트레일링 주석과 무관하다.** `#ifdef HQ\t// comment` 는 `#` 줄의
     /// 주석 절단이 먼저 돌아 종전에도 **올바른** 분기를 골랐다(실측 TRUE_BRANCH). 살아 있던 형태는
     /// 탭 + 비주석 트레일러뿐이다. 동봉 WEAssets + 형제 코퍼스 전수 실측 도달 **0건** —
     ///   grep -rlE '^[ ]*#[ \t]*(ifdef|ifndef|undef)[ \t]+[A-Za-z_][A-Za-z0-9_]*\t' → 0
-    /// 즉 오늘 시점 자산 번역 결과는 불변이고, 고치는 이유는 `#define`(:401 의 nameEnd 가 `\t` 포함)·
+    /// 즉 오늘 시점 자산 번역 결과는 불변이고, 고치는 이유는 `#define`(그 분기의
+    /// `let nameEnd = decl.firstIndex(where: { $0 == " " || $0 == "(" || $0 == "\t" })` 가 `\t` 를
+    /// 이미 구분자로 포함한다. 종전 인용 `:401` 은 무관한 줄이었다 — r2-4.1-lane4)·
     /// `#require` 와의 일관성이다.
     private static func token(after kw: String, _ line: String) -> String {
         line.dropFirst(kw.count).trimmingCharacters(in: .whitespaces)

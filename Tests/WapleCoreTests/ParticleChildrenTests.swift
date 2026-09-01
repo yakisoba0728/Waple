@@ -469,4 +469,120 @@ final class ParticleChildrenTests: XCTestCase {
         XCTAssertEqual(particle.vel.x, 0, accuracy: 1e-5)
         XCTAssertEqual(particle.vel.y, 4, accuracy: 1e-5)
     }
+
+    // MARK: - r2-C1: 부모 CP 피드 · emitOrigin 이중가산
+
+    /// **회귀 핀(r2-C1).** `children[].flags & 1`(부모 CP 피드)이 켜진 `eventfollow` 링크에서
+    /// 부모 파티클 위치가 두 항에 동시에 실렸다: `applyParentControlPointFeed` 가 자식 CP 슬롯을
+    /// 부모 위치로 덮고(→ `emitterControlPointFrame` 의 `frame.translation`), 같은 값이
+    /// `emitOrigin`(`p.pos + link.origin`)에도 들어가 `spawn` 말미에 한 번 더 더해졌다.
+    ///
+    /// 동봉 `presets/lightning/particles/presets/thunderbolt.json` 체인이 정확히 이 모양이다
+    /// (자식 링크 `type:"eventfollow"` · `flags:1` · `controlpointstartindex:null`→슬롯0).
+    /// 여기서는 부모를 (100,0,0) 한 개로 고정해 자식이 200 이 아니라 **100** 에 서는지 본다.
+    func testFollowChildWithControlPointFeed_addsParentPositionExactlyOnce() {
+        let child = ParticleSystemDef.parse(json("""
+        {"controlpoint":[{"offset":"0 0 0"}],
+         "emitter":[{"name":"boxrandom","rate":0,"instantaneous":1,
+                     "origin":"0 0 0","distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":10,"max":10}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """), material: nil)
+        let parent = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":1,
+                     "origin":"100 0 0","distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":10,"max":10}],
+         "children":[{"name":"child.json","type":"eventfollow","flags":1,
+                      "probability":1,"maxcount":1,"origin":"0 0 0"}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """), material: nil) { _ in child }
+
+        var sim = ParticleSimulator(def: parent, seed: 410)
+        _ = sim.step(0.1)
+        let kids = sim.childDisplay(0)
+        XCTAssertEqual(kids.count, 1)
+        XCTAssertEqual(kids[0].pos.x, 100, accuracy: 1e-4,
+                       "부모 위치는 CP 피드와 emitOrigin 중 한 번만 실려야 한다(이중가산이면 200)")
+        XCTAssertEqual(kids[0].pos.y, 0, accuracy: 1e-4)
+    }
+
+    /// 이중가산 억제의 **반대편 가드**. `type:"static"`(→`.always`) 링크는 `emitOrigin` 이
+    /// 링크 origin 뿐이라(생성 자리 `makeInstance(uid: 0, origin: s3(link.origin))`) 부모 위치를
+    /// 싣는 경로가 CP 피드 하나뿐이다 — 여기서 평행이동까지 눌러 버리면 자식이 부모를 놓친다.
+    /// 억제 조건이 `emitOrigin 이 부모 위치를 실었는가` AND `그 슬롯이 피드로 덮였는가` 인 이유다.
+    func testStaticChildWithControlPointFeed_keepsParentPositionFromTheFeed() {
+        let child = ParticleSystemDef.parse(json("""
+        {"controlpoint":[{"offset":"0 0 0"}],
+         "emitter":[{"name":"boxrandom","rate":0,"instantaneous":1,
+                     "origin":"0 0 0","distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":10,"max":10}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """), material: nil)
+        let parent = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":1,
+                     "origin":"100 0 0","distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":10,"max":10}],
+         "children":[{"name":"child.json","type":"static","flags":1,
+                      "probability":1,"maxcount":1,"origin":"0 0 0"}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """), material: nil) { _ in child }
+
+        var sim = ParticleSimulator(def: parent, seed: 411)
+        _ = sim.step(0.1)
+        let kids = sim.childDisplay(0)
+        XCTAssertEqual(kids.count, 1)
+        XCTAssertEqual(kids[0].pos.x, 100, accuracy: 1e-4,
+                       "static 링크는 CP 피드가 부모 위치의 유일한 경로 — 눌러서는 안 된다")
+        XCTAssertEqual(kids[0].pos.y, 0, accuracy: 1e-4)
+    }
+
+    /// **회귀 핀(r2-H7).** 부모 CP 피드가 **끊긴 뒤**(부모 파티클 사망) 자식의
+    /// `previousRuntimeControlPoints` 가 얼어붙어, `maintaindistancebetweencontrolpoints` 가
+    /// 매 프레임 낡은 선분을 재사상하며 입자를 밀어내던 결함.
+    ///
+    /// 종전 동기화는 `updateControlPointPositionAnimations` **안**에 있었고 그 함수는
+    /// `instanceoverride.controlpointN` 이 없으면 즉시 반환한다 — 자식 시스템은 전건이 그 모양이라
+    /// 동기화가 아예 안 돌았다. 피드가 살아 있는 동안은 `beginExternalControlPointUpdate` 가
+    /// 잡아 주므로 결함이 안 보이고, **피드가 멈춘 프레임부터** 드러난다.
+    func testChildControlPointFeedStopping_freezesTheSegmentInsteadOfDriftingTheParticle() {
+        let child = ParticleSystemDef.parse(json("""
+        {"controlpoint":[{"offset":"0 0 0"},{"offset":"0 0 0"}],
+         "emitter":[{"name":"boxrandom","rate":0,"instantaneous":1,
+                     "origin":"55 10 0","distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":10,"max":10}],
+         "operator":[{"name":"maintaindistancebetweencontrolpoints",
+                      "controlpointstart":0,"controlpointend":1}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """), material: nil)
+        // 부모 수명 0.25 → 세 번째 0.1 스텝(age 0.3)에서 컬. 그 뒤 피드는 빈 배열이라
+        // applyParentControlPointFeed 가 조기 반환한다.
+        let parent = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":1,
+                     "origin":"100 0 0","distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":0.25,"max":0.25},
+                        {"name":"velocityrandom","min":"100 0 0","max":"100 0 0"}],
+         "operator":[{"name":"movement"}],
+         "children":[{"name":"beam.json","type":"static","flags":1,
+                      "controlpointstartindex":1,"maxcount":1}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """), material: nil) { _ in child }
+
+        var sim = ParticleSimulator(def: parent, seed: 412)
+        _ = sim.step(0.1)   // CP1 0→110(직전 선분 퇴화 — 보정 스킵)
+        _ = sim.step(0.1)   // CP1 110→120, 축 비율 1/2 재매핑 → x=60
+        XCTAssertEqual(sim.childDisplay(0)[0].pos.x, 60, accuracy: 1e-4)
+
+        // 이 스텝에서 부모가 컬된다(age 0.3 > lifetime 0.25). 컬은 stepChildren **앞**이라
+        // 이번 프레임의 cpFeed 가 이미 비고, 따라서 자식은 beginExternalControlPointUpdate 를
+        // 못 받는다 — 결함이 드러나는 정확히 그 한 프레임이다.
+        //
+        // **여기서 단언을 멈춘다.** 다음 스텝은 `particles.isEmpty` 라 부모 이미터가 재버스트하고
+        // (`e.burst > 0, wasEmpty` 갈래) 피드가 되살아나 CP1 이 120 → 100 으로 되돌아간다 —
+        // 그건 이 결함과 무관한 재버스트 거동이라 여기서 잠글 대상이 아니다.
+        _ = sim.step(0.1)
+        // 기대값은 직접 계산했다: 선분이 얼어붙으면 정적 분기(ap==a, bp==b)라 x=60 유지.
+        // previous 가 110 에 얼어붙은 채면 "이동" 분기가 돌아 60 → **65.4545…** 로 밀린다.
+        XCTAssertEqual(sim.childDisplay(0)[0].pos.x, 60, accuracy: 1e-4,
+                       "피드가 멈추면 선분도 멈춘다 — 낡은 직전 선분으로 재사상하면 65.45 로 밀린다")
+    }
 }

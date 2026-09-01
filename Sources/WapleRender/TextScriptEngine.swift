@@ -617,7 +617,7 @@ public final class TextScriptEngine {
     ///
     /// 근거 3종이 모두 같은 것을 가리킨다:
     ///  · d.ts(lib.sceneScript.d.ts:1257-1261) — `interface IThisPropertyObjectBase extends IObject`
-    ///    의 문서 주석이 그대로 "The object this property is bound to". `thisLayer: ILayer`(:2123)
+    ///    의 문서 주석이 그대로 "The object this property is bound to". `declare let thisLayer: ILayer;`
     ///    와는 별개 선언이다.
     ///  · 실물 스크립트 — dino_run 은 이펙트 `visible` 에 붙은 스크립트에서 `thisObject.getMaterial(0)`
     ///    (=IEffect), razer_vortex 는 패스 상수 `colormode` 에 붙은 스크립트에서 `thisObject.colormode`
@@ -1365,7 +1365,7 @@ public final class TextScriptEngine {
                 continue
             }
             // 정규식 리터럴 스킵(감사 W-B7): /while (true)/ 같은 패턴 내부를 스캔해 정상 스크립트를
-            // 오탐 거부하지 않도록. 시작 판정은 stripModuleSyntax(:485) 의 식-시작 휴리스틱 재사용 —
+            // 오탐 거부하지 않도록. 시작 판정은 `stripModuleSyntax` 의 식-시작 휴리스틱 재사용 —
             // 나눗셈/정규식 모호성도 같은 수준에서만 처리한다(`)` 뒤 정규식은 여전히 미스킵).
             if c == "/", i + 1 < n,
                lastKeywordAllowsRegex || prevSig == nil || "({[=,:;!?&|+-*%^~<>".contains(prevSig!) {
@@ -2282,7 +2282,11 @@ public final class TextScriptEngine {
     }
     // thisScene.createLayer(설정객체) 의 설정 → 레이어 심 필드. 키 이름은 씬 JSON 오브젝트와 같다
     // (WE 편집기가 저장하는 형태 그대로이고, 동봉 preview3dclock 이 그 형태로 부른다).
-    // 벡터는 `"r g b"` 문자열도 배열도 Vec 도 받는다 — Vec3/Vec2 생성자가 셋 다 삼킨다(:1729).
+    // 벡터는 `"r g b"` 문자열도 배열도 Vec 도 받는다 — 위 심의 `__WapleVec3`/`__WapleVec2`
+    // 생성자가 셋 다 삼킨다.
+    // (r4-39: 종전 인용 `:1729` 는 **출생 시점부터** Vec 생성자를 가리킨 적이 없다 —
+    //  그 자리는 `__timeoutQueue` 선형 스캔 루프다. 출생 커밋 `e18f6cf8` 트리에서도 같았다.
+    //  자기참조는 줄 번호 대신 심볼명으로 적는다.)
     // 모르는 키는 그대로 얹는다(WE 도 설정 객체의 미지 키를 오브젝트 필드로 남긴다 — 스크립트가
     // 직후에 그 이름으로 읽는 경우가 있어 버리면 undefined 가 된다).
     var __wapleLayerConfigVec3 = { origin: 1, angles: 1, scale: 1, color: 1, backgroundcolor: 1 };
@@ -2715,7 +2719,8 @@ public final class TextScriptEngine {
         var m = {
             getAnimation: function() { return __makeTextureAnimation(); },   // IMaterial extends IObject
             setMaterialProperty: function(k, v) { m[String(k)] = v; return m; },
-            // d.ts 는 이 메서드를 IEffect(:1295)에만 선언한다 — exe 등록부 0x1401EFCA0 도 IEffect
+            // d.ts 는 `executeMaterialFunction(propertyName: String): void;` 를 IEffect 에만
+            // 선언한다 — exe 등록부 0x1401EFCA0 도 IEffect
             // 바인딩 하나뿐이고 IMaterial 쪽 등록은 없다. 여기 남겨 두는 것은 머티리얼 바인딩
             // (패스 상수 스크립트)이 실수로 불러도 TypeError 로 훅 전체가 죽지 않게 하려는 것이고,
             // 적재/드레인 규약은 이펙트와 같다. 도달 0(코퍼스 호출 0건).

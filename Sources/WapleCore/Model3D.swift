@@ -84,7 +84,12 @@ import simd
 ///   꼬리 T1..T7(태그 레코드/게이트 mat4/제약/중첩 그룹/링크/(3f+mat4)×본수/u32×본수 ×2)
 ///   — parseSkeletonTail 로 파스해 skeletonTail 에 노출(파스·보존, 소비 보류). 레이아웃 상세는
 ///   SkeletonTail 주석 참조(디컴파일+어셈블리 대조, 실물 418파일 전수 착지 검증).
-/// 파일 말미에는 단일 0x00 종단자(엔진 섹션 루프의 빈 cstring — 실물 418/418).
+/// 파일 말미에는 단일 0x00 종단자(엔진 섹션 루프의 빈 cstring).
+/// **전칭이 아니다** — 이 종단자는 **섹션 루프가 도는 v≥13 파일에만** 있다(v0014/0017/0023).
+/// `v0004` 파일은 그 NUL 이 없고 마지막 인덱스 바이트가 곧 EOF 다(**설치본 8/8 실측** —
+/// 아래 `hasSections` 앞 주석이 같은 근거를 적는다). 종전 문면의 "실물 418/418" 은
+/// **파일 모집단 418 전건**을 뜻하는 것처럼 읽혔는데, 같은 파일 안의 v0004 예외 서술과
+/// 정면으로 어긋났다.
 /// (스키닝 모델) "MDAT0001" 이름-본 부착점 섹션 — parseAttachments()로 파싱, "MDLA0006" 애니메이션 섹션.
 ///
 /// 정점 포맷(formatFlag 하위 바이트 0x0f = pos+normal+tangent+uv; 비트 0x01800000 = 스키닝):
@@ -198,7 +203,9 @@ public struct Model3D: Equatable {
         public let indices: [UInt32]           // 트라이앵글 리스트(count % 3 == 0)
         /// 이 메시의 머티리얼 **전부**(= 헤더 skinCount 개, 스킨 = 같은 메시의 재질 변형).
         /// `material` 은 그중 첫 번째다 — 씬의 `"skin": N` 선택은 아직 없다(G-C3-05).
-        /// 실측 분포 {1: 450, 2: 1} — 2인 것은 audiophile grid.mdl 하나뿐이다.
+        /// 실측 분포 {1: 450, 2: 1} — 2인 것은 `audiophile` 의 `grid.mdl` 하나뿐이다.
+        /// **모집단은 `.mdl` 파일 451개**다(합 451). 바로 위 `969/986` 은 **메시** 모집단이라
+        /// 서로 다른 수를 센다 — 같은 struct 주석 안에서 두 모집단이 섞이지 않게 명시해 둔다.
         public var materials: [String] = []
         /// v≥21 메시 트레일러(게이트A/B 블롭 + v≥23 모프 레코드). 전부 0 인 트레일러(= 종전
         /// '6바이트 구분자')는 nil — 데이터가 있을 때만 채운다. 파스·보존, 렌더 소비는 범위 밖.
@@ -696,7 +703,10 @@ public struct Model3D: Equatable {
             if skinned { fallback += 32 }                             // boneIdx+weights
             var stride = layout?.stride ?? fallback
             if vSize % stride != 0 {
-                guard let inferred = inferStride(bytes: bytes, indexBlobAt: q + 4 + vSize, vSize: vSize),
+                // 인덱스 폭은 본경로(`let iWidth = (gateWord & 1) == 0 ? 2 : 4`)와 같은 규칙.
+                guard let inferred = inferStride(bytes: bytes, indexBlobAt: q + 4 + vSize,
+                                                 vSize: vSize,
+                                                 indexWidth: (gateWord & 1) == 0 ? 2 : 4),
                       inferred >= 20 else { return nil }   // pos(12)+uv(8) 최소
                 stride = inferred
                 layout = nil   // 추론 스트라이드는 테이블 산출이 아님 — 채널 오프셋도 꼬리고정 경로로
@@ -1247,19 +1257,31 @@ public struct Model3D: Equatable {
             || findMagic("MDLE0002", in: bytes, from: o) == o
     }
 
-    /// 변종 정점 스트라이드 추론: 정점 블롭 직후의 인덱스 블롭(u32 크기 + u16 인덱스)에서
+    /// 변종 정점 스트라이드 추론: 정점 블롭 직후의 인덱스 블롭(`u32 크기 + 인덱스`)에서
     /// maxIndex+1 = 정점 수로 보고 vSize/count. 정수가 아니거나 범위(20..96) 밖이면 nil(안전 실패).
-    private static func inferStride(bytes: [UInt8], indexBlobAt p: Int, vSize: Int) -> Int? {
-        guard let iSizeU = readU32LE(bytes, at: p), iSizeU > 0, iSizeU % 2 == 0 else { return nil }
+    ///
+    /// **[2026-09-01 r4-40]** 인덱스 폭은 본경로와 **같은 규칙**(`gateWord & 1` → 2 or 4)으로
+    /// 받는다. 종전에는 이 함수만 u16 쌍 고정 파스(`bytes[k] | bytes[k+1] << 8`, `k += 2`)라
+    /// 본경로가 u32 로 읽는 파일에서 maxIndex 를 잘못 세어 스트라이드를 틀리게 추론했다.
+    /// 도달: 설치본 45메시는 전건 gateWord 0 이라 u16 경로 그대로 — **이 머신 코퍼스에서는
+    /// 비트동일**이고, 갈리는 것은 gateWord bit0 이 선 워크샵 `.mdl`(코퍼스 부재)뿐이다.
+    private static func inferStride(bytes: [UInt8], indexBlobAt p: Int, vSize: Int,
+                                    indexWidth: Int) -> Int? {
+        guard indexWidth == 2 || indexWidth == 4 else { return nil }
+        guard let iSizeU = readU32LE(bytes, at: p), iSizeU > 0,
+              iSizeU % UInt32(indexWidth) == 0 else { return nil }
         let iSize = Int(iSizeU)
         guard p + 4 + iSize <= bytes.count else { return nil }
         var maxIdx = 0
         var k = p + 4
         let end = p + 4 + iSize
-        while k + 1 < end {
-            let v = Int(bytes[k]) | (Int(bytes[k + 1]) << 8)
+        while k + indexWidth - 1 < end {
+            let v = indexWidth == 2
+                ? Int(bytes[k]) | (Int(bytes[k + 1]) << 8)
+                : Int(bytes[k]) | (Int(bytes[k + 1]) << 8)
+                    | (Int(bytes[k + 2]) << 16) | (Int(bytes[k + 3]) << 24)
             if v > maxIdx { maxIdx = v }
-            k += 2
+            k += indexWidth
         }
         let count = maxIdx + 1
         guard count > 0, vSize % count == 0 else { return nil }

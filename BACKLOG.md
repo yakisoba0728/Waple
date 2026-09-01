@@ -27,6 +27,22 @@ debug·release 네 잡 모두 실행 4,016개 · 실패 0이었고, 스킵은 63
 
 상세 근거는 [AUDIT.md](AUDIT.md)(감사 리포트, 2026-07-06 — 이력)와 [docs/README.md](docs/README.md) 참조.
 
+### 2026-08-31 전체 감사 — 미해결분은 이 문서가 아니라 감사 산출물에 있다
+
+**이 백로그는 2026-08-31 감사 4라운드를 한 번도 참조하지 않고 있었다**(`grep -c 'AUDIT-FULL-2026-08-31' BACKLOG.md` = 0).
+그 라운드가 확정한 것 중 상당수가 아직 안 닫혔는데, 이 문서에는 **대응 항목이 없다** —
+"열린 것을 보려면 여기로 온다" 는 이 문서의 계약이 그만큼 깨져 있었다. 항목을 여기로 옮겨
+적지 않는 이유는 감사 산출물이 근거·재현 명령까지 들고 있어서다. 대신 입구를 둔다:
+
+| 문서 | 무엇 |
+| --- | --- |
+| [AUDIT-VERIFIED-MASTER.md](AUDIT-VERIFIED-MASTER.md) | **여기부터 읽어라.** 아래 세 라운드를 적대적으로 재현해 접은 마스터 목록(검증 통과 185건 · 기각 9건 · 심각도 정정표). 각 항목이 자리·판정·재현 명령을 함께 든다 |
+| [AUDIT-FULL-2026-08-31.md](AUDIT-FULL-2026-08-31.md) | 라운드 1 — 전수 감사(C1 · H1–H8 · M-series) |
+| [AUDIT-FULL-2026-08-31-r2.md](AUDIT-FULL-2026-08-31-r2.md) | 라운드 2 — PR #8 직후 재감사(§4.1 인용 드리프트 · §4.3 정본 · §4.4 RE 저장소) |
+| [AUDIT-FULL-2026-08-31-r3.md](AUDIT-FULL-2026-08-31-r3.md) | 라운드 3 — 적대적 검증(§4.1 기각 8건 · §4.2 살아남았으나 본문 정정 · §4.3 미판정 6건은 **확정으로 승격 금지**) |
+
+**미판정·`plausible` 을 이 표에서 확정으로 읽지 마라.** r3 §4.3 이 그 목록을 따로 든다.
+
 #### 정정 2026-08-30 — F402/F403 인용 기준선
 
 위 하네스 행이 F402/F403 해소 산출물로 `spec/golden/snapshot/baseline-7075b74` 를 인용하고 있었다.
@@ -85,7 +101,7 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 잔여 소항목 — 트리거: 해당 기능 사용 중 체감 시:
 - "이미 설치됨" 배지(창작마당 타일) — publishedfileid ≠ project.json id 라 대조 키 부재로 스코프아웃. 필요 시 다운로드 시점 매핑 저장부터.
 - 설정 창이 열려 있는 동안 적용 전환으로 바뀐 동영상 대상은 미러링하지 않음(재오픈 시 refresh) — 표시 문제, 체감 시.
-- ~~[PropertyEditorView.swift:55](Sources/Waple/PropertyEditorView.swift:55) deprecated 1-파라미터 `onChange` 1건(재구축 이전부터 존재) — 기회 시.~~
+- ~~[PropertyEditorView.swift](Sources/Waple/PropertyEditorView.swift) 의 deprecated 1-파라미터 `onChange` 1건(재구축 이전부터 존재) — 기회 시.~~
   **해소(2026-07-21 `0280ab6a`)** — 항목을 쓴 2026-07-13 당시 `:55` 는 실제로
   `.onChange(of: focusedText) { newValue in` 을 가리켰다. `0280ab6a` 가 이를
   `{ _, newValue in` 으로 고쳤고, 이후 편집으로 현재 호출부는 다른 줄로 이동했다. 현재 실측:
@@ -109,9 +125,9 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 | **X-⑤ g_TexelSize = 이펙트 dst 기준(채택안)** | bokeh_blur 12씬 블러 폭 | WE gaussian.vert `ratio = g_TexelSize * g_Texture0Resolution` 를 근거로 삼았으나 이 근거는 판별력 0(ratio 가 ratio.y/ratio.x 로만 소비돼 구(1/tex0)·신(1/dst) 해석 모두 값 1) — "실측으로 확정" 아니라 채택된 정본. 레이어 커스텀 셰이더 경로는 여전히 구 tex0 근사(규약 이원화, 무회귀 우선으로 스코프 밖 유지). 라이브 A/B 판독 항목: bokeh_blur 사용 12씬에서 블러 폭이 옛 tex0 근사(4× 과대) 대비 실제로 좁아졌는지 육안 확인. 코드 근거는 [GLSLTranslator.swift](Sources/WapleCore/GLSLTranslator.swift) g_TexelSize 치환부·[SceneRendererFrameEncoder.swift](Sources/WapleRender/SceneRendererFrameEncoder.swift) targetRes 관련 주석 |
 
 **Scene Wave3 티어1 후속** (2026-07-13, 명시요청 수행 — B1 텍스트·A2 HDR톤맵·E1 composelayer·A4 유니폼 완료·main 머지). 잔여:
-- ~~2881 이펙트-헤비 HDR 빨강~~ **해소** — 원인은 이펙트가 아니라 `f_compose` 파이프라인 포맷 불일치(bgra8 하드코딩 vs float acc)였고 SceneRenderer.swift 의 `accPixelFormat` 대입부(F003 정정: `715aaa6` 당시 674행이었으나 이후 커밋으로 하향 이동 — 2026-07-18 기준 [SceneRenderer.swift:964](Sources/WapleRender/SceneRenderer.swift:964), 라인은 향후도 드리프트 가능하니 `accPixelFormat` 으로 grep 권장)으로 수정(2026-07-13 리뷰 Critical). 11개 hdr+compose 씬(2881·2902 등)의 빨강/분홍 아티팩트 제거. 잔여 충실도만: 2881 오디오무입력 캡처 어두움·이펙트, 2902 삼각마스크(아래 항목)
+- ~~2881 이펙트-헤비 HDR 빨강~~ **해소** — 원인은 이펙트가 아니라 `f_compose` 파이프라인 포맷 불일치(bgra8 하드코딩 vs float acc)였고 SceneRenderer.swift 의 `accPixelFormat` 대입부(F003 정정: `715aaa6` 당시 674행이었으나 이후 커밋으로 하향 이동 — 2026-07-18 기준 [SceneRenderer.swift](Sources/WapleRender/SceneRenderer.swift) 의 `accPixelFormat` 대입부 — **[2026-09-01] `:964` 도 썩었다**(지금 그 줄은 `PointerButtonState.clickImpulse` 주석이다). 줄 번호를 또 적지 않는다: `grep -n 'accPixelFormat' Sources/WapleRender/SceneRenderer.swift`)으로 수정(2026-07-13 리뷰 Critical). 11개 hdr+compose 씬(2881·2902 등)의 빨강/분홍 아티팩트 제거. 잔여 충실도만: 2881 오디오무입력 캡처 어두움·이펙트, 2902 삼각마스크(아래 항목)
 - **E1 composelayer 삼각마스크 미재현** — 2902406982: 회색덩어리는 해소(화면좌표 f_compose), 그러나 三角模块N `_rt_imageLayerComposite_<id>` 그룹 자식 RT + clipping_mask 레이어간 샘플링 미구현
-- ~~A2 블룸 확산 패스~~ **F004 정정(2026-07-18): "파싱만(미소비)"는 역-스테일 — LDR/HDR 블룸 모두 추출→블러→가산으로 구현·소비됨**([LDRBloomPass.swift](Sources/WapleRender/LDRBloomPass.swift)/[HDRBloomPass.swift](Sources/WapleRender/HDRBloomPass.swift), `SceneRenderer.swift` `sceneWantsLDRBloom`/`sceneWantsHDRBloom`, 커밋 24cee5f·a3d2afb·8be4b89·cb9b80c·c1584da). 잔여는 refinement 뿐: **HDR 피라미드는 H6(2026-07-25~26)에서 8레벨로 완료**됐으므로 "2단 ÷4/÷8 근사" 표기는 무효 — 현재 `bloomhdriterations` 를 받아 `min(8, 허용 mip 수)` 로 클램프하고 2단 미만이면 단일레벨로 폴백한다([HDRBloomPyramidPass.swift](Sources/WapleRender/HDRBloomPyramidPass.swift) `levels` 기본값 8). 실제 잔여는 ①LDR 경로는 아직 피라미드가 아니라 3-패스([LDRBloomPass.swift](Sources/WapleRender/LDRBloomPass.swift)) ②~~피라미드 upsample blend state 미결(`HDRBloomPass.swift:46`)~~ ③~~strength CPU 변환규칙 미결~~ ④3D-HDR 골든 완전 파리티 미달(선재 3D 콘텐츠 갭, 위 참조)
+- ~~A2 블룸 확산 패스~~ **F004 정정(2026-07-18): "파싱만(미소비)"는 역-스테일 — LDR/HDR 블룸 모두 추출→블러→가산으로 구현·소비됨**([LDRBloomPass.swift](Sources/WapleRender/LDRBloomPass.swift)/[HDRBloomPass.swift](Sources/WapleRender/HDRBloomPass.swift), `SceneRenderer.swift` `sceneWantsLDRBloom`/`sceneWantsHDRBloom`, 커밋 24cee5f·a3d2afb·8be4b89·cb9b80c·c1584da). 잔여는 refinement 뿐: **HDR 피라미드는 H6(2026-07-25~26)에서 8레벨로 완료**됐으므로 "2단 ÷4/÷8 근사" 표기는 무효 — 현재 `bloomhdriterations` 를 받아 `min(8, 허용 mip 수)` 로 클램프하고 2단 미만이면 단일레벨로 폴백한다([HDRBloomPyramidPass.swift](Sources/WapleRender/HDRBloomPyramidPass.swift) `levels` 기본값 8). 실제 잔여는 ①LDR 경로는 아직 피라미드가 아니라 3-패스([LDRBloomPass.swift](Sources/WapleRender/LDRBloomPass.swift)) ②~~피라미드 upsample blend state 미결(`HDRBloomPass.swift`)~~ ③~~strength CPU 변환규칙 미결~~ ④3D-HDR 골든 완전 파리티 미달(선재 3D 콘텐츠 갭, 위 참조)
 
   > **[정정 2026-08-30] ②는 해소됐고, ③은 절반만 해소됐다. 인용 줄 하나는 딴 내용을 가리킨다.**
   >
@@ -124,8 +140,8 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   > grep -o '"blending"[^,]*' Sources/WapleRender/Resources/WEAssets/materials/util/hdr_upsample.json
   > grep -n '"blend": "additive"' spec/engine/render-pass.json
   > ```
-  > **인용 `HDRBloomPass.swift:46` 은 blend state 와 무관하다** — 그 줄은 `CreateSwapChain` 포맷
-  > (W-20) 문장이다. 미결 서술은 같은 파일의 `ponytail:` 블록으로 이동했다
+  > **종전 인용 `HDRBloomPass.swift:46` 은 blend state 와 무관했다** — 2026-09-01 에도 그 줄은
+  > `CreateSwapChain` 포맷(W-20) 문장이다(`DXGI_SWAP_CHAIN_DESC`). 미결 서술은 같은 파일의 `ponytail:` 블록으로 이동했다
   > (`grep -n 'upsample blend state' Sources/WapleRender/HDRBloomPass.swift`). 줄 번호는 드리프트한다 —
   > 이 리포 관례대로 심볼·문자열로 인용하라. **그 소스 주석은 이 레인의 소유가 아니라 손대지 않았다.**
   >
@@ -139,14 +155,14 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   > **비관적 거짓을 낙관적 거짓으로 바꾸는 것도 같은 결함이다.**
   > (별건: `HDRBloomPass` 의 라이브 관측 `0.3 → 0.00461` 은 위 확정 산식으로 설명되지 않아
   > 그 자리의 미결 표기는 살아 있을 수 있다 — 재도출하지 않았으므로 판정하지 않는다.)
-- **B1 텍스트 잔여** — 4.17× DPI로 8192px 래스터 가드 강화 → ~~긴 미줄바꿈 텍스트 소실(조용) 가능~~ **정정(2026-08-16): 가드는 더 이상 드로우를 통째로 드롭하지 않는다** — 상한 초과 시 nil 대신 `pointSize` 를 축소해 재시도하므로 텍스트가 사라지는 대신 작게 그려진다([TextRasterizer.swift:114](Sources/WapleRender/TextRasterizer.swift:114)). 잔여 드롭 경로는 `guard reduced > 0, reduced < pointSize`([:117](Sources/WapleRender/TextRasterizer.swift:117)) 하나뿐 — 더 못 줄이는 경우다. 근본 갭(워드랩 부재)은 그대로이므로 항목은 유지; 워드랩·MSDF·per-line 정렬·크기/위치 미세조정
+- **B1 텍스트 잔여** — 4.17× DPI로 8192px 래스터 가드 강화 → ~~긴 미줄바꿈 텍스트 소실(조용) 가능~~ **정정(2026-08-16): 가드는 더 이상 드로우를 통째로 드롭하지 않는다** — 상한 초과 시 nil 대신 `pointSize` 를 축소해 재시도하므로 텍스트가 사라지는 대신 작게 그려진다([TextRasterizer.swift](Sources/WapleRender/TextRasterizer.swift) `render(text:…)` 안의 축소 재시도 — `grep -n 'let reduced = pointSize' Sources/WapleRender/TextRasterizer.swift`). 잔여 드롭 경로는 그 바로 다음 줄의 `guard reduced > 0, reduced < pointSize` 하나뿐 — 더 못 줄이는 경우다. 근본 갭(워드랩 부재)은 그대로이므로 항목은 유지; 워드랩·MSDF·per-line 정렬·크기/위치 미세조정
 - **W-① 3D 씬 텍스트 빌보드 잔여**(2026-07-27, `08058c9`로 world-placement 배선 완료 — [SceneRenderer3D.swift](Sources/WapleRender/SceneRenderer3D.swift)) — origin/scale/angles/visible 만 attachScripts, 아래 2건은 의도적 미부착·미구현:
   (a) **alpha/color 프로퍼티 스크립트 미부착** — 실측 3509243656 UI 패널이 dd/yp/num 얽힌 shared 상태머신이라 부착 시 무관 이미지 빌보드(id=449)가 잘못된 타이밍에 오노출되고 캡처 셀프체크가 비결정(frac 0.0176~0.025, 재현 가능)이 됨. 필요 시 캡처-세이프 격리(예: alpha 스크립트 보유 text 는 빌보드 자체를 만들지 않는 draw-gate) 부터 검토.
   (b) **텍스트 '내용' 동적 재래스터 미지원** — F309 프라이밍이 확정한 1회 평가값(controllerOf[uid].last)만 래스터, update() 가 이후 콘텐츠를 바꿔도 화면엔 반영 안 됨(위치/스케일/회전/가시성만 매프레임 애니). 코퍼스 5씬(3470948192·3477054430·3589454154·3662790108·3737268876) A/B 캡처(1920×1080, main-6526db1 대비)로 블라스트 반경 확인 완료 — 3662790108(76텍스트)·3477054430(1)·3737268876(4) 는 byte-identical(새 빌보드가 캡처 시점 비가시), 3589454154·3470948192 는 소폭 개선(정보 텍스트 신규 노출, 왜곡 없음). 상세: [docs/scene-render-audit-2026-07-26.md](docs/history/scene-render-audit-2026-07-26.md) "3D/칸 메라/투영 잔여" 참조.
 - **A4 g_Color1~3 계열** — 그라디언트/파티클 다중색 유니폼(중립값 비단순), exact-name 스코프서 제외됨. 필요시 검토
   ([정정 2026-08-25] 종전 표기 `g_Color1~4` 는 하나가 더 많았다. **`g_Color4` 는 F613 에서 이미
-  등재됐다**(`GLSLTranslator.swift:1695` — 미등재 시 padDefault (0,0,0,0) 으로 즉시 검정이 되는
-  `g_Color` 의 vec4 변형이다). 남은 것은 `g_Color1`·`2`·`3` 셋뿐이고 셋은 등재 0건이다.)
+  등재됐다**(`GLSLTranslator.engineNeutralDefault` 의 case 목록 — 미등재 시 padDefault (0,0,0,0) 으로
+  즉시 검정이 되는 `g_Color` 의 vec4 변형이다. `grep -n 'g_Color4' Sources/WapleCore/GLSLTranslator.swift`). 남은 것은 `g_Color1`·`2`·`3` 셋뿐이고 셋은 등재 0건이다.)
 - **D1 텍스트 outline/spacing 파스-소비 단절** (2026-08-20 발굴) — `SceneDocument` 가
   `outline`·`outlineColor`·`outlineThickness`·`spacing`(줄간격)을 파스해 `SceneTextLayer`/
   `SceneLayer` 필드에 담지만 **`WapleCore` 밖에서 아무도 읽지 않는다**. `TextRasterizer.render`
@@ -189,25 +205,27 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   간다(조용히 틀린 그림이 아니라 안전한 실패다). `g_MorphOffsets` 는 선언 자체가 드롭된다.
 
   **`WAPLE_BUILTIN_MESH_SHADERS` 의 전제조건 서술도 틀렸다.** 화이트리스트는
-  `generic{,2,3,4}` 4종뿐이고(`SceneRenderer3D.swift:1043`), include 체인을 전개하면 그 경로에서
+  `generic{,2,3,4}` 4종뿐이고(`SceneRenderer3D.builtinMeshShaderWhitelist`), include 체인을 전개하면 그 경로에서
   실제로 무가드로 도달하는 것은 **셋**뿐이다 — `g_EyePosition`(generic.vert:6),
   `g_LightsPosition`(generic.vert:7), `g_LightsColorRadius`(generic.frag:4).
   `g_Texture0Rotation`/`g_Texture0Translation`·`g_ViewUp`/`g_ViewRight`·`g_Orientation*`·
   `g_HDRParams` 는 이 체인에 **도달하지 않는다**(종전 서술의 "켜는 순간 도달한다" 는 과장이다).
 
-  그리고 유니폼은 **유일한 블로커가 아니다.** ~~`SceneRenderer3D.swift:1039-1042` 가 이미
-  적어 두었듯 4종 전부 `a_Normal` 을 무조건 참조하는데 `GLSLTranslator` 의 VIn 은
-  `a_Position`/`a_TexCoord` 만 지원한다(`GLSLTranslator.swift:1797`) — 오늘은 **네 개가 전부
-  MSL 컴파일에 실패한다**.~~ attribute 화이트리스트 확장이 동등한 선행 블로커인데 종전 D3 는
+  그리고 유니폼은 **유일한 블로커가 아니다.** ~~`SceneRenderer3D` 의 `builtinMeshShaderWhitelist`
+  주석이 이미 적어 두었듯 4종 전부 `a_Normal` 을 무조건 참조하는데 `GLSLTranslator` 의 VIn 은
+  `a_Position`/`a_TexCoord` 만 지원한다(`GLSLTranslator.vertexAttributeWhitelist`) — 오늘은 **네 개가
+  전부 MSL 컴파일에 실패한다**.~~ attribute 화이트리스트 확장이 동등한 선행 블로커인데 종전 D3 는
   이걸 빠뜨린 채 자기만 "그 전제조건" 이라고 적고 있었다. ~~`generic4` 는 추가로
   `sampler2DComparison` 이 `GLSLType` 에 없어 선언 9건(그림자 아틀라스 포함)이 드롭된다.~~
   → **[정정 2026-08-30]** 그 `sampler2DComparison` 문장은 **쓰이는 순간 이미 거짓이었다** — 아래 정정 블록.
 
   > **[해소 2026-08-21, 문서 갱신 2026-08-25] `a_Normal` 은 더 이상 블로커가 아니다.**
-  > `GLSLTranslator.swift:104` 에 `("a_Normal", .vec3, 2)` 가 화이트리스트로 들어갔고
-  > (참조될 때만 `VIn` 에 싣는다), `SceneRenderer3D.swift:1145` 가 정점 디스크립터에 배선한다.
-  > 같은 파일 `:1070-1073` 이 "그 서술은 `a_Normal` 한 이름에 대해서는 더 이상 사실이 아니다"
-  > 라고 자기 정정을 이미 남겨 뒀는데 **이 표만 따라오지 못했다.**
+  > `GLSLTranslator.vertexAttributeWhitelist` 에 `("a_Normal", .vec3, 2)` 가 들어갔고
+  > (참조될 때만 `VIn` 에 싣는다), `SceneRenderer3D` 가 `t.vertexAttributes.contains("a_Normal")`
+  > 일 때 정점 디스크립터 attribute 2 에 배선한다. 같은 파일의 `builtinMeshShaderWhitelist` 주석이
+  > "그 서술은 `a_Normal` 한 이름에 대해서는 더 이상 사실이 아니다" 라고 자기 정정을 이미 남겨
+  > 뒀는데 **이 표만 따라오지 못했다.** (종전 이 자리의 `:104`·`:1145`·`:1070-1073` 세 인용은
+  > 2026-09-01 기준 전부 딴 줄을 가리켰다 — 심볼로 바꾼 이유다.)
   >
   > ~~남은 블로커는 `generic4` 의 `sampler2DComparison` 하나다(`PerformLighting_V1` 경로).~~
   > 즉 위 "작업 순서 ①" 은 끝났고 ②부터가 남았다. 이걸 미해결로 읽고 attribute 지원을
@@ -268,7 +286,8 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   > xcrun -sdk macosx metal -c <emitted>.metal
   > ```
 
-  **값 공급**: `EngineU`(320B, `GLSLTranslator.swift:1808`)에 카메라·라이트·포그·본·모프
+  **값 공급**: `EngineU`(320B, `GLSLTranslator` 의 MSL 프리앰블 문자열 —
+  `grep -n 'struct EngineU {' Sources/WapleCore/GLSLTranslator.swift`)에 카메라·라이트·포그·본·모프
   슬롯이 하나도 없다. 난이도 하 9개(`g_EyePosition`·`g_ViewRight/Up`·`g_Fog*`·
   `g_Texture3MipMapInfo`·`g_Texture0Rotation/Translation`), 중 9개(배열 피드 구조 확장),
   상 7개(스키닝/모프/퍼펫 — 값 자체가 없거나 CPU 프리스킨과 충돌).
@@ -429,12 +448,13 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   게이트(0.01/0.99) 미구현.
 
 - **F4-polish① 텍스트 anchor/padding/backgroundbrightness 렌더 소비** (2026-07-28 파스 착지) — `SceneTextLayer.anchor`/`padding`/`backgroundBrightness` 3필드 파스·보존 완료([SceneDocument.swift](Sources/WapleCore/SceneDocument.swift) parseText). anchor 비-none 70건(코퍼스 1642 오브젝트 중)·padding 전건·backgroundbrightness 1474건은 값이 있지만 opaqueBackground 와 동형으로 **렌더 소비는 아직 없음**(배경박스 최소구현 정책 유지). **[2026-08-20 정정] 종전 여기에 "outline 만 TextRasterizer 가 그림" 이라고 적혀 있었는데 사실이 아니다** — `Sources/WapleRender/TextRasterizer.swift` 에 `outline` 문자열이 **0건**이고 `render(...)` 는 outline 인자를 받지도 않는다. `SceneDocument` 가 `outline`/`outlineColor`/`outlineThickness`/`spacing` 을 파스해 필드에 담지만 소비처가 없다 — 아래 D1 참조. 배경박스 자체를 그리는 후속이 착수되면 이 3필드로 앵커 오프셋·패딩 여백·밝기 배율을 함께 적용할 것.
-- **F4-polish② Forward+ 라이팅 유니폼 인덱스 배열 피드** (2026-07-28 인식-전용 착지) — `g_LPoint_*`/`g_LSpot_*`/`g_LTube_*`/`g_LDirectional_*`/`g_LFeature_Shadow*` 를 `GLSLTranslator.isEngine` 에 등재해 머티리얼 오분류(g_TexelSize 동형 사고)만 차단([GLSLTranslator.swift](Sources/WapleCore/GLSLTranslator.swift) isEngine/engineReplacement). WE 실선언은 배열(`g_LPoint_Color[LIGHTS_POINT]`)·사용부는 `[l].rgb` 인덱스 접근인데, 이번 등재의 대체값(0 벡터/항등)은 비-배열 스칼라라 인덱스 구독엔 컴파일 안전하지 않음 — 로컬 코퍼스 460씬이 `LIGHTS_POINT/SPOT/TUBE/DIRECTIONAL` 콤보를 전혀 참조하지 않아(`ShaderPreprocessor.swift:38-40`) 이 블록이 항상 전처리로 제거되므로 오늘 시점 도달 0건. 콤보 지원이 실제로 켜지는 씬이 나타나면 인덱스 가능한 constant 배열 피드로 교체할 것(네이티브 Scene3DLighting 은 이미 구현돼 있어 스코프는 커스텀 셰이더 경로 한정).
+- **F4-polish② Forward+ 라이팅 유니폼 인덱스 배열 피드** (2026-07-28 인식-전용 착지) — `g_LPoint_*`/`g_LSpot_*`/`g_LTube_*`/`g_LDirectional_*`/`g_LFeature_Shadow*` 를 `GLSLTranslator.isEngine` 에 등재해 머티리얼 오분류(g_TexelSize 동형 사고)만 차단([GLSLTranslator.swift](Sources/WapleCore/GLSLTranslator.swift) isEngine/engineReplacement). WE 실선언은 배열(`g_LPoint_Color[LIGHTS_POINT]`)·사용부는 `[l].rgb` 인덱스 접근인데, 이번 등재의 대체값(0 벡터/항등)은 비-배열 스칼라라 인덱스 구독엔 컴파일 안전하지 않음 — 로컬 코퍼스 460씬이 `LIGHTS_POINT/SPOT/TUBE/DIRECTIONAL` 콤보를 전혀 참조하지 않아(`ShaderPreprocessor.preprocessStrict` 의 `defines` 구성 주석 —
+`grep -n 'LIGHTS_POINT' Sources/WapleCore/ShaderPreprocessor.swift`) 이 블록이 항상 전처리로 제거되므로 오늘 시점 도달 0건. 콤보 지원이 실제로 켜지는 씬이 나타나면 인덱스 가능한 constant 배열 피드로 교체할 것(네이티브 Scene3DLighting 은 이미 구현돼 있어 스코프는 커스텀 셰이더 경로 한정).
 
 ## 잠재 결함
 
-- ~~캡처 인스턴스가 라이브 모니터를 시작한다~~ → **해소(2026-08-25, 포인터 핀 + 미디어 폴러 게이트)** — `AppDelegate.captureSceneStill` 이 mount 전 `SceneRenderer.capturePointerUV = (0.5, 0.5)` 를 걸고(`SnapshotPipeline.pinRenderSettings` 의 save/set/defer-restore 패턴, teardown 뒤 LIFO 복원) `startMediaPollingIfNeeded` 머리에 핀 게이트를 더했다. 시차 전역 모니터는 기존 내부 핀 게이트로 함께 막힌다. "폴러 5초 주기라 안 불린다" 방어는 애초 성립하지 않았다 — `MediaPoller.start()` 가 타이머 등록 직후 `t.fire()` 로 즉시 1회 폴한다(MediaPoller.swift:40). 핀 상태에선 폴러를 아예 안 켜므로 골든 CLI 파이프라인(메인 동기 실행이라 배달이 캡처 창에 들어온 적 없음)과 픽셀이 같다. 검증: CapturePointerPinTests +2(핀 마운트 → mediaPoller nil, 무핀 음성 대조). `SceneRenderer.swift` 클래스 선언부 ⚠️ 문단은 툼스톤 정정 주석으로 교체
-- ~~**캡처 경로 잔여 갭 2건**~~ → **둘 다 해소(① 2026-08-26 `ae7fa12` · ② 2026-08-27).** ① `startClickMonitorIfNeeded` 에 캡처 게이트를 넣었다(포인터·미디어폴러와 같은 모양). **"이론상" 이 아니었다** — `.z` 를 한 프레임 임펄스로 되돌리는 `pointerButton.endFrame()` 은 리포 전체에서 `draw(in:)`(`SceneRenderer.swift:2375`) 한 곳뿐이고 `captureFrames` 는 그 경로를 타지 않으므로, 캡처 중 눌린 상태는 **그 캡처의 모든 프레임**에 `clickImpulse=1` 로 남았다. 같은 커밋에서 전역 핀 자체를 인스턴스 소유로 바꿨다(데이터레이스·라이브 오염·defer 교차 동시 해소). ② **해소(2026-08-27) — 다만 서술이 과대평가였다.** `captureSceneStill` 이 이제 마운트 직후 `pause()`+`setSpectrum(.silent)` 를 부른다(세 하네스 — 골든 CLI·프로파일·앱 스틸 — 이 같은 모양). 그러나 백로그가 적은 증상("그 순간의 스펙트럼이 스틸에 구워져 매번 다른 이미지")은 **현행 코드에서 도달 불가**였다: `currentSpectrum` 초기값이 `.silent`(`SceneRenderer.swift:1385`)이고, 그 값을 `setSpectrum*` 밖에서 쓰는 자리는 `SystemAudioSpectrumProvider.onFrame` 둘뿐이며(`:2170`·`:2178`), 그 공급자는 `mount` 의 `if hasAudio, container.window != nil`(`:2151`) 안에서만 생기는데 두 캡처 하네스 다 창 없는 오프스크린 `NSView` 를 쓴다. 즉 실효 게이트는 "창 유무" 하나이고 세 하네스의 그 두 줄은 프레시 헤드리스 인스턴스에서 전부 no-op 이다(그 두 줄이 먼저 쓰였고 `window != nil` 게이트는 F833·E1⑦ 로 나중에 생겼다). ①(과소평가)과 반대 방향의 오차였다. 고친 이유는 픽셀이 아니라 **하네스 모양** — 게이트가 하나뿐인데 세 하네스가 서로 다르게 기대하면 그 게이트가 흔들리는 날 여기만 조용히 라이브 값을 굽는다. 골든 베이스라인 무관도 재확인: 골든 픽셀의 출처는 `SnapshotPipeline.captureFrame`(스냅샷 매니페스트)과 `SyntheticPixelGoldenTests`(`spec/golden/synthetic/`) 둘뿐이고 **어느 쪽도 `captureSceneStill` 을 타지 않는다**(앱 타깃 private, 테스트에 링크되지 않음). 검증: `CaptureAudioDeterminismTests` +3 — 캡처 인스턴스에 스펙트럼 공급원 부재(`audioProvider` nil + `currentSpectrum == .silent`) · 앱 스틸 시퀀스 ≡ 골든 시퀀스 픽셀(strict) · 공집합 방지(스펙트럼 주입 시 luma +0.15 초과 변화)
+- ~~캡처 인스턴스가 라이브 모니터를 시작한다~~ → **해소(2026-08-25, 포인터 핀 + 미디어 폴러 게이트)** — `AppDelegate.captureSceneStill` 이 mount 전 `SceneRenderer.capturePointerUV = (0.5, 0.5)` 를 걸고(`SnapshotPipeline.pinRenderSettings` 의 save/set/defer-restore 패턴, teardown 뒤 LIFO 복원) `startMediaPollingIfNeeded` 머리에 핀 게이트를 더했다. 시차 전역 모니터는 기존 내부 핀 게이트로 함께 막힌다. "폴러 5초 주기라 안 불린다" 방어는 애초 성립하지 않았다 — `MediaPoller.start()` 가 타이머 등록 직후 `t.fire()` 로 즉시 1회 폴한다(`Sources/WapleRender/MediaPoller.swift` — 종전 이 인용은 `Sources/Waple/` 로 **경로까지 틀렸다**). 핀 상태에선 폴러를 아예 안 켜므로 골든 CLI 파이프라인(메인 동기 실행이라 배달이 캡처 창에 들어온 적 없음)과 픽셀이 같다. 검증: CapturePointerPinTests +2(핀 마운트 → mediaPoller nil, 무핀 음성 대조). `SceneRenderer.swift` 클래스 선언부 ⚠️ 문단은 툼스톤 정정 주석으로 교체
+- ~~**캡처 경로 잔여 갭 2건**~~ → **둘 다 해소(① 2026-08-26 `ae7fa12` · ② 2026-08-27).** ① `startClickMonitorIfNeeded` 에 캡처 게이트를 넣었다(포인터·미디어폴러와 같은 모양). **"이론상" 이 아니었다** — `.z` 를 한 프레임 임펄스로 되돌리는 `pointerButton.endFrame()` 은 리포 전체에서 `SceneRenderer.draw(in:)` 한 곳뿐이고 `captureFrames` 는 그 경로를 타지 않으므로, 캡처 중 눌린 상태는 **그 캡처의 모든 프레임**에 `clickImpulse=1` 로 남았다. 같은 커밋에서 전역 핀 자체를 인스턴스 소유로 바꿨다(데이터레이스·라이브 오염·defer 교차 동시 해소). ② **해소(2026-08-27) — 다만 서술이 과대평가였다.** `captureSceneStill` 이 이제 마운트 직후 `pause()`+`setSpectrum(.silent)` 를 부른다(세 하네스 — 골든 CLI·프로파일·앱 스틸 — 이 같은 모양). 그러나 백로그가 적은 증상("그 순간의 스펙트럼이 스틸에 구워져 매번 다른 이미지")은 **현행 코드에서 도달 불가**였다: `currentSpectrum` 초기값이 `.silent` 이고, 그 값을 `setSpectrum*` 밖에서 쓰는 자리는 `SystemAudioSpectrumProvider.onFrame` 둘뿐이며, 그 공급자는 `mount` 의 `if hasAudio, container.window != nil` 안에서만 생기는데 두 캡처 하네스 다 창 없는 오프스크린 `NSView` 를 쓴다. 즉 실효 게이트는 "창 유무" 하나이고 세 하네스의 그 두 줄은 프레시 헤드리스 인스턴스에서 전부 no-op 이다(그 두 줄이 먼저 쓰였고 `window != nil` 게이트는 F833·E1⑦ 로 나중에 생겼다). ①(과소평가)과 반대 방향의 오차였다. 고친 이유는 픽셀이 아니라 **하네스 모양** — 게이트가 하나뿐인데 세 하네스가 서로 다르게 기대하면 그 게이트가 흔들리는 날 여기만 조용히 라이브 값을 굽는다. 골든 베이스라인 무관도 재확인: 골든 픽셀의 출처는 `SnapshotPipeline.captureFrame`(스냅샷 매니페스트)과 `SyntheticPixelGoldenTests`(`spec/golden/synthetic/`) 둘뿐이고 **어느 쪽도 `captureSceneStill` 을 타지 않는다**(앱 타깃 private, 테스트에 링크되지 않음). 검증: `CaptureAudioDeterminismTests` +3 — 캡처 인스턴스에 스펙트럼 공급원 부재(`audioProvider` nil + `currentSpectrum == .silent`) · 앱 스틸 시퀀스 ≡ 골든 시퀀스 픽셀(strict) · 공집합 방지(스펙트럼 주입 시 luma +0.15 초과 변화)
 
 - ~~**`supportsAudioProcessing` 프로덕션 소비처 0**~~ → **처분 완료(2026-08-27) — "의도적 미사용" 으로 재분류.** `WallpaperProject` 14필드 중 마지막 참조-0 필드였다(`playbackProperties` 는 재생정책 배선으로 해소). **파싱은 유지하고 소비는 하지 않는다.** 배선(ⓐ)을 밀어낸 근거 셋: ① WE 의 게이트는 `SupportsAudioProcessing() && wproperties.audioprocessing.value` **두 항**인데(`FUN_14006e0c0` — 0x14006e11a·0x14006e352 가 살아 있는 벽지 전체를 이 식으로 OR 접어 WASAPI 루프백 캡처를 켜고/끈다) 둘째 항인 `audioprocessing` 유저 프로퍼티는 **엔진 합성 주입**이고(0x14010c650 → 0x14010c70c, 선언 true 일 때만·기본 true) Waple 에는 그 프로퍼티도 UI 도 없다 — 선언만 배선하면 되돌릴 손잡이 없는 반쪽 이식 ② 조용해질 벽지 수를 잴 **씬 × 선언 교차표가 없다**(설치본 191 중 선언 3건 / 워크샵 446 폴더 중 키 141건 / `AUDIOPROCESSING` 콤보 140회 / 이미터 `audioprocessingmode` 13씬 — 전부 모집단이 다르다, 실물 코퍼스 부재 F400) ③ **헤드리스 골든은 오디오 기동을 통째로 꺼도 픽셀 diff 가 0** 이라 이 회귀를 구조적으로 못 본다(공급자가 `container.window != nil` 게이트로 애초에 안 뜬다). RE 기록(0x14010d100 절차·타입 엄격성, VA 소비처 세 자리)은 유효하므로 그대로 둔다. 결정·뒤집을 조건 셋은 `ProjectJSONParser.parseSupportsAudioProcessing` 「처분」 문단, 지키는 오라클은 `AudioProcessingDeclarationTests` +3(선언 true/부재/명시 false 셋 다 `hasAudio` 승격 동일)
 
@@ -445,9 +465,9 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   `WallpaperProperties.parseValue` 가 기본 타입의 JSON 숫자 0/1을 Bool보다 먼저 숫자로 판정하고,
   preset 옵션도 프로퍼티 타입을 함께 전달한다. 숫자 preset 선택과 native Bool 보존을
   `WallpaperPropertiesTests`가 회귀 검증한다.
-- **GLSL vert/frag 공용 헬퍼의 스테이지별 하위 헬퍼 호출 리네임 누락** ([GLSLTranslator.swift:155](Sources/WapleCore/GLSLTranslator.swift:155)) — 2026-07-11 리뷰 #11, 추정 단계(재현 셰이더 미확보). 공용 헬퍼가 radial_blur식 스테이지별 computeUV 를 부르는 셰이더에서 frag 가 vert 버전을 받으면 조용한 오렌더 — 실물에서 관찰되면 착수
+- **GLSL vert/frag 공용 헬퍼의 스테이지별 하위 헬퍼 호출 리네임 누락** ([GLSLTranslator.swift](Sources/WapleCore/GLSLTranslator.swift) `_translate` 안의 `fragHelperRenames` 블록 — `grep -n 'fragHelperRenames' Sources/WapleCore/GLSLTranslator.swift`. **[2026-09-01] 종전 인용 `:155` 는 `_resetTranslationMemoForTesting()` 을 가리켜 항목 내용과 무관했다**) — 2026-07-11 리뷰 #11, 추정 단계(재현 셰이더 미확보). 공용 헬퍼가 radial_blur식 스테이지별 computeUV 를 부르는 셰이더에서 frag 가 vert 버전을 받으면 조용한 오렌더 — 실물에서 관찰되면 착수
 - **셰이더 멀티라인 매크로 "호출" 미확장** ([ShaderPreprocessor.swift](Sources/WapleCore/ShaderPreprocessor.swift) `spliceDefineContinuations` ponytail 주석) — `#define` 줄연속은 2026-07-11 해소, 인자가 여러 줄에 걸친 호출은 실입력 미확인이라 유보
-- ~~FFmpeg `converted/` 캐시 무한 증가~~ → **해소** — [FFmpegConverter.swift:68](Sources/WapleRender/FFmpegConverter.swift#L68) `maxCachedConversions = 8` + [:179](Sources/WapleRender/FFmpegConverter.swift#L179) 가 `VideoTextureExtractor.evictOldest` 를 실제로 부른다(정책은 `maxCachedVideos=8` 과 동일). 같은 섹션의 취소선 규약을 따라 표시만 밀려 있었다
+- ~~FFmpeg `converted/` 캐시 무한 증가~~ → **해소** — [FFmpegConverter.swift](Sources/WapleRender/FFmpegConverter.swift) 의 `maxCachedConversions = 8` 과, 같은 파일에서 `VideoTextureExtractor.evictOldest(in:keep:)` 를 실제로 부르는 자리(정책은 `maxCachedVideos=8` 과 동일). 같은 섹션의 취소선 규약을 따라 표시만 밀려 있었다
 - ~~**볼륨/배속 변경 = 렌더러 전체 재장착**(재생 리셋)~~ → **해소(F820, 2026-08-31)** —
   설정 변경 콜백이 실행 중인 `VideoRenderer.applyLiveVideoSettings()`를 호출해 같은 플레이어의
   `volume`·`defaultRate`를 갱신한다. 재마운트하지 않는 계약은 `VideoLiveSettingsTests`가 검증한다.
@@ -467,10 +487,27 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 5. 코드사인/공증, GUI 스모크, 워크샵 E2E
    - **릴리스 파이프라인 macos-26 실검증 완료(2026-07-30, 태그 `v0.1.0-beta.2` / 런 30547526365, 3m15s)**: `package-app.sh` 전 구간(plist·`.saver` clang·중첩 포함 ad-hoc `codesign --deep`·`hdiutil` UDZO) 통과, 태그→버전 규약 확인(`v0.1.0-beta.2` → plist `0.1.0`, CFBundleVersion=런번호), `-` 포함 태그는 즉시 prerelease. 산출물 직접 검증: sha256 노트값 일치·DMG 마운트·`Waple.saver`/`Waple.icns` 동봉·app·saver 모두 arm64·`codesign --verify --deep --strict` 통과. 릴리스 노트는 영어 + ad-hoc 일 때만 Gatekeeper 절. 잔여는 Developer ID/공증(유료 계정 = 배포 스코프C)뿐이며, 그때 `.p12` 키체인 임포트 스텝을 워크플로에 추가해야 한다. **주의: `workflow_dispatch` 로 release.yml 을 시험할 수 없다**(`GITHUB_REF_NAME`=main → 버전 추출 붕괴) — 버릴 프리릴리즈 태그를 쓸 것
 6. ~~접근성(그리드 타일 VoiceOver/키보드), 현지화(하드코딩 한국어 40+)~~ →
-   **접근성 해소·현지화 축소(2026-08-31)** — 네 종류 타일에 `tileAccessibility`가 배선됐고
+   **접근성 대부분 해소·현지화 축소(2026-08-31)** — 네 종류 타일에 `tileAccessibility`가 배선됐고
    `UIConventionTests`가 키보드·보조기술 규약을 지킨다. 앱/렌더러 Swift UI 문자열은
    `LocalizationCoverageTests`와 영어 번역 285키로 양방향 검사한다. 잔여는 별도 번들인
    `WapleSaverView.m`의 한글 안내문 1건과 `.saver` 현지화 리소스 배선이다.
+
+   > **[정정 2026-09-01] "해소" 는 한 칸 과했다 — 타입 배지가 접근성 트리에 없다.**
+   > `WallpaperGridView` 의 `tileAccessibility(value:)` 에 실리는 것은 `tileStatus(...)` 가
+   > 돌려주는 "폴더 유실"·"적용 중"·"지원 예정" 셋뿐이고, 그마저 셋 다 아니면 `nil` 이다.
+   > 씬/비디오/웹을 구분해 주는 `typeBadge`(`TypeBadge` — 아이콘 + `NowPlayingSubtitle.typeLabel`)
+   > 는 **썸네일의 `.overlay` 로만** 붙어 있고 `accessibilityElement(children: .combine)` 이
+   > 걸린 타일 본체 밖이라, 보조기술 사용자는 타일이 **어떤 종류의 배경인지 들을 수 없다**.
+   > 눈으로는 보이고 귀로는 안 들리는 정보다.
+   >
+   > 이 항목을 닫은 커밋(`b883386e`)이 배지도 함께 배선했다고 읽히는 것이 문제였다 —
+   > **같은 커밋 안에서 이미 거짓인 근거**다. 고치는 자리는 `tileStatus` 가 아니라
+   > `tileAccessibility` 호출부이고(값에 타입 라벨을 합치거나 배지에 별도 `accessibilityLabel`),
+   > `Sources/Waple/` 는 이 레인 소유가 아니라 손대지 않았다.
+   >
+   > ```bash
+   > grep -n 'tileAccessibility\|typeBadge\|func tileStatus' Sources/Waple/WallpaperGridView.swift
+   > ```
 
 ## 감사 2026-07-11 잔여
 
@@ -487,7 +524,7 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 | ApplyBlending 14–29 모드(내장 include) | 92종/141씬 | **BlendMSL.swift에 전 모드 MSL 이미 존재** → GLSL 내장 include로 이식만 |
 | systemfont 별칭·검증 (`consolas`/`comicsans`/`sansserif`) | ~211인스턴스 | TextRasterizer 별칭 테이블 + PostScript명 검증 |
 | ~~REFRACT 파티클 굴절~~ | 129건/35씬 | **[해소 2026-07-16 `4328709c`, 표 정정 2026-08-25]** `pf_refract` 셰이더 + 파이프라인 변형 2종 + `runRefractParticle`(acc blit 스냅샷 → 드로우 → 실패 시 identity 폴백)이 전부 배선돼 있다. 이 표의 머리말은 "의도적으로 남긴 것" 인데 이건 남긴 게 아니라 **이미 한 것**이었다. 남은 것은 픽셀 회귀 오라클 부재(아래 F399)뿐이다 |
-| wind/gravity 파티클 외력 (~~vortex_v2~~·~~scriptproperties~~ **해소**) | 110씬 | **2026-08-19 재검증**: vortex_v2 는 `9ee0ccf`(2026-07-21) 로, scriptproperties 는 `cdae755`+`0acef5d`(2026-07-15) 로 **이미 구현됐다** — 이 줄의 "파스+배선" 표기가 그 둘에 대해 낡았다. wind/gravity 만 잔존한다(파스·보존 전용, `SceneDocument.swift:861-865`; `ParticleSimulator` 가 그 필드를 받지 않아 구조적으로 소비 경로가 없다 — 참고로 시뮬레이터의 `movements[].gravity` 는 **파티클별 오퍼레이터**라 이것과 별개다). **적용 공식 미확정이 여전한 관문**이다: WE 셰이더에 `g_Gravity`/`g_Wind` 가 없고 (CPU 시뮬레이터 규약), RE 산출물에도 키 문자열 주소(`json-keys.txt:697-698`)뿐 공식이 없다. 게다가 도달 110씬 중 **107씬이 정확히 기본값**(1.0·(0,-1,0) — 에디터가 패널을 열면 자동 기입)이라, 실제로 화면이 달라질 저작은 3479521040(중력 반전 2.0)·3517818807(windstrength 1000) 정도다. 파스+배선. S1-formats③ 재실측(2026-07-27): `gravitystrength` 필드 110/169씬(65%, 거의 전부 1.0·방향(0,-1,0)), `windenabled=true` 활성 1/169 — 적용 공식 미확정이라 포맷대조 레인 스코프 밖 보류, 착수 시 이 비율을 우선순위 근거로 사용 |
+| wind/gravity 파티클 외력 (~~vortex_v2~~·~~scriptproperties~~ **해소**) | 110씬 | **2026-08-19 재검증**: vortex_v2 는 `9ee0ccf`(2026-07-21) 로, scriptproperties 는 `cdae755`+`0acef5d`(2026-07-15) 로 **이미 구현됐다** — 이 줄의 "파스+배선" 표기가 그 둘에 대해 낡았다. wind/gravity 만 잔존한다(파스·보존 전용 — `SceneDocument` 의 `out.windEnabled`/`windStrength`/`windDirection`/`gravityStrength`/`gravityDirection` 대입부, `grep -n 'out.gravityStrength' Sources/WapleCore/SceneDocument.swift`; `ParticleSimulator` 가 그 필드를 받지 않아 구조적으로 소비 경로가 없다 — 참고로 시뮬레이터의 `movements[].gravity` 는 **파티클별 오퍼레이터**라 이것과 별개다). **적용 공식 미확정이 여전한 관문**이다: WE 셰이더에 `g_Gravity`/`g_Wind` 가 없고 (CPU 시뮬레이터 규약), RE 산출물에도 키 문자열 주소(`json-keys.txt:697-698`)뿐 공식이 없다. 게다가 도달 110씬 중 **107씬이 정확히 기본값**(1.0·(0,-1,0) — 에디터가 패널을 열면 자동 기입)이라, 실제로 화면이 달라질 저작은 3479521040(중력 반전 2.0)·3517818807(windstrength 1000) 정도다. 파스+배선. S1-formats③ 재실측(2026-07-27): `gravitystrength` 필드 110/169씬(65%, 거의 전부 1.0·방향(0,-1,0)), `windenabled=true` 활성 1/169 — 적용 공식 미확정이라 포맷대조 레인 스코프 밖 보류, 착수 시 이 비율을 우선순위 근거로 사용 |
 | 번역기 폴백 강등 3건(`#if<TAB>` 정규화·`%=`·무공백 const) | 저빈도 | 검증 결과 컴파일실패→안전폴백(REFUTED) — 픽셀 무해, 폴백 회피용 |
 | 성능: 비가시 레이어 효과체인 스킵, acc+blit 생략(스냅샷 1회 확인 필요), TexImage 스캔 할당, ScenePackage 무복사 파스, DXT 블록 할당 | — | 감사 계획서 3계층 성능표 참조 |
 | 정리: 본체인 fold 6회·DXT 3벌·Process 헬퍼 3벌·JS 리터럴 4중·효과체인 루프 4중복·~~죽은 코드(resolveProjects, bitsRemaining, 미발행 이슈코드 8종, CLI 도움말)~~ **이슈코드 8종·CLI 도움말은 해소(F232/F235/F149, 2026-07-18)** | — | 기회 시(resolveProjects/bitsRemaining/fold/Process헬퍼/JS리터럴/효과체인루프 잔여) |
@@ -496,7 +533,7 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 
 *트리거: 3D 컴포지션 레이어 사용, 또는 파티클·텍스트의 copyBackground 소비 착수 시.*
 
-- **3D 경로 비대칭**: `SceneRenderer3D` 의 isFrameBuffer 빌보드 합성(`:1435`/`:1839` 부근)은 `copyBackground` 필드를
+- **3D 경로 비대칭**: `SceneRenderer3D` 의 isFrameBuffer 빌보드 합성(`grep -n 'isFrameBuffer' Sources/WapleRender/SceneRenderer3D.swift`)은 `copyBackground` 필드를
   전혀 읽지 않는다 — 2D `runFrameBufferLayer` 는 이번에 acc 블릿/투명 클리어 분기 + `_rt_FullFrameBuffer` aux
   슬롯 분리(fullFrame)를 소비하도록 고쳤지만, 3D 씬의 `copybackground:false` 컴포지션 레이어는 여전히 종전
   (항상 acc 합성) 거동이다. 회귀는 아니다(2D 만 고쳤으므로 3D 는 그대로) — 다만 동일 결함이 3D 에 남아있다는
@@ -542,9 +579,9 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 - 스냅샷 드리프트 2씬(3000562427, 3448290956) 부하 내성 — 순정에서도 요동하는 크로스-프로세스 비결정, 현재는 판독 시 제외 규약
 - ~~🟠 골든 재베이스라인 — `3706286085` 잔여 비결정~~ → **채택됨**(2026-08-19)
 
-  `spec/golden/snapshot/README.md:9` 가 `baseline-6f0bcf0`(2026-08-19, 170/0/0)을 **현행 기준선**으로
-  싣고 있고 디렉터리도 실재하며, `Tests/WapleRenderTests/GoldenBaselineOracleTests.swift:29`
-  `currentLabel = "baseline-6f0bcf0"` 가 그것을 실제 판정에 쓴다. `3706286085` 의 mip LOD 잔여
+  `spec/golden/snapshot/README.md` 의 머리 절이 `baseline-6f0bcf0`(2026-08-19, 170/0/0)을 **현행 기준선**으로
+  싣고 있고 디렉터리도 실재하며, `Tests/WapleRenderTests/GoldenBaselineOracleTests.swift` 의
+  `GoldenBaseline.currentLabel = "baseline-6f0bcf0"` 가 그것을 실제 판정에 쓴다. `3706286085` 의 mip LOD 잔여
   비결정 경고는 그 README 가 기준선 소개 안에 함께 싣는다 — 차단 사유가 아니라 **알려진 한계**로
   이관됐다. 아래 분석은 그 경위 기록으로 남긴다.
 
@@ -614,7 +651,7 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   를 실제로 번역(`WAPLE_BUILTIN_MESH_SHADERS` 화이트리스트가 이미 준비돼 있다) ② 스톡 폴백이
   WE 의 스페큘러 게이트를 따르게 한다. ②가 싸고 국소적이다. 3배 이상 밝아진 씬은 이 1종뿐이다.
 
-  > **[갱신 2026-08-25] ①의 `a_Normal` 부분은 2026-08-21 에 끝났다**(`GLSLTranslator.swift:104`).
+  > **[갱신 2026-08-25] ①의 `a_Normal` 부분은 2026-08-21 에 끝났다**(`GLSLTranslator.vertexAttributeWhitelist`).
   > ~~그래도 `generic4` 는 `sampler2DComparison` 때문에 여전히 번역에 실패하므로 이 씬의 폴백
   > 경로는 그대로다~~ — 즉 **증상과 권고(②가 싸다)는 유효하고, 원인 서술만 절반이 낡았다.**
   >
@@ -643,8 +680,8 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 등 시각 조건 alpha 스크립트를 가진 레이어 4개(id 134/211/149/126))의 트리거 경계에 초 단위 여유 없이 정확히 얹혀 있다. 게다가 `captureFrames`는 프레임 단위 재생 없이 마운트 직후(`runtime=0`)부터 목표 시각(`captureT=6.0`)까지 프로퍼티 스크립트를 **단 한 번** 평가하므로 `engine.frametime`이 실제로는 `t − 직전 t = 6.0`이라는 거대한 단발 점프가 된다(F700, `TextScriptEngine.swift` `__setRuntime`). `fadeValue += engine.frametime` 류의 축적형 스크립트는 실제 WE(수백 프레임에 걸쳐 조금씩 누적)와 최종 수렴값은 같더라도 **경계 바로 위/아래에서 결과가 급변**할 수 있어(§6 3563096027 재검 참조), captureEpochMillis 를 조금만 옮겨도(또는 향후 다른 시각 조건 스크립트를 가진 씬이 추가되면) 판정이 뒤집힐 수 있는 구조적 하네스 취약점이다. 트리거: 새 시각-조건 씬에서 유사 오탐/오분류가 재발할 때. 수정 방향(스코프 밖, 고비용): (a) `captureEpochMillis`를 정시(:00)에서 몇 분 비켜 재설정 — 170씬 전수 재베이스라인 필요, 또는 (b) `captureFrames`가 목표 시각까지 실제 프레임 스텝(예 30fps)으로 재생해 스크립트를 여러 번 평가하도록 변경 — 결정성/캡처 소요 트레이드오프 재검 필요
 - **F406 잔여: 3D 렌더 픽셀 커버리지 홀 — text3D 글리프·spritesheet 프레임·RIM/SHADINGGRADIENT 셰이딩** — colorBlendMode(additive/normal, 2026-07-18 착지) 외 나머지는 이 배치 범위 밖(스코프 지시: 1~2개만). 패턴은 이미 확립됨(`Scene3DRenderCorrectnessTests.captureBlendModeCenterPixel`/`captureFullscreenCompositeCenterPixel` — 씬을 디스크에 마운트해 `captureFrames`+`colorAt` 로 픽셀 확인)
 - **세션 간 캡처 비결정 29종 — 원인 미상(측정은 끝)** (2026-08-01). 같은 세션 안에서는 전 코퍼스 캡처가 프로세스를 갈라도 비트동일한데, 세션이 갈리면 고정된 29종이 갈린다(네 세션 중 17종은 네 값 전부 다름). 전부 임베디드-mip 수정 영향권(123종) 안, 정렬 인덱스 49 이상. 배제된 것: 바이너리 동일성·부하 개입·단건 대 순차·TZ·CWD·디스크 입력·절전/재부팅. 정본·씬 목록은 [`spec/golden/nondeterminism.json`](spec/golden/nondeterminism.json), 재측정은 `scripts/spec/measure_nondeterminism.py`(커밋된 매니페스트 8개)와 `scripts/mac-session/probe-session-nondeterminism.sh`(~12분). 위 "스냅샷 드리프트 2씬" 항목이 말하던 것의 정체가 이것이다(3448290956 이 그 29종 안에 있다). **트리거: 세션 간 대조가 필요한 작업(커밋된 기준선 대조, 릴리스 게이트)에서 이 잡음이 판독을 막을 때.** 다음 판별: 상태가 바뀐 세션에서 `WAPLE_CAPTURE_TIME=0,0.1,1,6` 으로 다시 떠 t=0 부터 대조 — t=0 이 이미 다르면 마운트/로드 발산, t 가 커지며 갈리면 프레임 누적 상태. 실무 회피책: **구현 전후 캡처를 한 세션 안에서 둘 다 뜬다.**
-- **↑ 위 항목 원인 규명(2026-08-02): 캡처가 실제 마우스 커서 위치를 픽셀에 굽는다.** `SceneRenderer.mount` 가 `parallaxEnabled || hasEffects` 면 마우스 모니터를 켜고(SceneRenderer.swift:1421) 그 콜백이 `pointerUV` = 이펙트 유니폼 `g_PointerPosition` 을 라이브 커서로 채우는데(:1535, SceneRendererFrameEncoder.swift:53), `SnapshotPipeline.pinRenderSettings`(:249) 의 핀 목록에 포인터가 없다. 커서만 옮겨 가며 같은 씬을 뜨면 위치마다 다른 해시가 나오고 같은 위치로 돌아오면 그 값이 재현된다(1포인트 차이도 바뀐다) — `scripts/mac-session/probe-pointer-uniform.sh`. 정본 `oracle.nondet.rootCause`(확정). 게이트 매트릭스에서 `WAPLE_DISABLE_TRANSLATED=1` 만 상태 간 동일했던 것이 이 경로를 지목했고, Metal 셰이더 캐시·mip 수정·부하는 전부 배제됐다. **수정 방향(사용자 결정 필요)**: 헤드리스 캡처에서 마우스 모니터를 켜지 않거나 `pointerUV` 를 (0.5,0.5)로 핀한다 — **포인터 반응 씬의 골든 재베이스라인이 따라온다**. GT 하네스(`RealPackagesGroundTruthTests`)가 같은 구멍인지도 함께 볼 것.
-- **↑ 포인터 핀 착지 + 골든 재베이스라인 완료(2026-08-02, `f3a17da`).** *(【2026-08-26】 이 문단의 `SceneRenderer.capturePointerUV` 는 **정적이 아니라 인스턴스 프로퍼티**다 — `ae7fa12`. 핀 값·골든 픽셀은 불변이고 소유 주체만 바뀌었다.)* `SceneRenderer.capturePointerUV` 로 캡처 하네스(스냅샷 파이프라인·GT)가 포인터를 중앙 고정한다 — 마우스 모니터를 **켜지 않는다**(pause 로 멈추면 이미 들어온 값이 남는다). 기동 지점이 셋이라 한 곳만 막았을 때는 그대로 샜다(새던 곳=mount 의 cursorMove·호버 게이트) → `startPointerMonitor()` 공용화 + `updateParallax` 이중 안전망. 회귀 `CapturePointerPinTests`(핀 분기 제거 시 깨지는 것까지 확인). 현행 기준선 `spec/golden/snapshot/baseline-f3a17da/`(release, 170/0/0, 셀프체크 비결정 0종) — 설치 게이트는 **두 캡처 사이에 커서를 옮기고 비트동일할 때만**(`scripts/mac-session/rebaseline-golden.sh`, 이번 설치 상이 0종). `GoldenBaseline.currentLabel` 이 이 기준선을 보며, 이걸로 **BACKLOG/인계의 `3394601417` GT 재베이스라인 항목도 해소**(기준선 0.0600 → 0.01162, GT 640×360 캡처는 그 2.5배라 structureLoss 통과). 남은 것: GT 하네스가 스냅샷 파이프라인과 **해상도·핀 규약이 여전히 다르다**(640×360 vs 256×144 — `oracle.gate.knownBandGap`).
+- **↑ 위 항목 원인 규명(2026-08-02): 캡처가 실제 마우스 커서 위치를 픽셀에 굽는다.** `SceneRenderer.mount` 가 `parallaxEnabled || hasEffects` 면 마우스 모니터를 켜고(`SceneRenderer.startPointerMonitor()`) 그 콜백이 `pointerUV` = 이펙트 유니폼 `g_PointerPosition` 을 라이브 커서로 채우는데(`SceneRendererFrameEncoder` 의 유니폼 적재부), `SnapshotPipeline.pinRenderSettings` 의 핀 목록에 포인터가 없다. 커서만 옮겨 가며 같은 씬을 뜨면 위치마다 다른 해시가 나오고 같은 위치로 돌아오면 그 값이 재현된다(1포인트 차이도 바뀐다) — `scripts/mac-session/probe-pointer-uniform.sh`. 정본 `oracle.nondet.rootCause`(확정). 게이트 매트릭스에서 `WAPLE_DISABLE_TRANSLATED=1` 만 상태 간 동일했던 것이 이 경로를 지목했고, Metal 셰이더 캐시·mip 수정·부하는 전부 배제됐다. **수정 방향(사용자 결정 필요)**: 헤드리스 캡처에서 마우스 모니터를 켜지 않거나 `pointerUV` 를 (0.5,0.5)로 핀한다 — **포인터 반응 씬의 골든 재베이스라인이 따라온다**. GT 하네스(`RealPackagesGroundTruthTests`)가 같은 구멍인지도 함께 볼 것.
+- **↑ 포인터 핀 착지 + 골든 재베이스라인 완료(2026-08-02, `f3a17da`).** *(【2026-08-26】 이 문단의 `SceneRenderer.capturePointerUV` 는 **정적이 아니라 인스턴스 프로퍼티**다 — `ae7fa12`. 핀 값·골든 픽셀은 불변이고 소유 주체만 바뀌었다.)* `SceneRenderer.capturePointerUV` 로 캡처 하네스(스냅샷 파이프라인·GT)가 포인터를 중앙 고정한다 — 마우스 모니터를 **켜지 않는다**(pause 로 멈추면 이미 들어온 값이 남는다). 기동 지점이 셋이라 한 곳만 막았을 때는 그대로 샜다(새던 곳=mount 의 cursorMove·호버 게이트) → `startPointerMonitor()` 공용화 + `updateParallax` 이중 안전망. 회귀 `CapturePointerPinTests`(핀 분기 제거 시 깨지는 것까지 확인). ~~현행 기준선 `spec/golden/snapshot/baseline-f3a17da/`~~ **[정정 2026-09-01] 그 디렉터리는 HEAD 에 없다.** 이 문단은 2026-08-02 시점 기록이고 그때의 기준선 라벨을 **현재형**으로 적어 두었다. HEAD 의 `spec/golden/snapshot/` 에 실재하는 기준선은 `baseline-6f0bcf0`·`baseline-81098bb` 둘뿐이고, 판정에 쓰이는 것은 `GoldenBaseline.currentLabel = "baseline-6f0bcf0"` 이다(같은 문서 상단 [정정 2026-08-30](#정정-2026-08-30--f402f403-인용-기준선) 이 `baseline-7075b74` 에 대해 같은 지적을 했는데 이 문단은 따라오지 못했다 — **날짜순 기록에 현재형을 쓰면 이렇게 된다**). 아래 서술은 2026-08-02 당시 사실로 읽어라: (release, 170/0/0, 셀프체크 비결정 0종) — 설치 게이트는 **두 캡처 사이에 커서를 옮기고 비트동일할 때만**(`scripts/mac-session/rebaseline-golden.sh`, 이번 설치 상이 0종). `GoldenBaseline.currentLabel` 이 **그때** 이 기준선을 봤고(지금 값은 `baseline-6f0bcf0`), 이걸로 **BACKLOG/인계의 `3394601417` GT 재베이스라인 항목도 해소**(기준선 0.0600 → 0.01162, GT 640×360 캡처는 그 2.5배라 structureLoss 통과). 남은 것: GT 하네스가 스냅샷 파이프라인과 **해상도·핀 규약이 여전히 다르다**(640×360 vs 256×144 — `oracle.gate.knownBandGap`).
 - **HDR 블룸 필터 체인을 WE 평문 구조로 교체(2026-08-02).** `hdr_downsample.frag` 하나를 콤보로 3역할에 쓰는 듀얼 필터 그대로 — 4탭 ±0.5 소스 텍셀 · **가우시안 패스 제거** · 4탭 additive 업샘플 · `combine_hdr` 의 ±텍셀 4탭 합성 · 피라미드 시작 1/4 → **1/2**. 정본 `engine.bloom.hdr.filterShapeDeviations`(확정, preSwap 5+1건 해소) + A/B 9씬(luma 0.95~1.10, 최대 평균차 2.84). ~~**미해결**: 업샘플 가중 …~~ → **[2026-08-20] 닫힘.** 발산의 원인은 가중이 아니라 **짝이 되는 정규화를 안 옮긴 것**이었다. WE 는 추출 강도를 `bloomhdrstrength / (bloomhdrscatter^(max(N,2)-2)+1)` 로 나눈다(`0x14017f85e` powf → `0x14017f86b` +1.0 → `0x14017f88f` divss). 업샘플에는 저작 scatter 가 **변형 없이** 실린다(`0x14017f807` 적재 → `0x14017f967`·`0x14017f988` setMaterialParam). 셰이더의 `0.25` 는 4탭 평균이라 가중과 경쟁 관계가 아니다(`hdr_downsample.frag:61,78`). 정본 `engine.bloom.hdr.upsampleWeight`(확정), 옛 id 는 묘비로 보존. **LDR 블룸은 그대로 3패스** — WE 평문에 `blur_h_bloom`/`downsample_quarter_bloom` 이 있으나 LDR 경로 조합의 정본이 없어 착수 전 대조가 선행이다.
 - **공개 배포 준비 착수(2026-08-02).** ①**공증 배선 완결**: release.yml 이 임시 키체인 생성 → `.p12` 임포트 → `set-key-partition-list`(이게 없으면 codesign 이 GUI 프롬프트에서 잡을 세운다) → `notarytool submit --wait`(앱 암호 방식 — 러너엔 저장된 notary 프로파일이 없다) → `stapler staple` + `stapler validate`/`spctl` 검증 → `if: always()` 키체인 삭제까지 수행한다. secrets 6종이 하나라도 없으면 종전대로 ad-hoc 폴백(릴리스는 안 멈춤). 필요한 secrets 표는 [docs/RELEASING.md](docs/RELEASING.md). **남은 것은 유료 계정 발급뿐.** ②**영어 UI**: 키=한국어 원문 규약으로 `Resources/en.lproj/Localizable.strings` 122키 신설, 보간 8곳은 `String(format: NSLocalizedString(...))` 로 명시, AppKit 8곳은 `NSLocalizedString` 로 감쌈. `.lproj` 는 앱 번들 `Contents/Resources` 에 들어간다(SPM 리소스 번들이면 `Bundle.main` 조회 실패 — `swift run` 개발 실행이 늘 한국어인 이유). 패키징한 `.app` 에서 실동작 확인(en→"Settings", ko→원문 폴백, 포맷 문자열 "Interval: 5 min"). `LocalizationCoverageTests` 가 누락·고아·ko 오염을 양방향으로 잡는다(실제로 누락 1건을 잡아냈다). **잔여 배포 항목**: 접근성(그리드 VoiceOver/키보드) · 창 닫힘 상태 오류 알림 UNUserNotification 승격 · 유료 계정.
 - **CI 플레이크 1건 수정(2026-08-02)**: `DevToolsSceneFixRegressionTests.testVisibilitySpoofFollowsPauseState` 의 **첫 대기**(WKWebView 콜드 스타트 + 브리지 주입)가 3초 상한이라 3코어 러너 부하 구간에서 넘겼다(run 30748362460 실패 / 같은 커밋이 30746196170 에서는 통과 — 타이밍 창). 그 대기만 15초로 올렸다(반응 지연을 재는 pause/resume 전이 대기는 3초 유지). 게이트는 안 약해진다 — 브리지가 끝내 안 뜨면 여전히 실패한다. 같은 계열의 남은 위험은 F398(고정시간 `RunLoop.run(until:)` 33사이트)로 이미 기록돼 있다.

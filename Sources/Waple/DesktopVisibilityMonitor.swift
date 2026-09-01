@@ -160,7 +160,17 @@ struct DesktopVisibilityMonitor {
 }
 
 extension DesktopVisibilityMonitor.WindowSnapshot {
-    /// CGWindowList dict → 스냅샷. 값 부재는 '가리지 않음' 쪽으로 안전 기본값(layer=max, alpha=1).
+    /// CGWindowList dict → 스냅샷.
+    ///
+    /// **[정정 r4-37] 두 기본값의 방향이 서로 다르다.** 종전 이 줄은 "값 부재는 '가리지 않음'
+    /// 쪽으로 안전 기본값(layer=max, alpha=1)" 이라고 둘을 묶어 적었는데, 판정 가드
+    /// (`isBlocking` 의 `w.layer == 0, w.alpha > 0.05`)에 넣어 보면 방향이 갈린다:
+    ///  · `layer = Int.max` → `layer == 0` 을 **통과 못 한다** = 가리지 않음. 주장대로 안전하다.
+    ///  · `alpha = 1` → `alpha > 0.05` 를 **통과한다** = 가리는 쪽 후보로 남는다. 주장과 반대다.
+    /// alpha 를 0 으로 바꾸지 않는 이유는 실제 위험 방향이 그쪽이 아니기 때문이다 —
+    /// CGWindowList 는 alpha 를 사실상 항상 채워 주고, 못 읽었을 때 "불투명한 창일 수 있다" 로
+    /// 보는 편이 배경을 잘못 되살리는 것보다 낫다. 즉 alpha 기본값은 '가리지 않음' 이 아니라
+    /// **'모르면 가린다고 본다'** 는 보수적 선택이다. 방향이 다르다는 사실만 정확히 적어 둔다.
     init(_ dict: [String: Any]) {
         ownerName = dict[kCGWindowOwnerName as String] as? String ?? ""
         processId = dict[kCGWindowOwnerPID as String] as? Int

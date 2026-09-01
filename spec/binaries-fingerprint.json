@@ -82,9 +82,9 @@
   {
    "id": "binary.fingerprints.why",
    "value": {
-    "reason": "spec 정본이 WE 바이너리를 341회 인용하는데 지문은 wallpaper64.exe 하나뿐이었다. 근거가 사는 분석 리포가 삭제되면 나머지 7종은 확정 등급인데 대조 수단이 사라진다.",
+    "reason": "spec 정본이 WE 바이너리를 340회 인용하는데 지문은 wallpaper64.exe 하나뿐이었다. 근거가 사는 분석 리포가 삭제되면 나머지 7종은 확정 등급인데 대조 수단이 사라진다.",
     "citations": {
-     "wallpaper64.exe": 246,
+     "wallpaper64.exe": 245,
      "scenescript64.dll": 31,
      "mediaextensions64.dll": 18,
      "wallpaperui.exe": 18,

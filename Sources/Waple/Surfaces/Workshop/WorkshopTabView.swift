@@ -23,8 +23,11 @@ struct WorkshopTabView: View {
             // vm.statusMessage 는 생산 지점에서 이미 번역돼 있다 — 여기 붙는 오버로드는
             // 번역을 하지 않으므로(§5.0) 뷰가 뒤늦게 감쌀 수 있는 것이 아니다.
             // [2026-08-25] 실패일 때는 캡션을 띄우지 않는다 — 아래 실패 상태가 같은 문장을
-            // 크게 보여주므로 두 번 뜬다. 캡션 자체는 남긴다: `loadMore` 실패(:174-176)는
-            // `searchFailed` 를 안 세우고 `results` 도 안 비우므로 그 분기가 캡션의 존재 이유다.
+            // 크게 보여주므로 두 번 뜬다. 캡션 자체는 남긴다: `WorkshopViewModel.loadMore()` 의
+            // `catch` 는 `statusMessage` 만 세우고 `searchFailed` 를 안 세우며 `results` 도
+            // 안 비우므로, 그 분기가 캡션의 존재 이유다.
+            // (r4-25: 종전 `:174-176` 인용은 `loadMore` 가 아니라 `search()` 의 catch 꼬리를
+            //  가리키고 있었다 — 주장 자체는 맞았고 좌표만 틀렸다. 줄 번호 대신 심볼로 적는다.)
             if let message = vm.statusMessage, !vm.searchFailed {
                 Text(message).font(Typography.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)

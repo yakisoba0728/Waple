@@ -138,8 +138,29 @@ extension SnapshotPipeline {
         //
         // 정수 산술로 쓴다(비율을 Double 로 내고 `Int(...)` 로 되돌리면 그 자체가
         // scripts/spec/check_int_narrowing.py 가 막는 부류가 된다 — 실제로 그 검사에 걸렸다).
+        // **[정정 2026-09-01] 위 하한의 guard 자체가 모집단 0을 면제하고 있었다.**
+        // `!baseline.entries.isEmpty` 를 조건에 달아 둔 탓에, `entries` 가 비면 위 루프가 0회
+        // 돌아 `rows`·`detFail`·`regressedToEmpty` 가 전부 빈 채로 이 분기를 **통째로 건너뛰고**
+        // `regressed == false` → exit 0 이 났다. 바로 위 [수정 2026-08-19] 가 "compared=0 인데
+        // exit 0 은 CI 가 성공으로 오인한다" 며 막으려던 그 경로가 **베이스라인 쪽에서** 그대로
+        // 열려 있었다(빈/절단된 매니페스트, 잘못된 baselineDir, 스키마 드리프트로 entries 소실).
+        // 그래서 모집단부터 먼저 막는다 — 비율 하한은 모집단이 있어야 의미가 있다.
+        if baseline.entries.isEmpty {
+            fputs("[snap] ⚠️ 베이스라인 entries 가 0종이다 — 비교할 것이 없다. "
+                  + "매니페스트가 비었거나 잘렸다: \(baselineDir.path)/manifest.json. "
+                  + "이 상태의 '무회귀' 는 아무것도 증명하지 않는다.\n", stderr)
+            return 2
+        }
+        // r3-O17: 아래 두 환경-오류 분기(exit 2)는 **회귀 판정보다 먼저** 돈다. 그래서
+        // "렌더→무픽셀 회귀" 가 실재하는 실행에서도 동시에 대량 skip 이 있으면 종료코드가
+        // 1(회귀)이 아니라 2(환경 오류)로 나가고 stderr 한 줄도 환경 얘기만 한다.
+        // 다만 **stdout 은 이미 위에서 `렌더→무픽셀 회귀=N` 과 id 목록을 먼저 찍는다** — 사람이
+        // 보는 화면에는 회귀가 남는다. 오진단 위험은 종료코드와 stderr 한 줄에 한정된다
+        // (원 발견의 "사람을 반대 방향으로 보낸다" 는 그만큼 과장이라 r3 §4.2 가 하향 정정했다).
+        // 순서를 뒤집지 않는 이유: 모집단이 반쯤 유실된 상태의 회귀 목록은 그 자체가 신뢰할 수
+        // 없어서, 먼저 환경을 고치라고 말하는 쪽이 옳다.
         let minComparedPercent = 90
-        if !baseline.entries.isEmpty, rows.count * 100 < baseline.entries.count * minComparedPercent {
+        if rows.count * 100 < baseline.entries.count * minComparedPercent {
             let pct = rows.count * 100 / baseline.entries.count
             fputs("[snap] ⚠️ compared=\(rows.count)/\(baseline.entries.count) (\(pct)%) — "
                   + "하한 \(minComparedPercent)% 미만. 베이스라인 씬이 현재 코퍼스/썸네일에서 "

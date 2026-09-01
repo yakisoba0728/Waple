@@ -60,16 +60,47 @@ def man(d):
         m = json.load(fh)
     return m, {e["id"]: e for e in m["entries"]}
 m1, a = man(f"baseline-{sha}")
-_, b = man(f"verify-{sha}")
-diff = sorted(i for i in a if i in b and a[i]["hash"] != b[i]["hash"])
-print(f"\n씬 {len(a)}종 · empties {len(m1['empties'])} · failures {len(m1['failures'])}")
-print(f"커서를 옮긴 뒤 재캡처 대조: 상이 {len(diff)}종")
+m2, b = man(f"verify-{sha}")
+print(f"\n씬 1차 {len(a)}종 / 2차 {len(b)}종 · empties {len(m1['empties'])}"
+      f" · failures 1차 {len(m1['failures'])} / 2차 {len(m2['failures'])}")
+
+# [정정 2026-09-01] **설치 게이트가 모집단 0에서 초록이었다.**
+# 종전 대조는 `diff = sorted(i for i in a if i in b and a[i]["hash"] != b[i]["hash"])` —
+# **교집합만** 본다. 2차 캡처가 통째로 실패해 `b` 가 비면 교집합도 비어 "상이 0종" 으로
+# 통과했고, 바로 아래 failures 검사는 `m1`(1차)만 봤으므로 2차의 전건 실패를 아무도 보지
+# 않은 채 1차가 그대로 커밋 기준선으로 설치됐다. 이 저장소가 반복해 물린 함정(모집단 0에서
+# 나오는 초록)이라 여기서 **모집단부터** 막는다.
+if not a:
+    print("!! 1차 캡처의 entries 가 0종이다 — 대조할 것이 없다. 설치하지 않는다."); sys.exit(1)
+symdiff = sorted(set(a) ^ set(b))
+if symdiff:
+    print(f"!! 두 캡처의 씬 목록이 다르다 {len(symdiff)}종 (1차 {len(a)} · 2차 {len(b)}):")
+    print("  " + " ".join(symdiff[:20]))
+    print("   2차 캡처가 중간에 죽었거나 코퍼스가 흔들렸다 — 비트동일 대조가 성립하지 않는다.")
+    print("   설치하지 않는다.")
+    sys.exit(1)
+diff = sorted(i for i in a if a[i]["hash"] != b[i]["hash"])
+print(f"커서를 옮긴 뒤 재캡처 대조: {len(a)}종 전건 대조 · 상이 {len(diff)}종")
 if diff:
     print("  " + " ".join(diff[:20]))
     print("!! 두 캡처가 다르다 — 포인터 핀이 새거나 다른 미핀 입력이 있다. 설치하지 않는다.")
     sys.exit(1)
-if m1["failures"]:
-    print("!! 마운트 실패가 있다 — 설치하지 않는다."); sys.exit(1)
+for tag, m in (("1차", m1), ("2차", m2)):
+    if m["failures"]:
+        print(f"!! {tag} 캡처에 마운트 실패 {len(m['failures'])}종 — 설치하지 않는다: "
+              + " ".join(m["failures"][:10]))
+        sys.exit(1)
+
+# H13 짝: 셀프체크가 아예 성립하지 않은 씬(selfMaxDiff=-1, 스키마 규약 "셀프체크 안 했으면 -1").
+# helper 프로세스가 못 뜨면 전건이 이 값으로 굳고 그 기준선은 `--compare` 에서 전건 lax 로
+# 판정된다. SnapshotPipeline 쪽에도 같은 하한을 걸었지만 여기 `cap()` 은 파이프(`| tail -4`)로
+# 종료코드를 잃으므로 설치 직전에 매니페스트로 한 번 더 본다.
+unchecked = sorted(e["id"] for e in m1["entries"] if e.get("selfMaxDiff", -1) < 0)
+if unchecked:
+    print(f"!! 셀프체크가 성립하지 않은 씬 {len(unchecked)}/{len(a)}종(selfMaxDiff=-1) — "
+          f"설치하지 않는다: {unchecked[:10]}")
+    print("   별도 프로세스 셀프체크 helper 가 못 떴거나 죽었다(캡처 로그의 '[snap] ⚠️' 확인).")
+    sys.exit(1)
 dark = [e["id"] for e in m1["entries"] if e["meanLuma"] <= 0.0]
 if dark:
     print(f"!! 완전 검정 프레임 {len(dark)}종 — 설치하지 않는다: {dark[:10]}"); sys.exit(1)

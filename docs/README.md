@@ -56,13 +56,18 @@ WE 엔진 이식 프로그램의 차터·스펙·계획은 [superpowers/](superp
 갱신하는 게이트는 없다.
 
 **얼마나 낡았나(2026-08-28 표본 조사): 두 독립 측정이 76~95% 드리프트로 수렴했다.**
-대표 3건(이번에 실제 값으로 고쳤다):
+대표 3건 — **이 표 자체가 두 번 썩었다.** 2026-08-28 에 `:488→552`·`:781→806`·`:981→4052` 로
+고쳤는데, 그 "실제" 값 셋이 PR #7·#8 을 거치며 다시 전부 틀렸다(3/3). 그래서 이제
+**값이 아니라 세는 명령을 정본으로 둔다** — 아래 표의 "실제" 열은 2026-09-01 재측정값이고,
+읽는 시점에 맞는지는 오른쪽 명령을 직접 돌려 확인해라.
 
-| 문서 | 인용 | 실제 |
+| 문서의 현재 인용 | 2026-09-01 실측 | 세는 법(이쪽이 정본) |
 | --- | --- | --- |
-| `re/material-blend.md` | `SceneRendererResources.swift:488` | **552** |
-| `re/material-blend.md` | `SceneRenderer3D.swift:781` | **806** |
-| `re/bundled-key-coverage.md` | `SceneDocument.swift:981` | **4052** |
+| `re/material-blend.md` `SceneRendererResources.swift:552` | **563** | `grep -n 'blendAdditive: layer.blendMode' Sources/WapleRender/SceneRendererResources.swift` |
+| `re/material-blend.md` `SceneRenderer3D.swift:806` | **911** | `grep -n 'additive = blend ==' Sources/WapleRender/SceneRenderer3D.swift` |
+| `re/bundled-key-coverage.md` `SceneDocument.swift:4052` | **4158** | `grep -n 'out.lightConfig = SceneLightConfig.parse' Sources/WapleCore/SceneDocument.swift` |
+
+세 인용 모두 **코드 조각을 함께 적어 두었기 때문에** 위 grep 이 가능하다. 그게 아래 규약의 요점이다.
 
 `re/unimplemented-json-keys.md` 는 아예 본문에서 *"그 줄번호는 당시 값이다"* 라고 스스로 인정한다.
 

@@ -1337,7 +1337,17 @@ def main():
                               "실물 스크립트는 이것들을 부르지 않으므로 무해하지만 정본은 아니다",
          "WEMath": "smoothStep/mix/deg2rad/rad2deg 4개 — 실제 wemath.js 와 표면 일치. 갭 없음",
          "WEVector": "angleVector2/vectorAngle2 2개 — wevector.js 와 일치. 갭 없음",
-         "WEColor": "rgb2hsv/hsv2rgb 2개. wecolor.js 는 normalizeColor/expandColor 도 export 한다",
+         # [정정 2026-09-01] 종전 문구는 "rgb2hsv/hsv2rgb 2개. wecolor.js 는
+         # normalizeColor/expandColor 도 export 한다" 였다 — 마치 뒤 둘이 심에 없는 갭인 것처럼
+         # 읽힌다. 그 갭은 2026-08-20 에 이미 닫혔다: `TextScriptEngine.swift` 의 `__WEColor`
+         # 가 넷을 다 내고(주석이 "심에 둘이 빠져 있어서 … TypeError 로 훅이 통째로 죽었다" 며
+         # 그때 메운 것을 기록한다), 이 파일이 내는 정본 자신도 같은 entry 의
+         # `modules.wecolor.js.exports` 에 넷을 전부 커버로 등재한다. 생성기 하드코딩만
+         # 옛 상태로 남아 정본과 어긋나 있었다.
+         # (주의: 커밋된 `spec/engine/script-api.json` 은 이 생성기를 **다시 돌려야** 갱신된다.
+         #  재실행은 WE 바이너리/코퍼스를 요구하므로 그 파일에는 옛 문구가 남아 있을 수 있다.)
+         "WEColor": "rgb2hsv/hsv2rgb/normalizeColor/expandColor 4개 — wecolor.js 의 export "
+                    "전부를 심이 낸다(2026-08-20 에 뒤 둘을 메웠다). 갭 없음",
          "input.cursorScreenPosition": "Waple 은 Vec3 로 만든다. d.ts 는 Vec2 — .z 접근 시 동작이 갈린다",
          "engine.userProperties": "Waple 은 원시값 맵으로 주입한다 — "
                                   "_Internal.convertUserProperties 결과와 일치(정합)"},

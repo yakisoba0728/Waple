@@ -952,7 +952,8 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCore/ParticleSystem.swift:509"
+     "ref": "Sources/WapleCore/ParticleSystem.swift",
+     "note": "`BlendWindow` 선언과 그 위 주석 — 공용 파서 0x1401c2a40..0x1401c2e4e 를 인용하는 자리. **[정정 2026-09-01] 종전 이 ref 는 `ParticleSystem.swift:509` 였는데 그 줄은 0x140244… 계열의 무관한 파티클 오퍼레이터 주석이었다.** ⚠️ **생성기가 아직 옛 문자열을 들고 있다** — `scripts/spec/measure_render_state.py` 안에 `specfmt.ev(\"file\", \"Sources/WapleCore/ParticleSystem.swift:509\")` 리터럴이 그대로라, 이 정본을 재생성하면 이 정정이 조용히 되돌아간다. 생성기는 이번 수정 레인의 소유가 아니라 손대지 않았다. `check_canon_generator_values.py` 는 이 항목을 검사 범위에 넣지 않으므로 자동으로도 안 잡힌다 — 재생성하는 사람이 생성기 쪽 리터럴을 함께 고쳐야 한다"
     },
     {
      "kind": "script",

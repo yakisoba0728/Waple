@@ -258,16 +258,24 @@ def main():
             "captureCaveat": "다중 시각 마운트의 t=6 프레임은 t=6 단독 캡처와 다르다"
                              "(캡처 루프가 프레임 간 스크립트/파티클 연속성을 유지 — 실측). "
                              "진단 프레임은 같은 WAPLE_CAPTURE_TIME 끼리만 비교할 것.",
+        # **[정정 2026-09-01] 이 evidence 넷의 줄 번호가 전부 드리프트해 무관한 코드를 가리켰다.**
+        # 실측(이 트리): `:1421-1425` 는 parallaxLayerOffset 계산부, `:1535-1537` 은
+        # `frameShakeOffset` 선언, `SnapshotPipeline.swift:249-264` 는 `runSelfCheckPass` 의
+        # 캡처 루프였다 — 셋 다 이 항목이 주장하는 것과 다른 코드다. 근거가 무관한 자리를
+        # 가리키면 "확정" 이라는 상태 자체가 검증 불가능해진다.
+        # 줄 번호는 다음 커밋에 바로 썩으므로 **심볼**로 적는다(정본 규약과 같은 이유).
         }, "확정", [specfmt.ev("script", "scripts/mac-session/probe-pointer-uniform.sh",
                                "커서를 옮겨 가며 같은 씬을 떠서 해시가 갈리는 것을 보인다"),
-                    specfmt.ev("file", "Sources/WapleRender/SceneRenderer.swift:1421-1425",
-                               "parallaxEnabled || hasEffects 면 마우스 모니터 start"),
-                    specfmt.ev("file", "Sources/WapleRender/SceneRenderer.swift:1535-1537",
-                               "updateParallax 가 pointerUV 를 라이브 커서로 채운다"),
-                    specfmt.ev("file", "Sources/WapleRender/SceneRendererFrameEncoder.swift:53",
-                               "pointerUV → 이펙트 유니폼 g_PointerPosition"),
-                    specfmt.ev("file", "Sources/WapleCompatCore/SnapshotPipeline.swift:249-264",
-                               "핀 목록에 포인터가 없다"),
+                    specfmt.ev("file", "Sources/WapleRender/SceneRenderer.swift",
+                               "mount 말미의 `if parallaxEnabled || hasEffects { startPointerMonitor() }`"),
+                    specfmt.ev("file", "Sources/WapleRender/SceneRenderer.swift",
+                               "`updateParallax(_:)` 가 `pointerUV` 를 라이브 커서로 채운다"
+                               "(핀이 있으면 pinned 로 대체)"),
+                    specfmt.ev("file", "Sources/WapleRender/SceneRendererFrameEncoder.swift",
+                               "유니폼 패킹의 `e[17]/e[18] = pointerUV`(g_PointerPosition) · "
+                               "`e[20]/e[21] = pointerUVLast`(g_PointerPositionLast)"),
+                    specfmt.ev("file", "Sources/WapleCompatCore/SnapshotPipeline.swift",
+                               "`pinRenderSettings(root:)` 의 핀 목록에 포인터가 없다"),
                     specfmt.ev("file", "Tests/WapleRenderTests/GoldenBaselineOracleTests.swift:29",
                                "GoldenBaseline.currentLabel = \"baseline-6f0bcf0\" — "
                                "판정이 실제로 쓰는 현행 기준선")]),

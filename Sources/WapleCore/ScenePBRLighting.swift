@@ -298,7 +298,12 @@ enum SceneWELightMath {
     }
 
     /// V0(deprecated) 유한광 감쇠 — `common_pbr.h:84` `radiance = lightColor / (distance*distance)`
-    /// 에 generic3.frag:132/145/152/160 이 실어 보내는 `color * radius * radius` 를 합친 값.
+    /// 에 generic3.frag 의 `ComputePBRLight(…)` 호출 **넷**(POINT · SPOT · TUBE · DIRECTIONAL)이
+    /// 실어 보내는 `color * radius * radius` 를 합친 값.
+    /// **[2026-09-01 인용 정정]** 종전 `:132/145/152/160` 중 둘이 밀려 있었다 — 지금 트리에서
+    /// `:132` 는 POINT 의 `for` **루프 헤더**이고 실제 `light +=` 는 `:135`, `:152` 는 TUBE 의
+    /// `vec3 lightDelta = PointSegmentDelta(…)` **대입줄**이고 `light +=` 는 `:153` 이다
+    /// (`:145` SPOT · `:160` DIRECTIONAL 만 정확했다). 줄 번호 대신 호출식으로 가리킨다.
     /// 즉 반경은 컷오프가 아니라 **세기 배율**이고 감쇠는 순수 역제곱이다(반경 밖도 밝다).
     /// SHADERVERSION < 62 가지(generic3.frag:87-121)는 `radius*radius` 배율이 없다.
     static func deprecatedInverseSquareFalloff(distance: Float, radius: Float,
@@ -701,6 +706,15 @@ public enum SceneWEVolumetricMath {
     /// `VolumetricLightPass.metalSource` 도 `lightCone.z`(=`1/hull`)를 곱한다. 여기서만
     /// `distance / hullRadius` 로 나누면 마지막 자리가 GPU 와 갈린다 — 값이 눈에 띄게
     /// 달라지지는 않지만 **두 벌을 비트로 대조할 수 없게 되는 것**이 문제다.
+    /// **[2026-09-01 r4-32] `exponent` 클램프는 이쪽에 없다 — 의도적 비대칭이다.**
+    /// GPU 벌(`VolumetricLightPass` 의 유니폼 패킹 `let exponent = max(0, light.exponent)`)은
+    /// 음수를 잘라 보내는데, 여기 CPU 정본은 `base > 0` 인 경우 **생값을 그대로** `powf` 에 넘긴다.
+    /// (`base <= 0` 갈래는 `exponent <= 0 ? 1 : 0` 이라 양쪽이 이미 일치한다.)
+    /// 원문 `volumetricsfront.frag` 에는 지수 클램프가 없으므로 **이 함수 쪽이 원문에 가깝고**,
+    /// GPU 의 `max(0, ·)` 는 Waple 이 얹은 방어다. 둘을 맞추려면 어느 쪽을 정본으로 삼을지
+    /// 먼저 정해야 하는데 `VolumetricLightPass` 는 이 레인 소유가 아니라 여기서 정하지 않는다.
+    /// 도달: 음수 `exponent` 저작은 동봉·설치 코퍼스 0건이고, 이 함수의 소비처는 테스트뿐이다
+    /// (프로덕션 소비 0건) — 값이 갈리는 입력이 실제로 오지는 않는다.
     public static func radialFalloff(distance: Float, hullRadius: Float, exponent: Float) -> Float {
         guard hullRadius > 0 else { return 0 }
         let t = 1 - distance * (1 / hullRadius)
@@ -886,6 +900,11 @@ public enum SceneWEVolumetricMath {
         public var farZ: Float
         public var lightPosition: SIMD3<Float>
         /// `VAR_SPOT_FORWARD` — 라이트 → 바깥. `SceneLight3D.forwardLightAxis` 산출물(단위벡터).
+        /// ⚠️ **[2026-09-01] 이 축은 3D PBR 레인과 갈려 있다.** `Scene3DLighting.resolveLights`
+        /// 는 라이트 forward 를 모델행렬 **col0(+X red축)** 으로 정정했다(V1 PBR 유니폼 패커
+        /// `wallpaper64.exe FUN_140190c80` 이 `glm::column(M, 0)` 을 부른다). `forwardLightAxis`
+        /// (`SceneDocument.swift`)는 아직 **col2(+Z blue축)** 이라 같은 라이트가 메시 셰이딩과
+        /// 볼류메트릭에서 다른 방향을 갖는다. 그 파일은 이 레인 소유가 아니라 함께 옮기지 못했다.
         public var lightForward: SIMD3<Float>
         public var density: Float
         public var exponent: Float

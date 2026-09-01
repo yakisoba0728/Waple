@@ -1,12 +1,21 @@
 import Foundation
+import simd
 import XCTest
 @testable import WapleCore
 
 /// F800(S-9): 2D 포워드 라이팅 kind 분기 — ForwardUniforms 의 kind/axis/cone 팩 회귀.
-/// axis = 모델회전(Rz·Ry·Rx) blue축(col2) = WE 스크립트 API Mat4.forward 규약(3D 경로와 동일),
+/// axis = 모델회전(Rz·Ry·Rx) **red축(col0)**,
 /// cone = spot 저작각(**광축 기준 반각**, 도) → 코사인(`SceneLight3D.forwardSpotConeCosines`,
 /// 리포 단일 정본 — 3D 레인의 `Scene3DLighting.spotConeCosines` 가 이 함수로 위임한다).
 /// 콘 산식 자체의 성질은 `SceneSpotConeTests` 가 따로 못박는다. 여기서는 **팩 배선**만 본다.
+///
+/// **[2026-09-01 정정 완료] 축이 3D PBR 레인과 다시 같다.** 세 레인(3D PBR
+/// `Scene3DLighting.resolveLights` · 2D 포워드 `SceneLight3D.forwardUniforms` · 볼류메트릭
+/// `SceneRenderer3D`)이 전부 모델행렬 **col0(+X red축)** 을 라이트 forward 로 쓴다.
+/// 근거는 V1 PBR 유니폼 패커 `wallpaper64.exe FUN_140190c80` 이 `glm::column(M, 0)` 을 부르는
+/// 것이다(directional `0x140191162 xor r8d,r8d`, spot `0x140192e79` 동일).
+/// 종전 col2 는 스크립트 API `Mat4.forward()="Blue axis"` 를 근거로 삼았는데, 그 인용은 참이지만
+/// **유니폼 패커가 고르는 열을 구속하지 않는다**(상세는 `forwardLightAxis` 선언부 주석).
 final class SceneForwardLightKindTests: XCTestCase {
     private func light(_ type: String, origin: Vec3 = Vec3(x: 0, y: 0, z: 250),
                        angles: Vec3 = Vec3(x: 0, y: 0, z: 0),
@@ -34,38 +43,60 @@ final class SceneForwardLightKindTests: XCTestCase {
         XCTAssertEqual(SceneLight3D.forwardLightKind(""), 0)
     }
 
-    // MARK: blue축 axis
+    // MARK: red축(col0) axis
 
-    func testAxisIdentityAnglesIsBlueAxis() {
+    func testAxisIdentityAnglesIsRedAxis() {
+        // 항등 회전의 col0 = (1,0,0). 비유한 입력 폴백도 같은 값이다.
         let a = SceneLight3D.forwardLightAxis(angles: Vec3(x: 0, y: 0, z: 0))
-        XCTAssertEqual(a.x, 0, accuracy: 1e-6)
-        XCTAssertEqual(a.y, 0, accuracy: 1e-6)
-        XCTAssertEqual(a.z, 1, accuracy: 1e-6)
-    }
-
-    func testAxisZRotationOnlyKeepsBlueAxis() {
-        // 실물 3416122407/3047405322 의 lspot 은 angles 가 z-only — Rz 는 +Z 축을 보존하므로
-        // blue축 규약상 forward 는 (0,0,1) 이다(회전 z 각도와 무관).
-        let a = SceneLight3D.forwardLightAxis(angles: Vec3(x: 0, y: 0, z: -2.54682))
-        XCTAssertEqual(a.x, 0, accuracy: 1e-6)
-        XCTAssertEqual(a.y, 0, accuracy: 1e-6)
-        XCTAssertEqual(a.z, 1, accuracy: 1e-6)
-    }
-
-    func testAxisXRotationPitchesBlueAxisDown() {
-        // Rx(+90°): +Z → -Y (Rz·Ry·Rx 의 col2 = (0,-sin x, cos x)).
-        let a = SceneLight3D.forwardLightAxis(angles: Vec3(x: Float.pi / 2, y: 0, z: 0))
-        XCTAssertEqual(a.x, 0, accuracy: 1e-6)
-        XCTAssertEqual(a.y, -1, accuracy: 1e-6)
-        XCTAssertEqual(a.z, 0, accuracy: 1e-6)
-    }
-
-    func testAxisYRotationTurnsBlueAxisToX() {
-        // Ry(+90°): +Z → +X (col2 x = cz·sy·cx + sz·sx = sy).
-        let a = SceneLight3D.forwardLightAxis(angles: Vec3(x: 0, y: Float.pi / 2, z: 0))
         XCTAssertEqual(a.x, 1, accuracy: 1e-6)
         XCTAssertEqual(a.y, 0, accuracy: 1e-6)
         XCTAssertEqual(a.z, 0, accuracy: 1e-6)
+    }
+
+    func testAxisZRotationSpinsRedAxisInXYPlane() {
+        // 실물 3416122407/3047405322 의 lspot 은 angles 가 z-only. col0 = (cz·cy, sz·cy, −sy)
+        // 이고 y=0 이므로 (cos z, sin z, 0) — **z 회전이 이제 실제로 축을 돌린다**.
+        // (종전 col2 규약에서는 Rz 가 +Z 를 보존해 z-only 라이트의 방향이 회전과 무관했다.)
+        let z: Float = -2.54682
+        let a = SceneLight3D.forwardLightAxis(angles: Vec3(x: 0, y: 0, z: z))
+        XCTAssertEqual(a.x, cos(z), accuracy: 1e-6)
+        XCTAssertEqual(a.y, sin(z), accuracy: 1e-6)
+        XCTAssertEqual(a.z, 0, accuracy: 1e-6)
+    }
+
+    func testAxisXRotationLeavesRedAxisUnchanged() {
+        // Rx 는 col0 에 기여하지 않는다(R = Rz·Ry·Rx 에서 Rx 의 첫 열이 (1,0,0)).
+        // 즉 pitch-only 라이트는 forward 가 +X 그대로다.
+        let a = SceneLight3D.forwardLightAxis(angles: Vec3(x: Float.pi / 2, y: 0, z: 0))
+        XCTAssertEqual(a.x, 1, accuracy: 1e-6)
+        XCTAssertEqual(a.y, 0, accuracy: 1e-6)
+        XCTAssertEqual(a.z, 0, accuracy: 1e-6)
+    }
+
+    func testAxisYRotationTurnsRedAxisToNegativeZ() {
+        // Ry(+90°): col0 = (cz·cy, sz·cy, −sy) = (0, 0, −1).
+        let a = SceneLight3D.forwardLightAxis(angles: Vec3(x: 0, y: Float.pi / 2, z: 0))
+        XCTAssertEqual(a.x, 0, accuracy: 1e-6)
+        XCTAssertEqual(a.y, 0, accuracy: 1e-6)
+        XCTAssertEqual(a.z, -1, accuracy: 1e-6)
+    }
+
+    /// 이 함수가 `Scene3DMath.modelMatrix` 의 **col0 과 비트 동형**임을 잠근다(WapleCore 라
+    /// 그 타입을 직접 참조할 수 없으므로 같은 회전 수식을 여기서 다시 세운다).
+    /// 두 레인이 다시 갈리면 여기서 잡힌다.
+    func testAxisMatchesModelMatrixColumnZeroForMixedRotations() {
+        for angles in [Vec3(x: 0.3, y: -1.1, z: 2.0), Vec3(x: -2.7, y: 0.4, z: -0.9),
+                       Vec3(x: 1.0, y: 1.0, z: 1.0)] {
+            let (sy, cy) = (sin(angles.y), cos(angles.y))
+            let (sz, cz) = (sin(angles.z), cos(angles.z))
+            let expected = SIMD3<Float>(cz * cy, sz * cy, -sy)   // modelMatrix 의 r00/r10/r20
+            let a = SceneLight3D.forwardLightAxis(angles: angles)
+            XCTAssertEqual(a.x, expected.x, accuracy: 1e-6)
+            XCTAssertEqual(a.y, expected.y, accuracy: 1e-6)
+            XCTAssertEqual(a.z, expected.z, accuracy: 1e-6)
+            // 회전 열이므로 단위벡터다.
+            XCTAssertEqual(simd_length(a), 1, accuracy: 1e-6)
+        }
     }
 
     // MARK: spot cone 코사인
@@ -98,21 +129,26 @@ final class SceneForwardLightKindTests: XCTestCase {
                   innerCone: 20, outerCone: 30, radius: 2048),
         ])
         XCTAssertEqual(u.count, 3)
-        // 슬롯 0: point — kind 0, cone 0(미사용), axis 는 identity blue축(셰이더가 kind 로 분기해 미소비).
+        // 슬롯 0: point — kind 0, cone 0(미사용), axis 는 identity col0(셰이더가 kind 로 분기해 미소비).
         XCTAssertEqual(u.kindCone[0], SIMD4<Float>(0, 0, 0, 0))
-        // 슬롯 1: directional — kind 1, cone 0, axis = Rx(90°) blue축 = (0,-1,0).
+        // 슬롯 1: directional — kind 1, cone 0. angles=Rx(90°) 인데 **col0 은 Rx 에 불변**이라
+        // axis = (1,0,0) 이다(종전 col2 규약에서는 (0,-1,0) 이었다 — r2-H1 정정).
         XCTAssertEqual(u.kindCone[1].x, 1, accuracy: 1e-6)
-        XCTAssertEqual(u.axisCone[1].x, 0, accuracy: 1e-6)
-        XCTAssertEqual(u.axisCone[1].y, -1, accuracy: 1e-6)
+        XCTAssertEqual(u.axisCone[1].x, 1, accuracy: 1e-6)
+        XCTAssertEqual(u.axisCone[1].y, 0, accuracy: 1e-6)
         XCTAssertEqual(u.axisCone[1].z, 0, accuracy: 1e-6)
-        // 슬롯 2: spot — kind 2, axis = (0,0,1) (z-only 회전), w = cone outer cos, inner cos = kindCone.y.
+        // 슬롯 2: spot — kind 2. z-only 회전이므로 col0 = (cos z, sin z, 0) 이다
+        // (종전 col2 규약에서는 z 회전과 무관하게 (0,0,1) 이었다).
+        // w = cone outer cos, inner cos = kindCone.y.
         // 콘 20/30 은 WE 라이트 생성자 기본값(0x1401904a8/0x1401904b2 = 20.0/30.0)이자 코퍼스
         // 실측 상단값이다(spec/corpus/scene-schema.json: innercone 범위 [10.63, 20.0] ·
         // outercone [14.28, 30.0], 5건/2씬). 기대값은 cos 30° = √3/2 = 0.8660254 처럼
         // **각도만으로 정해지는 수**로 적는다 — 산식을 다시 적으면 회귀를 못 잡는다.
         XCTAssertEqual(u.kindCone[2].x, 2, accuracy: 1e-6)
         XCTAssertEqual(u.kindCone[2].y, 0.9396926, accuracy: 1e-6)   // cos 20°
-        XCTAssertEqual(u.axisCone[2].z, 1, accuracy: 1e-6)
+        XCTAssertEqual(u.axisCone[2].x, cos(Float(-2.54682)), accuracy: 1e-6)
+        XCTAssertEqual(u.axisCone[2].y, sin(Float(-2.54682)), accuracy: 1e-6)
+        XCTAssertEqual(u.axisCone[2].z, 0, accuracy: 1e-6)
         XCTAssertEqual(u.axisCone[2].w, 0.8660254, accuracy: 1e-6)   // cos 30° = √3/2
         // 슬롯 3: 미사용 — 제로(종전 radius 0 스킵 규약과 동일하게 kind 0+radius 0).
         XCTAssertEqual(u.kindCone[3], .zero)
@@ -148,7 +184,10 @@ final class SceneForwardLightKindTests: XCTestCase {
         let doc = try SceneDocument.parse(package: pkg)
         let u = pack(doc.lights3D)
         XCTAssertEqual(u.kindCone[0].x, 2, accuracy: 1e-6)
-        XCTAssertEqual(u.axisCone[0].z, 1, accuracy: 1e-6)
+        // z-only 회전의 col0 = (cos z, sin z, 0) — 파스→팩 경로가 같은 축 규약을 쓴다.
+        XCTAssertEqual(u.axisCone[0].x, cos(Float(-2.54682)), accuracy: 1e-6)
+        XCTAssertEqual(u.axisCone[0].y, sin(Float(-2.54682)), accuracy: 1e-6)
+        XCTAssertEqual(u.axisCone[0].z, 0, accuracy: 1e-6)
         XCTAssertGreaterThan(u.kindCone[0].y, u.axisCone[0].w)
     }
 }

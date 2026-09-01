@@ -188,6 +188,12 @@ final class TubeLightCSMandMipTests: XCTestCase {
 
     func testNonTubeKindsKeepAxisAndShadowPackingBitIdentical() {
         // 무회귀: 기존 3종은 axis=forward/cone, shadow.z=0/1/2 그대로.
+        // **[2026-09-01] 기대 forward 만 갱신했다.** `Scene3DLighting.resolveLights` 가 라이트
+        // forward 를 모델행렬 col2(+Z blue) → **col0(+X red)** 로 정정했다(V1 PBR 유니폼 패커
+        // `wallpaper64.exe FUN_140190c80` 이 `glm::column(M, 0)` 을 부른다 — 그 파일의 방향 규약 절).
+        // 항등 회전(angles "0 0 0")의 col0 은 (1,0,0) 이라 축이 +Z 에서 +X 로 바뀐다.
+        // 이 테스트가 잠그는 것은 **tube 도입이 비-tube 3종의 패킹을 건드리지 않는다**는 것이고,
+        // 그 성질은 그대로다(shadow.z / axis.w 슬롯 규약 불변).
         func light(_ type: String, cone: Bool = false) -> SceneLight3D {
             SceneLight3D(id: 1, name: "", type: type, origin: Vec3(x: 0, y: 0, z: 5),
                          angles: Vec3(x: 0, y: 0, z: 0), color: Vec3(x: 1, y: 1, z: 1),
@@ -197,10 +203,10 @@ final class TubeLightCSMandMipTests: XCTestCase {
         }
         let packed = Scene3DLighting.packLights(Scene3DLighting.resolveLights(
             [light("lpoint"), light("ldirectional"), light("lspot", cone: true)], nodes: [:]))
-        XCTAssertEqual(packed[0].shadow.z, 0); XCTAssertEqual(packed[0].axis, SIMD4<Float>(0, 0, 1, 0))
-        XCTAssertEqual(packed[1].shadow.z, 1); XCTAssertEqual(packed[1].axis, SIMD4<Float>(0, 0, 1, 0))
+        XCTAssertEqual(packed[0].shadow.z, 0); XCTAssertEqual(packed[0].axis, SIMD4<Float>(1, 0, 0, 0))
+        XCTAssertEqual(packed[1].shadow.z, 1); XCTAssertEqual(packed[1].axis, SIMD4<Float>(1, 0, 0, 0))
         XCTAssertEqual(packed[2].shadow.z, 2)
-        XCTAssertEqual(packed[2].axis.z, 1, accuracy: 1e-6)
+        XCTAssertEqual(packed[2].axis.x, 1, accuracy: 1e-6)
         XCTAssertGreaterThan(packed[2].axis.w, -1, "spot axis.w = cone outer cos(채워짐)")
     }
 

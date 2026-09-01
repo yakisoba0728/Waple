@@ -355,10 +355,14 @@ public struct PropertyAnimation: Equatable {
     /// 독립 확인됐다(클러스터 M 이 테스트로 잠갔다).
     ///
     /// - Note: WE 는 2번의 "덮기" 경로에서 flags bit0 만 지우고(0x1401a9b66 `and eax, 0xfffffffe`)
-    ///   backX/backY 는 남긴다. Waple 의 평가기는 `backEnabled` 를 게이트로 쓰므로 그 잔존값이
-    ///   실효하지 않는다 — 동봉 자산 도달 0(wraploop 두 블록 모두 마지막 키프레임이 length 와
-    ///   달라 "붙이기" 경로). 그래도 잔존값 자체는 보존한다(엔진과 필드 단위로 일치시켜 두면
-    ///   나중에 라운드트립·비교가 생겨도 갈리지 않는다).
+    ///   backX/backY 는 남긴다. **그 잔존값은 실효한다**(r4-05 정정) — Waple 의 `segment()` 는
+    ///   `backEnabled`/`frontEnabled` 를 **참조하지 않는다**(같은 함수 주석의 "enabled 비트를 여기서
+    ///   보지 않는다" 블록. 실물 평가기 0x1401a9bc0 도 step(bit2)만 본다). 종전 이 Note 는
+    ///   "Waple 의 평가기는 backEnabled 를 게이트로 쓰므로 실효하지 않는다" 고 적어 같은 파일
+    ///   100줄 위의 서술(합성 반례 frame31 = 10.000000 ↔ 18.888773)과 정면으로 모순이었다.
+    ///   동봉 자산 도달은 0 이다(wraploop 두 블록 모두 마지막 키프레임이 length 와 달라 "붙이기"
+    ///   경로라 덮기 자체가 안 일어난다). 잔존값 자체는 그대로 보존한다(엔진과 필드 단위로
+    ///   일치시켜 두면 나중에 라운드트립·비교가 생겨도 갈리지 않는다).
     /// - Note: **`length` 의 i32 화는 닫혔다**(2026-08-21 클러스터 Q). WE 는 `length` 를
     ///   `asInt`(0x1401a9815 → 0x140085ee0, 태그 3 은 `cvttsd2si` 0x140085f12 = 0 방향 절단)로
     ///   **한 번** 정수화하고 그 정수 하나가 끝점 프레임(`[r13+0x48]` → 0x1401a5780)에도
@@ -676,9 +680,14 @@ public struct PropertyAnimation: Equatable {
         // 아래 `length`/`fps` 와 같은 이유(동봉·설치본 7블록 전수가 options 객체를 갖고 있어 도달 0,
         // 그리고 정지시키는 쪽이 더 나쁜 실패)다.
         let opts = a["options"] as? [String: Any] ?? [:]
-        // 이벤트 마커: options.events[] = {frame, name}(실물 3737268876). 형식 이상 항목은 드롭.
-        let events: [AnimationMarker] = ((opts["events"] as? [[String: Any]]) ?? []).compactMap { e in
-            guard let name = e["name"] as? String, let frame = f(e["frame"]) else { return nil }
+        // 이벤트 마커: options.events[] = {frame, name}(실물 3737268876). 형식 이상 **항목만** 드롭.
+        // r3-O5: 종전 `opts["events"] as? [[String: Any]]` 는 **배열 전체** 캐스트라 원소 하나가
+        // 비객체(문자열·null 등)면 캐스트가 통째로 실패해 마커가 전량 소실됐다 — 바로 위 주석의
+        // "형식 이상 항목은 드롭"(항목 단위)과 실제 동작이 어긋나 있었다. `[Any]` 로 받고
+        // 원소별로 접는다(EffectManifest 의 passes 가 쓰는 것과 같은 원소별 폴백 규약).
+        let events: [AnimationMarker] = ((opts["events"] as? [Any]) ?? []).compactMap { raw in
+            guard let e = raw as? [String: Any],
+                  let name = e["name"] as? String, let frame = f(e["frame"]) else { return nil }
             return AnimationMarker(name: name, frame: frame)
         }
         // fps / length 는 WE 에서 **필수**다 — 옵션 파서가 둘 다 숫자 타입(1..3)이 아니면 false 를

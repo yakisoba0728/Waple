@@ -78,8 +78,14 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         // 폴더 안에서의 검색은 그 폴더 안에서 한다: 사이드바가 폴더를 강조하고 있는데 결과가
         // 폴더 밖까지 나오면 좌측 강조가 거짓말이 된다.
         let scoped = LibraryFolders.scoped(entries, folders: folders.folders, active: activeFolder)
+        // r3-M24: "전체 선택 = 무필터" 판정의 모집단을 **명시적으로** 넘긴다. 안 넘기면 필터가
+        // 폴더로 좁혀진 `scoped` 에서 모집단을 유도하는데, 사용자가 고른 태그/등급은 팝오버가
+        // 나열한 `availableTags`/`availableRatings`(= 전체 엔트리)에서 왔다 — 두 집합이 다르면
+        // 폴더 안에서 그 축이 통째로 건너뛰어져 필터가 조용히 무필터가 된다.
         let result = LibraryFiltering.apply(scoped, search: searchText, criteria: criteria,
-                                            sort: sortOrder, isFavorite: { self.favorites.isFavorite($0) })
+                                            sort: sortOrder, isFavorite: { self.favorites.isFavorite($0) },
+                                            availableTags: Set(availableTags),
+                                            availableRatings: Set(availableRatings))
         filteredCache = result
         return result
     }
@@ -255,6 +261,16 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         monitors.removeAssignments(entryId: entry.id)
         favorites.remove(entry.id)
         folders.removeEntry(entry.id)
+        // r3-M65: 속성 편집값도 함께 지운다. 종전엔 위 다섯 스토어만 정리해 `waple.userprops.<id>`
+        // 가 UserDefaults 에 영구히 남았다 — 같은 id 를 다시 쓰는 경로(관리 폴더 **밖** 원본을
+        // 다시 가져오기 · 고아 폴더 정리 후 재사용)에서 새 배경이 남의 편집값을 물려받는다.
+        // 확인 대화상자 문구도 이 정리를 명시한다(`WallpaperGridView`·`SelectionPanelView`).
+        //
+        // **남는 격차: `script-storage/<id>.json`.** 그쪽은 `ScriptLocalStorage(sceneId: project.id)`
+        // 로 **파서 프로젝트 id** 를 쓰는데 이 뷰모델은 라이브러리 엔트리 id 만 들고 있고 둘은
+        // 다를 수 있다(F480/F194 접미 유일화). 잘못된 키로 남의 파일을 지우는 쪽이 남겨 두는
+        // 것보다 나쁘므로 여기서는 손대지 않는다 — 프로젝트 파스를 이 경로에 들이는 별도 작업이다.
+        UserPropertyStore.reset(id: entry.id)
         entries = store.entries
         if selectedId == entry.id { selectedId = nil }
         if focusedId == entry.id { focusedId = nil }

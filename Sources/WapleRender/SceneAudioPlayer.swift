@@ -6,7 +6,16 @@ import WapleCore
 
 /// 씬 sound 레이어 재생기. pkg 에서 mp3/wav 데이터를 추출해 AVAudioPlayer 로 재생한다.
 ///
-/// 실측 의미(코퍼스 460종 / sound 오브젝트 382개 scene.json 직접 열람으로 확정, 2026-07-09):
+/// 실측 의미(sound 오브젝트 382개 scene.json 직접 열람으로 확정, 2026-07-09):
+///
+/// **[정정 r3-M17] 모집단 표기가 정본에 없다.** 종전 머리말은 "코퍼스 460종" 이라고만 적었는데,
+/// `spec/` 전체에 `460` 이라는 모집단 정의가 **0건**이다(형제 `TexImage.swift`·`SceneDocument.swift`
+/// 도 같은 수를 인용하지만 정의처는 없다 — 이 파일만 고쳤고 나머지는 다른 레인 소유다).
+/// 이 리포가 이름을 붙여 둔 모집단은 설치본(191) · 동봉 코퍼스(`Resources/WEAssets`) ·
+/// 워크샵 코퍼스(446, **이 머신에 없다**) 셋이고 460 은 그 어느 것도 아니다. 아래 도수들은
+/// 2026-07-09 당시의 사설 수집본에서 잰 값이라 **이 머신에서 재현할 수 없다** — 되재기 전까지
+/// 새 결정의 근거로 인용하지 마라. 도수 자체는 지우지 않는다(현재 구현의 설계 근거이므로).
+///
 /// - `sound[]` 다중 엔트리(33개, 2~18곡)는 전부 상이한 곡의 **플레이리스트** — 동시 재생이 아니라
 ///   한 번에 한 곡. loop=순차 순환, single=순차 1회 후 종료, random=곡 종료마다 무작위 재선곡.
 ///   (랜덤 오브젝트 9개 전부가 다중 엔트리 음악/SFX 목록 — 셔플 재생 의도가 명백.)
@@ -15,8 +24,12 @@ import WapleCore
 ///   loop 140 의 배경음악). Waple 은 사운드 트리거 미지원 → 스킵. 시작 시점 무음이라는 점에서 WE 와
 ///   동일하고, 이후 트리거 재생만 미지원(한계).
 /// - 음량은 (오서 볼륨 × VideoSettings 배경별 설정)으로 합성 — 동영상 설정 메뉴의 음소거/음량이 그대로
-///   씬 오디오에도 적용된다(메뉴 변경 시 AppDelegate 가 배경을 재-mount → start 가 최신 설정을 재독). 기본
-///   VideoSettings.volume 은 0(음소거)이라 사용자가 명시적으로 올리기 전엔 소리 나지 않는다.
+///   씬 오디오에도 적용된다. 기본 VideoSettings.volume 은 0(음소거)이라 사용자가 명시적으로 올리기
+///   전엔 소리 나지 않는다.
+///   **[정정 r2-H8] 메뉴 변경은 리마운트가 아니라 라이브 반영이다.** 종전 이 줄은 "메뉴 변경 시
+///   AppDelegate 가 배경을 재-mount → start 가 최신 설정을 재독" 이라고 적었는데, F820 이 그 재적용을
+///   없앤 뒤로 그 문장은 거짓이었고 씬 오디오는 갱신 경로 자체를 잃고 있었다. 지금은
+///   `setSettingVolume(_:)`(→ `SceneRenderer.applyLiveMediaSettings`)가 살아 있는 재생목록에 직접 먹인다.
 /// - ogg(Vorbis)는 AVAudioPlayer 미디코드 → 순수 Swift 디코더(OggVorbisDecoder)로 PCM 화 후 재생(play(at:)).
 ///   mp3/wav/flac 은 Core Audio 네이티브. 코퍼스 참조 오디오 전 포맷 재생 가능.
 /// - mintime/maxtime: random 모드 곡 종료 후 [mintime,maxtime]초 무작위 대기 후 다음 곡(gapSeconds). loop/single 은 즉시.
@@ -98,6 +111,20 @@ public final class SceneAudioPlayer {
         playlists.forEach { $0.setMuted(on) }
     }
 
+    /// F820 라이브 반영(r2-H8) — 사용자가 하단 바에서 바꾼 배경별 음량을 **리마운트 없이** 먹인다.
+    ///
+    /// 종전에는 이 경로가 없었다. 클래스 주석이 "메뉴 변경 시 AppDelegate 가 배경을 재-mount →
+    /// start 가 최신 설정을 재독" 이라고 적어 두었지만 F820 이 재적용을 라이브 반영으로 바꾸면서
+    /// 그 전제가 사라졌고, 라이브 반영 대상은 `VideoRenderer` 뿐이라 **씬 오디오만 갱신 경로를
+    /// 잃었다** — 체크마크는 옮겨가는데 BGM 음량은 마운트 시점 값에 고정됐다.
+    ///
+    /// `setMuted` 와 같은 형태로 **살아 있는 재생목록에만** 전파한다. `start` 는 마운트당 1회라
+    /// 그 뒤 새로 생기는 재생목록이 없으므로 값을 따로 보관하지 않는다(보관하면 `start` 의
+    /// `settingVolume` 인자와 두 벌이 되고, 두 벌은 갈라진다).
+    public func setSettingVolume(_ v: Float) {
+        playlists.forEach { $0.setSettingVolume(v) }
+    }
+
     /// 소리를 낼 수 있는 재생목록이 하나라도 있는가 — 오디오 축의 뺄셈 항이 읽는다.
     ///
     /// `isPlaying`(순간 상태)이 아니라 `hasPlayer`(플레이어가 붙어 있다)를 보는 이유:
@@ -173,7 +200,10 @@ nonisolated final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Se
     private let package: ScenePackage
     /// 오서(스크립트) 볼륨 0…1 — 스크립트가 `.volume` 로 덮어쓰면 갱신. 실제 출력은 settingVolume 배수와 곱.
     private var authorVolume: Float
-    private let settingVolume: Float
+    /// 사용자 설정 볼륨(배경별 `VideoSettings.volume`) 배수. **`var` 다** — F820 라이브 반영이
+    /// 리마운트 없이 이 값을 갈아 끼운다(`setSettingVolume`). 종전 `let` 은 "설정을 바꾸면
+    /// 배경을 다시 마운트한다" 는 전제였고 그 전제는 F820 에서 사라졌다.
+    private var settingVolume: Float
     private let minTime: Float
     private let maxTime: Float
     private var index = 0
@@ -209,6 +239,13 @@ nonisolated final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Se
     /// 음소거를 얹으면서 그 복사가 셋이 되면 새 곡만 소리가 새는 부류가 생긴다.
     var outputVolume: Float { muted ? 0 : effectiveVolume }
     func setMuted(_ on: Bool) { muted = on; player?.volume = outputVolume }
+    /// F820 라이브 반영 — 사용자 설정 배수만 갈아 끼운다. `authorVolume`(오서/스크립트 관점)과
+    /// `muted`(정책 층)는 건드리지 않는다: 세 층이 각자 자기 값만 들고 `outputVolume` 한 자리에서
+    /// 합성되는 구조를 유지한다.
+    func setSettingVolume(_ v: Float) {
+        settingVolume = max(0, min(1, v))
+        player?.volume = outputVolume
+    }
 
     /// volume 스크립트 재평가(오디오/페이드 구동 — 실측 12건). update() 가 스칼라를 반환하지 않거나
     /// 예외면 authorVolume 유지(현상 유지 — 다른 프로퍼티 스크립트 소비처와 동일 규약).
@@ -315,4 +352,25 @@ nonisolated final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Se
     var indexForTesting: Int { index }
     /// F812 테스트용: 정지(paused) 플래그 — 가림 게이트의 sceneAudio pause/resume 대칭 검증.
     var pausedForTesting: Bool { paused }
+}
+
+/// F820 라이브 반영(r2-H8) — 씬 경로의 적합 선언.
+///
+/// **여기 있는 이유.** `SceneRenderer` 는 마운트한 프로젝트 id 를 저장하지 않아
+/// `VideoRenderer` 처럼 자기 힘으로 `VideoSettings` 를 되읽을 수 없다. 그래서 프로토콜이 값을
+/// 인자로 나르고(그 선언 주석), 이 확장은 받은 값을 씬 오디오 트랜스포트로 흘리기만 한다.
+/// 적합을 `SceneRenderer.swift` 가 아니라 소비처인 이 파일에 두는 것은 그 한 줄이 온전히
+/// `SceneAudioPlayer` 의 계약이기 때문이다.
+///
+/// `SceneRenderer` 는 비격리 클래스라(형제 두 렌더러와 달리 `WallpaperRenderer` 적합에도
+/// `@MainActor` 가 없다) 요구사항의 격리를 여기서 명시한다. 호출부는 `AppDelegate`(메인)뿐이다.
+/// 헤드리스/비프라이머리 화면은 `sceneAudio` 자체가 nil 이라 안전 no-op.
+extension SceneRenderer: LiveMediaSettingsApplying {
+    /// - Parameter rate: **문서화된 no-op.** 씬 사운드에는 배속 개념이 없다
+    ///   (`NowPlayingBar` 도 배속 섹션을 동영상에만 연다).
+    @MainActor
+    public func applyLiveMediaSettings(volume: Float, rate: Float) {
+        _ = rate
+        sceneAudio?.setSettingVolume(volume)
+    }
 }

@@ -61,7 +61,7 @@ public struct TexImage {
     /// 런타임에서 WE 가 무엇을 보여주는지는 샘플러 주소 모드가 정한다. 이 13건은 **전부
     /// `clampuvs` 꺼짐**(flags = 0x4 뿐)이라 REPEAT 이고, 엔진이 좌표를 alloc dims 로 나눈 UV
     /// 이므로 `v = 512/512 = 1.0` 이 **0.0 으로 감겨** 위쪽 행이 다시 나온다.
-    /// **Waple 은 감지 않고 자른다** — `SceneRendererFrameEncoder.spriteSubrect(:1834)` 가
+    /// **Waple 은 감지 않고 자른다** — `SceneRendererFrameEncoder` 의 `spriteSubrect` 가
     /// `sy = min(ah-1, y)` · `fh = min(ah-sy, h)` 라 그 프레임이 **1픽셀 높이 조각**이 된다.
     /// 그 파일은 이 과제 소유가 아니라 손대지 않았다(보고서에 패치안). 도달은 작다 — 13건이 전부
     /// 파티클 자산이고, 파티클 경로는 `spriteSubrect` 가 아니라 자체 UV 계산을 쓴다.
@@ -211,7 +211,7 @@ public struct TexImage {
     /// 종전에는 parse 가 `[UInt8](data)` 로 복사한 0-베이스 배열 인덱스를 그대로 실어 보냈고,
     /// 소비처(TexDecoder / VideoTextureExtractor)는 원본 Data 에 subdata 를 걸었다 — 지금까지
     /// 안 터진 이유는 `ScenePackage.data(for:)` 가 우연히 startIndex 0 인 새 Data 를 돌려주기
-    /// 때문뿐이고, 슬라이스가 한 번이라도 들어오면 곧바로 트랩이었다. ScenePackage.parse(:38)의
+    /// 때문뿐이고, 슬라이스가 한 번이라도 들어오면 곧바로 트랩이었다. `ScenePackage.parse(_:)` 의
     /// `let base = data.startIndex` 규약을 그대로 따라 **파스 시점에 절대 인덱스로 만든다**
     /// (0-베이스 Data 에서는 값이 종전과 동일 — 무회귀).
     public let payloadRange: Range<Int>

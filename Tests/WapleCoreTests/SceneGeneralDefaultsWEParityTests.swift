@@ -62,14 +62,30 @@ final class SceneGeneralDefaultsWEParityTests: XCTestCase {
         XCTAssertEqual(doc.windStrength, 1, accuracy: 1e-6)                     // 0x400 ← 0x140187104
     }
 
-    /// 생성자가 기록하는 float 비트패턴이 Swift 리터럴과 **비트동일**인지 — 반올림으로 미끄러지지 않게 못박는다.
-    func testDefaultLiteralsAreBitIdenticalToEngineConstants() {
-        XCTAssertEqual(Float(0.65).bitPattern, 0x3f26_6666)   // bloomthreshold  `0x1401870b7`
-        XCTAssertEqual(Float(0.1).bitPattern, 0x3dcc_cccd)    // feather/delay/nearz `0x1401870d8`
-        XCTAssertEqual(Float(1.619).bitPattern, 0x3fcf_3b64)  // bloomhdrscatter `0x1401870e3`
-        XCTAssertEqual(Float(0.707).bitPattern, 0x3f34_fdf4)  // winddirection.x `0x140187023`
-        XCTAssertEqual(Float(95).bitPattern, 0x42be_0000)     // perspectiveoverridefov `0x140186d67`
-        XCTAssertEqual(Float(50).bitPattern, 0x4248_0000)     // fov `0x140186d5c`
+    /// 파스가 내놓는 기본값의 float 비트패턴이 엔진 상수와 **비트동일**인지 — 반올림으로
+    /// 미끄러지지 않게 못박는다.
+    ///
+    /// **[정정 2026-09-01] 종전 이 테스트는 생성자 값을 한 번도 읽지 않았다 — 민감도 0 이었다.**
+    /// 단언이 전부 `XCTAssertEqual(Float(0.65).bitPattern, 0x3f26_6666)` 형태라 **Swift 리터럴
+    /// 자신**의 비트패턴만 비교했다. 그건 컴파일러가 십진 리터럴을 어떻게 굽는지에 대한
+    /// 항진명제이고, `SceneDocument` 의 기본값이 무엇으로 바뀌어도 **절대 실패하지 않는다**.
+    /// 그런데 주석은 "생성자가 기록하는 값" 을 잠근다고 적어 두었으니 주장과 검사가 어긋나
+    /// 있었다. 이제 실제 파스 결과(`doc.*` / `camera3D.*`)의 비트패턴을 본다.
+    func testDefaultLiteralsAreBitIdenticalToEngineConstants() throws {
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", Self.bareScene)]))
+        XCTAssertEqual(doc.bloomThreshold.bitPattern, 0x3f26_6666)          // 0.65  `0x1401870b7`
+        XCTAssertEqual(doc.bloomHDRFeather.bitPattern, 0x3dcc_cccd)         // 0.1   `0x1401870d8`
+        XCTAssertEqual(doc.parallaxDelay.bitPattern, 0x3dcc_cccd)           // 0.1   `0x140186fb0`
+        XCTAssertEqual(doc.bloomHDRScatter.bitPattern, 0x3fcf_3b64)         // 1.619 `0x1401870e3`
+        XCTAssertEqual(doc.windDirection.x.bitPattern, 0x3f34_fdf4)         // 0.707 `0x140187023`
+        XCTAssertEqual(doc.perspectiveOverrideFov.bitPattern, 0x42be_0000)  // 95    `0x140186d67`
+        // `fov` 는 3D 카메라 쪽 기본값이라 위 2D 최소 씬에는 없다 — 형제 테스트와 같은 3D 씬으로 읽는다.
+        let scene3D = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null},"objects":[]}
+        """
+        let cam = try XCTUnwrap(try SceneDocument.parse(package: try pkg([("scene.json", scene3D)])).camera3D)
+        XCTAssertEqual(cam.fov.bitPattern, 0x4248_0000)                     // 50    `0x140186d5c`
     }
 
     /// `skylightcolor` 는 `ambientcolor` 로 폴백하지 않는다 — 두 키는 등록도 저장도 독립이고

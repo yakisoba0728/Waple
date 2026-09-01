@@ -513,14 +513,22 @@ def measure(pe):
 def main():
     path = find_binary()
     if path is None:
+        # **[정정 2026-09-01] 입력 0에서 정본을 rc=0 으로 다시 쓰고 있었다.**
+        # 종전 이 분기는 `carry_forward()` 로 기존 산출물을 읽어 `specfmt.dump(prior, OUT)` 으로
+        # **다시 쓰고** 암묵적 `return`(exit 0)했다. 형제 생성기 22개는 같은 상황에서
+        # `raise SystemExit(...)` 로 rc=1 을 내고 **아무것도 쓰지 않는다**
+        # (그 규약을 잠그는 것이 `scripts/spec/tests/test_measure_prerequisites.py` 인데,
+        #  이 파일은 그 `CASES` 표에 없어서 규약 밖에 있었다 — 표에 넣을 것을 권고한다).
+        # 재작성이 왜 위험한가: 내용이 같더라도 mtime 과 문서 헤더가 갱신돼 "이번 실행이
+        # 바이너리를 읽고 확인했다" 처럼 보이고, rc=0 이라 호출자는 성공으로 읽는다.
+        # 게다가 `OUT` 은 리포 절대 경로라 **어느 작업 디렉터리에서 돌려도** 리포의 정본을 만진다.
+        # 근거 보존은 이제 **파일을 건드리지 않는 것**으로 한다 — 이미 커밋돼 있으므로
+        # 다시 쓸 이유가 없다.
         prior = carry_forward()
-        if prior is None:
-            raise SystemExit(f"[measure_effect_fbo_audio] wallpaper64.exe 를 못 찾았고 "
-                             f"이어받을 기존 산출물도 없다.\n  WE_ROOT 를 설정하거나 {CANDIDATES[1]} 에 두어라.")
-        print("  ⚠️ wallpaper64.exe 없음 — 기존 산출물을 그대로 이어받는다(근거 보존)", file=sys.stderr)
-        specfmt.dump(prior, OUT)
-        print(f"이펙트 FBO · 오디오 → {os.path.relpath(OUT, REPO)} (이어받음)")
-        return
+        state = ("기존 산출물은 그대로 둔다(재작성하지 않는다)." if prior is not None
+                 else "이어받을 기존 산출물도 없다.")
+        raise SystemExit(f"[measure_effect_fbo_audio] wallpaper64.exe 를 못 찾았다 — {state}\n"
+                         f"  WE_ROOT 를 설정하거나 {CANDIDATES[1]} 에 두어라.")
 
     pe = PE(path)
     entries = measure(pe)

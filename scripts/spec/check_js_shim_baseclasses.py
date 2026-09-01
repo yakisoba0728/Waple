@@ -32,6 +32,7 @@ WE 원본 `scripts/jsclasses/baseclasses.js` 는 `Vec2`/`Vec3`/`Vec4`/`Mat3`/`Ma
 확인한다. 검사가 실제로 잡는지 확인하지 않으면 "검사하는 척하는 검사" 가 된다.
 """
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -143,14 +144,32 @@ def check(shim_text, workdir, strict=True):
     return bad, alone, combo
 
 
+# **[정정 2026-09-01] 전제 부재가 rc=0 이었다 — 게이트가 사라져도 초록이었다.**
+# 종전 `main()` 은 `node` 가 없거나 `baseclasses.js` 가 없으면 stderr 한 줄만 남기고
+# `return 0` 했다. 호출부(`.github/workflows/spec.yml` 의 `JS shim / baseclasses
+# coexistence`)는 `$?` 만 보므로, 러너에서 node 가 사라지거나 PATH 가 바뀌면 이 게이트가
+# **조용히** 통과한다 — 이 저장소가 반복해 물린 "전제 0에서 나오는 초록" 이다.
+# 이제 환경 오류(2)로 낸다. 개발자가 node 없이 나머지 spec 검사만 돌리고 싶으면
+# `WAPLE_JS_SHIM_SKIP=1` 로 **명시적으로** 끈다 — 침묵이 기본값이면 안 된다.
+# (spec.yml 은 같은 날 `actions/setup-node` 로 node 를 고정했다.)
+SKIP_ENV = "WAPLE_JS_SHIM_SKIP"
+
+
+def _missing(what):
+    if os.environ.get(SKIP_ENV) == "1":
+        print("[js-shim] %s — %s=1 이라 명시적으로 생략" % (what, SKIP_ENV), file=sys.stderr)
+        return 0
+    print("[js-shim] %s — 이 검사는 전제가 없으면 통과를 낼 수 없다(환경 오류). "
+          "의도한 생략이면 %s=1 로 켜라." % (what, SKIP_ENV), file=sys.stderr)
+    return 2
+
+
 def main():
     if shutil.which("node") is None:
-        print("[js-shim] node 가 없다 — 검사 생략", file=sys.stderr)
-        return 0
-    shim_text = extract_shim(SWIFT.read_text(encoding="utf-8"))
+        return _missing("node 가 PATH 에 없다")
     if not BASECLASSES.is_file():
-        print("[js-shim] %s 가 없다 — 검사 생략" % BASECLASSES, file=sys.stderr)
-        return 0
+        return _missing("%s 가 없다" % BASECLASSES)
+    shim_text = extract_shim(SWIFT.read_text(encoding="utf-8"))
 
     with tempfile.TemporaryDirectory() as td:
         wd = Path(td)

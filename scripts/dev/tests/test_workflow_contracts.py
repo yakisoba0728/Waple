@@ -9,6 +9,7 @@ feedback loop for workflow edits that would otherwise need an expensive remote r
 """
 import json
 import pathlib
+import re
 import subprocess
 import unittest
 
@@ -142,8 +143,22 @@ class TestWorkflowWiring(unittest.TestCase):
     def test_source_warning_census_has_a_non_increasing_ceiling(self):
         census = step_block(self.ci, "Concurrency diagnostics census")
         self.assertIn("SOURCE_WARNINGS=", census)
-        self.assertIn("-gt 25", census)
+        # [정정 2026-09-01] 종전엔 `-gt 25` **리터럴**을 단언했다. 그러면 상한을 **낮추는**
+        # 커밋이 이 테스트를 깨뜨린다 — census 스텝 자신의 주석이 "진단을 고친 커밋은 아래
+        # 상한도 함께 낮춘다" 고 규정하는데, 그 규정을 따르면 반드시 빨개지는 구조였다.
+        # "증가 금지 ceiling" 을 잠근다면서 **감소까지** 막고 있었다. 숫자를 파싱해
+        # "상한이 존재하고 기준선 25 이하" 만 본다.
+        match = re.search(r'\$\{SOURCE_WARNINGS:-0\}"\s*-gt\s*(\d+)', census)
+        self.assertIsNotNone(match, "SOURCE_WARNINGS 상한 비교(`-gt <n>`)가 사라졌다")
+        self.assertLessEqual(int(match.group(1)), 25,
+                             "Swift 6 전환 기준선 25 위로는 올릴 수 없다(증가 금지 래칫)")
         self.assertIn("Sources warning", census)
+
+    def test_source_warning_census_has_a_positive_control_for_its_grep(self):
+        """상한만 있으면 `0` 이 '고쳤다' 인지 '패턴이 깨져 못 본다' 인지 구분되지 않는다."""
+        census = step_block(self.ci, "Concurrency diagnostics census")
+        self.assertIn("PROBE=", census)
+        self.assertIn('"${PROBE:-0}" -ne 1', census)
 
     def test_golden_bootstrap_captures_debug_then_validates_same_files_in_release(self):
         self.assertIn("golden-bootstrap:", self.ci)

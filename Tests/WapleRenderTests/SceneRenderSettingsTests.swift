@@ -64,8 +64,20 @@ final class SceneRenderSettingsTests: XCTestCase {
                        "주입 저장소에 쓴 값이 .standard 로 샜다 — 병렬 워커끼리 다시 충돌한다")
     }
 
+    /// **[정정 2026-09-01] 주석의 "설정 창 Picker 가 그대로 쓰는 라벨" 은 거짓이었다.**
+    /// `SettingsView` 의 「열거형 표시 라벨」 절이 정확히 그 반대를 명시한다 —
+    /// `FitMode.label`/`SceneFPSCap.label` 은 `String` 을 돌려줘 `Text($0.label)` 이
+    /// **비현지화 오버로드**로 해석되므로, 설정 창은 의도적으로 별도의
+    /// `fpsLabel(_:)`/`fitLabel(_:)`(둘 다 `Text` 리터럴 하드코딩)을 써서 이 프로퍼티를
+    /// 우회한다(`ForEach(SceneFPSCap.allCases…) { Self.fpsLabel($0).tag($0) }`).
+    /// 실측: `Sources/` 전체에서 `SceneFPSCap.label`/`FitMode.label` 의 **소비처가 0건**이다.
+    /// 즉 이 테스트가 잠그던 것은 "설정 창의 라벨" 이 아니라 **아무도 안 쓰는 미현지화
+    /// 한국어 값**이었다. 그 상태를 그대로 적어 둔다 — 잠금 자체는 남긴다(값이 비면
+    /// 나중에 이 프로퍼티를 되살리는 쪽이 조용히 빈 Picker 를 얻는다).
+    ///
+    /// 이 프로퍼티를 지울지 살릴지는 이 레인 밖의 판단이다(현지화 경로 통합과 함께 가야 한다
+    /// — `SettingsView` 의 같은 절 「옮기려면 …」 문단이 그 조건을 적어 두었다).
     func testFPSCapLabelsAreNonEmpty() {
-        // 설정 창 Picker 가 그대로 쓰는 라벨 — 최소한 비어있지 않은지만 방어.
         for cap in SceneFPSCap.allCases {
             XCTAssertFalse(cap.label.isEmpty)
         }

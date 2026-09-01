@@ -396,11 +396,24 @@ extension SceneRenderer {
     /// 컴포지션(_rt_) 레이어 실행: 현재 encoder 를 닫고, acc 스냅샷(blit — 진행 중 타깃은 샘플 불가)에
     /// 레이어의 효과 체인을 적용한 뒤, 새 encoder(.load)로 레이어 지오메트리에 결과를 그린다.
     /// 반환된 encoder 로 나머지 drawPlan 을 계속한다. 실패 시 기존 흐름 유지 위해 새 encoder 만 연다.
-    /// P⑤: colorBlendMode 도 함께 저작된 레이어(코퍼스 13씬: _rt_ + colorBlendMode 동시 보유)는 종전
+    /// P⑤: colorBlendMode 도 함께 저작된 레이어(`_rt_` + `colorBlendMode` 동시 보유)는 종전
+    ///
+    /// (r3-M12 — 도수 모집단 표기 정정: 종전 "코퍼스 13씬" 은 **라벨이 없고 재현되지 않는다**.
+    ///  2026-09-01 동봉 `WEAssets` 재계수: `_rt_` 를 언급하는 씬 문서 **11**, 그중 `_rt_` 를 쓰는
+    ///  오브젝트에 `colorblendmode` 키가 있는 씬 **0** — 따라서 값 ≠ 0 도 **0**이다.
+    ///  (r3 §4.2 는 같은 항목을 8/5/0 으로 자기수정했는데 그 셋도 이 트리에서 재현되지 않았다.
+    ///   `13`·`8/5` 중 어느 것도 이 저장소의 동봉 코퍼스 수치가 아니다 — 워크샵 코퍼스(446)는
+    ///   이 머신에 없어 그 출처는 확인할 수 없다.)
+    ///  재현: 동봉 씬 JSON 중 `_rt_` 를 포함한 문서를 세고, 그 안에서 `_rt_` 를 참조하는
+    ///  오브젝트의 `colorblendmode` 값을 분류한다.
+    ///  결론은 바뀌지 않는다: **동봉 도달 0** 이므로 이 분기는 워크샵 대비 잠복 방어다.)
     /// encodeDrawPlan 매치 순서(isFrameBuffer 가 colorBlendMode 보다 먼저 매치)때문에 f_compose 로만
     /// 그려져 저작 블렌드 모드가 통째로 무시됐다(주석 명시 우선순위 lit>colorBlendMode>framebuffer 위반).
     /// 매치 순서 자체를 바꾸면 colorBlendMode 경로(runBlendModeLayer)가 buildDisplayTextures 의 원본
-    /// 텍스처(효과 체인 스킵 — isFrameBuffer 는 사전계산 불가, :1485)를 쓰게 돼 이펙트 체인 결과를
+    /// 텍스처(효과 체인 스킵 — `buildDisplayTextures` 의
+    /// `if layer.effects.isEmpty || layer.isFrameBuffer { out.append(base); continue }` 가 컴포지션
+    /// 레이어의 이펙트를 사전계산하지 않는다. r4-13: 종전 인용 `:1485` 는 `encodeLayer` 의
+    /// `blendSnapshot` 파라미터 선언이라 무관했다)를 쓰게 돼 이펙트 체인 결과를
     /// 통째로 잃는다. 대신 이 함수 안에서 colorBlendMode 를 함께 반영: 효과 체인 실행 전 acc 스냅샷을
     /// blendSnapshot 으로 보존해 encodeLayer 에 넘기면(:1113 의 f_blend 분기가 :1119 compose 분기보다
     /// 우선) 이펙트 체인 결과(srcTex)는 그대로 유지한 채 저작 블렌드 모드가 적용된다.
@@ -447,6 +460,20 @@ extension SceneRenderer {
                 guard let clearEnc = cb.makeRenderCommandEncoder(descriptor: clearRPD) else { return nil }
                 clearEnc.endEncoding()
             }
+            // ⚠️ r4-34: `backdrop` 은 f_blend 의 **dst**(= 이 레이어가 얹힐 배경)로 쓰인다.
+            // `copyBackground:true` 면 `snap` 은 acc 스냅샷이라 옳다. 그러나 `copyBackground:false`
+            // 분기에서는 방금 위에서 `snap` 을 `loadAction = .clear` 로 **투명하게 비웠다** —
+            // 즉 블렌드 dst 가 "이 시점까지의 씬 컬러" 가 아니라 투명 텍스처다. 실제 acc 스냅샷은
+            // `auxSnap`(= `fullFrame`)에 따로 떠 있는데 그건 `_rt_FullFrameBuffer` aux 슬롯 전용이라
+            // 여기로 오지 않는다. 그래서 `copyBackground:false` + `colorBlendMode != 0` 인 레이어는
+            // 배경 없는 블렌드가 된다(예: multiply 가 투명 위에서 결과를 잃는다).
+            //
+            // 지금 `fullFrame` 으로 바꾸지 않는 이유: `copyBackground:false` 의 근사 자체가
+            // "자식 RT 대신 무(無)" 라는 위 B2-effects④ 의 의도적 단순화이고, 여기만 acc 로 되돌리면
+            // chain src(투명)와 blend dst(불투명)가 서로 다른 배경 전제를 갖게 된다. 두 값을
+            // 정합시키려면 compose 레이어별 자식 RT 가 필요하다(BACKLOG B2-effects④).
+            // 도달: `copyBackground:false` **그리고** `colorBlendMode != 0` 인 레이어 — 동봉·설치본
+            // 코퍼스에서 확인된 조합은 없다(잠복).
             backdrop = snap
             var current: MTLTexture = snap
             for eff in layer.effects {
@@ -1653,6 +1680,13 @@ extension SceneRenderer {
         liveLayerStates[layer.uid]?.visible = scriptVisible[layer.uid] ?? layer.initialVisible
         // 이 시점의 transform은 animation/script/attachment/read-back을 정확히 한 번 평가한 결과다.
         // draw root 시차와 다음 입력 프레임의 hit geometry가 같은 값을 공유하도록 캐시한다.
+        //
+        // H6: 마운트 경로(`SceneRenderer.interactionGeometry`)와 **같은 술어**를 쓴다. 여기엔
+        // 명시적 `if` 가 없지만 `encodeLayer` 는 2D 인코더라 `is3D == false` 인 프레임에서만 돌고
+        // (`draw`/`captureFrames` 의 `if is3D { … return }` 분기가 3D 프레임을 통째로 가져간다),
+        // 마운트 게이트도 `if is3D { return .unhittable }` 로 통일해 뒀다. 즉 3D 씬의 승격은
+        // 여기가 아니라 `encodeBillboard` 가 투영 폴리곤으로 하고, projection-0 이어도 2D 로
+        // 그려지는 씬은 마운트와 프레임이 똑같이 이 픽셀 쿼드를 쓴다.
         if let def = layer.def {
             let t = effectiveTransform ?? (
                 origin: SIMD3(def.origin.x, def.origin.y, def.originZ),

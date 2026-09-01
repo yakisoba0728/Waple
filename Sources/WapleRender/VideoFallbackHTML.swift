@@ -3,7 +3,12 @@ import Foundation
 public enum VideoFallbackHTML {
     /// F576: volume 은 배경별 VideoSettings 값(정상 경로 VideoRenderer 와 동일 의미론).
     /// 0(기본)이면 muted 고정으로 autoplay 를 보장하고, 양수면 muted 없이 해당 음량으로 재생한다.
-    public static func html(forVideoFile name: String, volume: Float = 0,
+    ///
+    /// **[r3-M14] rate 도 같은 규약이다.** 종전 이 폴백은 배속을 **한 번도** 적용하지 않았다 —
+    /// ffmpeg 미설치 + webm 조합에서 배경이 이 경로로 뜨면 사용자가 고른 배속이 마운트 시점에도
+    /// 라이브 변경에도 반영되지 않고 항상 1× 로 재생됐다(음량과는 별개 축이라 F576 이 음량만
+    /// 심으면서 함께 닫히지 않았다). 기본값 1 = 등속이라 무회귀다.
+    public static func html(forVideoFile name: String, volume: Float = 0, rate: Float = 1,
                             fitMode: FitMode = .fill) -> String {
         let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
         let clamped = max(0, min(1, volume))
@@ -12,6 +17,15 @@ public enum VideoFallbackHTML {
         let volumeScript = clamped > 0
             ? "<script>document.querySelector('video').volume=\(String(format: "%.3f", clamped));</script>"
             : ""
+        // 배속도 속성이 아니라 프로퍼티다. `defaultPlaybackRate` 를 **함께** 세운다 — 아래
+        // watchdog 의 `onerror` 가 `src` 를 재설정하면 `playbackRate` 는 `defaultPlaybackRate`
+        // 로 리셋되므로, 그것만 세우면 디코드 오류 한 번에 배속이 조용히 1× 로 돌아간다.
+        let clampedRate = max(VideoSettings.minRate, min(VideoSettings.maxRate, rate))
+        let rateScript = clampedRate == 1
+            ? ""
+            : "<script>(function(){var v=document.querySelector('video');if(!v){return;}"
+                + "v.defaultPlaybackRate=\(String(format: "%.3f", clampedRate));"
+                + "v.playbackRate=\(String(format: "%.3f", clampedRate));})();</script>"
         // 감사 V06: 정상 경로(VideoRenderer.videoGravity)와 같은 fitMode 를 object-fit 에 매핑.
         let objectFit: String
         switch fitMode {
@@ -41,7 +55,7 @@ public enum VideoFallbackHTML {
         <!doctype html><html><head><meta charset="utf-8">
         <style>html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden}
         video{width:100%;height:100%;object-fit:\(objectFit)}</style></head>
-        <body><video src="waple-asset://wallpaper/\(encoded)" autoplay loop\(mutedAttr) playsinline></video>\(volumeScript)\(watchdog)</body></html>
+        <body><video src="waple-asset://wallpaper/\(encoded)" autoplay loop\(mutedAttr) playsinline></video>\(volumeScript)\(rateScript)\(watchdog)</body></html>
         """
     }
 }

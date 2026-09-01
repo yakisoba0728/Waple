@@ -261,12 +261,20 @@ final class VolumetricLightPass {
         return true
     }
 
+    /// `radius <= 0` 1회 경고.
+    ///
+    /// [r4-10 정정] 종전 문구는 "`SceneRenderer3D` 의 `VolumetricLightParameters` 생성에
+    /// `radius: light.radius` 를 배선할 것" 이라고 **이미 된 일을 요구**했다 — 그 배선과 이
+    /// 문구의 `git log -S` 출생 커밋이 둘 다 `7c66d460` 으로, 배선과 "배선하라" 가 같은 커밋에서
+    /// 함께 태어났다(작성 시점부터의 자기모순). 지금 남는 실제 원인은 배선 누락이 아니라
+    /// **저작값 자체가 0 이하**인 경우다.
     private func warnMissingRadiusOnce(_ light: VolumetricLightParameters) {
         guard !warnedMissingRadius else { return }
         warnedMissingRadius = true
-        WapleLog.warn("[Waple] 볼류메트릭 라이트에 radius 가 없다(density=\(light.density)) — "
-            + "WE 라이트 기본 반경 1.0 으로 마치한다(사실상 비가시). "
-            + "SceneRenderer3D 의 VolumetricLightParameters 생성에 `radius: light.radius` 를 배선할 것.")
+        WapleLog.warn("[Waple] 볼류메트릭 라이트 radius 가 0 이하다(density=\(light.density)) — "
+            + "WE 라이트 생성자 기본 반경 1.0(0x140190494)으로 마치한다(사실상 비가시). "
+            + "배선은 이미 돼 있으니(SceneRenderer3D 의 `radius: light.radius`) "
+            + "씬 저작값 또는 그 파스를 확인할 것.")
     }
 
     // MARK: - 복원한 순수 산술 (정본은 WapleCore `SceneWEVolumetricMath` — 리눅스 코어 테스트가 값을 잠근다)

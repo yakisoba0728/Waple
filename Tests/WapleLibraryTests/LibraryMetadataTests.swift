@@ -76,4 +76,47 @@ final class LibraryMetadataTests: XCTestCase {
         let reloaded = LibraryStore(baseDirectory: base)
         XCTAssertEqual(reloaded.entries.first?.rating, 0.87)
     }
+
+    // MARK: - r3-M64: 백필의 실패 두 종류
+
+    /// **회귀 핀(r3-M64).** 북마크 해석 실패는 **일시적**일 수 있다(외장/네트워크 볼륨 미마운트).
+    /// 재시도 조건이 `tags == nil` 이라 `[]` 로 마킹하면 다시는 안 본다 — 볼륨을 안 꽂은 채
+    /// 한 번 기동한 것만으로 태그가 영구 소실됐다. `nil` 로 남겨야 다음 실행이 재시도한다.
+    func testBackfillLeavesTagsNilWhenTheBookmarkCannotResolve() throws {
+        let base = tempDir()
+        // 빈 북마크 → URL(resolvingBookmarkData:) 가 던진다 = 해석 실패(구버전 인덱스: tags 부재).
+        let old = """
+        {"entries":[{"id":"x","title":"t","typeRaw":"video","bookmark":""}],"selectedId":null}
+        """
+        try old.data(using: .utf8)!.write(to: base.appendingPathComponent("library.json"))
+
+        let store = LibraryStore(baseDirectory: base)
+        XCTAssertNil(store.entries.first?.tags, "해석 실패를 [] 로 못 박으면 안 된다")
+        // 인덱스에도 []가 기록되지 않아야 **다음 실행**이 재시도한다.
+        let reloaded = LibraryStore(baseDirectory: base)
+        XCTAssertNil(reloaded.entries.first?.tags, "디스크에도 [] 가 남으면 재시도가 영영 막힌다")
+    }
+
+    /// 반대편: 폴더는 열렸는데 `project.json` 이 없거나 깨진 경우는 **안정적** 결과라
+    /// 종전대로 `[]` 로 못 박아 매 실행 파스 I/O 를 막는다.
+    func testBackfillMarksEmptyWhenTheFolderResolvesButProjectJSONIsGone() throws {
+        let base = tempDir()
+        let folder = makeWallpaper(in: tempDir(), id: "w4", tags: ["Nature"], rating: nil)
+        var store: LibraryStore? = LibraryStore(baseDirectory: base)
+        _ = try store!.importFolder(folder)
+        store = nil
+
+        // 폴더는 그대로 두고(북마크는 해석된다) project.json 만 지운다 + 인덱스를 구버전화.
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("project.json"))
+        let url = base.appendingPathComponent("library.json")
+        var raw = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        var entries = raw["entries"] as! [[String: Any]]
+        entries[0].removeValue(forKey: "tags")
+        entries[0].removeValue(forKey: "contentRating")
+        raw["entries"] = entries
+        try JSONSerialization.data(withJSONObject: raw).write(to: url)
+
+        let reloaded = LibraryStore(baseDirectory: base)
+        XCTAssertEqual(reloaded.entries.first?.tags, [], "해석은 됐는데 메타데이터가 없으면 [] 로 확정")
+    }
 }

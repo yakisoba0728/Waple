@@ -55,12 +55,18 @@ public enum SceneRenderSettings {
     /// WE 의 `alignment` 기본값은 `0` = Cover 이고, 그건 `docs/re/media-playback.md:684,708`
     /// 이 이미 적어 뒀다. 종전의 `.fit`(letterbox)은 근거 없이 붙은 값이라 **키를 한 번도
     /// 만지지 않은 사용자**가 WE 와 다른 화면을 봤다 — 이 값은 씬·비디오·웹 세 경로가 모두
-    /// 소비한다(`SceneRenderer.swift:919`·`:2433`·`:2623` · `VideoRenderer.swift:200` ·
-    /// `WebRenderer.swift:179`).
+    /// `SceneRenderSettings.fitMode` 로 읽는다. 소비처는 grep 한 줄로 전수를 얻는다:
+    ///   `grep -rn 'SceneRenderSettings.fitMode' Sources/WapleRender`
+    /// (2026-09-01 실측 5자리 — `SceneRenderer` 의 `drawableContentScale` 계산 · 라이브 draw ·
+    ///  포인터 역매핑, `VideoRenderer` 의 `switch SceneRenderSettings.fitMode`,
+    ///  `WebRenderer` 의 object-fit 전달.)
+    /// r2-4.1-lane5 정정: 종전 이 자리는 줄 번호 5개를 적었는데 그중 4개가 무효였다
+    /// (`SceneRenderer.swift:919`·`:2433`·`:2623` · `VideoRenderer.swift:200`). 줄 번호는
+    /// 다음 커밋에 바로 썩으므로 재현 명령으로 대체한다.
     ///
-    /// **골든 베이스라인은 안 움직인다.** `SnapshotPipeline.swift:34` 가 `.fill` 을 고정하고
-    /// `:326-327 pinRenderSettings` 가 캡처 직전 **대입**으로 핀하므로, 이 폴백은 캡처 경로에
-    /// 도달하지 않는다. 그 핀은 옳으니 건드리지 마라.
+    /// **골든 베이스라인은 안 움직인다.** `SnapshotPipeline.fitMode`(`.fill`
+    /// 고정)와 `pinRenderSettings(root:)` 가 캡처 직전 **대입**으로 핀하므로, 이 폴백은 캡처
+    /// 경로에 도달하지 않는다. 그 핀은 옳으니 건드리지 마라.
     public static var fitMode: FitMode {
         get { FitMode(rawValue: defaults.string(forKey: key) ?? "") ?? .fill }
         set { defaults.set(newValue.rawValue, forKey: key) }

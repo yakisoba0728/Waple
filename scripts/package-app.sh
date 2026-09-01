@@ -96,13 +96,49 @@ cat > "$SAVER/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# --deep 이 중첩 번들(saver)까지 서명한다. 기본 "-" = ad-hoc.
-# Developer ID 지정 시 hardened runtime(--options runtime)을 함께 건다(공증 전제 조건).
-SIGN_ARGS=(--force --deep --sign "$WAPLE_SIGN_IDENTITY")
+# **[정정 2026-09-01] `--deep` 은 `Contents/Resources` 를 아예 안 본다 — saver 는 한 번도
+#  서명되지 않았다.**
+#
+# 종전: `codesign --force --deep --sign … --identifier kr.yaki.waple "$APP"` 한 줄.
+# 바로 위 주석은 "--deep 이 중첩 번들(saver)까지 서명한다" 였는데 **거짓이었다.**
+# 이 머신의 `man codesign` 은 `--deep` 이 중첩 코드를 찾는 디렉터리를 열거하는데
+# (`Contents` · `Contents/Frameworks` · `Contents/SharedFrameworks` · `Contents/PlugIns` ·
+#  `Contents/Plug-ins` · `Contents/XPCServices` · `Contents/Helpers` · `Contents/MacOS` ·
+#  `Contents/Library/{Automator,Spotlight,LoginItems}`) **`Contents/Resources` 는 없다.**
+#   "If any code (Mach-Os, bundles) are located outside the above listed locations
+#    they will not be signed by the --deep option"
+# 이 스크립트는 saver 를 `$APP/Contents/Resources/Waple.saver` 에 둔다(위 SAVER=).
+#
+# 합성 재현(이 머신, 같은 배치의 최소 앱+saver):
+#   `codesign --force --deep --sign - --identifier kr.yaki.waple <app>` 뒤
+#   `<saver>/Contents/_CodeSignature` 가 **생기지 않고**, `codesign -dvv <saver>` 의
+#   Identifier 가 `WapleSaver` 로 남는다 — 이건 arm64 링커가 붙인 ad-hoc 서명이지
+#   이 스크립트가 지정한 아이덴티티가 아니다. 즉 Developer ID 도 `--options runtime` 도
+#   saver 에는 한 번도 적용되지 않았다(공증 대상 중첩 번들로서 결함).
+#
+# 덧붙여 `--deep` 은 macOS 13 부터 **서명 용도로 폐기**됐고("DEPRECATED for signing as of
+# macOS 13.0"), 그 아래에서는 `--identifier` 같은 서명 옵션이 중첩 콘텐츠에도 그대로
+# 적용된다("All signing options will be applied, in turn, to all nested content.
+# This is almost never what you want.") — 위치만 맞았다면 saver 식별자가
+# `kr.yaki.waple` 로 덮였을 자리다. 검증 용도의 `--deep` 은 여전히 유효하다.
+#
+# 그래서 안→밖(inside-out)으로 명시 서명한다. 이 앱의 중첩 **코드**는 `Waple.saver`
+# 하나뿐이다(`Contents/MacOS/Waple` 은 주 실행 파일이고 `Resources/{Waple.icns,*.lproj,
+# WEAssets}` 는 전부 데이터다 — SPM 정적 링크라 동봉 프레임워크/dylib 가 없다).
+# saver 는 `--identifier` 없이 서명해 자기 Info.plist 의 `kr.yaki.waple.saver` 를 쓴다.
+# 기본 "-" = ad-hoc. Developer ID 지정 시 hardened runtime(--options runtime)을 함께 건다
+# (공증 전제 조건 — 중첩 번들에도 같이 걸어야 한다).
+SIGN_ARGS=(--force --sign "$WAPLE_SIGN_IDENTITY")
 if [ "$WAPLE_SIGN_IDENTITY" != "-" ]; then
   SIGN_ARGS+=(--options runtime)
 fi
+codesign "${SIGN_ARGS[@]}" "$SAVER"
 codesign "${SIGN_ARGS[@]}" --identifier kr.yaki.waple "$APP"
+# 검증은 `--deep` 이 여전히 정당한 용도다(폐기된 것은 서명 쪽이다).
+codesign --verify --deep --strict "$APP"
+SAVER_ID=$(codesign -dvv "$SAVER" 2>&1 | sed -n 's/^Identifier=//p')
+[ "$SAVER_ID" = "kr.yaki.waple.saver" ] \
+  || { echo "!! 중첩 saver 서명 식별자가 '$SAVER_ID' — 'kr.yaki.waple.saver' 여야 한다" >&2; exit 1; }
 
 # ── 배포 게이트 ────────────────────────────────────────────────────────
 # ① 구조: 공유 에셋이 실제로 들어갔는지(대표 파일까지) 확인한다.

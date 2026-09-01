@@ -24,6 +24,12 @@ final class PuppetMDLAFramingTests: XCTestCase {
         var tracks: [(UInt32, [[Float]])]
         var events: [AnimationMarker] = []
         var eventCountField: UInt32? = nil
+        /// `flags & 1` 이 켠 **클립 꼬리 0xC0(192)바이트 레코드**. 본 트랙 뒤·이벤트 블록 앞에 온다
+        /// (`0x140264fc9 test byte [rbp+0xc0],1` → `0x140264fdb call 0x14028af20`; 기본값에
+        ///  -1(`0x140264ff7`)과 1.0f 가 깔린다 — docs/re/skeleton-animation.md §6.2).
+        /// `flags` 와 **독립으로** 지정한다 — 비트만 서고 레코드가 없는 입력(종전에 통과하던 모양)을
+        /// 그대로 합성할 수 있어야 보수 게이트를 검증할 수 있기 때문이다.
+        var flagBit0TailRecord: [UInt8]? = nil
     }
 
     private func u8(_ v: UInt8, _ d: inout Data) { d.append(v) }
@@ -88,6 +94,7 @@ final class PuppetMDLAFramingTests: XCTestCase {
                     u32(UInt32(keys.count * 36), &d)
                     for k in keys { for v in k { f32(v, &d) } }
                 }
+                if let tail = c.flagBit0TailRecord { d.append(contentsOf: tail) }
                 u32(c.eventCountField ?? UInt32(c.events.count), &d)
                 for event in c.events {
                     f32(c.fps > 0 ? event.frame / c.fps : 0, &d)
@@ -314,5 +321,57 @@ final class PuppetMDLAFramingTests: XCTestCase {
                     PuppetModel.Key(position: SIMD3(9, 0, 0), angles: .zero, scale: SIMD3(1, 1, 1))]
         let trs = try XCTUnwrap(PuppetPose.sampledTRS(keys, frame: f))
         XCTAssertEqual(trs.position.x, 1, accuracy: 1e-5, "소비처 클램프가 프레임 0 으로 물린다")
+    }
+
+    // MARK: - 클립 flags bit0 → 꼬리 0xC0 레코드 (r2-H2)
+
+    /// 엔진 기본값을 흉내낸 192바이트 레코드 — 선두 u32 가 `-1`(0xFFFFFFFF) 이라 이벤트 수로는
+    /// 성립하지 않는다(`0x140264ff7` 이 심는 값). 나머지는 1.0f 로 채운다.
+    private func flagBit0Record() -> [UInt8] {
+        var out: [UInt8] = [0xFF, 0xFF, 0xFF, 0xFF]
+        while out.count < 0xC0 { out.append(contentsOf: [0x00, 0x00, 0x80, 0x3F]) }   // 1.0f
+        return out
+    }
+
+    /// **회귀 핀(r2-H2).** 클립 헤더의 `u32 flags` bit0 이 서면 본 트랙 뒤·이벤트 블록 앞에
+    /// 0xC0(192)바이트 레코드가 하나 더 붙는다. 종전 파서는 `flags` 를 아예 읽지 않고
+    /// (`fps|frameCount|boneCount` 셋만 바인딩하고 `o += 16`) 그 레코드의 선두 u32 를
+    /// 이벤트 수로 오독했다 — 그 클립과 **그 뒤의 모든 클립**이 사라진다.
+    func testClipFlagsBit0SkipsThe192ByteTailRecordBeforeTheEventBlock() throws {
+        let clips = [
+            Clip(id: 11, name: "flagged", mode: "loop", fps: 24, frameCount: 1,
+                 flags: 1, tracks: [(0, [key(x: 3), key(x: 4)])],
+                 flagBit0TailRecord: flagBit0Record()),
+            Clip(id: 12, name: "after", mode: "single", fps: 24, frameCount: 1,
+                 tracks: [(0, [key(x: 5), key(x: 6)])]),
+        ]
+        let m = try XCTUnwrap(PuppetModel.parse(makeMDL(
+            bones: [("root", -1, identity, "")], clips: clips)))
+        XCTAssertEqual(m.animations.count, 2,
+                       "flags bit0 레코드를 못 건너뛰면 이 클립부터 뒤가 전부 유실된다")
+        guard m.animations.count == 2 else { return }
+        XCTAssertEqual(m.animations.map(\.name), ["flagged", "after"])
+        XCTAssertEqual(m.animations[0].tracks[0][1].position.x, 4, accuracy: 1e-5)
+        XCTAssertEqual(m.animations[1].tracks[0][0].position.x, 5, accuracy: 1e-5,
+                       "레코드를 건너뛴 뒤 커서가 다음 클립 선두에 정확히 서야 한다")
+    }
+
+    /// **보수 게이트의 반대편.** `flags` bit0 이 서 있어도 그 자리에서 이벤트 블록이 이미
+    /// 성립하면 건너뛰지 않는다 — 이 결함의 도달 모집단(MDLA flags bit0 클립)이 이 머신의
+    /// 어떤 코퍼스에도 없어서(설치 .mdl 28개에 MDLS/MDLA 매직 0건) 종전에 통과하던 입력의
+    /// 거동을 바꾸지 않는 쪽을 택했다. flags 만 다른 두 입력이 같은 결과를 내야 한다.
+    func testClipFlagsBit0WithoutTheTailRecordParsesLikeFlagsZero() throws {
+        func parse(flags: UInt32) throws -> PuppetModel {
+            try XCTUnwrap(PuppetModel.parse(makeMDL(
+                bones: [("root", -1, identity, "")],
+                clips: [Clip(id: 21, name: "c", mode: "loop", fps: 24, frameCount: 1,
+                             flags: flags, tracks: [(0, [key(x: 7), key(x: 8)])])])))
+        }
+        let plain = try parse(flags: 0)
+        let flagged = try parse(flags: 1)
+        XCTAssertEqual(flagged.animations.count, 1)
+        XCTAssertEqual(flagged.animations.map(\.name), plain.animations.map(\.name))
+        XCTAssertEqual(flagged.animations[0].tracks[0][1].position.x,
+                       plain.animations[0].tracks[0][1].position.x, accuracy: 1e-5)
     }
 }

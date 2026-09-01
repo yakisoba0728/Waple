@@ -174,7 +174,22 @@ final class SyntheticPixelGoldenTests: XCTestCase {
         var missing: [String] = []
         var failures: [String] = []
 
-        for c in cases() {
+        // **[정정 2026-09-01] `cases()` 목록이 줄어드는 것을 잡을 단언이 없었다.**
+        // 종전엔 `for c in cases()` 뿐이라, 목록이 한 종으로 줄어도 남은 하나가 기준선과
+        // 맞으면 그대로 초록이었다. 특히 `gradient-horizontal` 은 이 세트에서 **좌우
+        // 미러링을 잡는 유일한 케이스**라(아래 cases() 주석의 2026-08-19 이력) 그것만
+        // 빠져도 uv.x 부호·정점 winding 회귀가 다시 통과한다.
+        // 형제 오라클은 정확히 이런 카운트 게이트를 둔다
+        // (`GoldenBaselineOracleTests` 의 `XCTAssertEqual(b.entries.count, 170)` 두 자리).
+        let all = cases()
+        XCTAssertEqual(all.count, 5, "합성 골든 케이스가 5종이어야 한다 — 목록이 줄었다")
+        XCTAssertEqual(Set(all.map(\.name)).count, all.count,
+                       "케이스 이름이 중복이다 — 기준선 PNG 가 서로 덮인다")
+        XCTAssertTrue(all.contains { $0.name == "gradient-horizontal" },
+                      "좌우 미러링을 잡는 유일한 케이스가 빠졌다")
+
+        var compared = 0
+        for c in all {
             let actual = try renderRGBA(c)
 
             // 전면 단색(특히 검정)은 "렌더가 아예 안 됐다" 의 전형이다. 기준선과 비교하기
@@ -196,6 +211,7 @@ final class SyntheticPixelGoldenTests: XCTestCase {
             }
 
             let expected = try Self.rgba(ofPNGAt: ref)
+            compared += 1
             let m = diffRGBA(expected, actual)
             // 측정값은 통과해도 남긴다 — 임계값을 나중에 근거 있게 조일 수 있게.
             print("[SyntheticPixelGolden] \(c.name): meanAbsDiff=\(m.meanAbsDiff) "
@@ -215,6 +231,10 @@ final class SyntheticPixelGoldenTests: XCTestCase {
                 (없을 때 조용히 만들고 통과시키지 않는다 — 그러면 게이트가 아니라 도장이 된다.)
                 """)
         }
+        // 위 missing 이 비어 있어도, 실제로 몇 종을 대조했는지 함께 못 박는다 —
+        // "0종 비교 후 무회귀" 를 초록으로 내지 않기 위한 모집단 하한이다.
+        XCTAssertEqual(compared, all.count,
+                       "대조한 케이스가 \(compared)/\(all.count)종 — 기준선이 일부만 있다")
         if !failures.isEmpty {
             XCTFail("""
                 픽셀 회귀 \(failures.count)건:

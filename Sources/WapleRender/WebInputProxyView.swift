@@ -77,7 +77,12 @@ final class WebInputProxyView: NSView {
         NSColor.black.setFill()
         bounds.fill()
         guard let img = lastImage else {
-            let s = "월페이퍼 미리보기 로딩 중…"
+            // r2-H17: 생 리터럴이었다. `NSString.draw` 는 `LocalizationCoverageTests` 의 네 패턴
+            // 어디에도 안 걸린다 — 표시 API 이름 목록에도, `label:`/`title:` 인자 패턴에도,
+            // `.title =` 류 프로퍼티 대입 패턴에도 없는 형태(단순 지역변수 대입 + 메서드 호출)라
+            // 오라클이 구조적으로 못 본다. `NSLocalizedString` 으로 감싸면 첫 패턴에 그대로 걸린다.
+            let s = NSLocalizedString("월페이퍼 미리보기 로딩 중…",
+                                      comment: "웹 조작 창 — 첫 프레임 도착 전 안내")
             let attrs: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.white]
             (s as NSString).draw(at: NSPoint(x: 20, y: bounds.midY), withAttributes: attrs)
             return

@@ -152,7 +152,20 @@ elif [ "$NFAIL" -ne 0 ]; then
 else
     ok "전 스위트 통과 — 번들 $NBUNDLE 개, 실패 0 ($((SECONDS-T0))초)"
 fi
-echo "  번들 합: ${TESTS:-?}  (기준값 2,300 — AGENTS.md, 2026-08-19 CI 실측. 코퍼스 유무와 무관하다)"
+# **[정정 2026-09-01] 이 줄은 AGENTS.md 가 명시적으로 금지한 숫자를 기준값으로 찍고 있었다.**
+# 종전: `(기준값 2,300 — AGENTS.md, 2026-08-19 CI 실측. 코퍼스 유무와 무관하다)`.
+# AGENTS.md 「빌드와 테스트」의 구성 표는 그 `실행` 열을 두고
+#   "**이 열의 숫자를 현재값으로 인용하지 마라** — 현재값은 `ci.yml` 의 census 스텝과
+#    위 `grep` 이 정본이다"
+# 라고 못박는다. 2,300 은 2026-08-19 스냅샷이고 지금 정본 하한은 그보다 한참 위다.
+# 그래서 값을 박지 않고 **정본에서 읽는다** — 래칫이 갱신되면 여기도 따라온다.
+FLOOR=$(grep -oE '"\$\{EXECUTED:-0\}" -lt [0-9]+' "$REPO/.github/workflows/ci.yml" \
+        | grep -oE '[0-9]+$' | head -1)
+if [ -z "${FLOOR:-}" ]; then
+    echo "  번들 합: ${TESTS:-?}  (!! ci.yml 의 실행 수 하한을 못 읽었다 — census 스텝이 바뀌었나?)"
+else
+    echo "  번들 합: ${TESTS:-?}  (하한 ${FLOOR} — 정본은 .github/workflows/ci.yml 의 'Skip / execution census'. 코퍼스 유무와 무관하다)"
+fi
 echo "  번들별:"
 printf '%s\n' "$BUNDLE_SUMMARY" | sed 's/^/    /'
 

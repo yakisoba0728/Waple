@@ -8,8 +8,9 @@ final class ShaderPreprocessorTests: XCTestCase {
     /// `#define FOO(a,a)` 는 애초에 불법 GLSL 이지만 pkg 안의 셰이더는 신뢰 경계 밖이다.
     /// 종전 구현은 인자 **수**만 확인하고 `Dictionary(uniqueKeysWithValues:)` 로 매핑을 만들어
     /// 중복 키에서 그대로 트랩했다 — 워크샵 배경화면 하나가 앱을 죽이는 경로다.
-    /// 형제 `PropertyConditionEvaluator.swift:12` 는 2026-08 에 같은 이유로 이미 고쳐졌는데
-    /// 이 자리로 오지 않았다.
+    /// 형제 `PropertyConditionEvaluator.isVisible` 은 2026-08 에 같은 이유로 이미 고쳐졌는데
+    /// 이 자리로 오지 않았다. (r3-M55: 종전 인용 `PropertyConditionEvaluator.swift:12` 는
+    /// AngularJS 문법 우선순위 사슬 주석이라 `uniquingKeysWith` 와 무관했다.)
     func testDuplicateMacroParametersDoNotTrap() {
         let src = """
         #define FOO(a,a) a+a

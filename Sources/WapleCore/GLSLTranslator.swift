@@ -170,10 +170,16 @@ public enum GLSLTranslator {
     /// 소문자 15종 중 14종이 어떤 셰이더에도 선언이 없어 대부분 놓치고 있었다.
     /// **[2026-08-21] 그 함수는 제거됐다** — 동봉+설치본 JSON 3655건 전수로 셰이더 `[COMBO]`
     /// 선언 68종이 전건 대문자이고 `canonical()` 의 두 모집단에 대문자 아닌 키가 0건임을 보인 뒤,
-    /// 코퍼스 전수 비트동일을 확인하고 지웠다(근거는 그 함수 자리의 주석). 다만 렌더 계층에는
-    /// 반환 딕셔너리를 **정확일치로 조회**하는 자리가 둘 남아 있어, 이 함수를 `public` 으로 노출해
-    /// 렌더 계층이 **딕셔너리별로** 접게 하는 것이 정본이다 — 실물이 접는 자리(JSON 파스 시점
-    /// `toupper` 0x14015458c-0x1401545aa)와 같은 위치다.)
+    /// 코퍼스 전수 비트동일을 확인하고 지웠다(근거는 그 함수 자리의 주석). 그래서 이 함수를
+    /// `public` 으로 노출해 렌더 계층이 **딕셔너리별로** 접게 하는 것이 정본이다 — 실물이 접는
+    /// 자리(JSON 파스 시점 `toupper` 0x14015458c-0x1401545aa)와 같은 위치다.
+    ///
+    /// [r4-26 정정] 종전 이 자리는 정확일치 조회처를 "둘" 이라 적었지만 실제로는 **셋**이다.
+    /// 재현: `grep -rn 'combos\[comboName\] == nil' Sources` →
+    ///   · `SceneRendererResources.resolvePassCombos` — 접힘(위 `uppercasedComboKeys` 두 줄)
+    ///   · `SceneRendererResources` 의 커스텀 **레이어** 셰이더 경로 — 이번에 접었다
+    ///   · `SceneRenderer3D` 의 커스텀 **메시** 셰이더 경로(`mat.customCombos`) — **아직 미접힘**
+    /// 마지막 하나는 이 라운드에서 다른 레인 소유라 손대지 않았다(보고 경계).)
     ///
     /// 충돌 규약: 접었을 때 이미 대문자 철자가 있으면 **대문자 쪽이 이긴다.** 근거는 실물의
     /// `#define` 방출 순서다 — 값 있는 패스 콤보(0x14016c400-0x14016c7fe)를 먼저 쏟고 그 다음
@@ -1524,9 +1530,13 @@ public enum GLSLTranslator {
             // F614: g_Screen = (렌더타깃 w, h, w/h) — 미분류 시 머티리얼 팬텀 슬롯(padDefault 0) 강등.
             || name == "g_Screen"
             // F744: 2D genericimage4/fluidsim 이 bare g_LightAmbientColor 선언 시 padDefault=0 폭백.
-            // 엔진 상수로 승격해 흰색을 주입한다 — **타입은 vec3 다**(아래 engineReplacement :1646).
+            // 엔진 상수로 승격해 흰색을 주입한다 — **타입은 vec3 다**(아래 `engineReplacement` 의
+            // `if name == "g_LightAmbientColor" { return "float3(1.0, 1.0, 1.0)" }`).
+            // [r2-4.1-lane4 정정] 종전 이 줄이 인용한 `:1646` 은 `g_TexelSize` 의 반환이지
+            // `g_LightAmbientColor` 자리가 아니었다(자기 hunk 삽입량 +8 만큼 밀린 드리프트).
             // [H4 정정 2026-08-30] 종전 이 줄은 "흰색(1,1,1,1)을 주입" 으로 vec4 를 적었다. 틀렸다 —
-            // G-A2/A4/B2 블록(:1640-1645)이 바로 그 float4 주입이 소비처를 전부 타입 불일치로 깨뜨려
+            // G-A2/A4/B2 블록(`engineReplacement` 의 같은 분기 주석)이 바로 그 float4 주입이
+            // 소비처를 전부 타입 불일치로 깨뜨려
             // float3 으로 되돌린 기록이다. 같은 사실을 두 자리에 적어 한쪽만 고쳤던 자리다.
             // 그리고 **흰색 자체가 WE 와 반대 방향인 의도적 이탈**이다: `spec/engine/uniform-feed.json`
             // `engine.uniformFeed.wapleGaps`(확정)는 WE 를 "씬 authoring 값. 키가 없으면 (0,0,0) — 검정."
