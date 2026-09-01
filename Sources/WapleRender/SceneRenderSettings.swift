@@ -50,8 +50,19 @@ public enum SceneRenderSettings {
     /// `UserDefaults` 자체가 스레드 안전하다 — `WapleProfiler`(:10-29)의 표기 규율과 같다.
     nonisolated(unsafe) public static var defaults: UserDefaults = .standard
 
+    /// **[2026-08-28] 미설정 폴백을 `.fit` → `.fill` 로 고친다 — WE 기본은 Cover 다.**
+    ///
+    /// WE 의 `alignment` 기본값은 `0` = Cover 이고, 그건 `docs/re/media-playback.md:684,708`
+    /// 이 이미 적어 뒀다. 종전의 `.fit`(letterbox)은 근거 없이 붙은 값이라 **키를 한 번도
+    /// 만지지 않은 사용자**가 WE 와 다른 화면을 봤다 — 이 값은 씬·비디오·웹 세 경로가 모두
+    /// 소비한다(`SceneRenderer.swift:919`·`:2433`·`:2623` · `VideoRenderer.swift:200` ·
+    /// `WebRenderer.swift:179`).
+    ///
+    /// **골든 베이스라인은 안 움직인다.** `SnapshotPipeline.swift:34` 가 `.fill` 을 고정하고
+    /// `:326-327 pinRenderSettings` 가 캡처 직전 **대입**으로 핀하므로, 이 폴백은 캡처 경로에
+    /// 도달하지 않는다. 그 핀은 옳으니 건드리지 마라.
     public static var fitMode: FitMode {
-        get { FitMode(rawValue: defaults.string(forKey: key) ?? "") ?? .fit }
+        get { FitMode(rawValue: defaults.string(forKey: key) ?? "") ?? .fill }
         set { defaults.set(newValue.rawValue, forKey: key) }
     }
 

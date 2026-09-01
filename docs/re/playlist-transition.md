@@ -627,7 +627,7 @@ progress = clamp( (elapsed_seconds - 0.1) / (transitiontime_ms * 0.001), 0.0, 1.
 ### 6.3 `dayofweek` (mode 3) — `0x140067bc7`–`0x140067c2e`
 
 ```
-0x140067be4  call qword ptr [rip+0x3be5c2]   ; GetLocalTime
+0x140067be8  call qword ptr [rip+0x3be5c2]   ; GetLocalTime   [VA-정정 2026-08-28]
 0x140067bee  movzx ebx, word ptr [rbp-0x6c]  ; SYSTEMTIME.wDayOfWeek (일=0)
 0x140067bf2  call 0x14003dcf0                ; 로케일 첫 요일 (0=월 … 6=일)
 0x140067bfb  sub  ebx, eax
@@ -641,6 +641,11 @@ progress = clamp( (elapsed_seconds - 0.1) / (transitiontime_ms * 0.001), 0.0, 1.
 6 으로 상한을 건다(`0x14003dd1e`–`0x14003dd25`). 사용자 오버라이드 키 `dayofweekoffset`
 (`0x140475148`) 도 있다. UI 는 항목 7개를 넘기지 못하게 막는다
 (`ui_browse_playlist_modal_settings_day_of_week_warning_*`).
+
+> **[VA-정정 2026-08-28]** 위 블록의 `GetLocalTime` 호출 주소가 **명령 시작이 아니었다** —
+> 종전 `0x140067be4` → **`0x140067be8`**. 종전 값은 그 앞의 인수 셋업 `lea rcx` 자리이고
+> 오프셋 4가 정확히 그 `lea` 의 길이다. **같은 블록의 다른 주소들은 그대로 맞다**
+> (`0x140067bee`·`0x140067bf2`·`0x140067bfb`·`0x140067c01`) — 각 자리를 따로 떠서 확인했다.
 
 ### 6.4 `order = random` — 셔플백 `0x140068010`–`0x1400681a0`
 

@@ -237,9 +237,24 @@ type==1 오브젝트의 `size`**(`obj+0x2f0/0x2f4`, `spec/engine/shape-quad.json
 
 값은 `"x y z"` 공백구분 문자열을 `strtod`(`0x1402d06ac`) 로 3회 파싱한다.
 
-**`camerapreview`(341씬 저작)는 wallpaper64.exe 에 문자열 자체가 없다** — 런타임 플레이어는 완전히 무시한다.
-에디터 전용 키다. 같은 스캔에서 `lightconfig`(`0x14048e4e0`, 로더 `0x1401876a2`),
+**`camerapreview`(341씬 저작)는 `wallpaper64.exe` 에 문자열 0건이다** — 런타임 플레이어는 완전히
+무시한다. 에디터 전용 키다. 같은 스캔에서 `lightconfig`(`0x14048e4e0`, 로더 `0x1401876a2`),
 `norecompile`(`0x140187626`), `spritesheetrefreshsync`(`0x140187656`)는 파스된다.
+
+> **[2026-08-28 호스트 명시] "에디터 전용 키다" 를 실측이 뒷받침한다 — 추정이 아니다.**
+> `camerapreview` 문자열의 호스트별 분포:
+>
+> | 호스트 | 건수 | VA |
+> | --- | ---: | --- |
+> | `wallpaper64.exe`(런타임 엔진) | **0** | — |
+> | **`wallpaperui.exe`(에디터)** | **1** | `0x140ad9ca8` |
+> | `webwallpaper64.exe` | 0 | — |
+> | `wallpaper32.exe` | 0 | — |
+>
+> 종전 문구는 호스트를 안 밝혀 **"WE 어디에도 없다" 로 읽혔고 그건 거짓**이다. 결론
+> (런타임 엔진이 무시한다)은 그대로 참이고, 오히려 에디터에만 있다는 사실이
+> "에디터 전용" 판정의 **직접 증거**다. 부재 주장에는 호스트를 반드시 붙일 것 —
+> 같은 부류의 라벨 오류를 `docs/re/unimplemented-json-keys.md` §2 에서도 고쳤다.
 
 ---
 
@@ -679,7 +694,7 @@ volumetrics_combine   (passthrough, additive) → 화면
 
 | **W-20** | HDR 최종 `lin()` | `saturate(lin(albedo)) * g_RenderVar0.x` (`combine_hdr.frag:43`), bloom off 는 `lin()`만 (`passthroughsrgb.frag:15`) | `saturate(base+bloom)` — `lin()` 미이식 (`HDRBloomPyramidPass.swift:473`, `HDRPostPass.swift:70`) | **미확정** | §8 참조 |
 | **W-21** | `g_RenderVar0.x` 출처 | 합성 직전 디바이스 vtable `+0x158` 질의 (`0x140180b15`–`0x140180b26`) | 없음(암묵 1.0) | **유력** | 값이 1.0 이 아니면 HDR 씬 전체 밝기 배수가 바뀐다 |
-| **W-22** | `camerapreview` | 문자열 자체가 바이너리에 없음 = 미소비 | 미파스 | **확정** | **일치**(둘 다 무시) — 조치 불필요 |
+| **W-22** | `camerapreview` | **`wallpaper64.exe`(런타임 엔진)에 문자열 0건** = 미소비. 단 `wallpaperui.exe`(에디터)에는 **1건** 있다(`0x140ad9ca8`) — **[2026-08-28 호스트 명시]** | 미파스 | **확정** | **일치**(런타임 둘 다 무시) — 조치 불필요 |
 | **W-23** | `transparentsorting`(bit12) · `customsortorder`(bit13) | 등록됨(`0x14019ad55`·`0x14019adfd`), 기본 false | **미파스**(`SceneDocument` 에 키가 없다) | **확정** — 2026-08-21 47키 전건 대조에서 나온 잔여 | 지금은 무영향(WE 쪽 소비 지점도 §8-4 로 미특정). 동봉 저작은 `transparentsorting:true` 2씬(둘 다 3D)뿐이라 소비처를 찾기 전엔 파스만 넣어도 화면이 안 바뀐다 |
 | **W-24** | `fov`/`nearz`/`farz` 파스 시점 | `general` 의 독립 키 — `camera` 블록 유무와 무관하게 씬 필드(`0x140`/`0x14c`/`0x150`)에 항상 실린다 | `parseCamera` 안에서만 읽는다 — `orthogonalprojection` 이 딕셔너리면(=2D) `camera3D == nil` 이라 세 값이 **문서에 남지 않는다** | **확정**(구조 차이) | 지금은 무영향(2D 는 세 값을 안 쓴다 — §5.3). `zoom`·`perspectiveoverridefov` 처럼 2D 에서도 살아 있어야 할 키가 늘면 그때 `applyGeneralSettings` 로 옮겨야 한다 |
 | **W-25** | HDR 피라미드 **레벨 수 산식** | 생성 단수 = `min(8, floor(log2(min(W,H))))` (`0x14017f363`·`0x14017f376`·`0x14017f37d`·`0x14017f383`·`0x14017f541`; 진입 전 두 변이 `max(·,2)` 로 클램프 `0x14017f1ec`·`0x14017f200`), 실효 `N = max(1, min(bloomhdriterations, 생성단수))` (`0x14017f7f7`–`0x14017f84c` → `obj+0x3108`) | ~~`w > 1 || h > 1` 로 도는 **max 기준**~~ → **해소(2026-08-21)**. `levelCount` 을 min 기준으로 다시 썼고 본체를 `WapleCore/HDRBloomMath.swift:66-75` 로 옮겼다(`HDRBloomPyramidPass.swift:176-179` 는 위임) | **확정 · 해소** | **풀스크린 화면 차이는 0**(짧은 변 ≥ 256 이면 양쪽 다 상한 8). 갈리는 것은 짧은 변 < 256 **이고 두 변의 2-거듭제곱 구간이 다른** 소스뿐이다 — 정사각 2의 거듭제곱(4×4·64×64)은 min=max 라 안 갈린다. **도달 실측: 이 리포의 골든 썸네일이 256×144**(`SnapshotPipeline.thumbW/thumbH`)라 `N` 이 8 → 7 로 바뀐다 — 정규화 분모가 19.01 → 12.12 라 HDR 블룸 씬 썸네일이 약 1.57배 밝아지고 **골든 재기준선이 필요하다**. 64×32 렌더 테스트는 6 → 5(`HDRBloomTests.swift` 의 두 기대치를 같이 고쳤다). 코퍼스 `bloomhdriterations` 는 157건 중 8 이 149건이라 요청 쪽이 먼저 캡을 만들지 않는다 |

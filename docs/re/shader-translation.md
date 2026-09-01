@@ -97,11 +97,26 @@ setne`), Waple 도 양쪽을 계산하므로 같다.
 | D4 | `#if 1.5` 소수 리터럴 | 소수부 버리고 `1` | **거부**(셰이더 폴백) | 0건 | 유지(선행 라운드의 의도적 결정) |
 | D5 | 잔여 토큰(`#if 1 0`) | 그냥 버림 | **거부** | 0건 | 유지("오역보다 폴터") |
 | D6 | 렉서가 모르는 문자(`?` `:` `.` `;` `@`) | 토큰 0x19 → 값 0 | **거부** | `;` 는 절단으로 관용 | 유지 |
-| D7 | `#include` 중복 | include-once | 매번 인라인 | 0건 — 같은 헤더가 한 TU 에 두 번 들어오는 동봉 셰이더는 **없다**(재귀 인라인 전수 실측) | 미조치 |
+| D7 | `#include` 중복 | include-once | **이름 기준 include-once**(스테이지 단위) | 0건 — 같은 헤더가 한 TU 에 두 번 들어오는 동봉 셰이더는 **없다**(재귀 인라인 전수 실측) | **착지 2026-08-21** |
 | D8 | 32비트 산술 | 전 구간 `eax` | 비트·시프트·`~`·리터럴만 32비트, `+ - * /` 는 `Int` | 0건(2^31 넘는 리터럴 0회) | 유지 |
 
 **정확도 주의.** D1–D8 은 전부 "동봉=설치본 502 파일에서 0건" 이다. 워크샵 pkg 는 이 컨테이너에
 없으므로 그쪽 빈도는 **모른다**. "0건" 은 이 코퍼스 범위 라벨이지 "발생하지 않는다" 가 아니다.
+
+> **[2026-08-28 정정 · D7] 종전 이 행은 Waple 칸에 "매번 인라인", 조치 칸에 "미조치" 로
+> 적혀 있었다 — 두 칸 다 낡았다. `docs/re/shader-combos.md` §G4 와 정면으로 모순이었다.**
+>
+> 착지가 사실이다(`shader-combos.md` §G4 의 `**[착지 2026-08-21]**` 항목). 코드 확인:
+> `Sources/WapleCore/ShaderPreprocessor.swift` 의
+> `inlineIncludes(_:include:depth:seen:)` 가 `seen: inout Set<String>` 을 받고
+> `if !seen.insert(name).inserted { … }` 로 이름 중복을 스킵한다. 진입점
+> `inlineIncludes(_:include:depth:)` 가 호출마다 `var seen = Set<String>()` 를 새로 만들어
+> 넘기므로 **범위는 실물과 같은 스테이지 단위**다(실물 `0x140162ee0`/`0x140162f2e` 가
+> 스테이지마다 컨테이너를 새로 만든다). 깊이 16 캡은 스택 방어로 남아 있다.
+>
+> 계약은 `ShaderEngineUniformTypeTests` 의 `testIncludeIsInlinedOncePerStage` ·
+> `testSelfIncludingHeaderTerminatesByNameNotDepth` · `testMemoKeyInlinerSharesIncludeOnce`
+> 가 잡는다. 상세 전문은 `shader-combos.md` §G4 이고, **이 표는 그쪽을 따른다**.
 
 ---
 

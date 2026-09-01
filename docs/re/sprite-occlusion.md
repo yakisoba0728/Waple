@@ -1347,13 +1347,51 @@ Waple 의 `.tex` 파서는 그 비트를 `TexImage.isGif`(`flags & 0x4`)로 **�
 
 * **[미해결] 파티클 시트의 위상 정본.** WE 는 `frac(in_ParticleLifeTime)`
   (`genericparticle.vert:94`)을 쓰는데, 그 정점 속성(`a_TexCoordVec4C1.w`)에 CPU 가 무엇을
-  굽는지는 **특정하지 못했다.** 강한 정황은 있다 — 파스가 `randomframe` 만 구분하고
+  굽는지는 **특정하지 못했다.** ~~강한 정황은 있다~~ **[2026-08-28 부분 격상 — 아래]** —
+  파스가 `randomframe` 만 구분하고
   (`[def+0x30]`, `0x1401c5727`/`0x1401c5731`) `sequence` 와 **키 부재를 똑같이** 다루므로,
   WE 에는 "frametime 으로 도는 파티클 시트" 라는 모드가 아예 없고 둘 다
   `frac(수명진행 × sequencemultiplier)` 일 가능성이 크다. 그렇다면 Waple 의 `mode == nil`
-  경로(`age / max(0.016, ft)`)는 WE 와 **구조가 다르다**. 정황일 뿐 **근거 없음** — 정점 버퍼를
-  채우는 자리를 못 찾았다. 참고로 `mode == .sequence` 경로는 대수적으로 WE 와 같다
+  경로(`age / max(0.016, ft)`)는 WE 와 **구조가 다르다**. 정점 버퍼를
+  채우는 자리는 여전히 못 찾았다. 참고로 `mode == .sequence` 경로는 대수적으로 WE 와 같다
   (`floor(z·n) mod n == floor(frac(z)·n)`).
+
+  > **[2026-08-28 격상 · [강한 정황] → [확정]] `animationmode` 는 `{sequence, randomframe}`
+  > 2값 콤보다 — 제3의 모드는 없다.**
+  >
+  > ⚠️ **호스트: `wallpaperui.exe`**(에디터). 이 증거는 런타임 엔진에 없다.
+  >
+  > 한 문자열 블록에 프로퍼티 정의가 **연속으로** 놓여 있어 열거를 통째로 읽을 수 있다:
+  >
+  > | VA | 문자열 | 역할 |
+  > | --- | --- | --- |
+  > | `0x140ada520` | `sequence` | **값 1** — 독립 C 문자열(LEA xref `0x1401b6eba`) |
+  > | `0x140ada558` | `ui_editor_properties_sequence` | 값 1 의 로케일 키 |
+  > | `0x140ada578` | `randomframe` | **값 2** |
+  > | `0x140ada5b0` | `ui_editor_properties_random_frame` | 값 2 의 로케일 키 |
+  > | `0x140ada5d8` | **`pList[6].value==='sequence'`** | `sequencemultiplier` 가시성 술어 |
+  > | `0x140ada5f8` | `animationmode` | **JSON 키** |
+  > | `0x140ada608` | `ui_editor_properties_sequence_multiplier` | 로케일 키 |
+  > | `0x140ada680` | `sequencemultiplier` | 종속 프로퍼티 |
+  >
+  > 값 2개 + 각각의 로케일 키 + JSON 키가 **한 블록 안에서 닫힌다** — 세 번째 값이 들어갈
+  > 자리가 없다. 게다가 `pList[6].value==='sequence'` 라는 가시성 술어는
+  > **`sequencemultiplier` 가 `sequence` 모드에서만 의미를 갖는다**는 것을 에디터가 직접
+  > 말해 주는 것이라, `sequence` 가 실재하는 값이라는 독립 증거이기도 하다.
+  >
+  > **왜 종전에 "전 바이너리 0건" 으로 잘못 결론났나:** `wallpaper64.exe` 에는 **독립
+  > `"sequence"` 문자열이 없다.** 런타임은 `randomframe` 하나만 `memcmp` 하고 나머지를
+  > 전부 "아님" 으로 처리하므로(`0x1401c5717`–`0x1401c5731`) `sequence` 리터럴을 가질
+  > **이유가 없다**. 엔진만 스캔하면 값 열거를 영영 못 본다 — **열거형의 값 목록은
+  > 에디터 호스트에서 찾아야 한다**는 것이 이 건의 교훈이다.
+  >
+  > **격상되는 것과 안 되는 것을 가른다:**
+  > - **[확정]** `animationmode` 의 값 집합은 정확히 `{sequence, randomframe}` 다.
+  >   따라서 "키 부재" 는 제3의 모드가 아니라 **둘 중 하나의 기본값**이고, 런타임 파스가
+  >   부재를 `sequence` 와 똑같이 다루는 것과 정합한다.
+  > - **[여전히 미해결]** `a_TexCoordVec4C1.w` 에 CPU 가 굽는 **식** 자체.
+  >   위 증거는 모드가 2개라는 것을 말할 뿐, `frac(수명진행 × sequencemultiplier)` 라는
+  >   구체적 식을 확정해 주지는 않는다. 정점 버퍼를 채우는 자리는 아직 못 찾았다.
 * **[미해결] `g_RenderVar1`(파티클 시트 균일 격자 3값)을 굽는 코드** — §10.8 그대로.
   Waple 은 TEXS 서브렉트를 쓰고 WE 파티클은 균일 격자를 쓰므로, 셀 폭 반올림이 어긋난
   시트(`tex-format.md`)에서 두 구현의 UV 가 갈린다. **[관측 한 줄 보탬]** 프레임 **크기**만

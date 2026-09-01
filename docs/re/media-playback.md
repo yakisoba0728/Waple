@@ -299,7 +299,7 @@ WM_ERASEBKGND=0x14 분기). 라이브 설정 반영은 `0x14012a270`–`0x14012a
 `wproperties.videotex.value = <비디오 경로>` 를 **써 넣는다**:
 
 ```
-0x140120137  call [rax+0x98]                       ; 프로젝트 JSON 루트
+0x140120131  call [rax+0x98]                       ; 프로젝트 JSON 루트   [VA-정정 2026-08-28]
 0x140120141  lea rdx, "wproperties"                ; 0x140474850
 0x140120169  lea rdx, "videotex"                   ; 0x140489d38
 0x140120188  call 0x140005790                      ; [player+0x80] → std::string (파일 경로)
@@ -309,6 +309,15 @@ WM_ERASEBKGND=0x14 분기). 라이브 설정 반영은 `0x14012a270`–`0x14012a
 0x140120200  mov byte [rbp-0x51], 4 / bts ebx,8    ; 태그 4(string) + allocated
 0x1401204b1  lea rdx, "materials/background.json"  ; 0x140489d48
 ```
+
+> **[VA-정정 2026-08-28]** 위 블록 첫 줄의 주소가 **명령 시작이 아니었다** — 종전
+> `0x140120137` → **`0x140120131`**. 이 건의 원인은 앞의 세 VA 오기와 **다르다**: `lea` 를
+> `call` 로 적은 것이 아니라 **`call` 의 *다음* 명령 주소를 적었다**(`call [rax+0x98]` 은
+> ModRM+disp32 로 6바이트 — `0x131`+6 = `0x137`).
+>
+> **같은 블록의 `0x140120169`(`lea rdx, "videotex"`)는 맞다.** 나머지 `lea`/`call` 줄도
+> 각각 떠서 확인했고 손대지 않았다. 오기 양식이 두 가지(‘`lea` 주소를 적음’ · ‘다음 명령
+> 주소를 적음’)이므로 **일괄 오프셋 보정은 불가능하다** — 자리마다 열어 봐야 한다.
 
 곧 **비디오 파일 경로가 유저 프로퍼티로 씬에 주입되고**, 머티리얼의
 `usertextures[0].name == "videotex"` 슬롯이 그 이름으로 해석된다.
@@ -1001,8 +1010,8 @@ Sleep(min(wait, 0.25) * 1000)
 | bit2 가 씬 생성 끝에서 `Sleep` 을 건다 | **확정** (`0x140113510` → `0x1401135e8`) |
 | 잠자는 시간 = 다음 프레임 경계까지, 배속으로 나누고 상한 | **확정** (산식 위) |
 | 상한 0.25s · 배속 하한 0.001 | 거의 확정 — 위 지배관계 문단 |
-| `vtbl+0x60` 이 `1` 을 내는 레이어가 무엇인가 | **미해결** — 종류 열거를 안 뜯었다 |
-| 시퀀스 객체 `[rdx+0x1c]` bit2(재생 중)와 §7.2 의 `+0x44` bit29/30 의 관계 | **미해결** — 두 구조체가 같은 것인지 확인 안 했다 |
+| `vtbl+0x60` 이 `1` 을 내는 레이어가 무엇인가 | **[미해결]** — 종류 열거를 안 뜯었다 |
+| 시퀀스 객체 `[rdx+0x1c]` bit2(재생 중)와 §7.2 의 `+0x44` bit29/30 의 관계 | **[미해결]** — 두 구조체가 같은 것인지 확인 안 했다 |
 
 **Waple 대조.** `SceneDocument.spritesheetRefreshSync` 는 "파스·보존 전용" 이다. 이식은
 `SceneRendererFrameEncoder.spriteFrameTexture` 가 "절대 씬 시간의 순수 함수" 라는 계약과
@@ -1166,10 +1175,38 @@ if (도달) { if (paused) backend->vtbl[0x10](); KillTimer(0x65); flags &= ~2 }
 | --- | --- | --- |
 | 비디오는 씬이 아니라 별도 렌더러 | `VideoRenderer.swift` (AVPlayerLayer) | WE 도 별도 창(§3.1) — 구조 동형 |
 | 씬 안 비디오 텍스처는 레이어로 합성 | `SceneVideoLayer.swift`(클래스 doc, `씬을 통째로 VideoRenderer 로 스왑` 문단) | WE 의 `videotex` 유저텍스처 슬롯과 동형 |
-| 루프 | `AVPlayerLooper`(`VideoRenderer.attachPlayer`) / `actionAtItemEnd = .none`(`SceneVideoLayer.startLive`) | WE 는 `SetLoop(TRUE)`(`0x1400f244d` `mov edx,1` → `0x1400f2455` `call [rax+0xF8]`) — 엔진 내부 루프. seek 로 감지 않는 것까지 같다 |
+| 루프 | `AVPlayerLooper`(`VideoRenderer.attachPlayer`) / `actionAtItemEnd = .none` + **종료 시 `seek(0)` 수동 루프**(`SceneVideoLayer.startLive`) | WE 는 `SetLoop(TRUE)`(`0x1400f244d` `mov edx,1` → `0x1400f2455` `call [rax+0xF8]`) — 엔진 내부 루프. **두 경로 중 `SceneVideoLayer` 는 seek 로 감는다** — 아래 정정 |
 | 배속 시 음정 유지 | `item.audioTimePitchAlgorithm = .spectral`(`VideoRenderer.attachPlayer`) | WE 도 MF 기본이 그렇다(별도 상수 없음) |
 | 가림 시 정지 | `VideoRenderer.attachPlayer` 의 `occlusionObserver` | WE 는 `playbackfocus` 축(PlaybackPolicy) |
 | `.tex` 시트 프레임 인덱스 | `TexImage.spriteFrameIndex` | `docs/re/tex-format.md` §5 가 이미 정합 |
+
+> **[2026-08-28 정정 · 루프 행] "seek 로 감지 않는 것까지 같다" 는 거짓이다.**
+>
+> Waple 은 **루프 경로가 둘**이고 서로 다르다:
+>
+> | 경로 | 방식 | 위치 |
+> | --- | --- | --- |
+> | 전체화면 비디오 벽지 | `AVPlayerLooper` — seek 안 한다 | `VideoRenderer.attachPlayer` |
+> | **씬 안 비디오 텍스처** | **`AVPlayerItemDidPlayToEndTime` → `seek(to: .zero)` + `play()`** | `Sources/WapleRender/SceneVideoLayer.swift:185-187` |
+>
+> ```swift
+> // SceneVideoLayer.swift:185-187
+> endObserver = NotificationCenter.default.addObserver(
+>     forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+> ) { [weak p] _ in p?.seek(to: .zero); p?.play() }
+> ```
+>
+> 같은 파일 `:182-184` 의 주석이 **이유까지 적어 두었다**: `AVPlayerLooper` 는 매 루프마다
+> 아이템을 교체하는데, 부착한 `AVPlayerItemVideoOutput` 이 새 아이템을 못 따라간다 —
+> 그래서 output 기반 재생에서는 단일 아이템 + 수동 seek 가 표준 패턴이다.
+>
+> ⇒ **`SceneVideoLayer` 는 "다시 손대지 말 것" 목록에 넣을 수 없다.** 이 행이 주장하는
+> 동형성은 `VideoRenderer` 쪽에만 해당한다. 씬 경로는 seek 왕복만큼의 **루프 이음매 지연**이
+> WE 의 엔진 내부 루프보다 크고, 그 크기는 측정한 적이 없다.
+> **[미해결 — 씬 비디오 루프 이음매 지연]**
+>
+> (다만 위 주석대로 이것은 **AVFoundation 이 강제하는 제약**이지 태만이 아니다. 고치려면
+> output 을 쓰지 않는 별도 합성 경로가 필요하다 — 그건 G7/G8 급 비용이다.)
 
 ### 9.2 갭 — 파일:줄 + 이식 난이도
 
@@ -1177,9 +1214,9 @@ if (도달) { if (paused) backend->vtbl[0x10](); KillTimer(0x65); flags &= ~2 }
 | --- | --- | --- | --- | --- | --- |
 | **G1** | **`alignment` 5모드가 없다.** Waple 은 전역 `FitMode` 3종(`fit`/`fill`/`stretch`)뿐이고 **월페이퍼별이 아니라 앱 전역 설정**이다 | `SceneRenderSettings.swift` — `enum FitMode` · `SceneRenderSettings.fitMode`(전역 getter) · `VideoRenderer.attachPlayer`(`switch SceneRenderSettings.fitMode` → `videoGravity`) | §5 표 — cover(0)/fill(1)/stretch(2)/center(3)/free(4) **+ 월페이퍼별 wproperty** | **중** | AVPlayerLayer 의 `videoGravity` 는 3종밖에 없다. center/free 는 `AVPlayerLayer.frame` 을 직접 계산하거나 `contentsRect`(CALayer)로 크롭해야 한다 — 가능하지만 새 코드다. 저장은 `VideoSettings` 에 키 하나 더 |
 | **G2** | **`alignmentposition`/`x`/`y`/`z`(zoom)/`fliph` 가 없다** | 없음 | §5 — 슬라이더 4개 + bool 1개, condition 포함 | **중** | z(zoom)는 `contentsRect` 축소로, x/y 는 그 원점 이동으로, fliph 는 `CALayer.transform` 의 x 스케일 −1 로 낸다. WE 는 이것을 **소스 정규화 사각형**으로 준다(§4.3) — `contentsRect` 가 정확히 같은 좌표계라 사상이 자연스럽다. 다만 WE 의 열거→사각형 산술을 확정하지 못해(§4.3 `[미해결]`) 무엇을 베낄지가 없다 |
-| **G3** | **letterbox 색이 다르다.** WE 는 **불투명 검정 하드코딩**(`0x1400f34ff` `mov byte [rsp+0x53],0xFF`) | `VideoRenderer.attachPlayer` — `AVPlayerLayer` 에 `backgroundColor` 를 주지 않는다(상위 뷰 색이 비친다) | §4.3 계약 4 | **하** | `layer.backgroundColor = .black` 한 줄 |
+| **G3** | ~~**letterbox 색이 다르다.**~~ **닫혔다 (2026-08-28 확인).** WE 는 **불투명 검정 하드코딩**(`0x1400f34ff` `mov byte [rsp+0x53],0xFF`)이고 Waple 도 이제 같다 | `Sources/WapleRender/VideoRenderer.swift:213` — `layer.backgroundColor = CGColor(red: 0, green: 0, blue: 0, alpha: 1)`. 같은 파일 `:205-212` 주석이 이 갭 항목(`§9.2 G3`)을 인용하며 WE 의 MFARGB 구성 3자리를 근거로 싣는다 | §4.3 계약 4 | ~~하~~ | **해소** — 예고했던 "한 줄" 이 실제로 들어갔다. 웹 폴백은 이미 `background:#000` 이라 두 경로의 레터박스가 같다 |
 | **G4** | **볼륨 기본값이 반대다.** Waple 기본 **0(음소거)**, WE 기본 **50** | `VideoSettings.volume(id:)`(`d.object(forKey:) == nil ? 0 : …`) | §5 — UI `getSharedDefaultProperties` `{volume:50}` | **하** | 값 하나. 단 Waple 주석(`VideoSettings` 선언부 주석)이 "바탕화면이 예고 없이 소리 내지 않도록 보수적 기본(설계 2026-07-02)"이라고 **의도적 이탈**을 명시했다 — 정합 대상이 아니라 **정책 차이**로 남기는 게 맞다 |
-| **G5** | **배속 범위가 다르다.** Waple `0.25–4`(`setRate` 클램프), WE `0.1–2`(슬라이더 10–200) | `VideoSettings.setRate` | §5 표(`0x14010525f` min 0xa · `0x1401052bf` max 0xc8), 씬 경로 min 클램프 0.1(`0x140114d84`) | **하** | 클램프 상수 두 개 |
+| **G5** | ~~**배속 범위가 다르다.** Waple `0.25–4`(`setRate` 클램프), WE `0.1–2`(슬라이더 10–200)~~ **닫혔다 (2026-08-28 확인).** Waple 도 **`0.1–2.0`** 이다 | `Sources/WapleRender/VideoSettings.swift` — `minRate: Float = 0.1` · `maxRate: Float = 2.0`, `setRate` 가 `max(minRate, min(maxRate, r))` 로 클램프 | §5 표(`0x14010525f` min 0xa · `0x1401052bf` max 0xc8), 씬 경로 min 클램프 0.1(`0x140114d84`) | ~~하~~ | **해소** — 예고했던 "클램프 상수 두 개" 가 실제로 들어갔다. WE 슬라이더 10–200 ÷100 = 0.1–2.0 과 **정확히 일치** |
 | **G6** | **`videoaudiooutput` 2단 게이트(전역 ∧ 모니터별)가 없다** | `VideoSettings.volume(id:)` 만 있고 전역 오디오 스위치 없음 | §8.1 (`0x1400ff8fd`–`0x1400ff985`, `0x14010e074`–`0x14010e0ee`) | **하** | 전역 UserDefaults 키 하나 + `isMuted` 에 AND. 멀티모니터 축은 Waple 이 아직 모니터별 설정을 안 가져 지금은 1단으로 충분 |
 | **G7** | **`IVideoTexture` 스크립트 표면이 통째로 없다.** `getVideoTexture()` 가 no-op 프록시를 반환한다 | `TextScriptEngine` JS 심 — `__makeLayer`/`__makeRootLayer` 의 `getVideoTexture` (`getVideoTexture: function() { return __noopProxy(); }`) | §6.2 — play/pause/stop/isPlaying/getCurrentTime/setCurrentTime/duration/rate/loop/addEndedCallback | **중** | `SceneVideoLayer` 에 이미 `AVPlayer` 가 있다(`SceneVideoLayer.player`). JSContext 브리지로 10개 멤버를 잇는 일 — 새 IPC 나 디코더는 필요 없다. `addEndedCallback` 은 `AVPlayerItemDidPlayToEndTime` 관찰로(이미 `endObserver` 필드가 있다, `SceneVideoLayer.endObserver`) |
 | **G8** | **`ITextureAnimation` 이 스텁이다.** `frameCount:1, fps:0, duration:0` 고정이고 실 시트와 연결되지 않았다. `join()` 이 **없다** | `TextScriptEngine.__makeTextureAnimation` | §6.2 · §7.2 | **중** | `TexImage` 가 이미 프레임 수·프레임타임을 갖고 있다(`docs/re/tex-format.md` §5). 값을 심에 밀어넣는 것은 배선이고, `setFrame` 이 실제로 표시 프레임을 바꾸게 하려면 `SceneRendererFrameEncoder.spriteFrameTexture`가 "절대 씬 시간의 순수 함수"라는 현재 계약을 **레이어별 시계**로 바꿔야 한다 — 그게 비용의 대부분이다. `SceneDocument.spritesheetRefreshSync` 선언부가 이미 같은 지점을 지목했다 |
@@ -1199,9 +1236,19 @@ if (도달) { if (paused) backend->vtbl[0x10](); KillTimer(0x65); flags &= ~2 }
 
 | 난이도 | 항목 | 공통 사유 |
 | --- | --- | --- |
-| **하** (9) | G3 G4 G5 G6 G9 G12 G15 G18 G19 | 상수·플래그·한 줄 배선. AVFoundation 에 이미 대응물이 있다 (G11 은 2026-08-21 에 **중**으로 올렸다 — 위 표 참조. G18 은 2026-08-21 에 새로 추가했다) |
+| **해소** (2) | ~~G3~~ ~~G5~~ | **[2026-08-28]** 둘 다 코드에 들어갔다 — `VideoRenderer.swift:213`(레터박스 검정) · `VideoSettings.swift` `minRate 0.1`/`maxRate 2.0`. 아래 남은 집계에서 뺐다 |
+| **하** (7) | G4 G6 G9 G12 G15 G18 G19 | 상수·플래그·한 줄 배선. AVFoundation 에 이미 대응물이 있다 (G11 은 2026-08-21 에 **중**으로 올렸다 — 위 표 참조. G18 은 2026-08-21 에 새로 추가했다) |
 | **중** (7) | G1 G2 G7 G8 G10 G14 G16 | 새 코드가 필요하지만 **플랫폼이 막지 않는다**. G8 만 렌더러 계약(레이어별 시계) 변경을 동반해 실질 비용이 크다 |
 | **상** (1) | G13 | macOS 에 디코더가 **없다**. 외부 변환 외 방법이 없고 그건 이미 구현돼 있다 — "구현"이 아니라 "포기 지점 문서화"가 남은 일 |
+
+> **[2026-08-28 집계 갱신]** 종전 이 표는 **하 9 / 중 7 / 상 1** 이었고 G3·G5 를 열린
+> 항목으로 세고 있었다. 둘 다 이미 닫혀 있다(위 §9.2 의 해당 행에 근거를 실었다).
+> 열린 갭은 **15개**(하 7 · 중 7 · 상 1)다. `G11` 은 **중** 칸에 세지 않는다 — 도달 0 이라
+> 위 표에서 별도 주석으로만 다룬다(종전과 같다).
+>
+> 대신 §9.1 에서 **새 [미해결] 하나가 열렸다** — 씬 비디오의 seek 수동 루프 이음매 지연.
+> 갭 번호를 새로 붙이지 않은 이유는 그것이 "구현 누락" 이 아니라 **플랫폼 제약에서 오는
+> 측정되지 않은 편차**이기 때문이다(G13 과 같은 부류다).
 
 **macOS 가 오히려 유리한 자리 3개**를 기록해 둔다 — 이식 계획이 WE 를 그대로 베끼려다
 손해 보는 자리다:

@@ -1580,6 +1580,26 @@ extension AppDelegate {
         // 직전 1분치를 잃는다. **아래 guard 보다 앞이어야 한다** — 그 guard 는 정적 배경 복원
         // 조건이지 이 저장과 무관하다.
         playlistDriver.persist()
+
+        // [2026-08-28] 렌더러 teardown 을 종료 경로에 넣는다 — **여기만 비대칭이었다.**
+        //
+        // `ScriptLocalStorage.flush()` 의 호출부는 리포 전체에 둘뿐이다:
+        // `SceneRenderer.swift:2797`(teardown 안) 과 `TextScriptEngine.swift:354`(deinit).
+        // 그런데 종료 경로가 teardown 을 안 불렀고, **프로세스 종료 시에는 ARC 해제가 일어나지
+        // 않으므로 deinit 도 안 돈다** — 즉 종료로 끝난 세션의 스크립트 저장소는 통째로 유실됐다.
+        // 대체 경로도 없다(실측: `applicationShouldTerminate` 0건 · `willTerminateNotification`
+        // 옵저버 0건 · `applicationWillResignActive` 0건 · `SceneRenderer.deinit(:1617-1622)` 은
+        // 모니터/폴러/오디오만 정리하고 teardown 도 flush 도 부르지 않음 · autosave 타이머 없음).
+        //
+        // 유실 폭을 키우는 게 하나 더 있다: 저장 디바운스(`TextScriptEngine.swift:420-428`)가
+        // **max-wait 없는 트레일링**이라 기본 0.75초(`:333`)보다 잦게 쓰는 스크립트는 매번
+        // 재예약되어 애초에 한 번도 발화하지 않는다. 그 경우 유실은 "마지막 0.75초"가 아니라 전부다.
+        //
+        // 다른 teardown 호출부(`:610` RendererSwap · `:728` 적용 실패 정리 · `:1284` 캡처 defer)와
+        // 같은 형태다. **아래 guard 보다 앞이어야 한다** — 그 guard 는 정적 배경 복원 조건이지
+        // 자원 정리와 무관하고, 복원 전에 우리 렌더를 내리는 것이 순서상으로도 맞다.
+        renderers.forEach { $0.teardown() }
+
         guard StillDesktopSync.shouldRestoreOnTerminate(syncEnabled: desktopStillSync) else { return }
         restoreDesktopOriginals()
     }

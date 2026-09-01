@@ -2552,7 +2552,22 @@ public enum GLSLTranslator {
         if let q1 = after.firstIndex(of: "\"") {
             let isNumberBeforeQuote = after[..<q1].contains { $0.isNumber }
             if !isNumberBeforeQuote, let q2 = after[after.index(after: q1)...].firstIndex(of: "\"") {
-                return String(after[after.index(after: q1)..<q2]).split(separator: " ").compactMap { Float($0) }
+                // [2026-08-28] 구분자에 콤마를 넣는다. 종전의 `split(separator: " ")` 은
+                // `"0.315, 0.135, 0.1125"` 를 `["0.315,", "0.135,", "0.1125"]` 로 쪼갰고
+                // `Float("0.315,")` 가 nil 이라 **앞 성분이 조용히 사라져** `[0.1125]` 만 남았다.
+                // 설치본 도달 3파일 5건 — `assets/shaders/fade.frag:6` ·
+                // `assets/zcompat/scene/shaders/2084198056/Simple_Audio_Bars.frag:22,23,27` ·
+                // `projects/defaultprojects/fantasticcar/shaders/dome.vert:9`. 다섯 건 전부
+                // 현재가 오답이라 고쳐서 나빠지는 자리가 없다.
+                //
+                // `dome.vert` 는 짝 머티리얼(`materials/dome/dome.json`)에 `constantshadervalues`
+                // 가 없고 `usershadervalues` 는 `SceneDocument.swift:3546`(2D)에만 있어 **3D 메시
+                // 경로에 대체 공급원이 없다** — 어노테이션 기본값이 유일한 값이다.
+                //
+                // 같은 결함이 `AudioResponse.swift:220-222` 에도 있고 그 주석이 이 정정을 예고했다.
+                return String(after[after.index(after: q1)..<q2])
+                    .split(whereSeparator: { $0 == " " || $0 == "," })
+                    .compactMap { Float($0) }
             }
         }
         var num = ""
