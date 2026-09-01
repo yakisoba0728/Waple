@@ -333,6 +333,261 @@ jobs:
       # **전부 스킵된 채 초록**이 뜬다 — 통과 수를 세는 것만으로는 알아챌 수 없다.
       # 처음엔 숫자만 남기는 단계로 뒀고, 두 번의 실측(run 32219037798 debug·release)으로
       # 정상 범위가 섰으므로 이제 하한/상한을 건다. 값과 근거는 아래 if 문 주석에.
+      # ══════════════════════════════════════════════════════════════════════
+      # [2026-08-28] 아래 세 게이트의 근거를 **run 블록 밖으로 옮겼다.**
+      #
+      # 옮긴 이유가 이 감사의 주제 그 자체다 — GitHub Actions 는 `run:` 스칼라를
+      # 템플릿으로 컴파일하고 그 길이에 **21,000바이트** 한도를 건다. 이 블록은
+      # 문자로는 16,830 이라 한도 안처럼 보였지만 한국어가 UTF-8 3바이트라
+      # 실제 **24,117바이트**였고, 그중 **87%(21,164B, 232줄)가 주석**이었다.
+      #
+      # 결과: 워크플로가 **파싱 자체에 실패**해 잡이 하나도 스케줄되지 않았고,
+      # 실행은 `conclusion: failure` 로 뜨는데 잡 목록이 비어 있어 로그가 없다.
+      # 즉 **macOS 레인 전체가 조용히 꺼진 채** 커밋 셋이 지나갔다(#355·#356·#357).
+      # `spec` 레인(ubuntu)은 계속 초록이라 신호가 더 가려졌다.
+      #
+      # 근거를 지우지 않고 자리만 옮긴다 — 한 글자도 버리지 않았다. YAML 주석은
+      # 템플릿에 안 들어가므로 한도와 무관하고, 스텝 바로 위라 인접성도 남는다.
+      # **이 스텝에 주석을 더할 때는 여기에 더해라. `run:` 안이 아니다.**
+      # 확인: `python3 scripts/ci/check-run-block-size.py`
+      # ══════════════════════════════════════════════════════════════════════
+      #
+      # ── 상한 100 — 대량 무음 스킵 트립와이어 ───────────────────────────────
+      # [2026-08-19] 트립와이어. 이제 정상 범위를 안다.
+      # [2026-08-21 여덟 번째] 실측 갱신: executed **3264** / skipped 51 / 실패 0
+      # (run 32493718837 job 96807118184 · 커밋 `26345f6` — **브랜치 tip 자신**이다).
+      # 하한을 3140 → 3264. 정적 개수도 `26345f6` 에서 정확히 3264 라 두 세는 법이
+      # 또 어긋나지 않았다(**아홉 번째 연속**).
+      #
+      # +124 의 출처: 이번 웨이브 13개 클러스터가 얹은 오라클이다(파티클 CP · 블렌드 도메인 ·
+      # 카메라 산술 · 경로 보안 · JSON 태그 · 오디오 패리티 · LDR 블룸 · tex 코퍼스 · 퍼펫 ·
+      # 프로퍼티 조건식 · 셰이더 스윕 · 호환성 코퍼스 감사 · 씬 디스크립터). 삭제는 2건뿐이고
+      # (탐사용 하네스 `GLSLInstallProbeTests`·`GLSLSyntheticProbeTests` — 파일 자신이
+      #  "커밋 대상 아님" 이라고 적어 둔 것들이다) 나머지는 전부 순증이다.
+      #
+      # **직전 하한 3140 은 붉은 런에서 잰 값이 아니다.** `1bc9835` 의 CI 는 실패했지만
+      # (`AssetJSONLenientTests` 중복 키 2건) 그때도 executed 는 3264 였다 — 실패는 개수가
+      # 아니라 단언에서 났다. 이 문단은 그 다음 **초록** 런의 값을 박은 것이다.
+      #
+      # [2026-08-21 일곱 번째] 실측: executed **3140** / skipped 47 / 실패 0
+      # (run 32484783071 job 96778842023 · 커밋 `9c39179` — **브랜치 tip 자신**이다).
+      # 하한을 3104 → 3140. 정적 개수도 `9c39179` 에서 정확히 3140 이라 두 세는 법이
+      # 또 어긋나지 않았다(**여덟 번째 연속**).
+      #
+      # +36 의 출처(9c39179 정적 3140 − 6064495 3104):
+      #   53e2bda `HDRBloomMathTests` +17 · 7d5fd63 `SceneDocumentTransformComponentTests` +19.
+      #   나머지 셋(94045ac·188cd1a·9c39179)은 python/문서라 스위프트 개수 불변. 삭제 0건.
+      #
+      # 바로 아래 [여섯 번째] 문단이 "다음 값은 3121" 이라고 적었는데 **3140 이 됐다** —
+      # 그 문단을 쓴 뒤에 클러스터 V(+19)가 더 들어왔기 때문이다. 예고값은 예고일 뿐이고
+      # 하한은 늘 **CI 가 실제로 잰 숫자**로 박는다는 관례가 여기서도 맞았다.
+      #
+      # [2026-08-21 여섯 번째] 실측: executed **3104** / skipped 46 / 실패 0
+      # (run 32482815813 job 96772776992 · 커밋 `6064495` — **브랜치 tip 자신**이다).
+      # 하한을 3099 → 3104. 정적 개수도 `6064495` 에서 정확히 3104 라 두 세는 법이 또
+      # 어긋나지 않았다(**일곱 번째 연속**).
+      #
+      # +5 의 출처(6064495 정적 개수 3104 − aebf586 3099):
+      #   0a9755e/eeb4fc7 계열은 이미 반영됐고, `6064495` 의 AudioSpectrumProcessor
+      #   접근자 오라클 5건이 순증분이다. 삭제·통합 0건.
+      #
+      # **다음 값은 3121 이다.** 이 커밋(`53e2bda`, HDRBloomMathTests 17건)까지 얹은
+      # 정적 개수가 3121 이다. 그런데 하한은 **3104** 로 둔다 — 3121 은 아직 CI 가 재지
+      # 않은 숫자이기 때문이다(아래 `94b0a34` 문단의 관례). 다음 초록 실행에서 3121 이
+      # 확인되면 그때 올린다. 하한은 최소값이므로 실측이 더 커도 초록은 유지된다.
+      #
+      # [2026-08-21 다섯 번째] 실측: executed **3099** / 실패 0
+      # (run 32478678474 · 커밋 `aebf586` — **브랜치 tip 자신**이다). 하한을 3038 → 3099.
+      # 정적 개수도 `aebf586` 에서 정확히 3099 라 두 세는 법이 또 어긋나지 않았다(여섯 번째 연속).
+      #
+      # +61 의 출처를 **커밋별로 실측**했다(2642488 ↔ aebf586 정적 개수 차, 합계 정확히 61):
+      #   1fb7ad2 +0 · d8e87f2 +0 · aa976b7 +7 · 25459c5 +6 · ef1fd91 +15 ·
+      #   fdc21e8 +6 · eeb4fc7 +14 · 0a9755e +0 · aebf586 +13.
+      # **파일별로도** 실측했다(같은 두 커밋, 합계 정확히 61 · 음수 0건):
+      #   PointerHitTests +13(신규) · PuppetHostileInputTests +13(신규) ·
+      #   ParticleNumericTagGateTests +9(신규) · PropertyAnimationOptionsTests +6 ·
+      #   SceneScriptAPISurfaceTests +6 · JSONNumericsTagGateTests +5(신규) ·
+      #   SceneDocumentFidelityTests +5 · CoreParseSceneFixRegressionTests +2 ·
+      #   PuppetPoseWEParityTests +2.
+      # 전부 오라클 추가이고 삭제·통합은 0건이다.
+      #
+      # **이 하한을 손대는 사람에게**: 이 값은 tip 의 실측치와 정확히 같게 박는 관례라
+      # (아래 `94b0a34` 문단) 여유가 0 이다. 여러 작업이 동시에 `Tests/**` 를 고치는 중이면
+      # **푸시 직전에 정적 개수를 다시 세서** 이 값 이상인지 확인해라 — 한 줄이면 된다:
+      #   grep -rE '^\s*(@\w+(\([^)]*\))?\s+|(private|fileprivate|internal|public|open|final|static|class|nonisolated|override|mutating)\s+)*func test' Tests/ --include=*.swift | wc -l
+      # (참고: 이 커밋을 쓰던 시점의 워킹트리는 이미 3119 였다 — 다른 작업들이 20개를 더 얹었다.
+      #  하한은 그 3119 가 아니라 **CI 가 실제로 잰 3099** 로 둔다. 안 재 본 숫자를 하한으로
+      #  박으면 그게 곧 근거 없는 게이트다.)
+      #
+      # [2026-08-21 네 번째] 실측 갱신: executed **3038** / skipped 47(release)·46(debug) / 실패 0
+      # (run 32473541358 · 커밋 2642488 — **브랜치 tip 자신**이다). 하한을 2877 → 3038.
+      # 정적 개수도 2642488 에서 정확히 3038 이라 두 세는 법이 또 어긋나지 않았다.
+      #
+      # **`Executed` 는 스킵을 포함한다.** 이번 런이 그 증거다 — 두 잡의 skipped 가 47/46 으로
+      # 다른데 `Executed` 는 둘 다 3038 로 같다. 그래서 이 하한은 스킵 수에 흔들리지 않는다
+      # (스킵 쪽은 아래 상한 100 이 따로 본다).
+      #
+      # 그 **±1 스킵 차이의 정체도 확정했다**(두 잡 로그의 `skipped (` 줄 집합 차집합):
+      #   `WapleRenderTests.WebHardPauseTests.testIntervalResumesAtRemainingPhaseThenUsesOriginalPeriod`
+      # 하나뿐이고, release 에서만 스킵됐다. 구성 의존이 아니라 **시간 의존**이다 —
+      # 그 테스트의 `XCTSkipIf` 가 "일시정지 전 경과 ≥ 주기(240ms)" 면 위상 전제가 깨졌다고 보고
+      # 가짜 그린 대신 스킵한다(Tests/WapleRenderTests/WebHardPauseTests.swift:344-348).
+      # 공용 러너 부하에 따라 매 런 ±1 로 흔들리는 것이 정상이다. 하한과는 무관하다.
+      #
+      # +161 의 출처를 **커밋별·파일별로 실측**했다(131feaa ↔ 2642488 정적 개수 차, 합계 정확히 161):
+      #   6feb99a +17(RemapOperationAxesTests 14 · RemapOutputChannelTests 3) ·
+      #   3bc0fab +18(ScenePackageWEParityTests) · ff2d30b +25(SceneDocumentFidelityTests) ·
+      #   1e4660a +17(ShaderPreprocessorRequireTests 16 · GLSLBundledShaderRegressionTests 1) ·
+      #   990aa2a +11(EffectFboFitTests) · 4eb61f1 +10(SceneLightConfigBudgetTests) ·
+      #   7a0e962 +4(WallpaperPropertiesTests) · 8bd2f42 +12(ParticleInputRangeConeTests) ·
+      #   8de9dba +2(SceneDocumentTests) · 1b0d20a +3(EffectFboFitTests 2 · EffectManifestTests 1) ·
+      #   e8ae206 +20(ShaderPreprocessorConformanceTests 13 · GLSLBundledShaderRegressionTests 7) ·
+      #   0c3e18c +13(TexHostileInputTests 12 · TexBundledCorpusTests 1) ·
+      #   2642488 +9(PropertyAnimationOptionsTests 4 · PropertyConditionEvaluatorTests 4 ·
+      #             PropertyAnimationTests 1).
+      # 전부 오라클 추가이고 삭제·통합은 0건이다(파일별 델타에 음수가 없다).
+      #
+      # 여유를 두지 않는 것이 이 리포의 관례다 — `94b0a34` 도 자기 커밋의 정적 개수(2825)와
+      # **정확히 같은 값**을 하한으로 박았다. 여유는 그 뒤 커밋이 쌓아 주는 것이지 미리 주는 게
+      # 아니다(`c0ee3ad`·`fcbb425` 가 벌어진 여유 168·62 를 되감은 이력).
+      #
+      # [2026-08-21 세 번째] 실측 갱신: executed **2877** / skipped 47 / 실패 0
+      # (run 32454065734 · 커밋 131feaa, debug·release 두 잡이 같은 수). 하한을 2825 → 2877.
+      # +52 의 출처(badbe68 ↔ 131feaa 정적 개수 차, 합계가 정확히 52):
+      #   SceneGeneralKeysTests +26 · PropertyAnimationOptionsTests +21 · ParallaxControllerTests +5.
+      # 정적 개수도 badbe68 에서 2825, 131feaa 에서 2877 로 실행 수와 일치한다.
+      #
+      # [2026-08-21 두 번째] 실측 갱신: executed **2825** / skipped 47 / 실패 0
+      # (run 32450029939 · 커밋 badbe68, debug·release 두 잡이 같은 수). 하한을 2627 → 2825.
+      # 래칫 규약(하한 = 직전 실측치)대로다.
+      #
+      # +198 의 출처를 **파일별로 실측**했다(8ccedd3 ↔ badbe68 의 정적 개수 차):
+      #   PlaylistTransitionTests +54 · ParticleExtendedKeysTests +17 ·
+      #   AudioCaptureParityTests +17 · SceneWELightMathTests +16 ·
+      #   WebCompatPatchTests +15 · SceneScriptAPISurfaceTests +13 ·
+      #   SceneSpriteParseTests +12 · TexBundledCorpusTests +11 ·
+      #   PropertyAnimationTests +10 · WebWallpaperInjectedAPITests +7 ·
+      #   RemapOutputChannelTests +7 · SceneGeneralDefaultsWEParityTests +6 ·
+      #   ParticleEmitterWindowWETests +6 · PropertyConditionEvaluatorTests +4 ·
+      #   VolumetricLightTests +1 · PropertyDecorationTests +1 · SceneDocumentTests +1.
+      # 두 세는 법이 여전히 어긋나지 않는다: 정적 개수도 8ccedd3 에서 정확히 2627,
+      # badbe68 에서 정확히 2825 다(아래 grep 명령으로 재현).
+      #
+      # **이번 갱신에는 배경이 있다.** 2627 로 올린 뒤 macOS 레인이 여섯 커밋 동안 빨갰는데
+      # (f0fcc99 의 MSL 주석 파손 — b98db0a 에서 고쳤다) 그 사이 실행 수가 하한을 밑돌아
+      # census 까지 같이 빨개졌다. 즉 이 게이트는 그때 **테스트 소실이 아니라 크래시**를
+      # 신고하고 있었다. 하한 초과 실패를 볼 때는 `Test` 스텝의 실패부터 먼저 읽어야 한다.
+      # [2026-08-20] 실측 갱신: executed **2459** / skipped 46 / 실패 0
+      # (run 32398914480 기준 2452 → remapvalue 어휘 1건 + 관용 JSON 6건 추가로 2459). 같은 시점의 정적 개수
+      # (`grep -rE '^\s*(@\w+(\([^)]*\))?\s+|(private|fileprivate|internal|public|open|final|static|class|nonisolated|override|mutating)\s+)*func test' Tests/ --include=*.swift | wc -l`)도
+      # 정확히 2459 다 — 두 세는 법이 어긋나지 않는다는 것을 실측으로 확인했다.
+      #
+      # **[2026-08-20] 근거가 하한보다 낡아 있었다.** 이 주석은 `2369`(커밋 c109ac1)를 인용하는데
+      # 강제되는 하한은 그 뒤로 2371 → 2372 → 2374 → 2382 → 2390 으로 다섯 번 더 올라갔다.
+      # 즉 "근거로 적힌 숫자"와 "실제로 막는 숫자"가 서로 다른 말을 하고 있었다 — 이 리포가
+      # 반복해서 잡아내는 바로 그 부류(주석과 코드가 어긋난 채 초록)를 이 게이트 자신이 앓고 있었다.
+      # 게이트 동작 자체는 정상이었지만(2452 ≥ 2390) 여유가 62 로 벌어져 **감도가 그만큼 무뎠다**:
+      # 테스트 62개가 사라져도 통과한다. 래칫 규약(하한 = 직전 실측치)대로 2452 로 되돌린다.
+      #
+      # 막으려는 것은 **대량 무음 스킵**이다. XCTSkip("no Metal") 게이트가 걸린 파일에
+      # 거주하는 테스트가 575개(위 census 주석의 세는 법 참조)인데 스킵은 통과로 집계되므로,
+      # 러너 이미지가 바뀌거나 GPU 없는 세션에서 돌면 전부 스킵된 채 초록이 뜬다 —
+      # 통과 수만 봐서는 알아챌 수 없다. 상한 100 은 그 실패 양상(수백 건 스킵)을 확실히 잡는다.
+      #
+      # [2026-08-27] 종전 이 자리는 "561개인데 … 정상치의 두 배 여유가 있어" 였다. 561 은
+      # 위 정정대로 잘못 센 값이고, "두 배" 도 그 문장이 쓰인 시점(정상치 46~47)의 비율이라
+      # 지금 정상치 63~64 에서는 1.56배다. **실효 여유는 36 이고, 오디오 출력이 죽은 머신에서는
+      # 78~79 까지 올라가 여유가 21 로 줄어든다.** 상한을 다시 잡을 때 이 여유부터 보라.
+      #
+      # ── 하한 3774 — 실행 수 래칫과 그 이력 ───────────────────────────────
+      # 테스트 수는 늘기만 한다(줄면 파일이 빠졌거나 번들이 안 실렸다는 뜻).
+      #
+      # 하한은 **초록 실행이 실제로 잰 값**에서만 올린다(추정 금지). 갱신 이력:
+      #   3350 → 3500  (2026-08-21, `2d19faa` 초록 실행 실측 executed=3596 skipped=65)
+      #   3500 → 3686  (2026-08-25, `be3390a` 초록 실행 실측 executed=3686 skipped=64/65,
+      #                 run 32755977630 · debug·release 두 잡이 같은 수. 정적 개수도 3,686 으로 일치)
+      #   3686 → 3693  (2026-08-25, `f5d5d56e` 초록 실행 실측 executed=3693 skipped=63/64,
+      #                 run 32776371263 · debug·release 두 잡이 같은 수. 정적 개수도 3,693 으로 일치
+      #                 — 열 번째 연속. 증분 +7 은 이 라운드가 얹은 오라클이다: 파티클 클램프 2 ·
+      #                 이미지 빌보드 depthwrite 1 · 동봉 루트 findability 2 · CompatCore 마운트 3 ·
+      #                 ObjC 셀렉터 노출 1 · 엡실런 비트동일 1 에서 삭제 3 을 뺀 값)
+      #   3693 → 3708  (2026-08-25, `ce99a527` 초록 실행 실측 executed=3708 skipped=63/64,
+      #                 run 32836320975 · debug·release 두 잡이 같은 수. 정적 개수도 3,708 으로 일치
+      #                 — 열한 번째 연속. 증분 +8 은 P0 라운드가 얹은 오라클이다:
+      #                 SceneVersionFeatureGateTests +4(신규) · ParticleExtendedKeysTests +2 ·
+      #                 CapturePointerPinTests +2)
+      #
+      # **[2026-08-25] 종전 여유 96 의 근거는 실측과 달랐다.** 그 주석은 "테스트 파일 하나가
+      # 통째로 안 실리는 양상(대개 100건 이상)은 잡는 폭" 이라고 적었는데, 100건 넘는 테스트
+      # 파일이 **하나도 없다** — 최대가 `SceneDocumentTests.swift` 81건이다. 즉 그 여유는
+      # 어떤 파일이 통째로 빠져도 잡지 못하는 폭이었다.
+      #
+      # 그래서 래칫 규약(하한 = 직전 초록 실측치)으로 되돌린다. 여유 0 이 안전한 이유는
+      # `executed` 가 **스킵을 포함**해 정적 개수와 같기 때문이다 — 플랫폼별 스킵 흔들림은
+      # 이 수를 바꾸지 않는다(위 표에서 스킵 64/65 로 갈려도 executed 는 둘 다 3,686).
+      # 그리고 "타깃이 통째로 빠지는" 양상은 이제 개수가 아니라 **아래 존재 게이트**가 잡는다.
+      # [2026-08-26] 하한을 3708 → **3723** 으로 래칫한다.
+      # (run 32991538355 · 커밋 `0e1a744` — **브랜치 tip 자신**, debug·release 두 잡 모두 성공.
+      #  debug 가 `executed=3723 skipped=63`. 정적 개수도 정확히 3,723 이라 두 세는 법이
+      #  **열한 번째로** 어긋나지 않았다 — 단, 그 "정적 개수" 는 `AGENTS.md` 의 **새 정본
+      #  레시피**로 센 값이다. 종전 레시피(`^\s*func test`)는 같은 트리에서 3,714 를 낸다.)
+      #
+      # 증분 15의 출처(커밋별 실측 — 추정 아님):
+      #   `7de1021` 3708  (AppLogicTests 58 · CapturePointerPinTests 4)
+      #   `ae7fa12` 3711  +3  캡처 핀 인스턴스화 — CapturePointerPinTests 4→7
+      #   `5a7831b` 3722  +11 프리셋 필드 드롭 — AppLogicTests 58→69
+      #   `2d7d002` 3723  +1  죽은 폴백 회귀 — AppLogicTests 69→70
+      #   `0e1a744` 3723  ±0  문서·스크립트만
+      # 두 번째 항목이 +11 인 것은 `5a7831b` 가 **작업 중인 트리를 잡아 커밋했기 때문**이다
+      # (같은 커밋이 죽은 `??` 도 함께 실어 CI 를 붉혔다 — `2d7d002` 메시지 참조).
+      # 마지막 오라클 하나가 그 뒤에 착지해 +1 로 따라왔다.
+      # [2026-08-27] 3723 → **3774** 래칫. run 33028115080 · 커밋 `e48bd3b`(브랜치 tip 자신,
+      # debug·release 두 잡 성공)에서 `executed=3774 skipped=64`. 정적 개수도 정확히 3,774 라
+      # **열두 번째로** 어긋나지 않았다.
+      #
+      # ⚠️ **[2026-08-27] 래칫 미이행 — 지금 여유는 101 이다. 다음 그린에서 반드시 올려라.**
+      # `e48bd3b` 이후 세 커밋이 하한을 안 올린 채 테스트를 얹었다(커밋별 정적 실측):
+      #   `a9f271b` 3807  +33  재생정책 stage 3
+      #   `6a0e389` 3813  +6   캡처 하네스
+      #   `4c58826` 3875  +62  재생목록 4파일 신설
+      # 이 상태가 위험한 이유는 여유의 크기 자체가 아니라 **아래 [2026-08-25] 가 여유 96 을
+      # 두고 정확히 같은 논리로 되감았던 자리로 돌아왔다**는 것이다. 100건 넘는 테스트 파일은
+      # 지금도 없다(최대 `SceneDocumentTests.swift` 81). 게다가 타깃 넷(`WaplePolicyTests` 74 ·
+      # `WapleLibraryTests` 52 · `WapleCompatCoreTests` 28 · `WapleSnapshotTests` 26)이 전부
+      # 여유보다 작아 **타깃 하나가 통째로 죽어도 이 게이트는 통과한다**(존재 게이트는 타깃당
+      # 클래스 1개만 확인하므로 그것도 못 잡는다).
+      # 정적 3,875 를 알고 있어도 **손으로 박지 마라** — 래칫 규약은 그린 CI 실측이다.
+      #
+      # 증분 51의 출처(재생정책 stage 2 — 커밋별 실측):
+      #   S2a 전역면·병합·마스크        +24  PlaybackPolicyRuntimeTests 신설
+      #   S2b 관측자 6축                +12  PlaybackObserversTests 신설
+      #   S2c 합류·엣지 추적            +15  PlaybackPolicyCompositionTests 신설
+      #   배선·심 타입 정정              ±0  프로덕션 코드만
+      #
+      # ── 타깃 존재 검사 — 하한이 못 잡는 소실 ────────────────────────────────
+      # [2026-08-25] **하한만으로는 타깃 통째 소실을 못 잡는다.**
+      #
+      # 위 하한은 이제 래칫(여유 0)이라 "개수가 줄면" 잡는다. 그런데 **개수가 줄지 않는
+      # 소실**은 여전히 못 잡는다 — 타깃 하나가 빠지면서 다른 곳에 그만큼 테스트가 늘면
+      # 총계는 유지된다. 그리고 래칫은 다음 갱신 전까지만 여유 0 이고, 오라클을 추가하는
+      # 순간 다시 여유가 벌어진다(그 창에서 타깃 넷은 각각 100건 미만이라 숨을 수 있다:
+      # WapleCompatCoreTests 25 · WapleSnapshotTests 26 · WapleLibraryTests 52 · WaplePolicyTests 74).
+      #
+      # 즉 개수 게이트로는 이 구멍이 원리적으로 안 닫힌다. 그래서
+      # **개수가 아니라 존재**를 본다 — 각 테스트 타깃에서 클래스 이름을 실제로 뽑아, 그 중
+      # 하나라도 실행 로그에 나타났는지 확인한다.
+      #
+      # 이름을 하드코딩하지 않는 이유: 하드코딩하면 클래스 rename 마다 이 게이트가 거짓
+      # 실패하고, 그걸 피하려고 목록을 느슨하게 만들면 다시 도장이 된다. 소스에서 뽑으면
+      # 스스로 따라온다.
+      #
+      # 한계 두 가지를 명시한다.
+      #   ① `Tests/<타깃>/` 디렉터리와 `Package.swift` 항목을 **같이** 지우면 찾을 대상이 없어
+      #      이 게이트가 침묵한다. 그래서 타깃 수 하한(7)도 함께 본다 — 이 숫자는 타깃을
+      #      의도적으로 늘리거나 줄일 때만 바뀐다.
+      #   ② `Test` 스텝이 중간에 죽으면 뒤쪽 타깃이 로그에 없어 여기가 빨개진다. 그건 오탐이
+      #      아니라 "스위트가 안 끝났다" 는 같은 신고다 — 다만 **`Test` 스텝의 실패를 먼저 읽어라**.
+      # ══════════════════════════════════════════════════════════════════════
       - name: Skip / execution census
         if: always()
         run: |
@@ -349,245 +604,21 @@ jobs:
           echo "- skipped:  \`${SKIPPED}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "executed=${EXECUTED} skipped=${SKIPPED}"
 
-          # [2026-08-19] 트립와이어. 이제 정상 범위를 안다.
-          # [2026-08-21 여덟 번째] 실측 갱신: executed **3264** / skipped 51 / 실패 0
-          # (run 32493718837 job 96807118184 · 커밋 `26345f6` — **브랜치 tip 자신**이다).
-          # 하한을 3140 → 3264. 정적 개수도 `26345f6` 에서 정확히 3264 라 두 세는 법이
-          # 또 어긋나지 않았다(**아홉 번째 연속**).
-          #
-          # +124 의 출처: 이번 웨이브 13개 클러스터가 얹은 오라클이다(파티클 CP · 블렌드 도메인 ·
-          # 카메라 산술 · 경로 보안 · JSON 태그 · 오디오 패리티 · LDR 블룸 · tex 코퍼스 · 퍼펫 ·
-          # 프로퍼티 조건식 · 셰이더 스윕 · 호환성 코퍼스 감사 · 씬 디스크립터). 삭제는 2건뿐이고
-          # (탐사용 하네스 `GLSLInstallProbeTests`·`GLSLSyntheticProbeTests` — 파일 자신이
-          #  "커밋 대상 아님" 이라고 적어 둔 것들이다) 나머지는 전부 순증이다.
-          #
-          # **직전 하한 3140 은 붉은 런에서 잰 값이 아니다.** `1bc9835` 의 CI 는 실패했지만
-          # (`AssetJSONLenientTests` 중복 키 2건) 그때도 executed 는 3264 였다 — 실패는 개수가
-          # 아니라 단언에서 났다. 이 문단은 그 다음 **초록** 런의 값을 박은 것이다.
-          #
-          # [2026-08-21 일곱 번째] 실측: executed **3140** / skipped 47 / 실패 0
-          # (run 32484783071 job 96778842023 · 커밋 `9c39179` — **브랜치 tip 자신**이다).
-          # 하한을 3104 → 3140. 정적 개수도 `9c39179` 에서 정확히 3140 이라 두 세는 법이
-          # 또 어긋나지 않았다(**여덟 번째 연속**).
-          #
-          # +36 의 출처(9c39179 정적 3140 − 6064495 3104):
-          #   53e2bda `HDRBloomMathTests` +17 · 7d5fd63 `SceneDocumentTransformComponentTests` +19.
-          #   나머지 셋(94045ac·188cd1a·9c39179)은 python/문서라 스위프트 개수 불변. 삭제 0건.
-          #
-          # 바로 아래 [여섯 번째] 문단이 "다음 값은 3121" 이라고 적었는데 **3140 이 됐다** —
-          # 그 문단을 쓴 뒤에 클러스터 V(+19)가 더 들어왔기 때문이다. 예고값은 예고일 뿐이고
-          # 하한은 늘 **CI 가 실제로 잰 숫자**로 박는다는 관례가 여기서도 맞았다.
-          #
-          # [2026-08-21 여섯 번째] 실측: executed **3104** / skipped 46 / 실패 0
-          # (run 32482815813 job 96772776992 · 커밋 `6064495` — **브랜치 tip 자신**이다).
-          # 하한을 3099 → 3104. 정적 개수도 `6064495` 에서 정확히 3104 라 두 세는 법이 또
-          # 어긋나지 않았다(**일곱 번째 연속**).
-          #
-          # +5 의 출처(6064495 정적 개수 3104 − aebf586 3099):
-          #   0a9755e/eeb4fc7 계열은 이미 반영됐고, `6064495` 의 AudioSpectrumProcessor
-          #   접근자 오라클 5건이 순증분이다. 삭제·통합 0건.
-          #
-          # **다음 값은 3121 이다.** 이 커밋(`53e2bda`, HDRBloomMathTests 17건)까지 얹은
-          # 정적 개수가 3121 이다. 그런데 하한은 **3104** 로 둔다 — 3121 은 아직 CI 가 재지
-          # 않은 숫자이기 때문이다(아래 `94b0a34` 문단의 관례). 다음 초록 실행에서 3121 이
-          # 확인되면 그때 올린다. 하한은 최소값이므로 실측이 더 커도 초록은 유지된다.
-          #
-          # [2026-08-21 다섯 번째] 실측: executed **3099** / 실패 0
-          # (run 32478678474 · 커밋 `aebf586` — **브랜치 tip 자신**이다). 하한을 3038 → 3099.
-          # 정적 개수도 `aebf586` 에서 정확히 3099 라 두 세는 법이 또 어긋나지 않았다(여섯 번째 연속).
-          #
-          # +61 의 출처를 **커밋별로 실측**했다(2642488 ↔ aebf586 정적 개수 차, 합계 정확히 61):
-          #   1fb7ad2 +0 · d8e87f2 +0 · aa976b7 +7 · 25459c5 +6 · ef1fd91 +15 ·
-          #   fdc21e8 +6 · eeb4fc7 +14 · 0a9755e +0 · aebf586 +13.
-          # **파일별로도** 실측했다(같은 두 커밋, 합계 정확히 61 · 음수 0건):
-          #   PointerHitTests +13(신규) · PuppetHostileInputTests +13(신규) ·
-          #   ParticleNumericTagGateTests +9(신규) · PropertyAnimationOptionsTests +6 ·
-          #   SceneScriptAPISurfaceTests +6 · JSONNumericsTagGateTests +5(신규) ·
-          #   SceneDocumentFidelityTests +5 · CoreParseSceneFixRegressionTests +2 ·
-          #   PuppetPoseWEParityTests +2.
-          # 전부 오라클 추가이고 삭제·통합은 0건이다.
-          #
-          # **이 하한을 손대는 사람에게**: 이 값은 tip 의 실측치와 정확히 같게 박는 관례라
-          # (아래 `94b0a34` 문단) 여유가 0 이다. 여러 작업이 동시에 `Tests/**` 를 고치는 중이면
-          # **푸시 직전에 정적 개수를 다시 세서** 이 값 이상인지 확인해라 — 한 줄이면 된다:
-          #   grep -rE '^\s*(@\w+(\([^)]*\))?\s+|(private|fileprivate|internal|public|open|final|static|class|nonisolated|override|mutating)\s+)*func test' Tests/ --include=*.swift | wc -l
-          # (참고: 이 커밋을 쓰던 시점의 워킹트리는 이미 3119 였다 — 다른 작업들이 20개를 더 얹었다.
-          #  하한은 그 3119 가 아니라 **CI 가 실제로 잰 3099** 로 둔다. 안 재 본 숫자를 하한으로
-          #  박으면 그게 곧 근거 없는 게이트다.)
-          #
-          # [2026-08-21 네 번째] 실측 갱신: executed **3038** / skipped 47(release)·46(debug) / 실패 0
-          # (run 32473541358 · 커밋 2642488 — **브랜치 tip 자신**이다). 하한을 2877 → 3038.
-          # 정적 개수도 2642488 에서 정확히 3038 이라 두 세는 법이 또 어긋나지 않았다.
-          #
-          # **`Executed` 는 스킵을 포함한다.** 이번 런이 그 증거다 — 두 잡의 skipped 가 47/46 으로
-          # 다른데 `Executed` 는 둘 다 3038 로 같다. 그래서 이 하한은 스킵 수에 흔들리지 않는다
-          # (스킵 쪽은 아래 상한 100 이 따로 본다).
-          #
-          # 그 **±1 스킵 차이의 정체도 확정했다**(두 잡 로그의 `skipped (` 줄 집합 차집합):
-          #   `WapleRenderTests.WebHardPauseTests.testIntervalResumesAtRemainingPhaseThenUsesOriginalPeriod`
-          # 하나뿐이고, release 에서만 스킵됐다. 구성 의존이 아니라 **시간 의존**이다 —
-          # 그 테스트의 `XCTSkipIf` 가 "일시정지 전 경과 ≥ 주기(240ms)" 면 위상 전제가 깨졌다고 보고
-          # 가짜 그린 대신 스킵한다(Tests/WapleRenderTests/WebHardPauseTests.swift:344-348).
-          # 공용 러너 부하에 따라 매 런 ±1 로 흔들리는 것이 정상이다. 하한과는 무관하다.
-          #
-          # +161 의 출처를 **커밋별·파일별로 실측**했다(131feaa ↔ 2642488 정적 개수 차, 합계 정확히 161):
-          #   6feb99a +17(RemapOperationAxesTests 14 · RemapOutputChannelTests 3) ·
-          #   3bc0fab +18(ScenePackageWEParityTests) · ff2d30b +25(SceneDocumentFidelityTests) ·
-          #   1e4660a +17(ShaderPreprocessorRequireTests 16 · GLSLBundledShaderRegressionTests 1) ·
-          #   990aa2a +11(EffectFboFitTests) · 4eb61f1 +10(SceneLightConfigBudgetTests) ·
-          #   7a0e962 +4(WallpaperPropertiesTests) · 8bd2f42 +12(ParticleInputRangeConeTests) ·
-          #   8de9dba +2(SceneDocumentTests) · 1b0d20a +3(EffectFboFitTests 2 · EffectManifestTests 1) ·
-          #   e8ae206 +20(ShaderPreprocessorConformanceTests 13 · GLSLBundledShaderRegressionTests 7) ·
-          #   0c3e18c +13(TexHostileInputTests 12 · TexBundledCorpusTests 1) ·
-          #   2642488 +9(PropertyAnimationOptionsTests 4 · PropertyConditionEvaluatorTests 4 ·
-          #             PropertyAnimationTests 1).
-          # 전부 오라클 추가이고 삭제·통합은 0건이다(파일별 델타에 음수가 없다).
-          #
-          # 여유를 두지 않는 것이 이 리포의 관례다 — `94b0a34` 도 자기 커밋의 정적 개수(2825)와
-          # **정확히 같은 값**을 하한으로 박았다. 여유는 그 뒤 커밋이 쌓아 주는 것이지 미리 주는 게
-          # 아니다(`c0ee3ad`·`fcbb425` 가 벌어진 여유 168·62 를 되감은 이력).
-          #
-          # [2026-08-21 세 번째] 실측 갱신: executed **2877** / skipped 47 / 실패 0
-          # (run 32454065734 · 커밋 131feaa, debug·release 두 잡이 같은 수). 하한을 2825 → 2877.
-          # +52 의 출처(badbe68 ↔ 131feaa 정적 개수 차, 합계가 정확히 52):
-          #   SceneGeneralKeysTests +26 · PropertyAnimationOptionsTests +21 · ParallaxControllerTests +5.
-          # 정적 개수도 badbe68 에서 2825, 131feaa 에서 2877 로 실행 수와 일치한다.
-          #
-          # [2026-08-21 두 번째] 실측 갱신: executed **2825** / skipped 47 / 실패 0
-          # (run 32450029939 · 커밋 badbe68, debug·release 두 잡이 같은 수). 하한을 2627 → 2825.
-          # 래칫 규약(하한 = 직전 실측치)대로다.
-          #
-          # +198 의 출처를 **파일별로 실측**했다(8ccedd3 ↔ badbe68 의 정적 개수 차):
-          #   PlaylistTransitionTests +54 · ParticleExtendedKeysTests +17 ·
-          #   AudioCaptureParityTests +17 · SceneWELightMathTests +16 ·
-          #   WebCompatPatchTests +15 · SceneScriptAPISurfaceTests +13 ·
-          #   SceneSpriteParseTests +12 · TexBundledCorpusTests +11 ·
-          #   PropertyAnimationTests +10 · WebWallpaperInjectedAPITests +7 ·
-          #   RemapOutputChannelTests +7 · SceneGeneralDefaultsWEParityTests +6 ·
-          #   ParticleEmitterWindowWETests +6 · PropertyConditionEvaluatorTests +4 ·
-          #   VolumetricLightTests +1 · PropertyDecorationTests +1 · SceneDocumentTests +1.
-          # 두 세는 법이 여전히 어긋나지 않는다: 정적 개수도 8ccedd3 에서 정확히 2627,
-          # badbe68 에서 정확히 2825 다(아래 grep 명령으로 재현).
-          #
-          # **이번 갱신에는 배경이 있다.** 2627 로 올린 뒤 macOS 레인이 여섯 커밋 동안 빨갰는데
-          # (f0fcc99 의 MSL 주석 파손 — b98db0a 에서 고쳤다) 그 사이 실행 수가 하한을 밑돌아
-          # census 까지 같이 빨개졌다. 즉 이 게이트는 그때 **테스트 소실이 아니라 크래시**를
-          # 신고하고 있었다. 하한 초과 실패를 볼 때는 `Test` 스텝의 실패부터 먼저 읽어야 한다.
-          # [2026-08-20] 실측 갱신: executed **2459** / skipped 46 / 실패 0
-          # (run 32398914480 기준 2452 → remapvalue 어휘 1건 + 관용 JSON 6건 추가로 2459). 같은 시점의 정적 개수
-          # (`grep -rE '^\s*(@\w+(\([^)]*\))?\s+|(private|fileprivate|internal|public|open|final|static|class|nonisolated|override|mutating)\s+)*func test' Tests/ --include=*.swift | wc -l`)도
-          # 정확히 2459 다 — 두 세는 법이 어긋나지 않는다는 것을 실측으로 확인했다.
-          #
-          # **[2026-08-20] 근거가 하한보다 낡아 있었다.** 이 주석은 `2369`(커밋 c109ac1)를 인용하는데
-          # 강제되는 하한은 그 뒤로 2371 → 2372 → 2374 → 2382 → 2390 으로 다섯 번 더 올라갔다.
-          # 즉 "근거로 적힌 숫자"와 "실제로 막는 숫자"가 서로 다른 말을 하고 있었다 — 이 리포가
-          # 반복해서 잡아내는 바로 그 부류(주석과 코드가 어긋난 채 초록)를 이 게이트 자신이 앓고 있었다.
-          # 게이트 동작 자체는 정상이었지만(2452 ≥ 2390) 여유가 62 로 벌어져 **감도가 그만큼 무뎠다**:
-          # 테스트 62개가 사라져도 통과한다. 래칫 규약(하한 = 직전 실측치)대로 2452 로 되돌린다.
-          #
-          # 막으려는 것은 **대량 무음 스킵**이다. XCTSkip("no Metal") 게이트가 걸린 파일에
-          # 거주하는 테스트가 575개(위 census 주석의 세는 법 참조)인데 스킵은 통과로 집계되므로,
-          # 러너 이미지가 바뀌거나 GPU 없는 세션에서 돌면 전부 스킵된 채 초록이 뜬다 —
-          # 통과 수만 봐서는 알아챌 수 없다. 상한 100 은 그 실패 양상(수백 건 스킵)을 확실히 잡는다.
-          #
-          # [2026-08-27] 종전 이 자리는 "561개인데 … 정상치의 두 배 여유가 있어" 였다. 561 은
-          # 위 정정대로 잘못 센 값이고, "두 배" 도 그 문장이 쓰인 시점(정상치 46~47)의 비율이라
-          # 지금 정상치 63~64 에서는 1.56배다. **실효 여유는 36 이고, 오디오 출력이 죽은 머신에서는
-          # 78~79 까지 올라가 여유가 21 로 줄어든다.** 상한을 다시 잡을 때 이 여유부터 보라.
+          # (상한 100 — 대량 무음 스킵 트립와이어) — 근거는 이 스텝 위 YAML 주석에 있다.
+          # run 블록 밖으로 옮긴 이유도 거기 적었다(21,000바이트 한도).
           if [ "${SKIPPED:-0}" -gt 100 ]; then
             echo "::error::스킵 ${SKIPPED}건 — 상한 100 초과. GPU/코퍼스 없이 대량 스킵되고 있을 가능성이 크다."
             exit 1
           fi
-          # 테스트 수는 늘기만 한다(줄면 파일이 빠졌거나 번들이 안 실렸다는 뜻).
-          #
-          # 하한은 **초록 실행이 실제로 잰 값**에서만 올린다(추정 금지). 갱신 이력:
-          #   3350 → 3500  (2026-08-21, `2d19faa` 초록 실행 실측 executed=3596 skipped=65)
-          #   3500 → 3686  (2026-08-25, `be3390a` 초록 실행 실측 executed=3686 skipped=64/65,
-          #                 run 32755977630 · debug·release 두 잡이 같은 수. 정적 개수도 3,686 으로 일치)
-          #   3686 → 3693  (2026-08-25, `f5d5d56e` 초록 실행 실측 executed=3693 skipped=63/64,
-          #                 run 32776371263 · debug·release 두 잡이 같은 수. 정적 개수도 3,693 으로 일치
-          #                 — 열 번째 연속. 증분 +7 은 이 라운드가 얹은 오라클이다: 파티클 클램프 2 ·
-          #                 이미지 빌보드 depthwrite 1 · 동봉 루트 findability 2 · CompatCore 마운트 3 ·
-          #                 ObjC 셀렉터 노출 1 · 엡실런 비트동일 1 에서 삭제 3 을 뺀 값)
-          #   3693 → 3708  (2026-08-25, `ce99a527` 초록 실행 실측 executed=3708 skipped=63/64,
-          #                 run 32836320975 · debug·release 두 잡이 같은 수. 정적 개수도 3,708 으로 일치
-          #                 — 열한 번째 연속. 증분 +8 은 P0 라운드가 얹은 오라클이다:
-          #                 SceneVersionFeatureGateTests +4(신규) · ParticleExtendedKeysTests +2 ·
-          #                 CapturePointerPinTests +2)
-          #
-          # **[2026-08-25] 종전 여유 96 의 근거는 실측과 달랐다.** 그 주석은 "테스트 파일 하나가
-          # 통째로 안 실리는 양상(대개 100건 이상)은 잡는 폭" 이라고 적었는데, 100건 넘는 테스트
-          # 파일이 **하나도 없다** — 최대가 `SceneDocumentTests.swift` 81건이다. 즉 그 여유는
-          # 어떤 파일이 통째로 빠져도 잡지 못하는 폭이었다.
-          #
-          # 그래서 래칫 규약(하한 = 직전 초록 실측치)으로 되돌린다. 여유 0 이 안전한 이유는
-          # `executed` 가 **스킵을 포함**해 정적 개수와 같기 때문이다 — 플랫폼별 스킵 흔들림은
-          # 이 수를 바꾸지 않는다(위 표에서 스킵 64/65 로 갈려도 executed 는 둘 다 3,686).
-          # 그리고 "타깃이 통째로 빠지는" 양상은 이제 개수가 아니라 **아래 존재 게이트**가 잡는다.
-          # [2026-08-26] 하한을 3708 → **3723** 으로 래칫한다.
-          # (run 32991538355 · 커밋 `0e1a744` — **브랜치 tip 자신**, debug·release 두 잡 모두 성공.
-          #  debug 가 `executed=3723 skipped=63`. 정적 개수도 정확히 3,723 이라 두 세는 법이
-          #  **열한 번째로** 어긋나지 않았다 — 단, 그 "정적 개수" 는 `AGENTS.md` 의 **새 정본
-          #  레시피**로 센 값이다. 종전 레시피(`^\s*func test`)는 같은 트리에서 3,714 를 낸다.)
-          #
-          # 증분 15의 출처(커밋별 실측 — 추정 아님):
-          #   `7de1021` 3708  (AppLogicTests 58 · CapturePointerPinTests 4)
-          #   `ae7fa12` 3711  +3  캡처 핀 인스턴스화 — CapturePointerPinTests 4→7
-          #   `5a7831b` 3722  +11 프리셋 필드 드롭 — AppLogicTests 58→69
-          #   `2d7d002` 3723  +1  죽은 폴백 회귀 — AppLogicTests 69→70
-          #   `0e1a744` 3723  ±0  문서·스크립트만
-          # 두 번째 항목이 +11 인 것은 `5a7831b` 가 **작업 중인 트리를 잡아 커밋했기 때문**이다
-          # (같은 커밋이 죽은 `??` 도 함께 실어 CI 를 붉혔다 — `2d7d002` 메시지 참조).
-          # 마지막 오라클 하나가 그 뒤에 착지해 +1 로 따라왔다.
-          # [2026-08-27] 3723 → **3774** 래칫. run 33028115080 · 커밋 `e48bd3b`(브랜치 tip 자신,
-          # debug·release 두 잡 성공)에서 `executed=3774 skipped=64`. 정적 개수도 정확히 3,774 라
-          # **열두 번째로** 어긋나지 않았다.
-          #
-          # ⚠️ **[2026-08-27] 래칫 미이행 — 지금 여유는 101 이다. 다음 그린에서 반드시 올려라.**
-          # `e48bd3b` 이후 세 커밋이 하한을 안 올린 채 테스트를 얹었다(커밋별 정적 실측):
-          #   `a9f271b` 3807  +33  재생정책 stage 3
-          #   `6a0e389` 3813  +6   캡처 하네스
-          #   `4c58826` 3875  +62  재생목록 4파일 신설
-          # 이 상태가 위험한 이유는 여유의 크기 자체가 아니라 **아래 [2026-08-25] 가 여유 96 을
-          # 두고 정확히 같은 논리로 되감았던 자리로 돌아왔다**는 것이다. 100건 넘는 테스트 파일은
-          # 지금도 없다(최대 `SceneDocumentTests.swift` 81). 게다가 타깃 넷(`WaplePolicyTests` 74 ·
-          # `WapleLibraryTests` 52 · `WapleCompatCoreTests` 28 · `WapleSnapshotTests` 26)이 전부
-          # 여유보다 작아 **타깃 하나가 통째로 죽어도 이 게이트는 통과한다**(존재 게이트는 타깃당
-          # 클래스 1개만 확인하므로 그것도 못 잡는다).
-          # 정적 3,875 를 알고 있어도 **손으로 박지 마라** — 래칫 규약은 그린 CI 실측이다.
-          #
-          # 증분 51의 출처(재생정책 stage 2 — 커밋별 실측):
-          #   S2a 전역면·병합·마스크        +24  PlaybackPolicyRuntimeTests 신설
-          #   S2b 관측자 6축                +12  PlaybackObserversTests 신설
-          #   S2c 합류·엣지 추적            +15  PlaybackPolicyCompositionTests 신설
-          #   배선·심 타입 정정              ±0  프로덕션 코드만
+          # (하한 3774 — 실행 수 래칫과 그 이력) — 근거는 이 스텝 위 YAML 주석에 있다.
+          # run 블록 밖으로 옮긴 이유도 거기 적었다(21,000바이트 한도).
           if [ "${EXECUTED:-0}" -lt 3774 ]; then
             echo "::error::실행 ${EXECUTED}건 — 하한 3774 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
             exit 1
           fi
 
-          # [2026-08-25] **하한만으로는 타깃 통째 소실을 못 잡는다.**
-          #
-          # 위 하한은 이제 래칫(여유 0)이라 "개수가 줄면" 잡는다. 그런데 **개수가 줄지 않는
-          # 소실**은 여전히 못 잡는다 — 타깃 하나가 빠지면서 다른 곳에 그만큼 테스트가 늘면
-          # 총계는 유지된다. 그리고 래칫은 다음 갱신 전까지만 여유 0 이고, 오라클을 추가하는
-          # 순간 다시 여유가 벌어진다(그 창에서 타깃 넷은 각각 100건 미만이라 숨을 수 있다:
-          # WapleCompatCoreTests 25 · WapleSnapshotTests 26 · WapleLibraryTests 52 · WaplePolicyTests 74).
-          #
-          # 즉 개수 게이트로는 이 구멍이 원리적으로 안 닫힌다. 그래서
-          # **개수가 아니라 존재**를 본다 — 각 테스트 타깃에서 클래스 이름을 실제로 뽑아, 그 중
-          # 하나라도 실행 로그에 나타났는지 확인한다.
-          #
-          # 이름을 하드코딩하지 않는 이유: 하드코딩하면 클래스 rename 마다 이 게이트가 거짓
-          # 실패하고, 그걸 피하려고 목록을 느슨하게 만들면 다시 도장이 된다. 소스에서 뽑으면
-          # 스스로 따라온다.
-          #
-          # 한계 두 가지를 명시한다.
-          #   ① `Tests/<타깃>/` 디렉터리와 `Package.swift` 항목을 **같이** 지우면 찾을 대상이 없어
-          #      이 게이트가 침묵한다. 그래서 타깃 수 하한(7)도 함께 본다 — 이 숫자는 타깃을
-          #      의도적으로 늘리거나 줄일 때만 바뀐다.
-          #   ② `Test` 스텝이 중간에 죽으면 뒤쪽 타깃이 로그에 없어 여기가 빨개진다. 그건 오탐이
-          #      아니라 "스위트가 안 끝났다" 는 같은 신고다 — 다만 **`Test` 스텝의 실패를 먼저 읽어라**.
+          # (타깃 존재 검사 — 하한이 못 잡는 소실) — 근거는 이 스텝 위 YAML 주석에 있다.
+          # run 블록 밖으로 옮긴 이유도 거기 적었다(21,000바이트 한도).
           python3 - <<'PYEOF' || exit 1
           import pathlib, re, sys
 
