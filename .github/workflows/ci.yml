@@ -735,8 +735,10 @@ jobs:
       # L2 렌더 +8(waterripple 1 · parallax 중립 2 · orthographic 게이트 2 · events 1 ·
       # bind/fbos 1 · forwardLightAxis 동형 1) · L3 앱 +6(L3MediaFixRegression 3 ·
       # L3LibraryFilterScope 3) · L4 하네스 ±0(단언만 보강) · L6 문서 ±0.
-      # **원격 근거는 아직 없다** — 이 래칫은 로컬 실측이다. 다음 그린 CI 가 `executed=4042` 를
-      # 확인하면 여기에 런 id 를 덧붙여 규약대로 마감해라.
+      # **[근거 마감 2026-09-01]** PR #9 의 커밋 `f3e37732` 를 PR/push 두 이벤트가 각각
+      # 검증했다(run `33464170650` · `33464122819`). debug·release 네 잡 모두
+      # `executed=4042` · 실패 0 이고 skipped 만 63/64 로 갈렸다(스킵은 `executed` 에
+      # 포함되므로 이 수는 안 흔들린다). 정적 개수도 정확히 4,042 라 두 세는 법이 일치한다.
       #
       # 순증 +141의 출처: CameraParallaxRender +16 · ScenePerspectiveOverrideFovRender +15 ·
       # ParticleMapSequenceOracle +14 · ParticleInstanceOverrideAnimationRuntime +11 ·
