@@ -251,9 +251,20 @@ public enum ProfilePipeline {
         guard let project = try? ProjectJSONParser.parse(folderURL: folder) else {
             fputs("[profile] project parse failed: \(only)\n", stderr); return 2
         }
-        let pkgName = fm.fileExists(atPath: folder.appendingPathComponent("scene.pkg").path) ? "scene.pkg" : "gifscene.pkg"
-        guard let mdata = try? Data(contentsOf: folder.appendingPathComponent(pkgName)),
-              let mpkg = try? ScenePackage.parse(mdata) else {
+        // [2026-08-27] 이 자리만 `.pkg` 를 하드코딩하고 있었다. 이 파일 머리의 정정이 "마운트
+        // 선택자를 렌더러·DeepScan 과 **같은 함수**로 맞춘다" 고 선언했는데 `mountPackage` 호출부는
+        // runInventory·runVisBlast 둘뿐이었고 runProfile 만 빠져 있었다.
+        //
+        // 귀결이 컸다: `DeepScan.swift` 가 실측으로 기록한 대로 WE 2.8.42 설치본 씬은 **188/188 이
+        // 언팩**이고 두 루트 전체에 `.pkg` 가 0개다. 폴더는 SnapshotPipeline.sceneFolders 가
+        // 언팩 폴백으로 잘 찾아 주므로 `--profile` 은 **여기까지 와서** 죽었다 — 즉 이 모드가
+        // 자기가 겨냥해 만들어진 코퍼스에서 전건 exit 2 였다. mpkg 는 layers/effects 카운트
+        // 메타에만 쓰이고 실제 프로파일링은 아래 r.mount 가 하므로, 측정 가능한 상태인데도
+        // 메타 파스에서 떨어진 것이다.
+        //
+        // 트립와이어도 못 잡았다 — scripts/spec/check_scene_mount_parity.py 의 감시 목록에
+        // ProfilePipeline 이 없었다. 그쪽도 같이 넓힌다.
+        guard let mpkg = mountPackage(folder) else {
             fputs("[profile] meta parse failed: \(only)\n", stderr); return 2
         }
         // F680: 메타 파스도 inventory 와 같은 공유 에셋 리졸버를 쓴다 — 없으면 models/util/*.json 참조
