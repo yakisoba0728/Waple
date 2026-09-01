@@ -1253,20 +1253,21 @@
     },
     "saturateIsClampNotCurve": "[0,1] 구간은 **항등**이고 >1 은 1.0 이다. 어깨도 발끝도 없으므로 ACES/Reinhard 로 바꾸면 저역까지 곡선변형돼 이탈한다.",
     "hdrBoostRampIsNotAToneCurve": "combine_hdr.frag:31 의 smoothstep(1,5,luma) 는 톤 곡선이 아니라 **HDR10 헤드룸 배수 램프**다. DISPLAYHDR 콤보 안에만 있고 SDR 경로에는 실리지 않는다.",
-    "corpusScenes": 358,
+    "corpusPopulation": "**설치본 assets/ + projects/**, 이름 글롭 `{scene,gifscene}.json`. [2026-08-28] 종전 358 은 이중계수였다 — 동봉 `Sources/WapleRender/Resources/WEAssets/` 는 설치본 `assets/` 의 사본이라 172 씬을 두 번 셌다(358 = 172 + 186). 단일 모집단으로 다시 세면 **186** 이고 분포도 그만큼 줄어든다({348,6,4,0} → {178,5,3,0}; 산술 확인 348 = 178+170 · 6 = 5+1 · 4 = 3+1). 같은 트리를 **구조 기준**(`objects` + `general|camera`)으로 세면 190 / {180,7,3,0} 이다 — 기준이 다르면 수가 다르다.",
+    "corpusScenes": 186,
     "corpusReach": {
-     "LDR + bloom off": 348,
-     "LDR + bloom on": 6,
-     "HDR + bloom on": 4,
+     "LDR + bloom off": 178,
+     "LDR + bloom on": 5,
+     "HDR + bloom on": 3,
      "HDR + bloom off": 0
     },
     "hdrScenes": [
-     "Sources/WapleRender/Resources/WEAssets/presets/lightning/previewthunderbolt/scene.json",
      "WE_ROOT/assets/presets/lightning/previewthunderbolt/scene.json",
      "WE_ROOT/projects/defaultprojects/razer_bedroom/scene.json",
      "WE_ROOT/projects/defaultprojects/shimmering_particles/scene.json"
     ],
-    "reachReading": "감마 논쟁(`lin()` 이식 여부)이 화면에 닿는 표본은 358 중 `hdr:true` 쪽뿐이고, `hdr:true && !bloom` 은 코퍼스에 **0건**이라 `passthroughsrgb` 경로는 동봉·설치본 어느 씬으로도 재현되지 않는다.",
+    "hdrScenesNote": "고유 HDR 씬은 **3개**다. 종전 4개는 `previewthunderbolt` 를 동봉 경로와 설치 경로로 두 번 실은 것이다 — 이중계수의 같은 뿌리.",
+    "reachReading": "감마 논쟁(`lin()` 이식 여부)이 화면에 닿는 표본은 **설치본 186 씬** 중 `hdr:true` 쪽 3건뿐이고, `hdr:true && !bloom` 은 코퍼스에 **0건**이라 `passthroughsrgb` 경로는 설치본 어느 씬으로도 재현되지 않는다.",
     "crossRef": "spec/engine/shaders.json shaders.composite · spec/engine/render-pass.json engine.renderPass.order"
    },
    "status": "확정",
@@ -1278,7 +1279,9 @@
     },
     {
      "kind": "corpus",
-     "ref": "동봉 172 + 설치본 186 = 358 씬의 general.hdr / general.bloom"
+     "ref": "설치본 assets/ + projects/ 186 씬(이름 글롭 {scene,gifscene}.json)의 general.hdr / general.bloom",
+     "note": "단일 모집단이다. 동봉 WEAssets/ 는 설치본 assets/ 의 사본이라 같이 세면 172 씬이 두 번 들어간다",
+     "population": "설치본 assets/ + projects/ — 이름 글롭 {scene,gifscene}.json 186씬"
     },
     {
      "kind": "script",
@@ -1517,7 +1520,7 @@
     "authoringDefaults": {
      "bloomstrength": "2.0 — Scene::Scene 즉시값 `0x1401870ac` (0x40000000)",
      "bloomthreshold": "0.6499999761581421 — `0x1401870b7` (0x3f266666)",
-     "bloomtint": "(1,1,1) — 358 씬 중 저작 154건이 전건 \"1.00000 1.00000 1.00000\""
+     "bloomtint": "(1,1,1) — **설치본 186 씬**(이름 글롭 {scene,gifscene}.json) 중 저작 **77건**이 전건 \"1.00000 1.00000 1.00000\". [2026-08-28] 종전 \"358 중 154\" 는 이중계수였다 — 동봉 77 + 설치 77 을 더한 것이고 두 트리는 같은 집합이다."
     },
     "wapleProbes": {
      "ldr.defaultStrength": 2.0,

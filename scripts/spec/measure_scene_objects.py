@@ -448,6 +448,20 @@ def corpus():
         if isinstance(cam, dict) and "paths" in cam:
             scene_camera_paths.append(os.path.relpath(p, WE).replace("\\", "/"))
     return {
+        "_모집단": "**설치본 이름 글롭** — `$WE_ROOT/**/{scene,gifscene}.json`. 아래 도수는 전부 "
+                 "이 모집단 기준이고, 다른 기준으로 세면 다른 수가 나온다. [2026-08-28] 종전에는 "
+                 "이 라벨이 없어서 186 이 '설치본 씬의 전부' 처럼 읽혔다 — 값은 틀리지 않았고 "
+                 "**모집단 이름이 빠져 있었다**. 세 기준의 실측: "
+                 "① 이름 글롭 `{scene,gifscene}.json` = **186**(이 항목) · "
+                 "② `project.json` 의 `file` 이 가리키는 문서 = **188** · "
+                 "③ 구조 기준(`objects` 키 + `general` 또는 `camera` 키) = **190**. "
+                 "그리고 **190 = ① ∪ ②** 이며 ①②는 서로 포함관계가 아니다: "
+                 "①에만 있는 것 = `assets/scenes/gifs/gifscene.json` · "
+                 "`assets/scenes/videoplayer/scene.json`(project.json 이 안 가리킨다), "
+                 "②에만 있는 것 = audiophile · fantasticcar · ricepod · techno"
+                 "(파일 이름이 scene.json 이 아니다). "
+                 "**따라서 '글롭을 폐기하고 file 로 대체하라' 는 처방은 틀렸다** — 그러면 문서 2개를 "
+                 "잃는다. 전수를 원하면 **합집합(190)** 을 써라.",
         "씬문서": len(files),
         "오브젝트": objs,
         "중복id를_가진_문서": dupfiles,
@@ -513,7 +527,9 @@ def main():
     binref = specfmt.ev("binary", f"wallpaper64.exe (WE {specfmt.WE_VERSION}) — $WE_BIN "
                                  f"(sha256 {_sha256_of(BIN)}, {os.path.getsize(BIN)} B)")
     me = specfmt.ev("script", "scripts/spec/measure_scene_objects.py")
-    corpref = specfmt.ev("corpus", f"설치본 씬 문서 전수 — $WE_ROOT/**/{{scene,gifscene}}.json")
+    corpref = specfmt.ev("corpus", f"설치본 씬 문서 전수 — $WE_ROOT/**/{{scene,gifscene}}.json",
+                         None,
+                         "설치본 assets/ + projects/ — 이름 글롭 {scene,gifscene}.json 186씬")
 
     entries = [
         specfmt.entry("scene.object.idLookupFirstWins", find_by_id(pe), "확정", [binref, me]),

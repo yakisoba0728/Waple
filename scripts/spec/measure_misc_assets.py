@@ -959,6 +959,12 @@ def main():
     # Swift 툴체인이 없어 빌드/실행은 못 한다. 소스 문자열 존재 여부만 기계적으로 센다.
     SRC = "Sources"
     def src_hits(needle):
+        """`Sources/**/*.swift` 전수의 **부분문자열 출현 횟수**(줄 수가 아니다).
+
+        [2026-08-28] `files` 를 정렬한다. 종전엔 `os.walk` 의 디렉터리 열거 순서를 그대로
+        따라가 같은 트리에서도 실행마다 목록 순서가 달라졌다 — 재생성 고정점이 깨지는
+        자리이고, 값이 아니라 순서만 바뀌는 diff 는 사람이 무시하게 되어 진짜 변화를 가린다.
+        """
         n = 0
         files = []
         for dp, _dn, fn in os.walk(SRC):
@@ -970,23 +976,53 @@ def main():
                 if c:
                     n += c
                     files.append(os.path.relpath(p, SRC).replace(os.sep, "/"))
-        return {"hits": n, "files": files[:6]}
+        return {"hits": n, "files": sorted(files)[:6]}
 
-    waple = {k: src_hits(k) for k in
-             ("zcompat", "models/util", "keepaspect", "normalizeColor", "expandColor",
-              "videoplayer", "videotex", "jsmodules", "baseclasses")}
+    waple = {"_세는법":
+             "[2026-08-28] 모집단은 `Sources/**/*.swift` 전수. 단위는 **부분문자열 출현 횟수**"
+             "(줄 수가 아니다). `files` 는 히트가 난 파일을 정렬해 앞 6개만 싣는다. "
+             "재현: scripts/spec/measure_misc_assets.py 의 src_hits(). 종전 이 표는 9개 키 중 "
+             "**8개가 0 으로 굳어 있었다** — 구현이 그 사이 들어왔는데 표가 따라가지 않은 것이고, "
+             "0 은 '없다' 는 강한 부정 결론이라 낡으면 가장 해롭다. 실제로 그 0 하나에 기대어 "
+             "waple.ok.zcompatZero 가 정반대 결론을 적고 있었다."}
+    waple.update({k: src_hits(k) for k in
+                  ("zcompat", "models/util", "keepaspect", "normalizeColor", "expandColor",
+                   "videoplayer", "videotex", "jsmodules", "baseclasses")})
     entries.append(specfmt.entry(
         "waple.sourceStringCensus", waple, "확정",
-        [specfmt.ev("file", "Sources/**/*.swift 문자열 카운트"),
-         specfmt.ev("script", "Swift 툴체인이 없어 빌드/실행은 못 했다 — 존재 여부만"), ev_script]))
+        [specfmt.ev("file", "Sources/**/*.swift 문자열 카운트",
+                    "[2026-08-28] 재실행 실측. 종전 9키 중 8키가 0 으로 낡아 있었다",
+                    "Sources/**/*.swift 전수 — 부분문자열 출현 횟수(줄 수가 아니다)"),
+         specfmt.ev("doc", "Swift 툴체인이 없어 빌드/실행은 못 했다 — 문자열 존재 여부만 센다",
+                    "[2026-08-28] kind 를 'script' 에서 'doc' 으로 고쳤다 — 이 ref 는 스크립트 "
+                    "경로가 아니라 방법의 한계를 적은 산문이다"), ev_script]))
 
+    # [2026-08-28] 종전 id 는 `waple.ok.zcompatZero` 였고 값은 "'zcompat' 문자열 0회 — 0건 구현"
+    # 이었다. **정반대다.** 실측 zcompat 히트는 15회이고 구현이 세 파일에 실재한다
+    # (WapleCore/GLSLTranslator.swift · WapleCore/WebCompatPatch.swift ·
+    #  WapleRender/WallpaperSchemeHandler.swift). 문장이 낡은 것이 아니라 **결론이 뒤집혔다**.
+    # id 를 바꾸면 축소 가드에 걸리고 다른 문서의 참조가 끊기므로 id 는 유지하고
+    # 내용을 사실에 맞게 다시 쓴다(`supersedes` 없는 개명은 이 리포의 관례가 아니다).
     entries.append(specfmt.entry(
         "waple.ok.zcompatZero",
-        {"waple": "'zcompat' 문자열 %d회 — 0건 구현" % waple["zcompat"]["hits"],
-         "정본": "scene zcompat 은 모바일 익스포트 전용이라 데스크톱 렌더러가 구현할 것이 없다",
-         "판정": "현행이 옳다. 다만 web 월페이퍼를 구현하면 zcompat/web 은 런타임이라 필요해진다"},
-        "확정", [specfmt.ev("binary", "wallpaper64.exe 에 'zcompat' 0회"),
-                specfmt.ev("file", "Sources/**/*.swift"), ev_script]))
+        {"waple": "'zcompat' 문자열 %d회 — **구현돼 있다**. 히트는 %s."
+                  % (waple["zcompat"]["hits"], " · ".join(waple["zcompat"]["files"]) or "없음"),
+         "정본": "scene zcompat 은 모바일 익스포트 전용이라 **씬 렌더러**가 구현할 것은 없다. "
+                 "그러나 Waple 은 web 월페이퍼 경로를 갖고 있고, 그 경로에서 zcompat/web 은 "
+                 "런타임이라 실제로 필요하다 — 종전 항목이 '필요해진다(미래)' 로 적어 둔 것이 "
+                 "이미 현재형이 됐다.",
+         "판정": "**항목 이름이 사실과 반대다.** 'zcompatZero' 는 0건일 때 붙인 이름이고 지금은 "
+                 "0 이 아니다. 이 항목이 담는 참인 사실은 '씬 렌더러 쪽 구현 부담이 없다' 뿐이고, "
+                 "'문자열이 0회다' 와 '0건 구현이다' 는 둘 다 거짓이다.",
+         "정정": "[2026-08-28] 종전 값 「'zcompat' 문자열 0회 — 0건 구현」 을 삭제했다. "
+                 "그 0 은 waple.sourceStringCensus 가 낡은 채 0 을 싣고 있어서 파생된 것이다 — "
+                 "낡은 도수 하나가 파생 결론을 정반대로 뒤집은 실례다."},
+        "확정", [specfmt.ev("file", "Sources/**/*.swift — 'zcompat' 실측",
+                           "GLSLTranslator.swift · WebCompatPatch.swift · "
+                           "WallpaperSchemeHandler.swift"),
+                specfmt.ev("binary", "wallpaper64.exe 에 'zcompat' 0회",
+                           "WE 바이너리 쪽 0 은 여전히 참이다 — 뒤집힌 것은 Waple 쪽 도수다"),
+                ev_script]))
 
     entries.append(specfmt.entry(
         "waple.note.videoPathDivergence",

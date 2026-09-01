@@ -3,14 +3,25 @@
 ## 왜 필요한가
 
 Waple 의 소스·정본은 `FUN_140xxxxxx` 형태로 wallpaper64.exe 의 주소를 인용한다.
-그 주소의 출처가 둘인데 **서로 0xD0(208바이트) 어긋난다**:
+그 주소의 출처가 셋이고, 그중 하나만 0xD0(208바이트) 어긋나 있다:
 
   ① 바이너리 직접 관찰(어셈블리 주소, .rdata 덤프) — 원본 기준, 보정 불필요
-  ② Ghidra 디컴파일 산출물의 파일명(`analysis/decompiled/all/…FUN_xxx.c`)
-     — Ghidra 가 **rich header 주입본**을 매핑했다. 주입본은 원본 앞에 208바이트가
-     붙어 있어(e_lfanew 0x40 → 0x110) 모든 주소가 +0xD0 밀려 있다.
+  ② **재생성** Ghidra 산출물의 파일명 — 참 VA 로 이름이 붙는다. 보정 불필요
+  ③ **폐기된 1세대(변위) 산출물**에서 뜬 옛 인용 — 그때의 주입기가 FileAlignment 를
+     어겨 섹션이 실제로 밀렸다. 원본에서 되읽으려면 −0xD0.
 
-인용을 눈으로 보면 둘이 구분되지 않는다. 이 문서가 그 구분을 기록한다.
+**[2026-08-28] 종전 이 자리와 정본은 ②③ 을 구분하지 않고 "산출물의 모든 주소가 +0xD0
+밀린다" 는 전칭을 적었다. 그 전칭은 거짓이다.** 실측 셋:
+  · 산출물 파일명 VA 7,748개 중 **6,824개가 원본 `.pdata` 함수 시작과 보정 없이 일치**한다
+    (변위 가설로만 설명되는 것 340개, 그중 307개는 보정 전후 양쪽이 함수 시작인 중복 판정)
+  · `wallpaper64.exe` 와 `wallpaper64_rich.exe` 의 `.pdata` 시작 주소 **14,792개가 비트동일**
+    — 리치헤더 주입 자체는 VA 를 밀지 않는다
+  · 종전 근거였던 `e_lfanew 0x40 → 0x110(208B)` 은 실물과 다르다 — 실물 주입본의
+    `e_lfanew` 는 **0x240**(+512B)이다. 그 문장은 208 을 뒷받침하지 못한다.
+208 을 뒷받침하는 것은 아래 `needsMinus0xD0List` 7건의 −0xD0 대조뿐이고, 정본도 그
+**개별 7건 한정**으로 좁혀 적는다.
+
+인용을 눈으로 보면 셋이 구분되지 않는다. 이 문서가 그 구분을 기록한다.
 
 ## 왜 지금 재는가
 
@@ -147,10 +158,34 @@ def main():
         specfmt.entry("decomp.pdataFunctionStarts", len(starts), "확정", [ev]),
         specfmt.entry("decomp.richHeaderShift", {
             "bytes": RICH_SHIFT,
-            "why": "Ghidra 가 매핑한 것은 rich header 주입본이다. 주입본은 원본 앞에 208바이트가 "
-                   "붙어 e_lfanew 가 0x40 → 0x110 이 되고, 디컴파일 산출물의 모든 주소가 +0xD0 밀린다.",
-            "appliesTo": "analysis/decompiled/all/*.c 의 파일명과 그 파일 안의 행 인용",
-            "doesNotApplyTo": "바이너리를 직접 관찰한 인용(어셈블리 주소·.rdata 덤프)",
+            "scope": "[2026-08-28] **개별 인용 7건 한정** — 같은 문서 "
+                     "decomp.citedAddressClassification.needsMinus0xD0List 에 열거된 것들. 전칭이 아니다.",
+            "why": "종전 문면은 '디컴파일 산출물의 **모든** 주소가 +0xD0 밀린다' 는 전칭이었고 "
+                   "그 전칭은 거짓이다. 208B/0xD0 은 헤더 크기 차이가 아니라 **폐기된 1세대 손상 "
+                   "코퍼스**(주입기가 FileAlignment 를 어겨 섹션이 실제로 밀렸던 판)에서 나온 변위이며, "
+                   "그 세대에서 뜬 개별 인용에만 남아 있다. 재생성본은 참 VA 로 이름이 붙는다"
+                   "(Sources/WapleCore/Model3DFormat.swift 의 [2026-08-27] 주석과 같은 사실).",
+            "measured": "① 산출물 파일명 VA 7,748개를 원본 .pdata 함수 시작 14,792개와 대조하면 "
+                        "**6,824개가 보정 없이 그대로 일치**한다. 변위 가설로만 설명되는 것은 340개이고 "
+                        "그중 307개는 보정 전후가 둘 다 함수 시작이라 중복 판정이다 — 전칭이 참이면 "
+                        "나올 수 없는 분포다. ② wallpaper64.exe 와 wallpaper64_rich.exe 의 .pdata 시작 "
+                        "주소 **14,792개가 비트동일**하다. 리치헤더 주입 자체는 VA 를 밀지 않는다. "
+                        "③ 종전 근거로 적혀 있던 'e_lfanew 0x40 → 0x110(208B 선행)' 은 실물과 다르다 — "
+                        "실물 wallpaper64_rich.exe 의 e_lfanew 는 **0x240**(원본 0x40 대비 +512B)이다. "
+                        "즉 그 근거 문장은 208 을 뒷받침하지 못한다. 208 을 뒷받침하는 것은 오직 "
+                        "아래 7건의 −0xD0 대조뿐이다.",
+            "appliesTo": "1세대(변위) 코퍼스에서 뜬 **개별 인용 7건**. 그 인용을 원본 이미지에서 "
+                         "되읽을 때만 −0xD0 한다.",
+            "doesNotApplyTo": "바이너리를 직접 관찰한 인용(어셈블리 주소·.rdata 덤프), 그리고 "
+                              "**재생성 코퍼스의 파일명·행 인용**(참 VA 라 보정하면 오히려 틀린다).",
+            "usedInTests": "7건 중 3건이 테스트 기대값의 근거 주석으로 쓰인다 — "
+                           "FUN_1400d0380(Tests/WapleRenderTests/AudioInputPipelineTests.swift · "
+                           "AudioCalibrationTests.swift · EngineAttenuationLaneTests.swift) · "
+                           "FUN_1400d8060(Tests/WapleCoreTests/Model3DTests.swift) · "
+                           "FUN_140261950(Tests/WapleCoreTests/Model3DVertexLayoutTests.swift · "
+                           "Model3DTrailerSkeletonTailTests.swift). 나머지 4건"
+                           "(0x14009c5d0 · 0x14009c630 · 0x14009c690 · 0x140261750)은 Sources 주석에만 "
+                           "있다. 이름을 참 VA 로 옮길 때 이 테스트 주석도 같이 옮겨야 한다.",
         }, "확정", [ev]),
         specfmt.entry("decomp.citedAddressClassification", {
             "total": len(raw_ok) + len(shifted) + len(indeterminate),
@@ -167,6 +202,16 @@ def main():
                        "파일이 인용 주소 그대로 있으면 그 인용은 주입본 기준이므로 needsMinus0xD0 다.",
             "decompiledSignalUsed": bool(decompiled),
             "decompiledFunctionCount": len(decompiled),
+            "decompiledFunctionCountNote":
+                "[2026-08-28] 종전 11205 는 폐기된 1세대(변위) 코퍼스의 수치라 낡았다. 재생성본 "
+                "실측은 **7748** — analysis/decompiled/manifest.json 의 total 이 7748 이고 "
+                "`.c` 파일 실물도 7,748개다. 세는 법: 산출물 디렉터리에서 "
+                r"`[0-9a-f]{16}__FUN_([0-9a-f]+)\.c` 로 이름이 붙은 파일 수"
+                "(= decompiled_function_starts() 의 집합 크기).",
+            "pdataCoverage": f"{len(decompiled)} / {len(starts)} = "
+                             f"**{100.0 * len(decompiled) / len(starts):.1f}%**. 디컴파일 산출물은 "
+                             f".pdata 함수 시작의 절반쯤만 덮는다 — '산출물에 없다' 가 '함수가 아니다' 를 "
+                             f"뜻하지 않는 두 번째 이유다(첫 번째는 리프 함수).",
         }, "확정", [ev]),
     ]), os.path.join("spec", "engine", "decompilation-provenance.json"))
 

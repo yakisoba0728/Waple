@@ -54,7 +54,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 VA_RE = re.compile(r"0x1[0-9a-fA-F]{8}")
 # 범위 표기: `A–B`(엔대시) · `A-B` · `A..B` · `dis(A, B)` · `vdis2.py A B`
 RANGE_RE = re.compile(r"(0x1[0-9a-fA-F]{8})[`'\"]?\s*(?:–|—|-|\.\.|,\s*|\s+)\s*[`'\"]?(0x1[0-9a-fA-F]{8})")
-# Ghidra 산출물(주입본)과 원본 이미지의 주소 차. `spec/engine/decompilation-provenance.json` 참조.
+# 1세대 Ghidra 산출물(rich header 주입본)과 원본 이미지의 주소 차.
+#
+# [2026-08-28] `spec/engine/decompilation-provenance.json` 의 `decomp.richHeaderShift` 가
+# **전칭에서 개별 7건 한정으로 좁혀졌다** — 현행 코퍼스는 재생성본이라 시프트가 0 이고
+# 파일명 VA 7,748 중 6,824 가 보정 없이 `.pdata` 함수 시작과 일치한다. 그래도 이 상수는
+# 남긴다: 여기서 쓰이는 자리(:485-487)는 **일괄 변환이 아니라 진단용 폴백**이고 —
+# 명령 경계가 아닌 VA 를 만났을 때만 `va - 0xD0` 도 경계인지 보고 "주입본 주소" 힌트를
+# 붙인다 — 문서에 남아 있는 그 7건의 옛 인용을 설명하는 것이 정확히 그 용도다.
+# (부작용: 우연히 `va-0xD0` 이 경계인 진짜 오기를 주입본으로 오분류할 수 있다. 힌트일 뿐
+#  판정이 아니므로 그대로 둔다.)
 GHIDRA_SHIFT = 0xD0
 
 OTHER_BINARIES = ("webwallpaper64.exe", "scenescript64.dll", "wallpaperui.exe",

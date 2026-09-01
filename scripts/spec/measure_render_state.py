@@ -887,13 +887,40 @@ def main():
         "import": "wallpaper64.exe 는 d3d11.dll 에서 D3D11CreateDevice 하나만 임포트한다 "
                   "(D3D11CreateDeviceAndSwapChain 아님 — 스왑체인은 DXGI COM 경유)",
         "dxgiNotImported": "dxgi.dll 임포트 없음. IDXGIFactory 는 디바이스에서 QueryInterface 로 얻는다",
-        "flags": "0x20 = D3D11_CREATE_DEVICE_BGRA_SUPPORT",
+        "callSitesAreMany": "**D3D11CreateDevice 호출부는 하나가 아니라 이미지에 5개이고 Flags 가 "
+                            "제각기 다르다.** [2026-08-28] 종전 이 항목은 `FUN_14005deb0` 하나만 "
+                            "지목하고 `flags: 0x20` 이라고 적었다 — 그 한 자리에 대해서는 참이지만, "
+                            "그것을 '이 프로그램의 디바이스 생성' 으로 읽으면 **씬 스왑체인을 만드는 "
+                            "디바이스를 다른 것으로 오인한다**(아래 sceneSwapchainDevice).",
+        "callSites": {
+            "FUN_140007e40:109": "Flags=**0**. 시작 시 **능력 프로브** — 임시 100×100 창 "
+                                 "`L\"WPEInit\"` 를 만들어 디바이스를 세우고 즉시 파괴한다. "
+                                 "렌더링에 쓰이지 않는다.",
+            "FUN_14005deb0:74": "Flags=**0x20** = D3D11_CREATE_DEVICE_BGRA_SUPPORT "
+                                "(호출부 `0x14005e00a` 가 `mov r9d,0x20`). 종전 정본이 지목하던 자리.",
+            "FUN_1400f1fa0:88": "Flags=**0x800** = D3D11_CREATE_DEVICE_VIDEO_SUPPORT. "
+                                "Media Foundation 비디오 경로용 디바이스다.",
+            "FUN_14012ac60:136/140": "Flags=**0x800 또는 1**(두 자리), 실패 시 재시도는 **0**. "
+                                     "**씬 스왑체인을 만드는 경로**다 — 같은 함수가 "
+                                     "IDXGIFactory2::CreateSwapChainForHwnd 를 부른다"
+                                     "(renderState.backbuffer.swapchainFormat 참조).",
+        },
+        "flags": "**호출부마다 다르다** — 0 / 0x20 / 0x800 / 0x800·1(재시도 0). "
+                 "하나의 값으로 적을 수 없다. 위 callSites 를 볼 것.",
+        "sceneSwapchainDevice": "씬 스왑체인을 만드는 디바이스는 `FUN_14005deb0` 이 **아니다** — "
+                                "`FUN_14012ac60` 이 만든다. 종전 정본이 BGRA_SUPPORT 한 자리만 "
+                                "지목한 탓에 '백버퍼가 BGRA 일 것' 이라는 파생 결론까지 따라 나왔고, "
+                                "그 결론은 실측으로 틀렸다(스왑체인 Format = 28 = R8G8B8A8_UNORM).",
         "featureLevels": ["11_1", "11_0", "10_1", "10_0"],
         "interfaceGuidsPresent": guid_present,
     }, "확정", [
         specfmt.ev("binary", "wallpaper64.exe 임포트 테이블 + .rdata IID 전수 스캔"),
         specfmt.ev("binary", "wallpaper64.exe FUN_14005deb0 @ 0x14005deb0",
                    "D3D11CreateDevice(NULL, HARDWARE, NULL, 0x20, levels, 4, D3D11_SDK_VERSION=7, ...)"),
+        specfmt.ev("binary", "wallpaper64.exe D3D11CreateDevice 호출부 전수",
+                   "FUN_140007e40(Flags=0, L\"WPEInit\" 프로브 창) · FUN_14005deb0(0x20) · "
+                   "FUN_1400f1fa0(0x800, Media Foundation) · FUN_14012ac60(0x800|1, 재시도 0 — "
+                   "씬 스왑체인 경로)"),
         ev_script,
     ]))
 
@@ -912,14 +939,40 @@ def main():
     ]))
 
     E(specfmt.entry("renderState.backbuffer.swapchainFormat", {
-        "value": "DXGI_FORMAT_B8G8R8A8_UNORM(87) 로 추정",
-        "why": "D3D11_CREATE_DEVICE_BGRA_SUPPORT 를 켜고, RTV 포맷 오버라이드가 없고, "
-               "sRGB 뷰를 쓰지 않는다",
-        "notMeasured": "DXGI_SWAP_CHAIN_DESC 를 채우는 지점을 특정하지 못했다. "
-                       "IDXGIFactory::CreateSwapChain(vtbl+0x50)/ForHwnd(+0x78) 호출부를 "
-                       "변위 스캔으로 좁히지 못했다",
-    }, "추정", [
-        specfmt.ev("binary", "wallpaper64.exe 임포트/IID/RTV 생성 경로 정황"),
+        "value": "**DXGI_FORMAT_R8G8B8A8_UNORM(28)**. [2026-08-28] 종전 값 "
+                 "`DXGI_FORMAT_B8G8R8A8_UNORM(87)` 은 틀렸다 — 87 이 아니라 28 이고, "
+                 "그 값은 재지 않고 정황으로 세운 것이었다.",
+        "hdrPath": "**DXGI_FORMAT_R16G16B16A16_FLOAT(10)**. 같은 자리에서 조건부로 갈린다.",
+        "site": "프로덕션 사이트는 `FUN_14012adb9` 다. "
+                "`0x14012b656 mov edx,0x1c`(=28) · `0x14012b65f mov eax,0xa`(=10) · "
+                "`0x14012b668 cmovne edx,eax` 로 골라 `DXGI_SWAP_CHAIN_DESC1` 의 "
+                "`Format`(구조체 +8)에 넣는다. 즉 SDR 이 28, HDR 이 10 이다.",
+        "createSwapChain": "스왑체인 생성은 `0x14012b774 call [r10+0x78]` = "
+                           "**IDXGIFactory2::CreateSwapChainForHwnd**(vtbl +0x78). "
+                           "종전 '호출부를 못 좁혔다' 는 여기서 닫힌다.",
+        "desc1Fields": {
+            "Format (+8)": "28(R8G8B8A8_UNORM) 또는 10(R16G16B16A16_FLOAT) — 위 cmovne",
+            "SampleDesc (+0x10)": 1,
+            "BufferUsage (+0x18)": "0x20 (DXGI_USAGE_RENDER_TARGET_OUTPUT)",
+            "BufferCount (+0x1C)": 2,
+            "SwapEffect (+0x24)": "3 (FLIP_DISCARD)",
+            "AlphaMode (+0x28)": "3 (IGNORE)",
+            "Flags (+0x2C)": "0x800 (ALLOW_TEARING)",
+        },
+        "why": "종전의 정황 추론은 'D3D11_CREATE_DEVICE_BGRA_SUPPORT 를 켜고, RTV 포맷 "
+               "오버라이드가 없고, sRGB 뷰를 쓰지 않는다' 였다. **그 세 사실은 지금도 참이지만 "
+               "결론을 뒷받침하지 않는다** — BGRA_SUPPORT 는 스왑체인 경로가 아니라 "
+               "`FUN_14005deb0`(호출부 `0x14005e00a` 의 `mov r9d,0x20`)에서 오는 **별개 사실**이고, "
+               "D3D11CreateDevice 호출부는 이미지에 5개이며 Flags 가 각각 다르다"
+               "(renderState.device.creation.callSites). 씬 스왑체인을 만드는 디바이스는 "
+               "`FUN_14012ac60` 쪽이다. BGRA_SUPPORT 문장을 지우지 않는 이유가 이것이다 — "
+               "참인 사실이 **엉뚱한 결론에 배선돼 있었다**는 것이 이 항목의 교훈이다.",
+    }, "확정", [
+        specfmt.ev("binary", "wallpaper64.exe FUN_14012adb9 @ 0x14012b656–0x14012b774",
+                   "mov edx,0x1c / mov eax,0xa / cmovne edx,eax → DXGI_SWAP_CHAIN_DESC1.Format(+8); "
+                   "call [r10+0x78] = IDXGIFactory2::CreateSwapChainForHwnd"),
+        specfmt.ev("binary", "wallpaper64.exe 임포트/IID/RTV 생성 경로 정황",
+                   "종전 정황 추론의 근거. 지금은 결론이 아니라 배경으로만 남는다"),
         ev_script,
     ]))
 
