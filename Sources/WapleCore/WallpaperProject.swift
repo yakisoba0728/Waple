@@ -92,15 +92,25 @@ public struct WallpaperProject: Equatable, Sendable {
     /// **여기 `[String: String]` 이상을 담지 않는 것은 의도다.** 이 모듈(WapleCore)은 리눅스
     /// spec 레인 보호를 위해 WaplePolicy 에 의존할 수 없다(Package.swift 의 WaplePolicy 경고 —
     /// 실측 `AudioResponse.swift:2 error: no such module 'simd'`). 부재 키는 딕셔너리에
-    /// **안 들어간다** — 소비자(PlaybackPolicyGate)가 "부재 = run" 을 판정한다. WE 는 월페이퍼별
-    /// 속성을 "" 기본값으로 주입해 "전역 설정 따름"을 뜻하게 하는데(FUN_140046ff0 →
-    /// FUN_140086eb0(param_1,"playbackfocus","")), Waple 에는 아직 전역 정책면이 없으므로
-    /// 빈 문자열도 부재와 같게 취급해 소비자에게 넘기지 않는다.
+    /// **안 들어간다.** WE 는 월페이퍼별 속성을 "" 기본값으로 주입해 "전역 설정 따름"을 뜻하게
+    /// 하는데(FUN_140046ff0 → FUN_140086eb0(param_1,"playbackfocus","")), 빈 문자열도 부재와
+    /// 같게 취급해 소비자에게 넘기지 않는다.
     ///
-    /// **[2026-08-26] 그 소비자가 이제 실재한다** — `PlaybackPolicyGate`
-    /// (`Sources/Waple/AppLogic.swift`). 이 주석이 쓰일 때는 예고였다(당시 프로덕션 참조 0건).
-    /// 다만 **stage 1 은 순수 판정까지**다: 게이트에 조건(`PlaybackConditions`)을 먹이는
-    /// 플랫폼 관측자(NSWorkspace·IOKit·CGWindowList)는 아직 없다. 같은 파일의 「stage 2」 주석 참조.
+    /// **[2026-08-26] 그 소비자가 이제 실재한다** — 이 주석이 쓰일 때는 예고였다.
+    ///
+    /// **[2026-08-27 정정] 위 두 문단의 근거가 뒤집혔고 결론만 살아남았다.** 종전엔 "소비자
+    /// (PlaybackPolicyGate)가 '부재 = run' 을 판정한다" · "Waple 에는 아직 전역 정책면이 없으므로"
+    /// 라고 적혀 있었는데 둘 다 이제 거짓이다. 전역면은 `Sources/Waple/PlaybackPolicyRuntime.swift`
+    /// 에 실재하고, 판정자는 `PlaybackPolicyResolver` 다(`PlaybackPolicyGate.verdict` 는 걷어냈다 —
+    /// `AppLogic.swift` 의 [2026-08-26 승계] 툼스톤). 부재 축은 `run` 이 아니라 **전역값**을 받는다.
+    ///
+    /// **빈 문자열을 버리는 것은 그래서 오히려 더 옳아졌다.** 전역면이 없을 때는 `""` 를 버리는
+    /// 것이 "표현할 수 없으니 근사" 였지만, 지금은 `""` = "전역 따름" 이 정확히 표현된다 —
+    /// 키를 안 넣으면 `effective(global:declaring:)` 가 전역값을 그대로 남긴다. 근거가 바뀌었을 뿐
+    /// 동작은 손댈 것이 없다. (`PlaybackPolicyRuntime.swift:27-29` 에 같은 판단이 적혀 있다.)
+    ///
+    /// 플랫폼 관측자도 이제 6축이 실재한다(`Sources/Waple/PlaybackObservers.swift`).
+    /// 아직 안 채우는 축은 `vramPressure` 와 `external*Request` 둘뿐이고 이유는 `:128` 에 있다.
     public private(set) var playbackProperties: [String: String]
 
     public init(id: String, type: WallpaperType, fileName: String?, previewName: String?,

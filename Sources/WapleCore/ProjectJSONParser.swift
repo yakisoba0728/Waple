@@ -205,13 +205,21 @@ public enum ProjectJSONParser {
     /// 수집 규칙:
     /// - **값이 비어 있거나(빈 문자열) 문자열이 아니면 부재로 본다.** WE 는 월페이퍼별 속성을 ""
     ///   기본값으로 주입해 "전역 설정 따름"을 뜻하게 한다(FUN_140046ff0 →
-    ///   FUN_140086eb0(param_1,"playbackfocus","") — analysis/decompiled/all/0000000140046ff0).
-    ///   Waple 에는 전역 정책면이 아직 없으므로 빈 값 ≡ 부재다. 숫자·불리언 value 도 WE 의
+    ///   FUN_140086eb0(param_1,"playbackfocus","") — 짝 저장소
+    ///   `analysis/decompiled/all/0000000140046f20__FUN_140046f20.c`. **[2026-08-27] 종전 이 자리는
+    ///   `…/0000000140046ff0` 이었다 — 그 이름은 rich header 주입본의 변위된 주소이고, 코퍼스
+    ///   재생성 후 참 VA 로 이름이 바뀌었다. 산출물이 사라진 게 아니라 이름이 바뀐 것이다.**)
+    ///   빈 값 ≡ 부재로 버린다 — **[2026-08-27 정정] 그 이유가 "Waple 에는 전역 정책면이 아직
+    ///   없으므로" 라고 적혀 있었는데 전역면은 이제 실재한다**(`Waple/PlaybackPolicyRuntime.swift`).
+    ///   결론은 그대로다: 키를 안 넣으면 `PlaybackPolicyResolver.effective` 가 전역값을 남기므로
+    ///   `""` = "전역 따름" 이 **정확히** 표현된다. 근거만 뒤집혔다. 숫자·불리언 value 도 WE 의
     ///   저장 형식(콤보 문자열)과 어긋나므로 받지 않는다 — 매퍼 포트가 기대하는 입력은
     ///   config.json `general/user` 와 같은 `[String: String]` 이다
     ///   (PlaybackPolicy.init(weConfig:) 서명).
-    /// - **부재 키는 딕셔너리에 넣지 않는다** — 소비자(PlaybackPolicyGate)의 "부재 = run"
-    ///   무회귀 계약이 판정의 단일 지점을 갖게 하기 위해서다.
+    /// - **부재 키는 딕셔너리에 넣지 않는다** — 판정이 단일 지점을 갖게 하기 위해서다. 그 지점은
+    ///   이제 `PlaybackPolicyResolver` 이고 부재 축의 값은 `run` 이 아니라 **전역값**이다
+    ///   (종전 "소비자(PlaybackPolicyGate)의 '부재 = run' 무회귀 계약" 서술은 `verdict` 가
+    ///   걷힌 2026-08-26 에 낡았다 — `AppLogic.swift` 의 툼스톤 참조).
     private static func parsePlaybackProperties(_ obj: [String: Any]) -> [String: String] {
         guard let properties = (obj["general"] as? [String: Any])?["properties"] as? [String: Any] else {
             return [:]

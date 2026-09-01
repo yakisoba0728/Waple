@@ -403,17 +403,20 @@ struct PauseGate {
 /// 남의 창 최대화만으로 멈춘다 — 무회귀 요구의 정반대다. 그래서 기준선을 전 축 `.run` 으로
 /// 깔고 **선언된 축만** 덮어쓴다.
 ///
-/// ## 무회귀: 아무것도 선언하지 않은 벽지에서 이 게이트는 완전한 무동작이다
+/// ## 무회귀 — **이 절이 설명하던 `verdict(...)` 는 걷어냈다** (아래 [2026-08-26 승계] 참조)
 ///
-/// 한 축도 선언되지 않았으면 `declaredPolicy` 가 nil 이고, `verdict(...)` 는 평가기를
-/// **부르지도 않고** `.running` 을 낸다. 조건(`PlaybackConditions`)에 무엇이 들어 있든 결과가
-/// 같다는 뜻이라, 무회귀가 논증이 아니라 **구조**로 성립한다.
+/// 종전: 한 축도 선언되지 않았으면 `declaredPolicy` 가 nil 이고 `verdict(...)` 가 평가기를
+/// 부르지도 않고 `.running` 을 냈다 — 무회귀가 논증이 아니라 **구조**로 성립했다.
+/// 그 단축은 전역 정책면이 없다는 전제 위에서만 옳았고, 전제가 깨지면서 함수와 함께 사라졌다.
+/// 지금 선언이 없는 축은 `.running` 이 아니라 **전역 정책값**을 받는다
+/// (`PlaybackPolicyResolver.effective`). 위 문단의 "기준선을 전 축 `.run` 으로 깔고" 는
+/// `declaredPolicy` 에 대해서는 여전히 유효하다 — 그 함수는 "이 벽지가 스스로 무엇을
+/// 선언했는가" 라는 별개의 질문에 답하므로 전 축 `.run` 기준선이 맞다.
 ///
-/// 그 단축이 삼키는 것도 정확히 적어 둔다: `PlaybackConditions` 의 `external*Request` ·
-/// `vramPressure` · `forcePauseAll` 은 벽지 선언과 무관한 **외부 요청**인데, 선언이 없으면
-/// 여기서 무시된다. 지금은 관측 가능한 차이가 없다 — **그 필드들에 값을 넣는 프로덕션 코드가
-/// 아직 하나도 없고**(stage 2), 수동·가림·슬립 정지는 이 파일의 `PauseGate` 가 따로 쥐고 있다.
-/// stage 2 에서 트레이/IPC 를 붙일 때 이 자리를 다시 판단해라.
+/// 남아 있는 사실 하나: `PlaybackConditions` 의 `external*Request` · `vramPressure` ·
+/// `forcePauseAll` 에 **값을 넣는 프로덕션 코드가 아직 하나도 없다**(`PlaybackObservers.swift:128`
+/// 이 왜 안 넘기는지 적어 둔다). 수동·가림·슬립 정지는 이 파일의 `PauseGate` 가 따로 쥐고 있고,
+/// 트레이/IPC 를 붙일 때 이 자리를 다시 판단해라.
 enum PlaybackPolicyGate {
     /// 벽지가 **선언한 축만** 반영한 정책. 한 축도 선언하지 않았으면 nil.
     ///
@@ -453,51 +456,53 @@ enum PlaybackPolicyGate {
     // 이제 `PlaybackPolicyResolver.effective(global: .allRun, declaring:)` 로 정확히 표현된다.
 }
 
-// MARK: - stage 2 — 남은 것 (플랫폼 관측자)
+// MARK: - stage 2 — 축별 착지점, 그리고 아직 남은 둘
 //
-// [2026-08-26] 전역면·병합·창 파생 마스크는 `PlaybackPolicyRuntime.swift` 에 착지했다.
-// 아래 목록 중 남은 것은 **관측자 배선과 판정 적용**이다.
+// [2026-08-27 정정] 이 블록은 stage 2 가 **끝난 뒤에도 "아직 없다" 를 현재형으로 말하고
+// 있었다.** 부분 갱신 한 줄만 머리에 얹히고 본문이 그대로였다. 사실과 어긋난 문장 셋을
+// 걷어내고 축별 착지점으로 바꾼다 — 재생정책 진입 설명을 맡은 자리라, 다음 사람이 이미
+// 있는 관측자를 다시 만들 위험이 실질적이었다. (같은 서술이 실린
+// `docs/handoff-2026-08-26b.md:116` 도 그 시점 기록이니 그대로 읽지 마라.)
 //
-// [2026-08-26] 위 게이트는 **순수 판정까지만**이다. `PlaybackConditions` 를 실제 시스템
-// 상태로 채우는 관측자는 **하나도 쓰지 않았다** — 전부 macOS 전용 API 라 이 작업이 검증에
-// 쓴 리눅스 컨테이너에서는 컴파일조차 확인할 수 없고(타입체크 심에도 없다), 별개의 변경이다.
-// **검증 못 한 배선을 넣지 않는 것이 이 리포의 규칙이다.**
+// 걷어낸 문장: "관측자는 하나도 쓰지 않았다" · "`PlaybackPolicyGate` 를 부르는 프로덕션
+// 호출부가 없다" · "판정을 렌더러에 먹이는 쪽도 아직 없다". 셋 다 뒤집혔다 —
+// `PlaybackObservers.swift` 가 6축을 채우고 `AppDelegate.applyPlaybackPolicy`(1초 타이머)가
+// 판정을 렌더러에 먹인다. `PlaybackPolicyGate.verdict` 자체는 삭제됐고 판정자는
+// `PlaybackPolicyResolver` 다(아래 툼스톤 참조).
 //
-// 그래서 지금 상태는 이렇다: `PlaybackPolicyGate` 를 부르는 프로덕션 호출부가 없다.
-// 벽지가 선언한 정책은 파서 → 모델 → 게이트까지 **온전히 도달하지만**(그게 stage 1 이 산
-// 것이다), 그 판정을 렌더러에 먹이는 마지막 한 뼘이 비어 있다.
+// 축별 착지점:
 //
-// 각 축이 무엇에 묶여야 하는지(이 자리에서 확인한 것만 적는다):
-//
-//  · `unfocusedMask`   ← `NSWorkspace.shared.frontmostApplication` +
-//                        `didActivateApplicationNotification`. 그 앱의 창이 **어느 화면**에
-//                        있는지까지 알아야 마스크가 되므로 창 열거가 함께 필요하다.
-//  · `maximizedMask`   ← `CGWindowListCopyWindowInfo` 의 창 프레임 vs `NSScreen.visibleFrame`.
-//  · `fullscreenMask`  ← 같은 열거, 비교 대상이 `NSScreen.frame`.
-//                        **이 리포에 이미 같은 API 를 쓰는 자리가 있다** —
-//                        `Sources/Waple/DesktopVisibilityMonitor.swift`(가림 판정)가
-//                        `CGWindowListCopyWindowInfo` → 순수 `WindowSnapshot` 배열 → static
-//                        판정 함수의 모양을 갖췄다. 두 마스크는 그 스냅샷의 파생으로 얹는 게 맞다.
-//  · `audioPlaying`    ← CoreAudio. 기본 출력 장치의
-//                        `kAudioDevicePropertyDeviceIsRunningSomewhere`(다른 프로세스가 장치를
-//                        물고 있는가). WE 는 WASAPI 세션 열거로 같은 것을 본다.
-//  · `displayAsleep`   ← **이미 있다.** `AppDelegate.displaySleepBegan/displaySleepEnded`
-//                        (`NSWorkspace.screensDidSleepNotification`)가 `PauseGate.Reason.displaySleep`
-//                        을 켜고 끈다. 그 불리언을 그대로 넘기면 된다 — 새 관측자가 필요 없는
-//                        유일한 축이다.
-//  · `onBattery`       ← IOKit `IOPSCopyPowerSourcesInfo` /
+//  · `unfocusedMask`   → `PlaybackMasks.unfocused` (`PlaybackObservers.swift:115`).
+//  · `maximizedMask`   → `PlaybackMasks.maximized` (`:119`), 비교 대상 `NSScreen.visibleFrame`.
+//  · `fullscreenMask`  → `PlaybackMasks.fullscreen` (`:122`), 비교 대상 `NSScreen.frame`.
+//                        셋 다 `DesktopVisibilityMonitor.WindowSnapshot` 배열의 파생으로 얹었다 —
+//                        `CGWindowListCopyWindowInfo` → 순수 스냅샷 → static 판정 함수라는
+//                        그 파일의 모양을 그대로 물려받는다. 예상대로 그게 맞는 자리였다.
+//  · `audioPlaying`    → `SystemAudioObserver.defaultOutputDeviceIsRunning` (`:68`),
+//                        `kAudioDevicePropertyDeviceIsRunningSomewhere`. WE 는 WASAPI 세션
+//                        열거로 같은 것을 본다. 우리 자신의 재생을 빼는 것은 `:61`.
+//  · `displayAsleep`   → `AppDelegate.displaySleepBegan/displaySleepEnded` 의 불리언을 그대로
+//                        넘긴다(`NSWorkspace.screensDidSleepNotification`). 새 관측자가 필요
+//                        없는 유일한 축이라던 예상이 맞았다.
+//  · `onBattery`       → `PowerSourceObserver.isOnBattery` (`:48`), IOKit
 //                        `IOPSGetProvidingPowerSourceType() == kIOPMBatteryPowerKey`.
-//  · `vramPressure`    ← `VRAMHysteresis`(WaplePolicy)에 표본을 먹여 얻는다. macOS 쪽 표본은
-//                        `MTLDevice.currentAllocatedSize` / `recommendedMaxWorkingSetSize` 이고,
-//                        WE 의 PDH 표본수·총량 범위 게이트는 그 모델이 이미 강제한다.
-//  · `external*Request` ← 트레이/IPC. 여기서 겹치는 문제가 하나 있다 — 수동 정지는 이 파일의
-//                        `PauseGate` 가 이미 쥐고 있다. 두 경로를 어떻게 합칠지가 stage 2 의
-//                        설계 결정이고, 위 게이트 주석의 단축(선언 없음 → 즉시 `.running`)을
-//                        그때 다시 봐야 한다.
 //
-// 판정을 렌더러에 먹이는 쪽도 아직 없다: `PlaybackVerdict.stop`(렌더러 해제) ·
-// `.muted`(전역 음소거) · `.pauseMask`(화면별 정지, `isPaused(monitorIndex:)`)를 `AppDelegate`
-// 의 `applyPause` 계열과 어떻게 합류시킬지가 남는다.
+// **아직 남은 둘** — `PlaybackConditionsBuilder.make` 가 왜 안 넘기는지를 그 자리
+// (`PlaybackObservers.swift:128-131`)에 적어 두었다. 요약하면:
+//
+//  · `vramPressure`     `VRAMHysteresis`(WaplePolicy) 는 모델만 있고 표본을 먹이는 자리가
+//                       없다. macOS 쪽 표본은 `MTLDevice.currentAllocatedSize` /
+//                       `recommendedMaxWorkingSetSize` 이고, WE 의 PDH 표본수·총량 범위
+//                       게이트는 그 모델이 이미 강제한다. 기본값 false 가 "압박 없음" 이라
+//                       무회귀 쪽이다.
+//  · `external*Request` 트레이/IPC. 겹치는 문제가 그대로 남아 있다 — 수동 정지는 이 파일의
+//                       `PauseGate` 가 이미 쥐고 있고, 두 경로를 어떻게 합칠지가 설계 결정이다.
+//                       **붙일 때 함께 볼 것**: 절전 래치가 `externalMuteRequest`(플래그 bit6)를
+//                       삼킨다(`WaplePolicy/PlaybackPolicy.swift:546` 의 조기 이탈이 `muted:
+//                       false` 를 못박는다). 적용기는 pause 와 다른 마스크로 bit6 을 보므로
+//                       (`test bpl, 0xc0` vs `test bpl, 0x21`) 모델이 실물과 갈리는 자리다.
+//                       호출부가 없어 오늘 도달이 0 이라 잠복해 있을 뿐이다 —
+//                       `docs/swarm-audit-2026-08-26.md:296` 이 이미 지적했고 처분 기록이 없다.
 
 /// 잠금화면 스틸(작업 2): `dscl . -read /Users/<user> GeneratedUID` 출력 파싱(순수).
 enum GeneratedUID {

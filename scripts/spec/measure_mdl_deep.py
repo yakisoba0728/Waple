@@ -91,7 +91,7 @@ def collect():
 
 def parse_mdmp(data, magic_off, meshes):
     """MDMP0001 모프 섹션. 레코드 내용은 **메시 게이트워드 비트**로 게이팅된다
-    (엔진 디컴파일 FUN_140261950 의 MDMP 분기: bit10/11/12/13 각각 별도 리드,
+    (엔진 디컴파일 FUN_140261880 의 MDMP 분기: bit10/11/12/13 각각 별도 리드,
     크기 불일치 시 trap). 성공하면 (끝오프셋, 레코드목록)."""
     p = magic_off + 8 + 1
     next_off = struct.unpack_from("<I", data, p)[0]
@@ -495,7 +495,7 @@ def main():
                            "scripts/spec/measure_mdl_deep.py")
     ev_rosetta = specfmt.ev("file", "projects/defaultprojects/*/models/*.{obj,mdl} 16쌍",
                             "scripts/spec/verify_rosetta.py — 16/16 대조 통과")
-    ev_bin = specfmt.ev("binary", "wallpaper64.exe FUN_140261950 (RVA 0x261880)",
+    ev_bin = specfmt.ev("binary", "wallpaper64.exe FUN_140261880 (RVA 0x261880)",
                         "MDL 디코더 디컴파일")
     ev_rc = specfmt.ev("binary", "bin/resourcecompiler64.exe FUN_140020260 (RVA 0x20260)",
                        ".mdl 굽기 경로 — MDLV0023 문자열과 skins/normals/tangentspace 옵션 키를 같이 참조")
