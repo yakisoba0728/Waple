@@ -16,11 +16,22 @@
 | macOS 테스트 타입체크 | 최종 S4 Sources/Tests와 동일한 입력으로 전체 7개 타깃의 XCTest 대역 모듈 타입체크 통과(rc0). 단언 실행 결과가 아님 |
 | macOS 독립 native 회귀 실행 | 앱 상태 16건(행동 15 + 소스 배선 1), 3D/JSC 6건, 2D/Web 8건(스킵 0 · 단언 81, GPU 차이 픽셀·WebKit 포함), Library/Workshop·현지화 16건(스킵 0 · 단언 41) 통과. Core 14건·셰이더 16건도 동일한 최종 Core 소스에서 통과 |
 | Compat·오디오 독립 native 회귀 | Compat의 기준선 보존·사용자 씬·실패 캡처 거부·URL 크기 캐시의 빈 파일→정상→빈 파일 사례, 실제 Ogg append 예산·잘못된 예산 사례 통과. MW-02는 실제 모듈·무음 PCM(음량 0) 드라이버 2/2 통과(스킵 0 · 단언 22 · 실패 0) |
-| 정적 XCTest 메서드 수 | 정본 AGENTS 레시피로 기준 커밋 4,042 → 현재 4,127(+85 순증: 추가 이름 88 · 제거 이름 3). 기존 Keychain 3개는 update 우선 계약에 맞춰 개명·교체했다. 성공 update·없을 때 add·ACL 거부 검증을 보존했다. 실행 수와 구분하며 macOS CI 실측 전에는 실행 하한을 올리지 않음 |
-| 전체 macOS XCTest 스위트 | 이 기록에서 실행 완료로 취급하지 않음. Xcode XCTest 실행 결과가 필요 |
+| 정적 XCTest 메서드 수 | 정본 AGENTS 레시피로 기준 커밋 4,042 → 현재 4,127(+85 순증: 메서드 이름 88개 추가·3개 제거). 기존 Keychain 3개는 update 우선 계약에 맞춰 개명·교체했으며 성공 update·미존재 add·ACL 거부 검증은 보존했다. 원격 macOS 실행 수와 일치하며, 하한과 실측 근거는 CI census에 둔다 |
+| 전체 macOS XCTest 스위트 | 수정 커밋 `059b7a8e`의 [원격 macOS CI](https://github.com/yakisoba0728/Waple/actions/runs/41916451535) 통과. debug·release 각각 4,127개 실행·실패 0, 스킵은 64/63. 실제 Test 성공과 전체 원본 로그의 번들 집계를 함께 확인했다 |
 | 실물 코퍼스 전체 픽셀 비교·데스크탑/다중 모니터·절전·실제 오디오 | 이번 수정의 소스 리뷰 및 합성 검사만으로 확정하지 않음 |
 
 테스트 수와 CI 실행 하한의 정본은 [CI census](../.github/workflows/ci.yml)다. 최종 실행 전 추정 개수를 여기에 적거나, 독립 실행 드라이버 결과를 전체 XCTest 통과로 바꾸어 쓰지 않는다.
+
+## 원격 CI 검증 후속
+
+2026-11-05에 수정 커밋 `059b7a8e82ca7473e94c0bfed51dd5ddd790b51c`를 푸시해
+[macOS debug·release CI](https://github.com/yakisoba0728/Waple/actions/runs/41916451535)와
+[Linux spec CI](https://github.com/yakisoba0728/Waple/actions/runs/41916451737)의 성공을 확인했다.
+release의 `continue-on-error`에 가려진 실패가 없는지도 실제 Test 단계와 원본 로그로 검사했다.
+
+이 성공 런의 실측치로 [CI census](../.github/workflows/ci.yml)의 실행 하한을 래칫했다.
+스킵 상한과 타깃 존재 검사는 유지하며, 하한을 변경한 최종 커밋도 다시 원격 CI로 검증한다.
+로컬 CLT 환경의 제약과 달리 원격 Xcode에서는 전체 XCTest를 실제 실행했다.
 
 ## 수정 원장
 
