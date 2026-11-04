@@ -130,6 +130,53 @@ final class OggVorbisDecoderTests: XCTestCase {
         XCTAssertLessThan(maxDiff, 1e-3)
     }
 
+    func testPCMFrameLimitsShareOneBudgetAcrossChannels() {
+        for channels in [1, 2] {
+            let limits = OggVorbisDecoder.pcmFrameLimits(channels: channels)
+            XCTAssertEqual(limits.decoded, 28_800_000)
+            XCTAssertEqual(limits.reserved, 2_097_152)
+        }
+        let limits = OggVorbisDecoder.pcmFrameLimits(channels: 255)
+        XCTAssertEqual(limits.decoded, 225_882)
+        XCTAssertEqual(limits.reserved, 16_448)
+    }
+
+    func testManyChannelsRejectsDeclaredPCMAboveTotalBudget() {
+        let data = silentMultichannelOgg(channels: 255, finalGranule: 4_194_304)
+        XCTAssertThrowsError(try OggVorbisDecoder.decode(data)) { error in
+            guard case VorbisError.corrupt = error else { return XCTFail("expected PCM budget rejection, got \(error)") }
+        }
+    }
+
+    func testManyChannelsStillDecodesAShortStream() throws {
+        let decoded = try OggVorbisDecoder.decode(silentMultichannelOgg(channels: 255, finalGranule: 128))
+        XCTAssertEqual(decoded.channels, 255)
+        XCTAssertEqual(decoded.frameCount, 128)
+        XCTAssertEqual(decoded.samples.count, 32_640)
+        XCTAssertTrue(decoded.samples.allSatisfy { $0 == 0 })
+    }
+
+    func testManyChannelsRejectsActualPCMGrowthWithLowGranule() {
+        // 258 output blocks × 128 frames × 255 channels exceed 8M samples. This tests
+        // the append guard through real packets, with ~32MB PCM instead of the full default budget.
+        for granule in [Int64(0), 128] {
+            let data = silentMultichannelOgg(channels: 255, finalGranule: granule, audioPacketCount: 259)
+            XCTAssertThrowsError(try OggVorbisDecoder.decode(data, maximumPCMSamples: 1 << 23)) { error in
+                guard case VorbisError.corrupt(let reason) = error else { return XCTFail("expected actual PCM budget rejection, got \(error)") }
+                XCTAssertEqual(reason, "decoded frames > 32896")
+            }
+        }
+    }
+
+    func testPCMDecodeRejectsNonpositiveInjectedBudget() {
+        for budget in [0, -1] {
+            XCTAssertThrowsError(try OggVorbisDecoder.decode(TinyOgg.data, maximumPCMSamples: budget)) { error in
+                guard case VorbisError.corrupt(let reason) = error else { return XCTFail("expected invalid budget rejection, got \(error)") }
+                XCTAssertEqual(reason, "PCM sample budget must be positive")
+            }
+        }
+    }
+
     /// 단일 스펙트럼 계수 → windowed 코사인. **stb_vorbis inverse_mdct_slow 공식(π/2N)** 과 직접 대조.
     /// (naive 를 그 공식에 못박아 두어 위상/상수 회귀를 잡는다 — 진짜 검증은 oracle.)
     func testIMDCTSingleCoeffMatchesStbFormula() {
@@ -320,4 +367,16 @@ private func oggStream(_ packets: [[UInt8]], finalGranule: Int64) -> Data {
 
 private func makeVorbisOgg(setup: [UInt8], audio: [UInt8]) -> Data {
     oggStream([idHeaderPacket(channels: 1), commentHeaderPacket(), setup, audio], finalGranule: 480)
+}
+
+private func silentMultichannelOgg(channels: Int, finalGranule: Int64, audioPacketCount: Int = 2) -> Data {
+    let setup = setupHeaderPacket(residueType: 0, begin: 0, end: 0, partitionSize: 1,
+                                  classifications: 1, cascade0: 0, book0: 0)
+    var audio = BitWriter()
+    audio.bit(0)
+    for _ in 0..<channels { audio.bit(0) }
+    let packets = [idHeaderPacket(channels: channels), commentHeaderPacket(), setup]
+        + Array(repeating: audio.bytes, count: audioPacketCount)
+    return oggStream(packets,
+                     finalGranule: finalGranule)
 }

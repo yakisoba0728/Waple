@@ -23,7 +23,9 @@ BIN="$REPO/.build/release/WapleCompat"
 SCENES="${WAPLE_PROBE_SCENES:-3302695207 3629379075 3696323523}"   # 불안정 가족 중 3종
 
 cd "$REPO" || exit 1
-mkdir -p "$OUT"
+mkdir -p "$OUT" || exit 2
+OUT=$(mktemp -d "$OUT/run.XXXXXX") || exit 2
+echo "이번 실행 출력: $OUT"
 
 echo "빌드(release)…"
 swift build -c release 2>&1 | tail -3 || exit 1
@@ -32,10 +34,9 @@ echo "  (세션 간 대조의 전제 — 이 값이 이전 실행과 같아야 '
 
 cap() {   # cap <출력루트> <라벨> <씬루트> [추가 env…]
     local out="$1" lbl="$2" root="$3"; shift 3
-    [ -d "$out/$lbl" ] && return 0
     launchctl asuser "$(id -u)" env "$@" \
         WAPLE_REAL_PKGS="$ROOT/backgrounds" WAPLE_BASE_ASSETS="$ROOT/assets" \
-        "$BIN" --capture "$out" --label "$lbl" "$root" >/dev/null 2>&1
+        "$BIN" --capture "$out" --label "$lbl" "$root" >/dev/null 2>&1 || exit $?
 }
 
 echo
@@ -59,7 +60,7 @@ done
 
 echo "[5/5] 작업 디렉터리 3종"
 for d in "$REPO" "$HOME" /tmp; do
-    (cd "$d" && cap "$OUT/cwd" "$(echo "$d" | tr '/' '_')" "$ROOT/backgrounds/${SCENES%% *}")
+    (cd "$d" && cap "$OUT/cwd" "$(echo "$d" | tr '/' '_')" "$ROOT/backgrounds/${SCENES%% *}") || exit $?
 done
 
 python3 - "$OUT" "$REPO" "$SCENES" <<'PY'

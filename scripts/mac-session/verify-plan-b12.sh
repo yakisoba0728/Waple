@@ -116,6 +116,7 @@ T0=$SECONDS
 launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$WAPLE_REAL_PKGS" \
     WAPLE_BASE_ASSETS="$WAPLE_BASE_ASSETS" \
     swift test -c release 2>&1 | tee "$OUT/full-suite.log" | tail -20
+SUITE_RC=${PIPESTATUS[0]}
 # [수정 2026-08-16] 이 절 — "가장 중요" 라고 적어 둔 그 절 — 의 판정과 출력이 둘 다 틀려 있었다.
 # 셋이 겹쳤다:
 #   (a) 통과 조건이 `grep -q "with 0 failures"` 였다. 로그 **아무 데나** 그 문자열이 있으면
@@ -131,43 +132,13 @@ launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$WAPLE_REAL_PKGS" \
 #   (c) 테스트 수가 전 Executed 줄 합이라 6,429 로 부풀었다(클래스 소계 혼입).
 #       주석은 "번들 총계 줄들을 합산한다" 였는데 코드는 로그 전체를 훑고 있었다.
 #       -> 번들 합을 헤드라인으로 낸다. AGENTS.md 의 기준값도 번들 합이다.
-BUNDLE_SUMMARY=$(grep -A1 -E "^Test Suite '[A-Za-z0-9_]+\.xctest' (passed|failed) at" \
-                 "$OUT/full-suite.log" 2>/dev/null \
-                 | grep -oE "Executed [0-9]+ tests?, with ([0-9]+ tests? skipped and )?[0-9]+ failures?")
-NBUNDLE=$(printf '%s' "$BUNDLE_SUMMARY" | grep -c "Executed")
-NFAIL=$(printf '%s\n' "$BUNDLE_SUMMARY" | grep -oE "[0-9]+ failures?" \
-        | grep -oE "^[0-9]+" | awk '{s+=$1} END {print s+0}')
-TESTS=$(printf '%s\n' "$BUNDLE_SUMMARY" | grep -oE "Executed [0-9]+" \
-        | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
-# 기대 번들 수는 Package.swift 에서 끌어온다 — 하드코딩하면 타깃이 늘 때 조용히 낡는다.
-# 이게 없으면 **잘린 로그가 통과한다**: 앞부분만 남은 로그에 통과 번들 하나만 들어 있으면
-# 실패 합이 0 이라 OK 가 된다(실측 확인). 번들 수까지 봐야 "다 돌고 다 통과" 가 된다.
-NEXPECT=$(grep -cE '^[[:space:]]*\.testTarget' Package.swift)
-if [ "$NBUNDLE" -ne "$NEXPECT" ]; then
-    bad "번들 요약 $NBUNDLE 개 — Package.swift 의 testTarget $NEXPECT 개와 다르다. 스위트가 다 안 돌았거나 로그가 잘렸다 ($OUT/full-suite.log)"
-    printf '%s\n' "$BUNDLE_SUMMARY" | sed 's/^/    /'
-elif [ "$NFAIL" -ne 0 ]; then
-    bad "전 스위트 실패 — 번들 $NBUNDLE 개에서 실패 $NFAIL 건 ($OUT/full-suite.log)"
-    grep -E "error:|failed \(" "$OUT/full-suite.log" | head -20 | sed 's/^/    /'
+# [2026-11-05] testTarget 7개가 한 XCTest 번들로 합쳐지는 툴체인도 있다.
+# 공용 census가 실행 하한·실제 타깃 실행·실패 요약을 검사한다.
+if TESTS=$(python3 scripts/dev/xctest-census.py --check "$OUT/full-suite.log") && [ "$SUITE_RC" -eq 0 ]; then
+    ok "전 스위트 통과 — 실행 $TESTS개, 실패 0 ($((SECONDS-T0))초)"
 else
-    ok "전 스위트 통과 — 번들 $NBUNDLE 개, 실패 0 ($((SECONDS-T0))초)"
+    bad "전 스위트 검증 실패 — 종료코드 $SUITE_RC ($OUT/full-suite.log)"
 fi
-# **[정정 2026-09-01] 이 줄은 AGENTS.md 가 명시적으로 금지한 숫자를 기준값으로 찍고 있었다.**
-# 종전: `(기준값 2,300 — AGENTS.md, 2026-08-19 CI 실측. 코퍼스 유무와 무관하다)`.
-# AGENTS.md 「빌드와 테스트」의 구성 표는 그 `실행` 열을 두고
-#   "**이 열의 숫자를 현재값으로 인용하지 마라** — 현재값은 `ci.yml` 의 census 스텝과
-#    위 `grep` 이 정본이다"
-# 라고 못박는다. 2,300 은 2026-08-19 스냅샷이고 지금 정본 하한은 그보다 한참 위다.
-# 그래서 값을 박지 않고 **정본에서 읽는다** — 래칫이 갱신되면 여기도 따라온다.
-FLOOR=$(grep -oE '"\$\{EXECUTED:-0\}" -lt [0-9]+' "$REPO/.github/workflows/ci.yml" \
-        | grep -oE '[0-9]+$' | head -1)
-if [ -z "${FLOOR:-}" ]; then
-    echo "  번들 합: ${TESTS:-?}  (!! ci.yml 의 실행 수 하한을 못 읽었다 — census 스텝이 바뀌었나?)"
-else
-    echo "  번들 합: ${TESTS:-?}  (하한 ${FLOOR} — 정본은 .github/workflows/ci.yml 의 'Skip / execution census'. 코퍼스 유무와 무관하다)"
-fi
-echo "  번들별:"
-printf '%s\n' "$BUNDLE_SUMMARY" | sed 's/^/    /'
 
 hr; echo "6. 골든 무변화 (Task 1·2 는 픽셀을 바꾸면 안 된다)"; hr
 # [수정 2026-08-01] 커밋된 baseline-81098bb 는 **debug** 캡처인데 여기서는 release 로
@@ -193,16 +164,24 @@ if [ -z "$PRE" ] || [ ! -d "$PRE/thumbs" ]; then
     echo "     (이번 실행은 아래 캡처만 남기고 대조는 건너뛴다)"
     SKIP_GOLDEN_DIFF=1
 fi
+# 같은 SHA 재실행도 기존 기준선을 덮거나 재사용하지 않는다.
+CAPTURE_ROOT=$(mktemp -d "$OUT/capture.XXXXXX") || exit 2
 LABEL="verify-$(git rev-parse --short HEAD)"
 launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$WAPLE_REAL_PKGS" \
     WAPLE_BASE_ASSETS="$WAPLE_BASE_ASSETS" \
-    swift run -c release WapleCompat --capture "$OUT" --label "$LABEL" "$ROOT" \
-    2>&1 | tee "$OUT/capture.log" | tail -6
+    swift run -c release WapleCompat --capture "$CAPTURE_ROOT" --label "$LABEL" "$ROOT" \
+    2>&1 | tee "$CAPTURE_ROOT/capture.log" | tail -6
+CAPTURE_RC=${PIPESTATUS[0]}
+if [ "$CAPTURE_RC" -ne 0 ]; then
+    bad "캡처 실패 (exit $CAPTURE_RC) — $CAPTURE_ROOT/capture.log"
+    exit "$CAPTURE_RC"
+fi
+echo "  캡처: $CAPTURE_ROOT/$LABEL"
 
 if [ "${SKIP_GOLDEN_DIFF:-0}" = "1" ]; then
     echo "  (구현 전 release 기준선 부재로 대조 생략)"
 else
-python3 - "$PRE" "$OUT/$LABEL" <<'PY'
+python3 - "$PRE" "$CAPTURE_ROOT/$LABEL" <<'PY'
 import json, os, sys
 a, b = sys.argv[1], sys.argv[2]
 try:

@@ -40,8 +40,8 @@ public enum ProfilePipeline {
     /// WE 2.8.42 설치본은 씬 188/188 이 언팩이고 `.pkg` 가 0개다). 그때 형제 스캐너 셋 중 둘만
     /// 고쳐졌고 여기 둘이 남아 있었다. 마운트 선택자를 렌더러·DeepScan 과 **같은 함수**로 맞춘다 —
     /// `project.json` 의 `file` 이 단독 결정자이고 `.pkg` 는 그 파일이 디스크에 없을 때의 폴백이다.
-    static func mountPackage(_ folder: URL) -> ScenePackage? {
-        let project = try? ProjectJSONParser.parse(folderURL: folder)
+    static func mountPackage(_ folder: URL, project suppliedProject: WallpaperProject? = nil) -> ScenePackage? {
+        let project = suppliedProject ?? (try? ProjectJSONParser.parse(folderURL: folder))
         switch ScenePackage.resolveMountSource(folderURL: folder,
                                                fileName: project?.fileName ?? "scene.pkg",
                                                hasDependency: project?.dependency != nil) {
@@ -97,11 +97,15 @@ public enum ProfilePipeline {
         for folder in folders {
             let id = folder.lastPathComponent
             autoreleasepool {
-                guard let pkg = mountPackage(folder) else { dropped.append("\(id): 마운트 실패"); return }
+                let project = try? ProjectJSONParser.parse(folderURL: folder)
+                guard let pkg = mountPackage(folder, project: project) else {
+                    dropped.append("\(id): 마운트 실패"); return
+                }
                 let res = PkgAssets(package: pkg, assetsDir: assetsDir)
                 guard let doc = try? SceneDocument.parse(
                     package: pkg,
-                    assets: { res.baseAssetURL($0).flatMap { try? Data(contentsOf: $0) } }
+                    assets: { res.baseAssetURL($0).flatMap { try? Data(contentsOf: $0) } },
+                    sceneFileName: project?.fileName
                 ) else { dropped.append("\(id): 씬 파스 실패"); return }
                 let is3D = doc.camera3D != nil && !doc.objects3D.isEmpty
                 let effects = doc.layers.reduce(0) { $0 + $1.effects.count }
@@ -145,15 +149,20 @@ public enum ProfilePipeline {
         for folder in folders {
             let id = folder.lastPathComponent
             autoreleasepool {
-                guard let pkg = mountPackage(folder) else { dropped.append("\(id): 마운트 실패"); return }
+                let project = try? ProjectJSONParser.parse(folderURL: folder)
+                guard let pkg = mountPackage(folder, project: project) else {
+                    dropped.append("\(id): 마운트 실패"); return
+                }
                 let res = PkgAssets(package: pkg, assetsDir: assetsDir)
                 let assetsFn: (String) -> Data? = { res.baseAssetURL($0).flatMap { try? Data(contentsOf: $0) } }
                 setenv("WAPLE_VIS_INHERIT", "0", 1)
-                guard let off = try? SceneDocument.parse(package: pkg, assets: assetsFn) else {
+                guard let off = try? SceneDocument.parse(package: pkg, assets: assetsFn,
+                                                       sceneFileName: project?.fileName) else {
                     unsetenv("WAPLE_VIS_INHERIT"); dropped.append("\(id): 씬 파스 실패(off)"); return
                 }
                 unsetenv("WAPLE_VIS_INHERIT")
-                guard let on = try? SceneDocument.parse(package: pkg, assets: assetsFn) else {
+                guard let on = try? SceneDocument.parse(package: pkg, assets: assetsFn,
+                                                      sceneFileName: project?.fileName) else {
                     dropped.append("\(id): 씬 파스 실패(on)"); return
                 }
                 scanned += 1
@@ -234,9 +243,33 @@ public enum ProfilePipeline {
         let footBeforeBytes: Int, footAfterBytes: Int, footDeltaBytes: Int, deviceAllocBytes: Int
     }
 
+    enum CaptureError: Error { case invalidDimensions, missingFrame }
+
+    static func measureCapture(width: Int, height: Int, capture: () -> [URL]) throws -> Double {
+        guard width > 0, height > 0, width <= Int.max / height / 4 else {
+            throw CaptureError.invalidDimensions
+        }
+        let start = CFAbsoluteTimeGetCurrent()
+        let frames = capture()
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        // URL.resourceValues는 같은 URL의 이전 파일 크기를 캐시한다. 썸네일과 전체 해상도
+        // 캡처가 경로를 재사용하므로 매번 실제 파일 속성을 읽어 실패/성공을 판정한다.
+        guard frames.count == 1, let frame = frames.first,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: frame.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber, size.int64Value > 0 else {
+            throw CaptureError.missingFrame
+        }
+        return elapsed
+    }
+
     public static func runProfile(root: String, outDir: URL, only: String, remount: Bool, frameW: Int, frameH: Int) -> Int32 {
+        guard frameW > 0, frameH > 0, frameW <= Int.max / frameH / 4 else {
+            fputs("[profile] invalid frame dimensions: \(frameW)x\(frameH)\n", stderr); return 2
+        }
         let fm = FileManager.default
-        try? fm.createDirectory(at: outDir, withIntermediateDirectories: true)
+        do { try fm.createDirectory(at: outDir, withIntermediateDirectories: true) }
+        catch { fputs("[profile] output directory creation failed: \(error)\n", stderr); return 2 }
         // F520: 개발 루트/backgrounds/단일 씬 디렉터리 직접 지정 모두 수용(sceneFolders 와 동일 해석).
         guard let folder = SnapshotPipeline.sceneFolders(root: root).first(where: { $0.lastPathComponent == only }) else {
             fputs("[profile] scene not found: \(only) (root: \(root))\n", stderr); return 2
@@ -244,8 +277,11 @@ public enum ProfilePipeline {
         let restore = SnapshotPipeline.pinRenderSettings(root: root)
         defer { restore() }
         // F148: PID 로 스코프(SnapshotPipeline.runCapture 와 동일 이유 — 동시 실행 간 캡처파일 충돌 방지).
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_profile_\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
-        try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
+            "waple_profile_\(ProcessInfo.processInfo.processIdentifier)_\(UUID().uuidString)", isDirectory: true)
+        do { try fm.createDirectory(at: tmp, withIntermediateDirectories: true) }
+        catch { fputs("[profile] temporary directory creation failed: \(error)\n", stderr); return 2 }
+        defer { try? fm.removeItem(at: tmp) }
 
         // 메타(파스만, 계측 밖) — 카운트/분류.
         guard let project = try? ProjectJSONParser.parse(folderURL: folder) else {
@@ -264,7 +300,7 @@ public enum ProfilePipeline {
         //
         // 트립와이어도 못 잡았다 — scripts/spec/check_scene_mount_parity.py 의 감시 목록에
         // ProfilePipeline 이 없었다. 그쪽도 같이 넓힌다.
-        guard let mpkg = mountPackage(folder) else {
+        guard let mpkg = mountPackage(folder, project: project) else {
             fputs("[profile] meta parse failed: \(only)\n", stderr); return 2
         }
         // F680: 메타 파스도 inventory 와 같은 공유 에셋 리졸버를 쓴다 — 없으면 models/util/*.json 참조
@@ -275,7 +311,8 @@ public enum ProfilePipeline {
         let mres = PkgAssets(package: mpkg, assetsDir: assetsDir)
         guard let mdoc = try? SceneDocument.parse(
             package: mpkg,
-            assets: { mres.baseAssetURL($0).flatMap { try? Data(contentsOf: $0) } }
+            assets: { mres.baseAssetURL($0).flatMap { try? Data(contentsOf: $0) } },
+            sceneFileName: project.fileName
         ) else {
             fputs("[profile] meta parse failed: \(only)\n", stderr); return 2
         }
@@ -288,6 +325,7 @@ public enum ProfilePipeline {
             NSView(frame: NSRect(x: 0, y: 0, width: SnapshotPipeline.thumbW, height: SnapshotPipeline.thumbH))
         }
         let r = SceneRenderer()
+        defer { r.teardown(); WapleProfiler.enabled = false }
         // [2026-08-26] 포인터 핀은 이제 **인스턴스 소유**다. 종전에는 프로세스 전역
         // `SceneRenderer.capturePointerUV` 였고, 위 `pinRenderSettings`(:244)가 그것을 걸어 주었기
         // 때문에 여기서 아무것도 안 해도 이 인스턴스가 핀 상태로 태어났다. 전역을 없애면서 그
@@ -315,16 +353,22 @@ public enum ProfilePipeline {
         r.pause(); r.setSpectrum(.silent)
 
         // 첫 프레임(썸네일) — sim catch-up 포함(파티클 스텝 채움, CPU sim 은 해상도 무관).
-        let f0 = CFAbsoluteTimeGetCurrent()
-        _ = r.captureFrames(width: SnapshotPipeline.thumbW, height: SnapshotPipeline.thumbH,
-                            times: [SnapshotPipeline.captureT], toDir: tmp)
-        let firstFrameMs = (CFAbsoluteTimeGetCurrent() - f0) * 1000
+        let firstFrameMs: Double
+        do {
+            firstFrameMs = try measureCapture(width: SnapshotPipeline.thumbW, height: SnapshotPipeline.thumbH) {
+                r.captureFrames(width: SnapshotPipeline.thumbW, height: SnapshotPipeline.thumbH,
+                                times: [SnapshotPipeline.captureT], toDir: tmp)
+            }
+        } catch { fputs("[profile] thumbnail capture failed: \(error)\n", stderr); return 1 }
         let particleSteps = WapleProfiler.particleSteps   // 썸네일 프레임까지의 스텝
 
         // 실해상도 프레임(GPU 부분 = 해상도 의존 → 프레임 예산 분모).
-        let ff0 = CFAbsoluteTimeGetCurrent()
-        _ = r.captureFrames(width: frameW, height: frameH, times: [SnapshotPipeline.captureT], toDir: tmp)
-        let frameFullMs = (CFAbsoluteTimeGetCurrent() - ff0) * 1000
+        let frameFullMs: Double
+        do {
+            frameFullMs = try measureCapture(width: frameW, height: frameH) {
+                r.captureFrames(width: frameW, height: frameH, times: [SnapshotPipeline.captureT], toDir: tmp)
+            }
+        } catch { fputs("[profile] full-size capture failed: \(error)\n", stderr); return 1 }
 
         // 재마운트(웜) — 동일 프로세스 2차 마운트. teardown 은 mount 진입 시 자동.
         var warmMountMs: Double? = nil
@@ -337,9 +381,6 @@ public enum ProfilePipeline {
                 phasesWarm = WapleProfiler.phases
             }
         }
-        r.teardown()
-        WapleProfiler.enabled = false
-
         // 집계.
         var byFormat: [String: FormatAgg] = [:]
         var maxSingle = 0

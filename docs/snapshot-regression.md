@@ -39,9 +39,27 @@ WapleCompat --compare <baselineDir> [<corpusRoot>]
 - `<corpusRoot>` 기본값 `~/Downloads/wallpaper_dev`. 씬은 `<corpusRoot>/backgrounds/*/`
   중 `scene.pkg`|`gifscene.pkg` 를 가진 폴더.
 - `--label` 기본값 = cwd 의 git 단축 sha. 산출물은 `<outDir>/<label>/`.
+  라벨은 경로 구분자가 없는 디렉터리 이름 하나여야 한다.
+  **이미 있는 `<outDir>/<label>` 은 덮어쓰지 않고 종료코드 2로 거부한다.** 같은 커밋에서
+  다시 캡처할 때도 새 `--label` 또는 새 출력 루트를 사용한다.
 - base-assets(공유 셰이더 `common.h`)는 `WAPLE_BASE_ASSETS` 또는 `<corpusRoot>/assets`.
 - 종료코드: `--compare` 는 **결정 씬 FAIL 또는 렌더→무픽셀 회귀**가 있으면 1, 아니면 0.
-  `--capture` 는 마운트 실패가 있으면 1.
+  `--capture` 는 마운트 실패가 있으면 1, 기존 라벨·출력 디렉터리 생성 실패·씬 0개·
+  셀프체크 성립 하한 미달이면 2다. 자동화는 종료코드가 0일 때만 비교·기준선 설치로 진행한다.
+
+실패한 새 캡처의 디렉터리와 부분 산출물은 진단용으로 남을 수 있다. 잘못된 코퍼스 경로처럼
+매니페스트 작성 전 실패한 경우도 포함한다. 이 디렉터리는 유효한 기준선이 아니며, 경로를
+고친 뒤 **새 라벨이나 출력 루트로 재시도**한다. 기존 디렉터리가 있다는 이유로 캡처를
+건너뛰고 성공으로 처리하면 지난 실행의 결과를 재사용하게 된다.
+
+매 실행 고유 출력 루트를 사용하면 기본 라벨이 같은 커밋 SHA여도 안전하게 반복할 수 있다:
+
+```bash
+corpus_root="${WAPLE_DEV_ROOT:-$HOME/Downloads/wallpaper_dev}"
+capture_root="$(mktemp -d "${TMPDIR:-/tmp}/waple-baseline.XXXXXX")"
+swift run -c release WapleCompat --capture "$capture_root" --label baseline "$corpus_root" &&
+  swift run -c release WapleCompat --compare "$capture_root/baseline" "$corpus_root"
+```
 
 ### 산출물 레이아웃
 
@@ -164,5 +182,48 @@ debug 오버헤드가 씬당 2.4배다. `empties` 가 24 → 0 으로 바뀐 것
 ## 재베이스라인
 
 고정 조건 상수(`t`, `fitMode`, thumb 크기)나 렌더러가 의도적으로 바뀌면 베이스라인을
-재생성한다: `--capture` 를 새 `--label` 로 다시 실행. 최종 베이스라인은 관련 브랜치
-머지 후 코디네이터가 생성한다.
+재생성한다: `--capture` 를 새 `--label` 또는 새 출력 루트로 다시 실행하고 종료코드 0을
+확인한다. 이전 기준선과 실패 산출물은 자동으로 교체되지 않는다. 최종 베이스라인은
+관련 브랜치 머지 후 코디네이터가 생성한다.
+
+### 로컬 캡처 스크립트의 출력 경로
+
+2026-11-05부터 아래 스크립트는 같은 커밋에서 반복해도 새 하위 디렉터리에 캡처한다.
+이미 있는 라벨을 보고 캡처를 건너뛰거나, 기존 디렉터리를 지워 다시 쓰지 않는다.
+표의 `<base>`는 사용자가 지정한 출력 루트이며, 실제 생성 경로는 표준 출력으로 안내한다.
+
+| 스크립트 | 출력 base 지정 | 이번 실행의 캡처·분석 위치 |
+| --- | --- | --- |
+| `verify-plan-b12.sh` | `WAPLE_VERIFY_OUT` | `<base>/capture.XXXXXX/verify-<sha>/` |
+| `verify-embedded-mips.sh` | `WAPLE_VERIFY_OUT` | `<base>/capture.XXXXXX/mips-<sha>/` |
+| `rebaseline-golden.sh` | 첫 번째 위치 인자 | `<base>/run.XXXXXX/{baseline,verify}-<sha>/` |
+| `probe-nondeterminism.sh` | `WAPLE_VERIFY_OUT` | `<base>/run.XXXXXX/{runA,runB}/`, 같은 run의 `nondet.json` |
+| `probe-session-nondeterminism.sh` | `WAPLE_VERIFY_OUT` | `<base>/run.XXXXXX/` 아래 `R1`·`R2`·`R3`·단건·TZ·CWD 캡처와 `session-compare.json` |
+| `probe-scene-repeat.sh` | 세 번째 위치 인자 | `<base>/run.XXXXXX/run1/`부터 `runN/`까지 |
+
+앞의 두 검증 스크립트는 빌드·스위트 로그를 계속 base에 남기고, 캡처 로그는 해당
+`capture.XXXXXX/capture.log`에 기록한다. 프로브의 A/B·R1/R2·반복 번호는 같은 run 안에서
+관계를 유지한다. 서로 다른 run의 결과를 한 실행의 표본으로 섞지 않는다.
+
+```bash
+WAPLE_DEV_ROOT=/path/to/wallpaper_dev \
+  bash scripts/mac-session/rebaseline-golden.sh /path/to/captures
+
+WAPLE_DEV_ROOT=/path/to/wallpaper_dev WAPLE_VERIFY_OUT=/path/to/probes \
+  bash scripts/mac-session/probe-nondeterminism.sh
+
+bash scripts/mac-session/probe-scene-repeat.sh 3706286085 8 /path/to/probes
+```
+
+캡처가 실패하면 그 종료코드로 즉시 중단한다. 새 run에 남은 부분 산출물은 진단용이며,
+실패한 실행의 매니페스트를 비교·설치에 사용하지 않는다. 재시도는 같은 base를 지정해도
+자동으로 다른 run을 만든다.
+
+`rebaseline-golden.sh`는 두 새 캡처의 검사를 통과한 뒤
+`spec/golden/snapshot/baseline-<sha>`로 복사한다. **그 설치 경로가 이미 있으면 rc1로
+중단하고 기존 기준선을 보존한다.** 새 run의 후보 캡처도 남는다. 같은 SHA의 기준선 교체는
+자동화가 승인하지 않으므로, 새 코드 커밋에서 재생성하거나 후보를 별도 검토해 새 라벨로
+승격하는 절차를 밟는다. 검사 실패를 고치려고 기존 기준선을 삭제하지 않는다.
+
+직접 `WapleCompat --capture`를 호출할 때도 위 CLI의 새 라벨·출력 루트 규약을 따른다.
+A/B 스크립트처럼 사용자가 출력 루트를 직접 정하는 호출부에는 매 실행 새 루트를 제공한다.

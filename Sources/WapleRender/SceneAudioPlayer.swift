@@ -328,7 +328,11 @@ nonisolated final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Se
         // random 모드는 곡 사이 [mintime,maxtime]초 대기 후 다음 곡(WE 셔플 간격). 그 외 gap=0(즉시).
         // 다음 곡 실패 시 이 플레이리스트만 종료(코퍼스는 참조 파일 전부 존재 — 실사용에선 발생 안 함).
         let gap = SceneAudioPlayer.gapSeconds(mode: mode, minTime: minTime, maxTime: maxTime)
-        guard gap > 0 else { _ = play(at: next); return }
+        guard gap > 0 else {
+            if paused { pendingNext = next }
+            else { _ = play(at: next) }
+            return
+        }
         let gen = generation
         DispatchQueue.main.asyncAfter(deadline: .now() + gap) { [weak self] in
             // F410: 만기 전 trigger/stop 으로 세대가 바뀌었으면 stale — 폐기(새 곡 절단 방지).

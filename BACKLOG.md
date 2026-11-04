@@ -1,6 +1,10 @@
 # Waple 백로그
 
-**현재 상태** (2026-08-31 작업 트리): 로컬 정적·실행 테스트 **4,016개** · 실패 0 · 스킵 63.
+**2026-11-05 후속:** 전체 감사 확정 51건의 구현과 독립 소스 리뷰를 마쳤다.
+항목별 수정·회귀 참조·통합 검증 상태는 [수정 기록](docs/audit-fixes-2026-11-05.md)에 둔다.
+현재 실행 하한은 `.github/workflows/ci.yml`의 census가 정본이며, 아래 숫자는 당시 기록이다.
+
+**이전 검증 기록** (2026-08-31 작업 트리): 로컬 정적·실행 테스트 **4,016개** · 실패 0 · 스킵 63.
 CI 하한도 **4,016**으로 맞췄다. PR #8의 PR/push 실행(`33377467569` · `33377406808`)에서
 debug·release 네 잡 모두 실행 4,016개 · 실패 0이었고, 스킵은 63/64로만 갈렸다.
 
@@ -19,7 +23,7 @@ debug·release 네 잡 모두 실행 4,016개 · 실패 0이었고, 스킵은 63
 | 섹션 | 트리거 | 주요 잔여 |
 | --- | --- | --- |
 | [시각 충실도](#시각-충실도) | 해당 씬을 실제 배경으로 쓸 때 | H7 Ultra EOTF · E1 삼각마스크 · 텍스트 워드랩 · LDR 블룸 피라미드화 · g_Color1~3 |
-| [잠재 결함](#잠재-결함) | 실제 파일·사용에서 물릴 때 | GLSL 공용 헬퍼 리네임 · 셰이더 멀티라인 매크로 호출 |
+| [잠재 결함](#잠재-결함) | 실제 파일·사용에서 물릴 때 | 셰이더 멀티라인 매크로 호출(GLSL 공용 헬퍼 리네임은 2026-11-05 해소) |
 | [제품화](#제품화) | 배포 결심 | Developer ID 공증 · 창 닫힘 오류 알림 · WapleSaver 안내문 현지화 |
 | [감사 2026-07-11 잔여](#감사-2026-07-11-잔여) | 해당 씬 사용·체감 시 | REFRACT 픽셀 오라클(F399) · wind/gravity 외력 · M6 사운드 3D |
 | [copybackground 후속](#copybackgroundfalse-후속) | 3D 컴포지션 레이어 사용 시 | 3D 경로 비대칭 · 파스·보존 전용 필드 소비 |
@@ -465,7 +469,14 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   `WallpaperProperties.parseValue` 가 기본 타입의 JSON 숫자 0/1을 Bool보다 먼저 숫자로 판정하고,
   preset 옵션도 프로퍼티 타입을 함께 전달한다. 숫자 preset 선택과 native Bool 보존을
   `WallpaperPropertiesTests`가 회귀 검증한다.
-- **GLSL vert/frag 공용 헬퍼의 스테이지별 하위 헬퍼 호출 리네임 누락** ([GLSLTranslator.swift](Sources/WapleCore/GLSLTranslator.swift) `_translate` 안의 `fragHelperRenames` 블록 — `grep -n 'fragHelperRenames' Sources/WapleCore/GLSLTranslator.swift`. **[2026-09-01] 종전 인용 `:155` 는 `_resetTranslationMemoForTesting()` 을 가리켜 항목 내용과 무관했다**) — 2026-07-11 리뷰 #11, 추정 단계(재현 셰이더 미확보). 공용 헬퍼가 radial_blur식 스테이지별 computeUV 를 부르는 셰이더에서 frag 가 vert 버전을 받으면 조용한 오렌더 — 실물에서 관찰되면 착수
+- ~~**GLSL vert/frag 공용 헬퍼의 스테이지별 하위 헬퍼 호출 리네임 누락**~~ →
+  **해소(2026-11-05, `SH-01`)** — fragment helper 의존성의 전이 폐쇄를 구해 공용 wrapper도
+  fragment의 하위 helper를 호출하도록 바꿨다. 저작된 `_f` 이름과의 충돌도 피한다.
+  [AuditShaderRegressionTests](Tests/WapleCoreTests/AuditShaderRegressionTests.swift)의
+  `testFragmentWrapperChainUsesFragmentCallee`·`testStageHelperRenameDoesNotCollideWithAuthoredSuffix`가 회귀를 검사한다.
+  종전 근거는 2026-07-11 리뷰 #11의 추정(실물 재현 셰이더 미확보)이었고,
+  `fragHelperRenames`가 단일 helper만 바꿔 wrapper 경유 호출을 놓치는 것이 이번 합성 사례로 확정됐다.
+  2026-09-01의 `_resetTranslationMemoForTesting()` 줄번호 정정 이력은 동작 수정과 별개다.
 - **셰이더 멀티라인 매크로 "호출" 미확장** ([ShaderPreprocessor.swift](Sources/WapleCore/ShaderPreprocessor.swift) `spliceDefineContinuations` ponytail 주석) — `#define` 줄연속은 2026-07-11 해소, 인자가 여러 줄에 걸친 호출은 실입력 미확인이라 유보
 - ~~FFmpeg `converted/` 캐시 무한 증가~~ → **해소** — [FFmpegConverter.swift](Sources/WapleRender/FFmpegConverter.swift) 의 `maxCachedConversions = 8` 과, 같은 파일에서 `VideoTextureExtractor.evictOldest(in:keep:)` 를 실제로 부르는 자리(정책은 `maxCachedVideos=8` 과 동일). 같은 섹션의 취소선 규약을 따라 표시만 밀려 있었다
 - ~~**볼륨/배속 변경 = 렌더러 전체 재장착**(재생 리셋)~~ → **해소(F820, 2026-08-31)** —

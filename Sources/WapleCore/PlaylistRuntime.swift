@@ -318,11 +318,18 @@ public struct PlaylistRuntime {
                               isPaused: Bool,
                               now: PlaylistClockReading,
                               isVideo: (String) -> Bool = { _ in false }) -> [String] {
+        tick(deltaSeconds: deltaSeconds, isPaused: { _ in isPaused }, now: now, isVideo: isVideo)
+    }
+
+    public mutating func tick(deltaSeconds: Float,
+                              isPaused: (String) -> Bool,
+                              now: PlaylistClockReading,
+                              isVideo: (String) -> Bool = { _ in false }) -> [String] {
         var out: [String] = []
         for key in activeScreens {
             guard var s = screens[key] else { continue }
             let wants = s.tick(deltaSeconds: deltaSeconds,
-                               isPaused: isPaused,
+                               isPaused: isPaused(key),
                                currentIsVideo: isVideo(key),
                                settings: settings,
                                items: items,

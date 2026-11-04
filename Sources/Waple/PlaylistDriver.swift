@@ -141,6 +141,10 @@ final class PlaylistDriver {
     ///   또는 인트로 래치가 참일 때만** 살아 있는데, 위 `PlaylistSettingsBridge` 가 그 둘을 모두
     ///   끄기 때문이다. 그 키에 UI 가 생기면 여기에 실제 타입을 넘겨야 한다.
     func tick(now: Date, isPaused: Bool, isVideo: (String) -> Bool = { _ in false }) -> [String] {
+        tick(now: now, isPaused: { _ in isPaused }, isVideo: isVideo)
+    }
+
+    func tick(now: Date, isPaused: (String) -> Bool, isVideo: (String) -> Bool = { _ in false }) -> [String] {
         let previous = lastTick ?? now
         lastTick = now
         let delta = Float(now.timeIntervalSince(previous))

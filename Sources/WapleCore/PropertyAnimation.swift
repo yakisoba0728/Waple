@@ -420,14 +420,16 @@ public struct PropertyAnimation: Equatable {
         // curF ≈ 2^24 = 가동 6.47일, period == 8 이면 ~52일. 아래 `((lo - p) / period)` 의
         // `.rounded(.down) + 1` 역시 2^24 위에서 +1 이 흡수돼 같은 지점에서 무너진다.
         var hits: [(t: Double, i: Int, name: String)] = []
-        if (mode == "loop" || mode == "mirror"), length > 0 {
+        let isSingle = mode.caseInsensitiveCompare("single") == .orderedSame
+        let isMirror = mode.caseInsensitiveCompare("mirror") == .orderedSame
+        if !isSingle, length > 0 {
             let len = Double(length)
-            let period = mode == "loop" ? len : 2 * len
+            let period = isMirror ? 2 * len : len
             let cur = Double(curF)
             let lo = max(Double(prevF), cur - period)  // ponytail: 큰 틱 갭은 마지막 한 주기만 — WE 실측 불가, 폭주 방지 우선
             for (i, e) in events.enumerated() {
                 var phases: [Double]
-                if mode == "loop" {
+                if !isMirror {
                     var p = Double(e.frame).truncatingRemainder(dividingBy: period)
                     if p < 0 { p += period }
                     phases = [p]

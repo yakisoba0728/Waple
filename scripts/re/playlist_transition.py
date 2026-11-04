@@ -29,7 +29,8 @@ PREFIX = "ui_browse_playlist_modal_settings_transition_"
 
 def from_shader(path):
     """`#if/#elif FADEEFFECT == N` → {N: (첫줄, 끝줄, 주석이름, 본문)}"""
-    lines = open(path, encoding="utf-8").read().split("\n")
+    with open(path, encoding="utf-8") as source:
+        lines = source.read().split("\n")
     out, cur = {}, None
     for i, line in enumerate(lines, 1):
         m = re.match(r"#(?:el)?if FADEEFFECT == (\d+)\s*$", line.strip())
@@ -51,7 +52,8 @@ def from_shader(path):
 
 def from_js(path):
     """getTransitionOptions() → [(locale_key, value)] (선언 순서 유지)"""
-    src = open(path, encoding="utf-8", errors="replace").read()
+    with open(path, encoding="utf-8", errors="replace") as source:
+        src = source.read()
     i = src.find("getTransitionOptions=function")
     if i < 0:
         return []
@@ -67,7 +69,8 @@ def main():
     geom = from_shader(GEOM)
     vert = from_shader(VERT)
     js = from_js(JS)
-    loc = json.load(open(LOC, encoding="utf-8"))
+    with open(LOC, encoding="utf-8") as source:
+        loc = json.load(source)
 
     js_by_id = {v: k for k, v in js}
     ids = sorted(frag)
@@ -95,6 +98,8 @@ def main():
             "Y" if ("Texture1Noise" in text or "Texture2Clouds" in text) else ""))
 
     for key, val in js:
+        if key not in loc:
+            bad.append("UI 값 %s: 로케일 키 %s가 없다" % (val, key))
         if val.lstrip("-").isdigit() and int(val) >= 0 and int(val) not in frag:
             bad.append("UI 값 %s (%s): 셰이더 분기가 없다" % (val, key))
 

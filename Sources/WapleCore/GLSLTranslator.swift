@@ -422,33 +422,55 @@ public enum GLSLTranslator {
         fFns = rewriteSameStageOverloads(fFns, baseEnv: overloadSizeEnv)
         guard let vertMainF = vFns.first(where: { $0.name == "main" }),
               let fragMainF = fFns.first(where: { $0.name == "main" }) else { return nil }
+        // 공용 wrapper도 stage별 하위 함수를 부르면 분리해야 한다.
+        var fragmentSpecific = Set(fFns.filter { h in
+            h.name != "main" && vFns.contains(where: {
+                $0.name == h.name && ($0.params.map(\.type) != h.params.map(\.type) || $0.body != h.body)
+            })
+        }.map(\.name))
+        var changedHelpers = true
+        while changedHelpers {
+            changedHelpers = false
+            for h in fFns where h.name != "main" && !fragmentSpecific.contains(h.name)
+                && vFns.contains(where: { $0.name == h.name }) {
+                if !identifiers(in: h.body).isDisjoint(with: fragmentSpecific) {
+                    fragmentSpecific.insert(h.name)
+                    changedHelpers = true
+                }
+            }
+        }
         // 헬퍼: vert+frag 합집합(이름 dedupe — 공용 헤더가 양 스테이지에 인라인되는 경우).
         var helperSeen = Set<String>()
         var helpers: [GLSLFunction] = []
         var fragMainBodyPre = fragMainF.body
         for h in vFns where h.name != "main" && helperSeen.insert(h.name).inserted { helpers.append(h) }
         var fragHelperRenames: [String: String] = [:]
+        var reservedHelperNames = Set((vFns + fFns).map(\.name))
+        var fragmentHelperIndices: [Int] = []
         for h in fFns where h.name != "main" {
             if helperSeen.insert(h.name).inserted {
+                fragmentHelperIndices.append(helpers.count)
                 helpers.append(h)
-            } else if let existing = helpers.first(where: { $0.name == h.name }),
-                      existing.params.map({ $0.type }) != h.params.map({ $0.type }) || existing.body != h.body {
+            } else if fragmentSpecific.contains(h.name) {
                 // 동명이지만 다른 정의(실물 radial_blur: vert/frag 각자 computeUV) — frag 쪽 리네임.
-                let newName = h.name + "_f"
-                guard helperSeen.insert(newName).inserted else { continue }
-                var renamed = h
-                renamed.body = replaceIdentifiers(h.body, [h.name: newName])
-                helpers.append(GLSLFunction(ret: renamed.ret, name: newName, params: renamed.params, body: renamed.body))
+                var newName = h.name + "_f"
+                var suffix = 2
+                while reservedHelperNames.contains(newName) {
+                    newName = h.name + "_f\(suffix)"
+                    suffix += 1
+                }
+                reservedHelperNames.insert(newName)
+                helperSeen.insert(newName)
+                fragmentHelperIndices.append(helpers.count)
+                helpers.append(GLSLFunction(ret: h.ret, name: newName, params: h.params, body: h.body))
                 fragHelperRenames[h.name] = newName
             }
         }
         if !fragHelperRenames.isEmpty {
             fragMainBodyPre = replaceIdentifiers(fragMainBodyPre, fragHelperRenames)
-            for i in helpers.indices where fFns.contains(where: { $0.name == helpers[i].name || helpers[i].name == $0.name + "_f" }) {
+            for i in fragmentHelperIndices {
                 // frag 유래 헬퍼 본문 내 호출도 리네임(vert 유래 정의를 잘못 부르지 않도록).
-                if fFns.contains(where: { $0.name + "_f" == helpers[i].name }) || (fFns.contains(where: { $0.name == helpers[i].name }) && !vFns.contains(where: { $0.name == helpers[i].name })) {
-                    helpers[i].body = replaceIdentifiers(helpers[i].body, fragHelperRenames)
-                }
+                helpers[i].body = replaceIdentifiers(helpers[i].body, fragHelperRenames)
             }
         }
 
@@ -473,10 +495,25 @@ public enum GLSLTranslator {
         if !mustDemote.isEmpty {
             let demoted = constOrder.filter { mustDemote.contains($0) }.map { (name: $0, line: constByName[$0]!) }
             for i in helpers.indices {
-                let refs = identifiers(in: helpers[i].body)
-                let needed = demoted.filter { refs.contains($0.name) }
+                let parameterNames = Set(helpers[i].params.map(\.name))
+                var pending = Array(identifiers(in: helpers[i].body).subtracting(parameterNames).intersection(mustDemote))
+                var required = Set<String>()
+                while let name = pending.popLast() {
+                    guard required.insert(name).inserted else { continue }
+                    pending.append(contentsOf: identifiers(in: constByName[name]!).intersection(mustDemote))
+                }
+                let needed = demoted.filter { required.contains($0.name) }
                 guard !needed.isEmpty else { continue }
-                helpers[i].body = needed.map { $0.line }.joined(separator: "\n") + "\n" + helpers[i].body
+                var occupied = bodyIds
+                var constRenames: [String: String] = [:]
+                for entry in needed where parameterNames.contains(entry.name) {
+                    var name = "we_const_\(entry.name)"
+                    while !occupied.insert(name).inserted { name += "_" }
+                    constRenames[entry.name] = name
+                }
+                // 초기화자는 helper 파라미터를 피하고, 원본문의 지역 shadow는 별도 블록에서 그대로 보존한다.
+                let declarations = needed.map { replaceIdentifiers($0.line, constRenames) }
+                helpers[i].body = declarations.joined(separator: "\n") + "\n{\n" + helpers[i].body + "\n}"
             }
         }
 
@@ -2139,7 +2176,7 @@ public enum GLSLTranslator {
                 // Texel 접미는 isEngine 통과분만 도달 = g_TextureNTexel 한정(g_TexelSize 는 "Size" 접미).
                 : (n.hasSuffix("Resolution") || n.hasSuffix("Texel") || n == "g_PointerState" ? "float4"
                     // F614: g_Screen 은 vec3 — 헬퍼 캡처 승격 시 치환식(float3)과 타입 정합.
-                    : (n == "g_Screen" ? "float3"
+                    : (n == "g_Screen" || n == "g_LightAmbientColor" || n == "g_LightSkylightColor" ? "float3"
                         : (n == "g_PointerPosition" || n == "g_ParallaxPosition" || n == "g_PointerPositionLast"
                             || n == "g_TexelSize" || n == "g_TexelSizeHalf" ? "float2" : "float")))
             return "\(t) \(n)"

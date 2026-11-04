@@ -128,10 +128,15 @@ final class WorkshopViewModel: ObservableObject {
             statusMessage = failure.message
             return
         }
+        searchEpoch &+= 1
         hasAPIKey = false
         results = []
         canLoadMore = false
         attemptedInitialLoad = false
+        isSearching = false
+        isLoadingMore = false
+        searchFailed = false
+        statusMessage = nil
     }
 
     // MARK: - 검색·페이징
@@ -147,6 +152,7 @@ final class WorkshopViewModel: ObservableObject {
         searchEpoch &+= 1
         let epoch = searchEpoch
         isSearching = true
+        isLoadingMore = false
         statusMessage = nil
         searchFailed = false
         page = 1
@@ -181,7 +187,7 @@ final class WorkshopViewModel: ObservableObject {
         guard canLoadMore, !isLoadingMore, !isSearching, let key = keyProvider() else { return }
         let epoch = searchEpoch
         isLoadingMore = true
-        defer { isLoadingMore = false }   // 이 loadMore 단독 소유 플래그 — 무조건 해제(폐기돼도 재개통해야 함)
+        defer { if epoch == searchEpoch { isLoadingMore = false } }
         // page 는 append 가 실제 반영될 때만 올린다 — 검색이 끼어들어 폐기되면 page 를 건드리지 않아
         // pagination gap(중간 페이지 건너뜀)을 원천 차단한다. 실패 시에도 page 미변경이라 재시도가 같은 페이지.
         let nextPage = page + 1

@@ -964,6 +964,12 @@ public enum WallpaperCompatibilityAnalyzer {
         let path: String   // 프로젝트 루트 기준 정규화 상대 경로 — F424: 경고의 relativePath 로 사용
     }
 
+    static func readWebFeatureData(_ file: FileHandle, maxBytes: Int) -> Data? {
+        guard maxBytes >= 0, maxBytes < Int.max,
+              let data = try? file.read(upToCount: maxBytes + 1), data.count <= maxBytes else { return nil }
+        return data
+    }
+
     private static func webFeatureSources(entryPath: String, folderURL: URL) -> [WebFeatureSource] {
         let maxFiles = 64
         let maxBytes = 2_000_000
@@ -981,9 +987,9 @@ public enum WallpaperCompatibilityAnalyzer {
             seen.insert(normalized)
             processed += 1
             guard isWebFeatureTextPath(normalized) else { continue }
-            guard let data = try? Data(contentsOf: url), !data.isEmpty else { continue }
-            guard data.count <= maxBytes,
-                  totalBytes + data.count <= maxBytes,
+            guard let file = try? FileHandle(forReadingFrom: url) else { continue }
+            defer { try? file.close() }
+            guard let data = readWebFeatureData(file, maxBytes: maxBytes - totalBytes), !data.isEmpty,
                   let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else { continue }
             totalBytes += data.count
             sources.append(WebFeatureSource(text: text, path: normalized))

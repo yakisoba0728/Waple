@@ -159,6 +159,16 @@ enum RenderPauseComposition {
         }
     }
 
+    /// mount가 재생을 시작해도 정책 정지가 풀리거나 짧은 소리가 나지 않게 한다.
+    static func mount(muted: Bool, paused: Bool,
+                      setMuted: (Bool) -> Void, mount: () throws -> Void,
+                      pause: () -> Void) rethrows {
+        setMuted(muted || paused)
+        try mount()
+        if paused { pause() }
+        setMuted(muted)
+    }
+
     /// 전역 음소거 — 화면마다 벽지가 다르면 판정도 갈리는데 **WE 의 음소거는 전역**이라
     /// (`PlaybackVerdict.muted` 주석: 적용기가 인스턴스마다 같은 값을 먹인다) 하나로 접어야 한다.
     ///

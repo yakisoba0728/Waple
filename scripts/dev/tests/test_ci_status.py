@@ -20,6 +20,7 @@ import io
 import os
 import sys
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOL = os.path.join(HERE, "..", "ci-status.py")
@@ -73,6 +74,34 @@ SPEC_OK = wf(name="spec", id=2)
 
 
 class TestExitCodeContract(unittest.TestCase):
+    def test_missing_release_tally_is_unverified_in_all_modes(self):
+        jobs = [dict(name="swift · release", id=9, status="completed",
+                     conclusion="success", steps=[])]
+        for argv in ((), ("--tests", "--jobs"), ("--watch", "--interval", "0")):
+            with self.subTest(argv=argv):
+                rc, out = run([CI_OK, SPEC_OK], jobs=jobs, tally=None, argv=argv)
+                self.assertEqual(rc, 2, out)
+                self.assertIn("검증 미확정", out)
+
+    def test_missing_release_tally_can_be_retried(self):
+        m = load()
+        m.api = lambda path: {"jobs": [dict(name="swift · release", id=9,
+                                           status="completed", conclusion="success")]}
+        with mock.patch.object(m, "test_tally", side_effect=[None, (4042, 64, 0)]) as tally:
+            m.inspect_hidden_test_failures("owner/repo", 1)
+            self.assertNotIn(9, m.HIDDEN["inspected_test_jobs"])
+            m.inspect_hidden_test_failures("owner/repo", 1)
+        self.assertEqual(tally.call_count, 2)
+        self.assertEqual(m.HIDDEN["unverified_test_jobs"], set())
+        self.assertIn(9, m.HIDDEN["inspected_test_jobs"])
+
+    def test_log_fetch_failure_or_missing_summary_is_unverified(self):
+        m = load()
+        with mock.patch.object(m, "api", side_effect=SystemExit(1)):
+            self.assertIsNone(m.test_tally("owner/repo", 9))
+        with mock.patch.object(m, "api", return_value=b"no XCTest summary\n"):
+            self.assertIsNone(m.test_tally("owner/repo", 9))
+
     # ── 종전에 rc=0 이던 자리 셋 ────────────────────────────────────────────
     def test_no_runs_at_all_is_failure(self):
         rc, out = run([])

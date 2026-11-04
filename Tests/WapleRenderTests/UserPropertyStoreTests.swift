@@ -3,30 +3,31 @@ import XCTest
 @testable import WapleRender
 
 final class UserPropertyStoreTests: XCTestCase {
-    override func tearDown() { UserPropertyStore.reset(id: "upt1"); super.tearDown() }
+    private let id = "audit-userprops-\(UUID().uuidString)"
+    override func tearDown() { UserPropertyStore.reset(id: id); super.tearDown() }
 
     func testRoundTripAndReset() {
-        XCTAssertTrue(UserPropertyStore.overrides(id: "upt1").isEmpty)
-        UserPropertyStore.set(.bool(false), key: "on", id: "upt1")
-        UserPropertyStore.set(.number(2.5), key: "amt", id: "upt1")
-        UserPropertyStore.set(.string("1 0 0"), key: "tint", id: "upt1")
-        let o = UserPropertyStore.overrides(id: "upt1")
+        XCTAssertTrue(UserPropertyStore.overrides(id: id).isEmpty)
+        UserPropertyStore.set(.bool(false), key: "on", id: id)
+        UserPropertyStore.set(.number(2.5), key: "amt", id: id)
+        UserPropertyStore.set(.string("1 0 0"), key: "tint", id: id)
+        let o = UserPropertyStore.overrides(id: id)
         XCTAssertEqual(o["on"], .bool(false))
         XCTAssertEqual(o["amt"], .number(2.5))
         XCTAssertEqual(o["tint"], .string("1 0 0"))
         // 씬 파서용 raw 딕셔너리
-        let raw = UserPropertyStore.rawOverrides(id: "upt1")
+        let raw = UserPropertyStore.rawOverrides(id: id)
         XCTAssertEqual(raw["on"] as? Bool, false)
         XCTAssertEqual(raw["amt"] as? Double, 2.5)
-        UserPropertyStore.reset(id: "upt1")
-        XCTAssertTrue(UserPropertyStore.overrides(id: "upt1").isEmpty)
+        UserPropertyStore.reset(id: id)
+        XCTAssertTrue(UserPropertyStore.overrides(id: id).isEmpty)
     }
 
     func testPresetOverridesMergeBeforeUserOverrides() {
-        UserPropertyStore.set(.number(0.9), key: "amount", id: "upt1")
+        UserPropertyStore.set(.number(0.9), key: "amount", id: id)
 
         let overrides = UserPropertyStore.overrides(
-            id: "upt1",
+            id: id,
             presetOverrides: [
                 "amount": .number(0.25),
                 "enabled": .bool(true),
@@ -40,10 +41,10 @@ final class UserPropertyStoreTests: XCTestCase {
     }
 
     func testPresetRawOverridesMergeBeforeUserOverrides() {
-        UserPropertyStore.set(.string("User"), key: "name", id: "upt1")
+        UserPropertyStore.set(.string("User"), key: "name", id: id)
 
         let raw = UserPropertyStore.rawOverrides(
-            id: "upt1",
+            id: id,
             presetOverrides: [
                 "enabled": .bool(false),
                 "amount": .number(0.5),
@@ -66,7 +67,7 @@ final class UserPropertyStoreTests: XCTestCase {
             .init(key: "tintcolor", type: "color", value: .string("0.8 0.4 0.05"), order: nil, condition: nil),
             .init(key: "showclock", type: "bool", value: .bool(true), order: nil, condition: nil),
         ]
-        let raw = UserPropertyStore.rawOverrides(id: "upt1", projectDefaults: defaults,
+        let raw = UserPropertyStore.rawOverrides(id: id, projectDefaults: defaults,
                                                   presetOverrides: [:], presetResourceRoot: nil)
         XCTAssertEqual(raw["grain"] as? Double, 0)
         XCTAssertEqual(raw["tintcolor"] as? String, "0.8 0.4 0.05")
@@ -75,12 +76,12 @@ final class UserPropertyStoreTests: XCTestCase {
 
     /// 계층: defaults < preset < user — 유저가 건드린 키는 defaults/preset 을 모두 이긴다.
     func testUserOverrideWinsOverProjectDefaultAndPreset() {
-        UserPropertyStore.set(.number(0.9), key: "grain", id: "upt1")
+        UserPropertyStore.set(.number(0.9), key: "grain", id: id)
         let defaults: [WallpaperProperty] = [
             .init(key: "grain", type: "slider", value: .number(0), order: nil, condition: nil),
         ]
         let raw = UserPropertyStore.rawOverrides(
-            id: "upt1", projectDefaults: defaults,
+            id: id, projectDefaults: defaults,
             presetOverrides: ["grain": .number(0.5)], presetResourceRoot: nil)
         XCTAssertEqual(raw["grain"] as? Double, 0.9, "유저 값이 preset·defaults 를 모두 이겨야")
     }
@@ -91,7 +92,7 @@ final class UserPropertyStoreTests: XCTestCase {
             .init(key: "grain", type: "slider", value: .number(0), order: nil, condition: nil),
         ]
         let raw = UserPropertyStore.rawOverrides(
-            id: "upt1", projectDefaults: defaults,
+            id: id, projectDefaults: defaults,
             presetOverrides: ["grain": .number(0.5)], presetResourceRoot: nil)
         XCTAssertEqual(raw["grain"] as? Double, 0.5, "preset 이 project 기본값을 이겨야")
     }
@@ -106,7 +107,7 @@ final class UserPropertyStoreTests: XCTestCase {
         try Data([1, 2, 3]).write(to: image)
 
         let raw = UserPropertyStore.rawOverrides(
-            id: "upt1",
+            id: id,
             presetOverrides: ["customimage": .string("files/yeezus.jpg"), "host": .string("franGMZ")],
             presetResourceRoot: root
         )
@@ -125,7 +126,7 @@ final class UserPropertyStoreTests: XCTestCase {
         // root=nil(비-preset 타입 web 배경이 우연히 최상위 "preset" 키를 가진 경우 포함)도
         // 절대경로 preset 값을 무검증 통과시키면 안 된다.
         let overrides = UserPropertyStore.overrides(
-            id: "upt1",
+            id: id,
             presetOverrides: ["secret": .string("/etc/passwd")]
         )
         XCTAssertNil(overrides["secret"], "root 없는 배경도 절대경로 preset 값을 허용목록에 편입시키면 안 된다")
@@ -138,7 +139,7 @@ final class UserPropertyStoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let overrides = UserPropertyStore.overrides(
-            id: "upt1",
+            id: id,
             presetOverrides: ["secret": .string("/etc/passwd")],
             presetResourceRoot: root
         )
@@ -147,7 +148,7 @@ final class UserPropertyStoreTests: XCTestCase {
 
     func testPresetAbsolutePathOverrideRawFormAlsoRejected() {
         let raw = UserPropertyStore.rawOverrides(
-            id: "upt1",
+            id: id,
             presetOverrides: ["secret": .string("/etc/passwd")]
         )
         XCTAssertNil(raw["secret"], "raw 딕셔너리(씬 파서/JS 브릿지 경유)에서도 편입되면 안 된다")
@@ -156,8 +157,8 @@ final class UserPropertyStoreTests: XCTestCase {
     func testGenuineUserSelectedAbsolutePathStillAllowed() {
         // 진짜 사용자 선택(속성 편집 UI 파일피커 → UserPropertyStore.set)은 presetOverrides 를
         // 거치지 않는 별도 경로(UserDefaults 저장)라 F357 수정의 영향을 받으면 안 된다.
-        UserPropertyStore.set(.string("/Users/someone/Pictures/chosen.jpg"), key: "images", id: "upt1")
-        let overrides = UserPropertyStore.overrides(id: "upt1", presetOverrides: [:])
+        UserPropertyStore.set(.string("/Users/someone/Pictures/chosen.jpg"), key: "images", id: id)
+        let overrides = UserPropertyStore.overrides(id: id, presetOverrides: [:])
         XCTAssertEqual(overrides["images"], .string("/Users/someone/Pictures/chosen.jpg"))
     }
 }

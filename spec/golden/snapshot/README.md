@@ -456,6 +456,13 @@ frac 0.1559 로 `deterministic:false` 로 기록됐다. 나머지 169종은 `sel
 
 ## 재생성
 
+기존 `<출력디렉터리>/<라벨>`은 CLI가 rc2로 거부한다. 재시도에는 새 라벨이나 새 출력 루트를
+사용하고, 종료코드 0을 확인한 뒤에만 기준선으로 채택한다. 자동 스크립트는 실행별
+`run.XXXXXX`·`capture.XXXXXX` 하위 경로를 사용한다.
+`rebaseline-golden.sh`도 기존 `baseline-<sha>` 설치 경로를 삭제·교체하지 않고 rc1로 중단한다.
+실패 산출물과 새 후보는 진단용으로 보존한다. 자세한 경로·재시도 방법은
+[로컬 캡처 스크립트 사용법](../../../docs/snapshot-regression.md#로컬-캡처-스크립트의-출력-경로)을 따른다.
+
 ```bash
 export WAPLE_REAL_PKGS=<코퍼스>/backgrounds
 export WAPLE_BASE_ASSETS=<코퍼스>/assets

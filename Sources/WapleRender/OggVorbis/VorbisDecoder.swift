@@ -33,12 +33,28 @@ public struct DecodedAudio: Equatable {
 /// 순수 Swift Ogg/Vorbis I 디코더(외부 의존성 0). Vorbis I, floor1, residue 0/1/2, 모노/스테레오+.
 /// 미지원(floor0 등)은 VorbisError 로 명확히 스킵. 알고리즘 근거: Vorbis I 명세 + stb_vorbis(퍼블릭 도메인).
 public enum OggVorbisDecoder {
+    /// F840: finalGranule과 패킷수×블록 크기는 모두 파일 제어값이다. 종전에는 10MB Ogg도
+    /// 채널당 약 10GB를 선예약할 수 있어 절대 상한을 뒀다. 그 상한도 채널마다 적용하면
+    /// 255채널에서 다시 수 GiB가 되므로, 기존 스테레오 한도를 전체 PCM 샘플 예산으로 쓴다.
+    /// mono/stereo의 48kHz 10분·선예약 약44초 한도는 유지하고 다채널만 같은 예산을 나눈다.
+    static func pcmFrameLimits(channels: Int, maximumPCMSamples: Int = 57_600_000) -> (decoded: Int, reserved: Int) {
+        let budgetChannels = max(2, channels)
+        let samples = min(57_600_000, max(0, maximumPCMSamples))
+        return (samples / budgetChannels, min(1 << 22, samples) / budgetChannels)
+    }
+
     /// Ogg 컨테이너에서 Vorbis 스트림을 디코드해 인터리브 PCM 반환.
     /// - useFastIMDCT: true=FFT 기반(기본, 실사용), false=naive(검증 기준).
     public static func decode(_ data: Data, useFastIMDCT: Bool = true) throws -> DecodedAudio {
+        try decode(data, maximumPCMSamples: 57_600_000, useFastIMDCT: useFastIMDCT)
+    }
+
+    /// 내부의 작은 예산으로 실제 append 경계를 검증하며, 기본 정책보다 한도를 늘릴 수 없다.
+    static func decode(_ data: Data, maximumPCMSamples: Int, useFastIMDCT: Bool = true) throws -> DecodedAudio {
+        guard maximumPCMSamples > 0 else { throw VorbisError.corrupt("PCM sample budget must be positive") }
         let ogg = try OggPageReader.parse(data)
         let stream = try VorbisStream(packets: ogg.packets, useFastIMDCT: useFastIMDCT)
-        return try stream.decodeAll(finalGranule: ogg.finalGranule)
+        return try stream.decodeAll(finalGranule: ogg.finalGranule, maximumPCMSamples: maximumPCMSamples)
     }
 }
 
@@ -315,26 +331,17 @@ private final class VorbisStream {
 
     // MARK: 전체 디코드
 
-    /// 채널당 디코드 프레임 절대 상한. 씬 내장 사운드(project.json 의 짧은 루프)는 48kHz 기준
-    /// 10분이면 과할 만큼 넉넉하다 — 2,880만 프레임 = 채널당 115MB(Float).
-    /// F840: 종전 clamp 는 finalGranule 과 `audioPackets.count * blocksize1` 의 min 이었는데
-    /// **둘 다 파일 제어값**이라 상한 역할을 못 했다. 10MB 짜리 .ogg 가 런트 패킷 수백만 개를 담으면
-    /// 곱이 ~2.4e9 → 채널당 reserveCapacity(2.4e9) ≈ 10GB(스테레오 20GB)로 즉시 OOM 이었다.
-    /// 절대 상한으로 예약을 캡하고, 실제 산출이 그 선을 넘으면 예약 대신 깨끗이 실패시킨다.
-    static let maxDecodedFrames = 48_000 * 60 * 10
-
-    /// 선반영 예약의 상한(채널당 2M 프레임 = 8MB, 48kHz 기준 ~44초). 예약은 성능 최적화일 뿐이라
-    /// 이보다 긴 트랙도 Array 증분 성장으로 정상 디코드된다 — 상한을 maxDecodedFrames(115MB/채널)이
-    /// 아니라 여기 두는 이유는, 파일이 제어하는 값으로 그만한 메모리를 **미리** 잡게 두지 않기 위해서다.
-    static let maxReservedFrames = 1 << 21
-
-    func decodeAll(finalGranule: Int64) throws -> DecodedAudio {
+    func decodeAll(finalGranule: Int64, maximumPCMSamples: Int) throws -> DecodedAudio {
+        let limits = OggVorbisDecoder.pcmFrameLimits(channels: channels, maximumPCMSamples: maximumPCMSamples)
+        let frameLimit = limits.decoded
+        guard let declaredLimit = Int64(exactly: frameLimit), finalGranule <= declaredLimit else {
+            throw VorbisError.corrupt("declared PCM exceeds total sample budget")
+        }
         var output = [[Float]](repeating: [], count: channels)
         // granulepos 는 파일 제어값 — 실제 산출 가능한 최대 프레임 수(패킷수×최대블록)로 clamp 하되,
-        // 그 곱 자체도 파일 제어값이므로 예약 상한(maxReservedFrames)으로 한 번 더 캡한다(거대 예약 방지).
-        let frameLimit = Self.maxDecodedFrames
+        // 예약은 성능 최적화이므로 실제 출력 예산보다 작게 잡고, 채널 합계에도 같은 예산을 건다.
         let estimate = min(max(0, Int(clamping: finalGranule)), audioPackets.count * blocksize1)
-        for ch in 0..<channels { output[ch].reserveCapacity(min(estimate, Self.maxReservedFrames)) }
+        for ch in 0..<channels { output[ch].reserveCapacity(min(estimate, limits.reserved)) }
 
         var prevWindow = [[Float]](repeating: [], count: channels)
         var prevLength = 0
@@ -434,11 +441,11 @@ private final class VorbisStream {
             var newPrev = [[Float]](repeating: [], count: channels)
             for ch in 0..<channels { newPrev[ch] = Array(timeBuf[ch][rightStart..<rightStart + saveCount]) }
             if hadPrev {
-                for ch in 0..<channels { output[ch].append(contentsOf: timeBuf[ch][leftStart..<rightStart]) }
-                // 상한 초과는 '조용히 잘라내기' 대신 실패 — 잘라내면 손상 파일이 정상 재생처럼 보인다.
-                guard output[0].count <= frameLimit else {
+                // granule이 작게 거짓말해도 append 전에 총량을 제한한다(후행 interleave도 같은 한도).
+                guard rightStart - leftStart <= frameLimit - output[0].count else {
                     throw VorbisError.corrupt("decoded frames > \(frameLimit)")
                 }
+                for ch in 0..<channels { output[ch].append(contentsOf: timeBuf[ch][leftStart..<rightStart]) }
             }
             prevWindow = newPrev
             prevLength = saveCount

@@ -91,7 +91,7 @@ def lea_refs(data, secs, targets):
     tset = set(targets)
     blob = data[t["raw"]:t["rawEnd"]]
     out = []
-    for i in range(len(blob) - 7):
+    for i in range(len(blob) - 7 + 1):
         if blob[i] not in (0x48, 0x4C) or blob[i + 1] != 0x8D or blob[i + 2] not in MODRM:
             continue
         disp = struct.unpack_from("<i", blob, i + 3)[0]
@@ -119,16 +119,17 @@ def mov_refs(data, secs, targets):
     out = []
     i = 0
     n = len(blob)
-    while i < n - 7:
+    while i + 6 <= n:
         b = blob[i]
         j = i + 1 if 0x40 <= b <= 0x4F else i        # REX 건너뛰기
-        if j >= n - 6:
+        if j + 6 > n:
             i += 1; continue
         op = blob[j]
         if op == 0x8B and blob[j + 1] in MODRM:      # mov reg, [rip+d]
             ln = (j + 2) - i + 4
             disp = struct.unpack_from("<i", blob, j + 2)[0]
-        elif op == 0x0F and blob[j + 1] in (0xB6, 0xB7) and blob[j + 2] in MODRM:
+        elif (j + 7 <= n and op == 0x0F and blob[j + 1] in (0xB6, 0xB7)
+              and blob[j + 2] in MODRM):
             ln = (j + 3) - i + 4                     # movzx reg, byte/word [rip+d]
             disp = struct.unpack_from("<i", blob, j + 3)[0]
         else:
@@ -152,7 +153,7 @@ def ptr_refs(data, secs, targets):
         if s["name"] not in (".rdata", ".data", "_RDATA"):
             continue
         blob = data[s["raw"]:s["rawEnd"]]
-        for i in range(0, len(blob) - 8, 8):
+        for i in range(0, len(blob) - 8 + 1, 8):
             v = struct.unpack_from("<Q", blob, i)[0]
             if v in tset:
                 out.append((s["va"] + i, v, s["name"]))

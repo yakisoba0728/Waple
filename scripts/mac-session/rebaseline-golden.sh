@@ -13,7 +13,7 @@ REPO="${WAPLE_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 ROOT="${WAPLE_DEV_ROOT:-$HOME/Downloads/wallpaper_dev}"
 OUT="${1:-$HOME/Downloads/waple-rebaseline}"
 BIN="$REPO/.build/release/WapleCompat"
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d)" || exit 2
 
 cd "$REPO" || exit 1
 if [ -n "$(git status --porcelain -- Sources Package.swift)" ]; then
@@ -36,21 +36,23 @@ if let loc = CGEvent(source: nil)?.location { print("\(loc.x) \(loc.y)") }
 SWIFT
 swiftc -O "$TMP/cursor.swift" -o "$TMP/cursor" || { echo "!! cursor 헬퍼 빌드 실패"; exit 1; }
 ORIG="$("$TMP/cursor")"; OX="${ORIG%% *}"; OY="${ORIG##* }"
+trap '"$TMP/cursor" "$OX" "$OY" >/dev/null 2>&1 || true; rm -rf "$TMP"' EXIT
 
-mkdir -p "$OUT"
+mkdir -p "$OUT" || exit 2
+OUT=$(mktemp -d "$OUT/run.XXXXXX") || exit 2
+echo "이번 실행 출력: $OUT"
 cap() {
-    [ -d "$OUT/$1" ] && { echo "  $1 이미 있음 — 건너뜀"; return 0; }
     echo "  $1 캡처…"
     launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$ROOT/backgrounds" WAPLE_BASE_ASSETS="$ROOT/assets" \
         "$BIN" --capture "$OUT" --label "$1" "$ROOT" 2>&1 | tail -4
+    rc=${PIPESTATUS[0]}
+    [ "$rc" -eq 0 ] || exit "$rc"
 }
 
 cap "baseline-$SHA"
 "$TMP/cursor" 37 613 >/dev/null   # ← 두 캡처 사이에 커서를 옮긴다(핀이 빠지면 여기서 갈린다)
 echo "커서 이동: $ORIG → $("$TMP/cursor")"
 cap "verify-$SHA"
-"$TMP/cursor" "$OX" "$OY" >/dev/null
-rm -rf "$TMP"
 
 python3 - "$OUT" "$SHA" "$REPO" <<'PY'
 import json, os, shutil, sys
@@ -93,8 +95,7 @@ for tag, m in (("1차", m1), ("2차", m2)):
 
 # H13 짝: 셀프체크가 아예 성립하지 않은 씬(selfMaxDiff=-1, 스키마 규약 "셀프체크 안 했으면 -1").
 # helper 프로세스가 못 뜨면 전건이 이 값으로 굳고 그 기준선은 `--compare` 에서 전건 lax 로
-# 판정된다. SnapshotPipeline 쪽에도 같은 하한을 걸었지만 여기 `cap()` 은 파이프(`| tail -4`)로
-# 종료코드를 잃으므로 설치 직전에 매니페스트로 한 번 더 본다.
+# 판정된다. capture 종료코드와 별개로 설치 직전 매니페스트 내용도 한 번 더 확인한다.
 unchecked = sorted(e["id"] for e in m1["entries"] if e.get("selfMaxDiff", -1) < 0)
 if unchecked:
     print(f"!! 셀프체크가 성립하지 않은 씬 {len(unchecked)}/{len(a)}종(selfMaxDiff=-1) — "
@@ -120,12 +121,13 @@ if inconsistent:
     for i in inconsistent[:10]:
         print(f"     {i}  selfMaxDiff={a[i].get('selfMaxDiff')}")
     print("   같은 캡처 안에서 두 마운트가 어긋났다는 뜻이다. 캐시를 지우고 다시 떠라:")
-    print(f"     rm -rf {out}/{{baseline,verify}}-{sha}")
+    print("     같은 출력루트로 다시 실행하면 새 run 디렉터리에 캡처한다.")
     sys.exit(1)
 
 dst = os.path.join(repo, "spec", "golden", "snapshot", f"baseline-{sha}")
-if os.path.exists(dst):
-    shutil.rmtree(dst)
+if os.path.lexists(dst):
+    print(f"!! 기존 기준선을 덮어쓰지 않는다: {dst}", file=sys.stderr)
+    sys.exit(1)
 shutil.copytree(os.path.join(out, f"baseline-{sha}"), dst)
 n = len(os.listdir(os.path.join(dst, "thumbs")))
 print(f"\n설치: spec/golden/snapshot/baseline-{sha}/ (manifest + thumbs {n}장)")

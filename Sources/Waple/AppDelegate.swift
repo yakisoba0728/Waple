@@ -37,6 +37,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let desktopController = DesktopWindowController()
     private var renderers: [WallpaperRenderer] = []
+    private var rendererViews: [String: NSView] = [:]
+    private var policyPausedScreenKeys = Set<String>()
+    private var playlistApplyTargetScreenKey: String?
+    private var stillCaptureGeneration = StillCaptureGeneration()
     private var currentFolderURL: URL?
     private var currentProjectId: String?
     private var activeVideoProjectIds: [String] = []
@@ -276,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 (key: sv.screenKey, name: namesByKey[sv.screenKey] ?? sv.screenKey)
             }
         }
+        libraryVM.onCancelPendingApply = { [weak self] in self?.cancelPendingRendererApply() }
         libraryVM.onAssignmentsChanged = { [weak self] in
             guard let self else { return }
             _ = self.applyCurrentSelection()  // 할당 변경 즉시 반영
@@ -575,6 +580,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return PresetResolver.resolve(
             project: project,
             originalFolder: folderURL,
+            libraryEntryId: recentEntryId(mountedFolder: folderURL),
             dependencyFolder: { self.folderForEntry($0) },
             parse: { try? ProjectJSONParser.parse(folderURL: $0) }
         )
@@ -623,7 +629,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             markApplyResult(success: false)
             return .failed
         }
-        return applyResolved(global: project, folderURL: folderURL, completion: completion)
+        return applyResolved(global: project, folderURL: folderURL,
+                             playlistScreenKey: playlistApplyTargetScreenKey, completion: completion)
     }
 
     /// 현재 전역 선택을 우선 적용하고, 그것이 실패하면 화면별 할당만으로 폴백한다.
@@ -725,6 +732,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyResolved(global project: WallpaperProject?, folderURL: URL?,
                                preparedVideoURLs: [URL: URL] = [:],
                                continuingGeneration: UInt64? = nil,
+                               playlistScreenKey: String? = nil,
                                completion: @escaping (WallpaperApplyResolution) -> Void = { _ in })
         -> WallpaperApplyDisposition {
         let generation: UInt64
@@ -749,8 +757,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             parse: { self.projectForMount(folderURL: $0) }
         )
         let screenProjects = Array(zip(screens, projectSlots)).compactMap { screen, project -> (screenKey: String, view: NSView, project: WallpaperProject)? in
-            guard let project else { return nil }
+            let previous = rendererProjects.first { $0.screenKey == screen.screenKey }?.project
+            let keepExisting = playlistScreenKey != nil && screen.screenKey != playlistScreenKey
+                && rendererViews[screen.screenKey] === screen.view
+            guard let project = keepExisting ? previous : project else { return nil }
             return (screen.screenKey, screen.view, project)
+        }
+        var reusedRenderers: [String: WallpaperRenderer] = [:]
+        if let playlistScreenKey {
+            for (renderer, slot) in zip(renderers, rendererProjects) where slot.screenKey != playlistScreenKey {
+                if screenProjects.contains(where: {
+                    $0.screenKey == slot.screenKey && $0.project == slot.project
+                        && rendererViews[slot.screenKey] === $0.view
+                }) { reusedRenderers[slot.screenKey] = renderer }
+            }
         }
 
         // ffmpeg 필요 소스는 RendererSwap 전에 전부 준비한다. VideoRenderer.mount 안에서
@@ -759,7 +779,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let sourcesNeedingPreparation: [URL]
         if FFmpegConverter.isAvailable {
             sourcesNeedingPreparation = screenProjects.compactMap { pair in
-                guard let source = videoSourceURL(for: pair.project),
+                guard reusedRenderers[pair.screenKey] == nil, let source = videoSourceURL(for: pair.project),
                       FFmpegConverter.needsConversion(source),
                       preparedVideoURLs[source] == nil else { return nil }
                 return source
@@ -799,6 +819,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             let outcome = self.applyResolved(global: project, folderURL: folderURL,
                                                              preparedVideoURLs: accumulatedOutputs,
                                                              continuingGeneration: generation,
+                                                             playlistScreenKey: playlistScreenKey,
                                                              completion: deferredCompletion)
                             switch outcome {
                             case .applied: deferredCompletion(.applied)
@@ -817,14 +838,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingVideoPreparation = nil
 
         // 전부 성공해야 교체, 하나라도 실패하면 부분 정리 후 롤백(기존 렌더러 유지) — 추출 로직.
+        let mountDecisions = playbackDecisions(for: screenProjects.map { ($0.screenKey, $0.project) })
+        let mountMute = RenderPauseComposition.wantsGlobalMute(mountDecisions)
+        let mountPauseByScreen = Dictionary(zip(screenProjects.map(\.screenKey), mountDecisions.map(\.paused)),
+                                            uniquingKeysWith: { _, later in later })
         let result = RendererSwap.apply(
             screens: screenProjects,
             existing: renderers,
+            reuse: { reusedRenderers[$0.screenKey] },
             makeAndMount: { pair -> WallpaperRenderer? in
                 let prepared = self.videoSourceURL(for: pair.project).flatMap { preparedVideoURLs[$0] }
                 guard let renderer = RendererFactory.makeRenderer(for: pair.project,
                                                                   preparedVideoURL: prepared) else { return nil }
-                try renderer.mount(in: pair.view, project: pair.project)
+                do {
+                    try RenderPauseComposition.mount(muted: mountMute,
+                        paused: mountPauseByScreen[pair.screenKey] ?? self.pauseGate.isPaused,
+                        setMuted: { renderer.setPolicyMuted($0) },
+                        mount: { try renderer.mount(in: pair.view, project: pair.project) },
+                        pause: { renderer.pause() })
+                } catch {
+                    renderer.teardown()
+                    throw error
+                }
                 return renderer
             },
             teardown: { $0.teardown() }
@@ -835,6 +870,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 위 주석의 불변식 — `RendererSwap.apply` 가 `screenProjects` 순서대로 만들므로 같은 순서다.
             // 화면 키를 함께 나른다(선언부 [2026-08-30]) — 이 배열의 위치는 모니터 인덱스가 아니다.
             rendererProjects = screenProjects.map { (screenKey: $0.screenKey, project: $0.project) }
+            rendererViews = Dictionary(screenProjects.map { ($0.screenKey, $0.view) }, uniquingKeysWith: { _, later in later })
+            if let playlistScreenKey {
+                let primaryPlaylistScreen = playlistScreenKeys().first
+                for slot in rendererProjects where slot.screenKey != playlistScreenKey
+                    && slot.screenKey != primaryPlaylistScreen
+                    && monitorStore.assignment(for: slot.screenKey) == nil {
+                    playlistScreenOverrides[slot.screenKey] = slot.project.id
+                }
+            }
             policyPauseState.reset()   // 렌더러 세트가 바뀌었다 → 다음 틱이 전부 다시 적용
             // 음소거도 같이 리셋한다. 새 렌더러는 `policyMuted == false` 로 태어나므로, 리셋하지
             // 않으면 엣지 추적이 "이미 음소거 중" 이라고 기억한 채 아무것도 밀지 않아 정책
@@ -851,7 +895,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 절대 갱신되지 않았다. screenProjects 는 미할당 화면에 전역을 폴백하므로 전역이 동영상인
             // 경우도 그대로 포함된다(무회귀) — 여러 화면이 서로 다른 동영상이면 첫 번째를 채택.
             ScreenSaverController.syncVideoPath(for: screenProjects.first { $0.project.type == .video }?.project)
-            if pauseGate.isPaused { renderers.forEach { $0.pause() } }  // 어떤 사유든 정지 중 교체된 렌더러도 정지 유지
+            applyPlaybackPolicy()
             scheduleDesktopStillSync()  // 정적 배경 동기화(옵션, 기본 꺼짐 — 내부에서 가드)
             if project != nil {
                 // F480: 최근 배경은 파서 id(project.id)가 아니라 라이브러리 엔트리 id 여야 한다 —
@@ -916,6 +960,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 반응하면 배경이 반복 리마운트된다(동영상 t=0 재시작·웹 페이지 리로드·텍스처 재업로드).
     /// scheduleDesktopStillSync 와 동일한 취소+재예약 패턴으로 흡수.
     @objc private func screensChanged() {
+        stillCaptureGeneration.advance()
         screenChangeWork?.cancel()
         // DispatchWorkItem 블록은 @Sendable 이지만 이 워크아이템은 바로 아래에서 메인 큐에만
         // 예약된다 — 실행 위치가 메인임을 assumeIsolated 로 알린다(scheduleDesktopStillSync 도 동일).
@@ -965,6 +1010,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         renderers.forEach { $0.teardown() }
         renderers = []
         rendererProjects = []
+        rendererViews.removeAll()
+        policyPausedScreenKeys.removeAll()
         policyPauseState.reset()
         policyMuteState.reset()   // 렌더러 세트가 비었다 — 정지와 같은 이유로 함께 리셋한다
         activeVideoProjectIds = []
@@ -1022,10 +1069,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func requestPrimaryPlaylistCandidate(
         entryId: String,
+        screenKey: String,
         completion: @escaping (WallpaperApplyResolution) -> Void
     ) -> WallpaperApplyDisposition {
         guard let entry = store.entries.first(where: { $0.id == entryId }) else { return .failed }
-        return libraryVM.apply(entry, completion: completion)
+        let previousTarget = playlistApplyTargetScreenKey
+        playlistApplyTargetScreenKey = screenKey
+        defer { playlistApplyTargetScreenKey = previousTarget }
+        stagedPlaylistScreenOverrides[screenKey] = entryId
+        let outcome = libraryVM.apply(entry) { [weak self] resolution in
+            self?.finishStagedPlaylistOverride(entryId: entryId, screenKey: screenKey,
+                                               resolution: resolution, primary: true)
+            completion(resolution)
+        }
+        if outcome == .applied || outcome == .failed {
+            finishStagedPlaylistOverride(entryId: entryId, screenKey: screenKey,
+                                         resolution: outcome == .applied ? .applied : .failed, primary: true)
+        }
+        return outcome
     }
 
     private func requestSecondaryPlaylistCandidate(
@@ -1039,7 +1100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // committed override는 그대로 두고 해석 경로에만 후보를 보인다. applyResolved가
         // screenProjects를 만들 때 이 staging 값을 읽고, 실제 swap 성공 뒤에만 승격한다.
         stagedPlaylistScreenOverrides[screenKey] = entryId
-        let outcome = requestStagedSecondarySelection { [weak self] resolution in
+        let outcome = requestStagedSecondarySelection(screenKey: screenKey) { [weak self] resolution in
             guard let self else { completion(.cancelled); return }
             self.finishStagedPlaylistOverride(entryId: entryId, screenKey: screenKey,
                                               resolution: resolution)
@@ -1076,6 +1137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// F035/F036 롤백 보호가 그 안에 이미 있다(빈 슬롯 성공이 살아있는 렌더러를 teardown 하는
     /// 역효과 차단). 전역 preflight 가 실패한 뒤라 후보는 여전히 **정확히 한 번만** 시도된다.
     private func requestStagedSecondarySelection(
+        screenKey: String,
         completion: @escaping (WallpaperApplyResolution) -> Void
     ) -> WallpaperApplyDisposition {
         // 전역 preflight. 실패하면 **전역만 떨어뜨린다** — 후보는 자기 폴더로 계속 마운트된다.
@@ -1094,14 +1156,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .failed
         }
         return applyResolved(global: global, folderURL: global == nil ? nil : currentFolderURL,
-                             completion: completion)
+                             playlistScreenKey: screenKey, completion: completion)
     }
 
     private func finishStagedPlaylistOverride(entryId: String, screenKey: String,
-                                              resolution: WallpaperApplyResolution) {
+                                              resolution: WallpaperApplyResolution, primary: Bool = false) {
         guard stagedPlaylistScreenOverrides[screenKey] == entryId else { return }
         stagedPlaylistScreenOverrides.removeValue(forKey: screenKey)
-        if resolution == .applied { playlistScreenOverrides[screenKey] = entryId }
+        if resolution == .applied {
+            if primary { playlistScreenOverrides.removeValue(forKey: screenKey) }
+            else { playlistScreenOverrides[screenKey] = entryId }
+        }
     }
 
     /// 1초 틱. 판정은 드라이버가 하고 여기서는 **마운트만** 한다.
@@ -1110,7 +1175,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         syncPlaylistDriver(screenKeys: keys)
         guard let primary = keys.first else { return }
         let now = Date()
-        let wants = playlistDriver.tick(now: now, isPaused: pauseGate.isPaused)
+        let wants = playlistDriver.tick(now: now, isPaused: { key in
+            self.pauseGate.isPaused || self.policyPausedScreenKeys.contains(key)
+        })
         guard !wants.isEmpty else { return }
         // RendererSwap은 화면 세트 전체의 전역 트랜잭션이다. 한 번에 한 화면의 advance만 열고,
         // 나머지 due 화면은 다음 1초 틱에서 처리한다. pending 동안 새 후보를 시작하면 새 세대가
@@ -1120,7 +1187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if target == primary {
             _ = playlistDriver.requestAdvance(screenKey: target, now: now) { [weak self] id, finish in
                 guard let self else { return .failed }
-                return self.requestPrimaryPlaylistCandidate(entryId: id, completion: finish)
+                return self.requestPrimaryPlaylistCandidate(entryId: id, screenKey: target, completion: finish)
             }
         } else {
             _ = playlistDriver.requestAdvance(screenKey: target, now: now) { [weak self] id, finish in
@@ -1144,7 +1211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let primary = keys.first else { return }
         _ = playlistDriver.requestAdvance(screenKey: primary, now: Date()) { [weak self] id, finish in
             guard let self else { return .failed }
-            return self.requestPrimaryPlaylistCandidate(entryId: id, completion: finish)
+            return self.requestPrimaryPlaylistCandidate(entryId: id, screenKey: primary, completion: finish)
         }
     }
 
@@ -1220,8 +1287,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !renderers.isEmpty, renderers.count == rendererProjects.count else {
             policyPauseState.reset()
             policyMuteState.reset()
+            policyPausedScreenKeys.removeAll()
             return
         }
+        let decisions = playbackDecisions(for: rendererProjects)
+        policyPausedScreenKeys = Set(zip(rendererProjects, decisions).compactMap {
+            $0.1.paused ? $0.0.screenKey : nil
+        })
+
+        for (index, paused) in policyPauseState.changes(decisions.map(\.paused)) {
+            guard index < renderers.count else { continue }
+            if paused { renderers[index].pause() } else { renderers[index].resume() }
+        }
+
+        // [2026-08-27 stage 3①] 음소거는 **전 렌더러에 같은 값**이다 — WE 에서 모니터별이
+        // 아니라 전역이기 때문이고(`PlaybackVerdict.muted` 주석), 화면마다 갈린 판정을 하나로
+        // 접는 규칙은 순수층(`wantsGlobalMute`)에 있다. 여기는 적용만 한다.
+        if let mute = policyMuteState.change(to: RenderPauseComposition.wantsGlobalMute(decisions)) {
+            renderers.forEach { $0.setPolicyMuted(mute) }
+        }
+    }
+
+    private func playbackDecisions(for projects: [(screenKey: String, project: WallpaperProject)])
+        -> [RenderPauseComposition.Decision] {
         let screens = NSScreen.screens
         // **마스크와 판정이 같은 인덱스 기준을 쓰게 한다.** 아래 `screenFrames:`/`visibleFrames:`
         // 가 `pauseMask` 의 비트 자리를 이 `screens` 배열 위치로 정하므로, 판정에 넘기는
@@ -1261,25 +1349,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 하지 않았다" 가 된다. 사라진 화면에 남의 결정을 먹이는 것보다 무동작이 옳다
         // (`performScreensChanged` 의 F036/F035 롤백 보존 가드와
         // 같은 판단이고, 화면 변경은 `performScreensChanged` 가 0.5초 뒤 전체 재적용으로 정리한다).
-        let decisions = RenderPauseComposition.decideAll(
+        return RenderPauseComposition.decideAll(
             globallyPaused: pauseGate.isPaused,
-            projects: rendererProjects.map {
+            projects: projects.map {
                 (monitorIndex: monitorIndexByKey[$0.screenKey] ?? -1, project: $0.project)
             },
             conditions: conditions,
             global: GlobalPlaybackSettings.current)
 
-        for (index, paused) in policyPauseState.changes(decisions.map(\.paused)) {
-            guard index < renderers.count else { continue }
-            if paused { renderers[index].pause() } else { renderers[index].resume() }
-        }
-
-        // [2026-08-27 stage 3①] 음소거는 **전 렌더러에 같은 값**이다 — WE 에서 모니터별이
-        // 아니라 전역이기 때문이고(`PlaybackVerdict.muted` 주석), 화면마다 갈린 판정을 하나로
-        // 접는 규칙은 순수층(`wantsGlobalMute`)에 있다. 여기는 적용만 한다.
-        if let mute = policyMuteState.change(to: RenderPauseComposition.wantsGlobalMute(decisions)) {
-            renderers.forEach { $0.setPolicyMuted(mute) }
-        }
     }
 
     // MARK: - 전역 일시정지 (메인창 하단 바)
@@ -1375,11 +1452,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 가 마침 같은 순간 메인에서 값을 바꿀 수 있어) 동기화 없는 경합이 생긴다 — 큐 진입 '전'
         // 메인에서 스냅샷해 넘긴다.
         let inputs = stillCaptureInputs(globalFolderURL: currentFolderURL)   // 메인 전용 값은 여기서 전부 스냅샷
+        guard let directory = try? StillCaptureWorkspace.create(in: stillDirectory()) else {
+            finishSetStillWallpaper(images: [:])
+            return
+        }
+        let generation = stillCaptureGeneration.advance()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-            let images = self.generateStillImages(inputs)   // 블로킹 — 백그라운드(F047)
+            guard let self else {
+                try? FileManager.default.removeItem(at: directory)
+                return
+            }
+            let images = self.generateStillImages(inputs, in: directory)
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { self.finishSetStillWallpaper(images: images) }
+                MainActor.assumeIsolated {
+                    self.finishStillCapture(images: images, directory: directory,
+                                            generation: generation, automatic: false)
+                }
             }
         }
     }
@@ -1455,12 +1543,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ⚠️ 블로킹(AVFoundation 디코드·씬 GPU 캡처) — 백그라운드 큐에서 호출(F047). 그래서
     /// `nonisolated` 다: AppDelegate 가 `@MainActor` 여도 이 함수만은 의도적으로 오프메인이다.
     /// AppKit·스토어에 닿는 값은 하나도 여기서 읽지 않고 전부 `inputs` 로 넘어온다.
-    nonisolated private func generateStillImages(_ inputs: StillCaptureInputs) -> [String: URL] {
+    nonisolated private func generateStillImages(_ inputs: StillCaptureInputs, in stillDir: URL) -> [String: URL] {
         let screenSizes = inputs.screenSizes
         let mainScale = inputs.mainScale
         let slots = inputs.slots
-        let stillDir = stillDirectory()
-        try? FileManager.default.createDirectory(at: stillDir, withIntermediateDirectories: true)
 
         var cache: [String: URL?] = [:]   // 스틸 캐시 키 → 생성 결과(실패도 캐시해 같은 화면 반복 재시도 방지)
         var result: [String: URL] = [:]
@@ -1746,6 +1832,7 @@ extension AppDelegate {
 
     /// 정적 배경 동기화 설정(설정 창 경유). 켜면 즉시(지연 후) 동기화, 끄면 원본 복원.
     func setDesktopStillSync(_ enabled: Bool) {
+        stillCaptureGeneration.advance()
         desktopStillSync = enabled
         if enabled {
             scheduleDesktopStillSync()
@@ -1758,6 +1845,7 @@ extension AppDelegate {
     /// 적용 성공 후 스틸 생성/설정 예약. 첫 프레임 안정화를 위해 수 초 지연 + 디바운스
     /// (연속 재적용 — fit/속성/화면변경 — 은 취소·재예약으로 흡수). 꺼져 있으면 no-op.
     func scheduleDesktopStillSync() {
+        stillCaptureGeneration.advance()
         stillSyncWork?.cancel()
         guard desktopStillSync else { return }
         let work = DispatchWorkItem { [weak self] in
@@ -1773,13 +1861,33 @@ extension AppDelegate {
     private func syncDesktopStill() {
         guard desktopStillSync else { return }
         let inputs = stillCaptureInputs(globalFolderURL: currentFolderURL)   // F047: 메인에서 스냅샷
+        guard let directory = try? StillCaptureWorkspace.create(in: stillDirectory()) else { return }
+        let generation = stillCaptureGeneration.advance()
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self else { return }
-            let images = self.generateStillImages(inputs)   // 블로킹 — 백그라운드(F047)
+            guard let self else {
+                try? FileManager.default.removeItem(at: directory)
+                return
+            }
+            let images = self.generateStillImages(inputs, in: directory)
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { self.finishSyncDesktopStill(images: images) }
+                MainActor.assumeIsolated {
+                    self.finishStillCapture(images: images, directory: directory,
+                                            generation: generation, automatic: true)
+                }
             }
         }
+    }
+
+    private func finishStillCapture(images: [String: URL], directory: URL,
+                                    generation: UInt64, automatic: Bool) {
+        guard stillCaptureGeneration.isCurrent(generation), !automatic || desktopStillSync else {
+            try? FileManager.default.removeItem(at: directory)
+            return
+        }
+        // 최신 결과만 메인 큐에서 기존 캐시로 승격한다. 늦은 캡처는 이 파일을 쓸 수 없다.
+        let published = StillCaptureWorkspace.publish(images: images, from: directory, to: stillDirectory())
+        if automatic { finishSyncDesktopStill(images: published) }
+        else { finishSetStillWallpaper(images: published) }
     }
 
     /// syncDesktopStill 의 메인 스레드 마무리 — 백업·실 적용·잠금화면 갱신.

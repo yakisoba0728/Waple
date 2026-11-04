@@ -258,6 +258,46 @@ if [ ! -x "$SWIFTC_DIR/swiftc" ]; then
 fi
 SWIFTC="$SWIFTC_DIR/swiftc"
 SHIM="$REPO/scripts/dev/linux-shim"
+
+# 기존 프로젝트를 WORK 로 잘못 지정해도 원본을 삭제하지 않는다(core-tests 와 같은 소유 규약).
+case "$WORK" in
+    ""|/) echo "!! 위험한 WAPLE_LINUX_TYPECHECK_DIR 거부: '$WORK'" >&2; exit 2 ;;
+esac
+if [ -L "$WORK" ]; then
+    echo "!! 작업 디렉터리 심링크를 거부한다: $WORK" >&2
+    exit 2
+fi
+if ! mkdir -p "$WORK" || ! WORK="$(cd "$WORK" && pwd -P)"; then
+    echo "!! 작업 디렉터리를 준비할 수 없다: $WORK" >&2
+    exit 2
+fi
+if [ "$WORK" = "$REPO" ]; then
+    echo "!! 저장소 루트를 작업 디렉터리로 쓸 수 없다: $WORK" >&2
+    exit 2
+fi
+WORK_MARKER="$WORK/.waple-linux-render-typecheck-workspace"
+WORK_MARKER_VALUE="Waple linux render typecheck workspace v1"
+if [ ! -L "$WORK_MARKER" ] && [ -f "$WORK_MARKER" ] && [ "$(<"$WORK_MARKER")" = "$WORK_MARKER_VALUE" ]; then
+    :
+elif [ -e "$WORK_MARKER" ] || [ -L "$WORK_MARKER" ]; then
+    echo "!! 알 수 없는 소유 마커를 덮어쓰지 않는다: $WORK_MARKER" >&2
+    exit 2
+else
+    shopt -s nullglob dotglob
+    work_items=("$WORK"/*)
+    shopt -u nullglob dotglob
+    if [ "${#work_items[@]}" -ne 0 ]; then
+        echo "!! 소유 마커 없는 비어 있지 않은 작업 디렉터리를 거부한다: $WORK" >&2
+        exit 2
+    fi
+    printf '%s\n' "$WORK_MARKER_VALUE" > "$WORK_MARKER" || exit 2
+fi
+for child in core mods; do
+    if [ -L "$WORK/$child" ]; then
+        echo "!! 작업 하위 디렉터리 심링크를 거부한다: $WORK/$child" >&2
+        exit 2
+    fi
+done
 MODS="$WORK/mods"
 mkdir -p "$MODS" "$WORK/core" || exit 2
 

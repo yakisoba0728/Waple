@@ -271,11 +271,14 @@ public struct ParticleSimulator {
     private struct ChildInstance {
         var sim: ParticleSimulator
         let parentUID: Int          // 0 = always(부모 파티클 무관)
-        let oneShot: Bool           // spawnBurst/deathBurst — 첫 스텝 후 방출 정지
+        let oneShot: Bool           // spawnBurst/deathBurst — 각 이미터의 첫 방출 기회 후 방출 정지
         var fired: Bool = false
     }
     private var childStates: [[ChildInstance]]
     private var childDisplaysCache: [[Particle]]
+    // 원샷도 지연이 다른 이미터마다 첫 방출 기회를 기다린다.
+    private var oneShotEmittersPending: Set<Int>?
+    private var hasStepped = false
     private let parentSeed: UInt64
     private var nextUID = 1
     /// 자식 인스턴스 제어(부모 sim 이 설정): 스폰 위치 오프셋 / 방출 정지(고아·원샷).
@@ -532,11 +535,31 @@ public struct ParticleSimulator {
         // 이라 부모 파티클 위치가 실려 있다(follow 는 stepChildren 이 매 프레임 갱신도 한다).
         s.emitOriginCarriesParentParticle = link.trigger != .always
         s.worldBasis = worldBasis   // 자식은 부모와 같은 오브젝트에 얹히므로 기저도 같다
+        if link.trigger == .spawnBurst || link.trigger == .deathBurst {
+            s.oneShotEmittersPending = Set(link.def.emitters.indices)
+        }
         return ChildInstance(sim: s, parentUID: uid,
                              oneShot: link.trigger == .spawnBurst || link.trigger == .deathBurst)
     }
 
     public var liveCount: Int { particles.count }
+
+    /// 빈 스냅샷만으로 끝났다고 볼 수 없다 — 지연 중인 이미터·무한 always 자식은 다시 방출한다.
+    /// 반대로 유한 창이 모두 은퇴한 always 자식은 emissionPaused 없이도 끝나므로 트리 전체로 판정한다.
+    private var isDrained: Bool {
+        particles.isEmpty && !canEmitAgain
+            && childStates.allSatisfy { $0.allSatisfy { $0.sim.isDrained } }
+    }
+
+    private var canEmitAgain: Bool {
+        guard !emissionPaused else { return false }
+        return def.emitters.indices.contains { i in
+            if let pending = oneShotEmittersPending, !pending.contains(i) { return false }
+            guard i < windowStates.count else { return true }  // 무한/주기 이미터는 보수적으로 보존
+            let w = windowStates[i]
+            return !w.retired && w.duration >= 0 && !w.delay.isNaN
+        }
+    }
 
     /// dt 만큼 진행 후 살아있는 파티클의 표시 스냅샷을 반환.
     public mutating func step(_ dt: Float) -> [Particle] {
@@ -548,6 +571,8 @@ public struct ParticleSimulator {
     }
 
     private mutating func _step(_ dt: Float) -> [Particle] {
+        if dt == 0, hasStepped { return particles.map { display($0) } }
+        hasStepped = true
         refreshMapSequenceBetweenSteps()
         time += dt
         let hadExternalControlPointUpdate = controlPointsUpdatedBeforeStep
@@ -579,11 +604,18 @@ public struct ParticleSimulator {
         if !emissionPaused, dt > 0 || time == 0, time >= def.startTime {
             let wasEmpty = particles.isEmpty  // 버스트 재발화 판정은 스텝 진입 시점 기준(다중 이미터 동시 발화)
             for i in def.emitters.indices {
+                if let pending = oneShotEmittersPending, !pending.contains(i) { continue }
                 let e = def.emitters[i]
                 // 방출 창 게이트 ①·②(+은퇴 비트). 실물은 이 셋을 **주기(flags&4) 상태기계보다
                 // 앞**에서 본다(delay 게이트 0x1402379ea < 주기 분기 0x140237a15) — 그래서 대기
                 // 중에는 주기 시계까지 얼어붙는다. 창이 없으면 `windowStates` 가 비어 상수 false.
-                if windowBlocksEmission(i) { continue }
+                if windowBlocksEmission(i) {
+                    if windowStates[i].retired || (windowStates[i].delay <= 0 && windowStates[i].duration < 0) {
+                        oneShotEmittersPending?.remove(i)
+                    }
+                    continue
+                }
+                let firstOneShot = oneShotEmittersPending?.remove(i) != nil
                 if periodicStates[i].enabled {
                     // 주기 키 보유 이미터: 주기 컨트롤러가 표준 rate/burst 방출을 대체한다
                     // ("전멸 시 재버스트" 추정(아래 레거시 분기)과의 관계 — 주기 키가 있으면 전멸
@@ -591,7 +623,7 @@ public struct ParticleSimulator {
                     stepPeriodicEmission(i, e, dt: dt)
                     continue
                 }
-                if e.burst > 0, wasEmpty {
+                if e.burst > 0, wasEmpty || firstOneShot {
                     // ponytail: 전멸 시 재버스트 루프 — 실 WE 는 자식(eventfollow) 트리거가 주 용법,
                     // Stage B(children)에서 트리거 발화로 대체 예정.
                     // max(0, …): `periodicEnterOn` 의 동형 식과 맞춘다 — particles.count 가
@@ -977,7 +1009,8 @@ public struct ParticleSimulator {
     }
 
     /// 자식 인스턴스 일괄 스텝: follow 는 부모 현재 위치로 방출 원점 갱신(부모 사망 → 방출 정지 후 드레인),
-    /// 원샷(spawn/death 버스트)은 startTime 도달 첫 스텝 후 방출 정지(F432). 드레인 완료 인스턴스는 제거.
+    /// 원샷(spawn/death 버스트)은 startTime·이미터 지연을 지난 첫 방출 기회 후 정지(F432).
+    /// 방출이 끝나고 자손까지 드레인된 인스턴스는 제거.
     private mutating func stepChildren(_ dt: Float) {
         guard !def.children.isEmpty else { return }
         var uidPos: [Int: SIMD3<Float>] = [:]
@@ -1011,15 +1044,17 @@ public struct ParticleSimulator {
                     insts[i].sim.applyParentControlPointFeed(cpFeed, parentParticles: particles)
                 }
                 insts[i].sim.currentAudio = currentAudio   // 오디오 하향 전파(무신호면 무영향 → 무회귀)
+                insts[i].sim.worldBasis = worldBasis
                 displays.append(contentsOf: insts[i].sim.step(dt))
                 // F432: startTime 게이트 도달 전에는 fired 마킹하지 않는다 — 종전엔 첫 스텝(누적
                 // time=첫 dt) 후 무조건 정지해 startTime > 첫 dt 인 원샷 자식(rain splash 류)이
                 // 한 개도 방출하지 못한 채 드레인 0 으로 제거됐다.
-                if insts[i].oneShot, !insts[i].fired, insts[i].sim.reachedStartTime {
+                if insts[i].oneShot, !insts[i].fired, insts[i].sim.reachedStartTime,
+                   insts[i].sim.oneShotEmittersPending?.isEmpty == true {
                     insts[i].fired = true; insts[i].sim.emissionPaused = true
                 }
             }
-            insts.removeAll { $0.sim.emissionPaused && $0.sim.liveCount == 0 }
+            insts.removeAll { $0.sim.isDrained }
             childStates[li] = insts
             childDisplaysCache[li] = displays
         }

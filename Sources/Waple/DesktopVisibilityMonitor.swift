@@ -122,7 +122,10 @@ struct DesktopVisibilityMonitor {
     /// 대형 Finder 브라우저 창은 예외가 **아니다** — 그런 창은 데스크탑을 실제로 가린다.
     private static func isFinderDesktopHost(_ w: WindowSnapshot, screenFrames: [CGRect]) -> Bool {
         guard w.ownerName == "Finder" else { return false }
-        return screenFrames.contains { area(w.bounds) >= area($0) * 0.95 }
+        return screenFrames.contains { screen in
+            abs(w.bounds.minX - screen.minX) <= 2 && abs(w.bounds.minY - screen.minY) <= 2
+                && abs(w.bounds.width - screen.width) <= 2 && abs(w.bounds.height - screen.height) <= 2
+        }
     }
 
     private static func area(_ r: CGRect) -> Double { Double(r.width * r.height) }

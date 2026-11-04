@@ -57,9 +57,11 @@ enum PresetResolver {
     static func resolve(
         project: WallpaperProject,
         originalFolder: URL,
+        libraryEntryId: String? = nil,
         dependencyFolder: (String) -> URL?,
         parse: (URL) -> WallpaperProject?
     ) -> WallpaperProject? {
+        let project = project.with(id: libraryEntryId ?? project.id)
         guard project.type == .preset else { return project }
         guard let dependency = project.dependency, !dependency.isEmpty else { return nil }
         guard let safeDependency = WallpaperPathSecurity.normalizedPathComponent(dependency) else { return nil }
@@ -146,29 +148,39 @@ enum RendererSwap {
     }
 
     /// `screens` 를 순서대로 mount 시도.
-    /// - 전부 성공 → `existing` 을 teardown 하고 새 렌더러 세트를 `.success` 로 반환.
+    /// - 전부 성공 → 재사용하지 않은 `existing`만 teardown하고 화면 순서의 세트를 반환.
     /// - mount 가 throw → 지금까지 만든 새 렌더러만 teardown, `existing` 은 건드리지 않고 에러를 `.failure` 로 전파.
     /// - `makeAndMount` 가 nil 반환(지원 안 하는 화면) → `.failure`; 기존 렌더러는 유지한다.
     static func apply<S, R>(
         screens: [S],
         existing: [R],
+        reuse: (S) -> R? = { _ in nil },
         makeAndMount: (S) throws -> R?,
         teardown: (R) -> Void
     ) -> Result<[R], Error> {
         var made: [R] = []
+        var created: [R] = []
+        var preserved = Set<ObjectIdentifier>()
         for s in screens {
+            if let renderer = reuse(s) {
+                made.append(renderer)
+                // 클래스 제약 existential도 R 자체는 AnyObject를 만족하지 않으므로 객체로 지운 뒤 비교한다.
+                preserved.insert(ObjectIdentifier(renderer as AnyObject))
+                continue
+            }
             do {
                 guard let r = try makeAndMount(s) else {
-                    made.forEach(teardown)
+                    created.forEach(teardown)
                     return .failure(SwapError.unsupportedRenderer)
                 }
                 made.append(r)
+                created.append(r)
             } catch {
-                made.forEach(teardown)   // 부분 정리(이 실행에서 만든 것만)
+                created.forEach(teardown)   // 부분 정리(이 실행에서 만든 것만)
                 return .failure(error)   // existing 은 그대로 유지
             }
         }
-        existing.forEach(teardown)       // 전부 성공한 뒤에만 이전 렌더러 정리
+        existing.filter { !preserved.contains(ObjectIdentifier($0 as AnyObject)) }.forEach(teardown)
         return .success(made)
     }
 }
@@ -682,4 +694,50 @@ enum StatusIconState {
 /// 여기서는 "완료 플래그가 없으면 1회 표시" 결정만 한다(플래그 영속은 호출자 — UserDefaults).
 enum Onboarding {
     static func shouldPresent(completed: Bool) -> Bool { !completed }
+}
+
+
+/// 시작된 캡처도 선택·화면 변경 뒤에는 완료 결과를 적용하지 않는다.
+struct StillCaptureGeneration {
+    private var generation: UInt64 = 0
+    @discardableResult mutating func advance() -> UInt64 {
+        generation &+= 1
+        return generation
+    }
+    func isCurrent(_ value: UInt64) -> Bool { generation == value }
+}
+
+enum StillCaptureWorkspace {
+    static func create(in directory: URL) throws -> URL {
+        let request = directory.appendingPathComponent("capture-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: request, withIntermediateDirectories: true)
+        return request
+    }
+
+    static func publish(images: [String: URL], from request: URL, to directory: URL) -> [String: URL] {
+        let fm = FileManager.default
+        defer { try? fm.removeItem(at: request) }
+        var published: [String: URL] = [:]
+        var outputs: [URL: URL] = [:]
+        for (screen, image) in images {
+            guard image.deletingLastPathComponent().standardizedFileURL == request.standardizedFileURL else {
+                published[screen] = image   // preview 원본은 이동·삭제하지 않는다.
+                continue
+            }
+            if let output = outputs[image] { published[screen] = output; continue }
+            let output = directory.appendingPathComponent(image.lastPathComponent)
+            do {
+                if fm.fileExists(atPath: output.path) {
+                    _ = try fm.replaceItemAt(output, withItemAt: image)
+                } else {
+                    try fm.moveItem(at: image, to: output)
+                }
+                outputs[image] = output
+                published[screen] = output
+            } catch {
+                NSLog("%@", "[Waple] failed to publish still \(image.path): \(error)")
+            }
+        }
+        return published
+    }
 }

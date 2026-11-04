@@ -122,32 +122,39 @@ final class WorkshopAPITests: XCTestCase {
         XCTAssertEqual(queryDict(url)["return_vote_data"], "true")
     }
 
-    // MARK: - Keychain 저장 OSStatus 처리(F132) — delete/add 주입으로 실제 Keychain 없이 검증.
+    // MARK: - Keychain 저장 OSStatus 처리 — 호출 주입으로 실제 Keychain 없이 검증.
 
-    func testSaveSucceedsWhenDeleteAndAddSucceed() {
+    func testSaveUpdatesExistingItemWithoutDeleteOrAdd() {
+        var deleteCalls = 0
+        var updateCalls = 0
+        var addCalls = 0
         let failure = SteamAPIKeyStore.save(
             "abc123",
-            delete: { _ in errSecSuccess },
-            add: { _, _ in errSecSuccess }
+            delete: { _ in deleteCalls += 1; return errSecSuccess },
+            update: { _, _ in updateCalls += 1; return errSecSuccess },
+            add: { _, _ in addCalls += 1; return errSecSuccess }
         )
         XCTAssertNil(failure)
+        XCTAssertEqual(deleteCalls, 0)
+        XCTAssertEqual(updateCalls, 1)
+        XCTAssertEqual(addCalls, 0)
     }
 
-    func testSaveSucceedsWhenDeleteFindsNoExistingItem() {
-        // 최초 저장: 지울 기존 항목이 없음(errSecItemNotFound) — 정상 경로여야 한다.
+    func testSaveAddsWhenUpdateFindsNoExistingItem() {
         let failure = SteamAPIKeyStore.save(
             "abc123",
             delete: { _ in errSecItemNotFound },
+            update: { _, _ in errSecItemNotFound },
             add: { _, _ in errSecSuccess }
         )
         XCTAssertNil(failure)
     }
 
-    func testSaveReportsACLDeniedWhenDeleteFailsAndAddHitsDuplicate() {
-        // 재서명(재빌드) 함정 재현: delete 가 거부돼 실패 → 구항목이 그대로 남아 add 가 errSecDuplicateItem.
+    func testSaveReportsACLDeniedWhenUpdateIsDenied() {
         let failure = SteamAPIKeyStore.save(
             "abc123",
             delete: { _ in errSecAuthFailed },
+            update: { _, _ in errSecAuthFailed },
             add: { _, _ in errSecDuplicateItem }
         )
         XCTAssertEqual(failure, .aclDenied)
@@ -158,6 +165,7 @@ final class WorkshopAPITests: XCTestCase {
         let failure = SteamAPIKeyStore.save(
             "abc123",
             delete: { _ in errSecItemNotFound },
+            update: { _, _ in errSecItemNotFound },
             add: { _, _ in errSecParam }
         )
         XCTAssertEqual(failure, .other(errSecParam))
@@ -167,6 +175,7 @@ final class WorkshopAPITests: XCTestCase {
         let failure = SteamAPIKeyStore.save(
             "",
             delete: { _ in errSecItemNotFound },
+            update: { _, _ in XCTFail("Clear must not update"); return errSecSuccess },
             add: { _, _ in errSecSuccess }
         )
         XCTAssertNil(failure)
@@ -176,9 +185,25 @@ final class WorkshopAPITests: XCTestCase {
         let failure = SteamAPIKeyStore.save(
             "",
             delete: { _ in errSecAuthFailed },
+            update: { _, _ in XCTFail("Clear must not update"); return errSecSuccess },
             add: { _, _ in errSecSuccess }
         )
         XCTAssertEqual(failure, .other(errSecAuthFailed))
+    }
+
+    func testFailedKeyReplacementPreservesExistingKey() {
+        var storedKey: String? = "old-key"
+        var addCalls = 0
+        let failure = SteamAPIKeyStore.save(
+            "new-key",
+            delete: { _ in storedKey = nil; return errSecSuccess },
+            update: { _, _ in errSecParam },
+            add: { _, _ in addCalls += 1; return errSecParam }
+        )
+
+        XCTAssertEqual(failure, .other(errSecParam))
+        XCTAssertEqual(storedKey, "old-key")
+        XCTAssertEqual(addCalls, 0)
     }
 
     // MARK: - HTTP 오류 메시지 분리(F133) — 429/5xx는 재시도 안내, 인증 오류만 키 확인 안내.

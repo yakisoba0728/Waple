@@ -28,7 +28,9 @@ export WAPLE_REAL_PKGS="${WAPLE_REAL_PKGS:-$ROOT/backgrounds}"
 export WAPLE_BASE_ASSETS="${WAPLE_BASE_ASSETS:-$ROOT/assets}"
 
 cd "$REPO" || exit 1
-mkdir -p "$OUT"
+mkdir -p "$OUT" || exit 2
+OUT=$(mktemp -d "$OUT/run.XXXXXX") || exit 2
+echo "이번 실행 출력: $OUT"
 
 echo "빌드(release)…"
 swift build -c release 2>&1 | tail -5 || exit 1
@@ -36,18 +38,16 @@ SHA=$(git rev-parse --short HEAD)
 echo "HEAD=$SHA — 같은 빌드로 **별도 프로세스** 2회 캡처한다."
 
 for run in A B; do
-    if [ -d "$OUT/run$run" ]; then
-        echo "  run$run 이미 있음 — 건너뜀(다시 뜨려면 지울 것)"
-        continue
-    fi
     echo "  run$run 캡처…"
     launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$WAPLE_REAL_PKGS" \
         WAPLE_BASE_ASSETS="$WAPLE_BASE_ASSETS" \
         swift run -c release WapleCompat --capture "$OUT" --label "run$run" "$ROOT" \
         2>&1 | tail -4
+    rc=${PIPESTATUS[0]}
+    [ "$rc" -eq 0 ] || exit "$rc"
 done
 
-python3 - "$OUT/runA" "$OUT/runB" "$OUT/nondet.json" <<'PY'
+python3 - "$OUT/runA" "$OUT/runB" "$OUT/nondet.json" <<'PY' || exit $?
 import json, os, sys
 a, b, outp = sys.argv[1], sys.argv[2], sys.argv[3]
 try:

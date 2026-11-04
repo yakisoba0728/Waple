@@ -941,13 +941,14 @@ public struct Model3D: Equatable {
         guard boneCount > 0 else { return [] }
         func u32(_ o: Int) -> UInt32? { readU32LE(bytes, at: o) }
         func f32(_ o: Int) -> Float? { u32(o).map { Float(bitPattern: $0) } }
-        func cstring(_ o: Int) -> (value: String, next: Int)? { readCString(bytes, at: o) }
         // 애니 헤더 시도: 성공 시 (이름,모드,fps,길이,본수,본트랙시작오프셋).
         // 모드 빈 문자열 = **디렉토리 레코드**(실측 link/talon: 본클립 뒤에 짧은 이름("Glance"/"Sleep")
         // + 빈 모드 + flags(0x401) 레코드 — 트랙 포맷은 동일, 씬 노출 애니 단위로 이벤트 마커를 보유).
         func tryHeader(_ p: Int) -> (name: String, mode: String, fps: Float, length: Int, bc: Int, off: Int)? {
-            guard let (name, p2) = cstring(p), !name.isEmpty, name.utf8.count <= 96 else { return nil }
-            guard let (mode, p3) = cstring(p2), animModes.contains(mode) || mode.isEmpty else { return nil }
+            guard let (name, p2) = readCString(bytes, at: p, maxLength: 96), !name.isEmpty,
+                  name.utf8.count <= 96 else { return nil }
+            guard let (mode, p3) = readCString(bytes, at: p2, maxLength: 16),
+                  animModes.contains(mode) || mode.isEmpty else { return nil }
             guard let fps = f32(p3), fps > 0, fps <= 240 else { return nil }
             // p3: f32 fps | u32 frameCount | u32 flags | u32 boneCount — 넷이고, 그 다음이 곧
             // 본 0 의 trackFlags 다(0x140263a1b/0x140263a2d/0x140263a3d/0x140263a4d).

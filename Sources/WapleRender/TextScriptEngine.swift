@@ -106,6 +106,7 @@ public struct SceneScriptLayerDescriptor {
 /// 각 스크립트는 IIFE 로 감싸므로 update/스크립트-로컬 상태는 클로저에 격리된다.
 public final class SceneScriptContext {
     let context: JSContext
+    private var hasLayerDescriptors = false
     /// 사운드 트리거 트랜스포트(라이브 mount 시 SceneRenderer 가 연결). nil 이면 __wapleSound 브리지는 no-op —
     /// 헤드리스/캡처(오디오 미생성)에서 getLayer(사운드).play() 는 안전 무시된다.
     public weak var soundTransport: SceneAudioPlayer?
@@ -141,6 +142,7 @@ public final class SceneScriptContext {
         installWarnBridge(ctx)
         if !layers.isEmpty {
             ctx.evaluateScript("__setSceneLayers(\(Self.layersJSONArray(layers)));")
+            hasLayerDescriptors = true
         }
         let named = soundNames.filter { !$0.isEmpty }
         if !named.isEmpty {
@@ -208,8 +210,18 @@ public final class SceneScriptContext {
     /// F710(S-35): JS thisScene 레이어를 최신 디스크립터로 **제자리** 갱신 — getLayer 가 반환한 JS 객체를
     /// 스크립트가 쥐고 있어도 라이브 트랜스폼을 읽게 하는 연결점(렌더러가 프레임마다 호출).
     /// 디스크립터 배열 순서는 mount 의 __setSceneLayers 와 동일해야 한다(인덱스 정합).
-    public func updateSceneLayers(_ layers: [SceneScriptLayerDescriptor]) {
-        context.evaluateScript("__updateSceneLayers(\(Self.layersJSONArray(layers, full: false)));")
+    public func updateSceneLayers(_ layers: [SceneScriptLayerDescriptor], startingAt index: Int = 0) {
+        context.evaluateScript("__updateSceneLayers(\(Self.layersJSONArray(layers, full: false)), \(index));")
+    }
+
+    /// 이미지·텍스트 인덱스를 유지한 채 모델·그룹 소유자 identity를 뒤에 등록한다.
+    func appendSceneLayers(_ layers: [SceneScriptLayerDescriptor]) -> Int {
+        guard !layers.isEmpty else { return 0 }
+        let index = context.evaluateScript("__appendSceneLayers(\(Self.layersJSONArray(layers)), \(!hasLayerDescriptors));")?.toInt32() ?? 0
+        hasLayerDescriptors = true
+        // JSC returns Int32; keep its native-index conversion explicitly checked.
+        guard let nativeIndex = Int(exactly: index) else { return 0 }
+        return nativeIndex
     }
 
     private static func floatArrayLiteral(_ values: [Float]) -> String {
@@ -970,7 +982,7 @@ public final class TextScriptEngine {
     /// 공유 씬 컨텍스트에선 여러 엔진이 같은 t 로 재호출 — 펌프는 멱등(만기분은 1회만 발화).
     /// F700(S-6): __setRuntime 이 frametime 을 실델타(t − 직전 t)로 갱신한다(같은 t 재호출은 물변화).
     public func setRuntime(_ t: Double) {
-        restoreScriptPropOverrides()   // F475: __pumpTimeouts 만기 콜백도 이 엔진의 스크립트 코드
+        restoreScriptPropOverrides()   // 타이머 콜백은 등록한 엔진의 오버라이드를 별도로 복원한다.
         context.evaluateScript("__setRuntime(\(t.isFinite ? t : 0));")
     }
 
@@ -1711,7 +1723,8 @@ public final class TextScriptEngine {
         if (typeof cb !== 'function') { return function() {}; }
         var id = ++__timeoutSeq;
         var entry = { id: id, at: __engineState.runtime + __num(ms, 0) / 1000,
-                      every: repeat ? Math.max(__num(ms, 0), 1) / 1000 : 0, cb: cb, cancelled: false };
+                      every: repeat ? Math.max(__num(ms, 0), 1) / 1000 : 0, cb: cb, cancelled: false,
+                      overrides: __scriptPropOverrides };
         __timeoutQueue.push(entry);
         var cancel = function() { entry.cancelled = true; };
         cancel.__wapleTimerId = id;
@@ -1740,7 +1753,10 @@ public final class TextScriptEngine {
                 if (entry.at + entry.every * 64 < now) { entry.at = now + entry.every; }
                 __timeoutQueue.push(entry);
             }
-            entry.cb();   // 예외 → evaluateScript 예외(기존 exceptionHandler 로깅). 잔여 만기분은 다음 틱에.
+            var previousOverrides = __scriptPropOverrides;
+            __scriptPropOverrides = entry.overrides;
+            try { entry.cb(); }
+            finally { __scriptPropOverrides = previousOverrides; }
         }
     }
     // engine.audio/audioBuffer 실데이터: 네이티브 setAudio 가 호출. 배열은 제자리 갱신 —
@@ -1824,12 +1840,16 @@ public final class TextScriptEngine {
     });
     // F700(S-6): 프레임 절대시각 주입 — frametime 을 실델타(t − 직전 t)로 갱신한다. t > prev 일 때만 갱신:
     // 공유 컨텍스트에서 같은 t 로 엔진마다 재호출돼도 두 번째부터는 물변화(0 리셋 방지). 시간 후퇴(루프/리셋)도 유지.
+    var __lastTimeoutPumpRuntime = null;
     function __setRuntime(t) {
         t = __num(t, 0);
         var prev = __engineState.runtime;
         if (t > prev) { __engineState.frametime = t - prev; __engineState.frameTime = t - prev; }
         __engineState.runtime = t;
-        __pumpTimeouts();
+        if (__lastTimeoutPumpRuntime !== t) {
+            __lastTimeoutPumpRuntime = t;
+            __pumpTimeouts();
+        }
     }
     var engine = new Proxy(__engineState, {
         get: function(t, k) { if (k in t) { return t[k]; } return __noopProxy(); },
@@ -2592,6 +2612,7 @@ public final class TextScriptEngine {
     }
     __rootLayer = __makeRootLayer();
     var thisLayer = __makeLayer();
+    var __scenePlaceholderLayer = thisLayer;
     var thisObject = thisLayer;
     var thisScene = __makeScene(thisLayer);
     // 사운드 트리거 브리지: 네이티브 전역(__wapleSound* — SceneScriptContext 가 씬 컨텍스트에만 설치)로 위임.
@@ -2640,6 +2661,24 @@ public final class TextScriptEngine {
             thisObject = thisLayer;
         }
     }
+    function __appendSceneLayers(descriptors, replacePlaceholder) {
+        // 빈 descriptor 씬의 카메라 스크립트가 이미 createLayer 했을 수 있다.
+        // 합성 초기 레이어만 identity로 제거하고 스크립트가 만든 레이어·배열은 보존한다.
+        if (replacePlaceholder) {
+            var placeholderIndex = thisScene.layers.indexOf(__scenePlaceholderLayer);
+            if (placeholderIndex >= 0) { thisScene.layers.splice(placeholderIndex, 1); }
+        }
+        var start = thisScene.layers.length;
+        for (var i = 0; i < descriptors.length; i += 1) {
+            thisScene.layers.push(__layerFromDescriptor(descriptors[i]));
+        }
+        __wireLayerParents(thisScene.layers);
+        if (replacePlaceholder && thisScene.layers.length) {
+            thisLayer = thisScene.layers[0];
+            thisObject = thisLayer;
+        }
+        return start;
+    }
     // F710(S-35): thisScene.getLayer 정적 스냅샷 결함 — 네이티브가 프레임마다 최신 디스크립터를 밀어 넣는다.
     // 스크립트가 쥔 참조(getLayer 반환 객체)가 살아있도록 **필드 제자리 갱신**(origin/scale/angles/size 의
     // Vec 객체 또한 성분 대입 — `var o = layer.origin` 보관 참조까지 라이브).
@@ -2649,11 +2688,12 @@ public final class TextScriptEngine {
         v.y = __num(a[1], v.y);
         if (a.length > 2) { v.z = __num(a[2], v.z); }
     }
-    function __updateSceneLayers(descriptors) {
+    function __updateSceneLayers(descriptors, start) {
         if (!descriptors || !descriptors.length) { return; }
-        var n = Math.min(descriptors.length, thisScene.layers.length);
+        start = typeof start === 'number' ? start : 0;
+        var n = Math.min(descriptors.length, thisScene.layers.length - start);
         for (var i = 0; i < n; i += 1) {
-            var d = descriptors[i], l = thisScene.layers[i];
+            var d = descriptors[i], l = thisScene.layers[start + i];
             if (!d || !l) { continue; }
             l.visible = d.visible !== false;
             l.alpha = __num(d.alpha, l.alpha);

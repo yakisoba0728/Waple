@@ -72,7 +72,8 @@ extension SceneRenderer {
         return e
     }
 
-    func runtimeTexRes(for pass: TranslatedPass, src: MTLTexture, fboTex: [MTLTexture]) -> [SIMD4<Float>] {
+    func runtimeTexRes(for pass: TranslatedPass, src: MTLTexture, fboTex: [MTLTexture],
+                       overrides: [(slot: Int, tex: MTLTexture)] = []) -> [SIMD4<Float>] {
         var texRes = pass.texRes
         func set(_ slot: Int, _ tex: MTLTexture) {
             guard slot >= 0, slot < 8 else { return }
@@ -84,7 +85,24 @@ extension SceneRenderer {
             else if source >= 0, source < fboTex.count { set(slot, fboTex[source]) }
         }
         for (slot, tex) in pass.aux { set(slot, tex) }
+        for (slot, tex) in overrides { set(slot, tex) }
         return texRes
+    }
+
+    func dynamicEffectTextures(for pass: TranslatedPass,
+                               fullFrameSnapshot: MTLTexture?) -> [(slot: Int, tex: MTLTexture)] {
+        var textures: [(slot: Int, tex: MTLTexture)] = []
+        if let snapshot = fullFrameSnapshot {
+            for slot in pass.fullFrameSlots where slot >= 0 && slot < 128 {
+                textures.append((slot, snapshot))
+            }
+        }
+        for (slot, previous) in pass.mediaArtworkSlots where slot >= 0 && slot < 128 {
+            if let texture = previous ? mediaPreviousArtworkTexture : mediaArtworkTexture {
+                textures.append((slot, texture))
+            }
+        }
+        return textures
     }
 
     /// 파티클 스냅샷 → 인터리브드 버텍스(정점당 `ParticleShaders.vertexFloats2D` = 12 float:
@@ -547,7 +565,7 @@ extension SceneRenderer {
                           aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
         enc.endEncoding()
         var snapshot: MTLTexture? = nil
-        if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true),
+        if let snap = blendModeSnapshotSlot(acc.width, acc.height, device),
            let blit = cb.makeBlitCommandEncoder() {
             blit.copy(from: acc, to: snap)
             blit.endEncoding()
@@ -2924,7 +2942,9 @@ extension SceneRenderer {
                         enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
                     }
                 }
-                let eng = engineUniform(time: time, texRes: runtimeTexRes(for: pass, src: passSrc, fboTex: fboTex),
+                let dynamicTextures = dynamicEffectTextures(for: pass, fullFrameSnapshot: fullFrameSnapshot)
+                let eng = engineUniform(time: time, texRes: runtimeTexRes(for: pass, src: passSrc, fboTex: fboTex,
+                                                                        overrides: dynamicTextures),
                                         texWrap: pass.texWrap, texFilter: pass.texFilter, targetRes: targetRes)
                 eng.withUnsafeBytes {
                     enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
@@ -2936,19 +2956,8 @@ extension SceneRenderer {
                     enc.setFragmentTexture(source == -1 ? passSrc : fboTex[source], index: slot)
                 }
                 for (slot, tex) in pass.aux { enc.setFragmentTexture(tex, index: slot) }
-                // F-X4: `_rt_FullFrameBuffer` 슬롯 — 위 aux 루프가 이미 흰색 1×1 로 채웠으므로, 실제
-                // 씬 스냅샷이 있으면 여기서 덮어써 배경을 바인드(godrays/shine COPYBG). 없으면 무회귀.
-                if let snap = fullFrameSnapshot {
-                    for slot in pass.fullFrameSlots where slot < 128 { enc.setFragmentTexture(snap, index: slot) }
-                }
-                // X-③: usertextures 시스템 키($mediaThumbnail/$mediaPreviousThumbnail) 슬롯 — 위 aux 루프가
-                // 이미 흰색 1×1 로 채웠으므로, 라이브 아트워크가 있으면 여기서 덮어쓴다(레이어 base 의 F722
-                // 배선과 동일 소스: self.mediaArtworkTexture/mediaPreviousArtworkTexture). 미수신(nil)이면 무회귀.
-                for (slot, previous) in pass.mediaArtworkSlots where slot < 128 {
-                    if let tex = previous ? mediaPreviousArtworkTexture : mediaArtworkTexture {
-                        enc.setFragmentTexture(tex, index: slot)
-                    }
-                }
+                // uniform과 같은 최종 선택을 사용해야 동적 snapshot/artwork의 texel 크기가 일치한다.
+                for (slot, texture) in dynamicTextures { enc.setFragmentTexture(texture, index: slot) }
                 if pass.usesAudio {  // 스펙트럼 버퍼(16:2/3, 32:5/6, 64:7/8).
                     func bind(_ arr: [Float], _ idx: Int) {
                         arr.withUnsafeBytes {

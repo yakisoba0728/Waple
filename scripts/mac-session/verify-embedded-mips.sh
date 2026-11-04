@@ -77,6 +77,7 @@ T0=$SECONDS
 launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$WAPLE_REAL_PKGS" \
     WAPLE_BASE_ASSETS="$WAPLE_BASE_ASSETS" \
     swift test -c release 2>&1 | tee "$OUT/full.log" | tail -20
+SUITE_RC=${PIPESTATUS[0]}
 # [수정 2026-08-19] 이 절의 판정이 세 갈래로 틀려 있었다. 자매 스크립트 verify-plan-b12.sh 가
 # 2026-08-16 에 **똑같은 셋을 이미 고쳤는데**(그쪽 :119-148) 이 파일로 오지 않았다.
 #   (a) 실패 탐지 `grep -qE "with [1-9][0-9]* failures?"` 가 **스킵 동반 요약**을 못 잡는다.
@@ -87,35 +88,29 @@ launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$WAPLE_REAL_PKGS" \
 #   (b) 번들별 집계 정규식도 같은 형식을 빠뜨려 가장 큰 두 번들이 통째로 사라졌다.
 #   (c) 잘린 로그를 막을 수단이 없었다 — 통과 번들 하나만 남은 로그도 실패 0 이라 OK 가 된다.
 #       기대 번들 수를 Package.swift 에서 끌어와 대조한다(하드코딩하면 타깃이 늘 때 조용히 낡는다).
-BUNDLE_SUMMARY=$(grep -A1 -E "^Test Suite '[A-Za-z0-9_]+\.xctest' (passed|failed) at" \
-                 "$OUT/full.log" 2>/dev/null \
-                 | grep -oE "Executed [0-9]+ tests?, with ([0-9]+ tests? skipped and )?[0-9]+ failures?")
-NBUNDLE=$(printf '%s' "$BUNDLE_SUMMARY" | grep -c "Executed")
-NFAIL=$(printf '%s\n' "$BUNDLE_SUMMARY" | grep -oE "[0-9]+ failures?" \
-        | grep -oE "^[0-9]+" | awk '{s+=$1} END {print s+0}')
-TESTS=$(printf '%s\n' "$BUNDLE_SUMMARY" | grep -oE "Executed [0-9]+" \
-        | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
-NEXPECT=$(grep -cE '^[[:space:]]*\.testTarget' Package.swift)
-if [ "$NBUNDLE" -ne "$NEXPECT" ]; then
-    bad "번들 요약 $NBUNDLE 개 — Package.swift 의 testTarget $NEXPECT 개와 다르다. 스위트가 다 안 돌았거나 로그가 잘렸다 ($OUT/full.log)"
-    printf '%s\n' "$BUNDLE_SUMMARY" | sed 's/^/      /'
-elif [ "$NFAIL" -ne 0 ]; then
-    bad "전 스위트 실패 — 번들 $NBUNDLE 개에서 실패 $NFAIL 건 ($OUT/full.log)"
-    grep -E "error:|XCTAssert.*failed|failed \(" "$OUT/full.log" | head -20 | sed 's/^/      /'
+# [2026-11-05] testTarget 7개가 한 XCTest 번들로 합쳐지는 툴체인도 있다.
+# 공용 census가 실행 하한·실제 타깃 실행·실패 요약을 검사한다.
+if TESTS=$(python3 scripts/dev/xctest-census.py --check "$OUT/full.log") && [ "$SUITE_RC" -eq 0 ]; then
+    ok "전 스위트 통과 — 실행 $TESTS개, 실패 0 ($((SECONDS-T0))초)"
 else
-    ok "전 스위트 통과 — 번들 $NBUNDLE 개, 실패 0 ($((SECONDS-T0))초)"
+    bad "전 스위트 검증 실패 — 종료코드 $SUITE_RC ($OUT/full.log)"
 fi
-echo "  번들별:"
-printf '%s\n' "$BUNDLE_SUMMARY" | sed 's/^/    /' 
-echo "  번들 합: ${TESTS:-?}  (기준 2,300 — 2026-08-19 CI 실측, 코퍼스 유무 무관. 종전 2,270)"
 
 hr; echo "5. 골든 — **바뀌어야 할 씬만** 바뀌었는가"; hr
 PRE="${WAPLE_PRE_BASELINE:-}"
+# 같은 SHA 재실행도 기존 기준선을 덮거나 재사용하지 않는다.
+CAPTURE_ROOT=$(mktemp -d "$OUT/capture.XXXXXX") || exit 2
 LABEL="mips-$(git rev-parse --short HEAD)"
 launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$WAPLE_REAL_PKGS" \
     WAPLE_BASE_ASSETS="$WAPLE_BASE_ASSETS" \
-    swift run -c release WapleCompat --capture "$OUT" --label "$LABEL" "$ROOT" \
-    2>&1 | tee "$OUT/capture.log" | tail -6
+    swift run -c release WapleCompat --capture "$CAPTURE_ROOT" --label "$LABEL" "$ROOT" \
+    2>&1 | tee "$CAPTURE_ROOT/capture.log" | tail -6
+CAPTURE_RC=${PIPESTATUS[0]}
+if [ "$CAPTURE_RC" -ne 0 ]; then
+    bad "캡처 실패 (exit $CAPTURE_RC) — $CAPTURE_ROOT/capture.log"
+    exit "$CAPTURE_RC"
+fi
+echo "  캡처: $CAPTURE_ROOT/$LABEL"
 
 if [ -z "$PRE" ] || [ ! -d "$PRE/thumbs" ]; then
     warn "구현 전 release 기준선이 없어 대조를 건너뛴다."
@@ -124,7 +119,7 @@ if [ -z "$PRE" ] || [ ! -d "$PRE/thumbs" ]; then
     echo "     이렇게 떠서 WAPLE_PRE_BASELINE 으로 지정할 것:"
     echo "       git stash && swift run -c release WapleCompat --capture ~/Downloads/waple-pre --label pre $ROOT && git stash pop"
 else
-python3 - "$PRE" "$OUT/$LABEL" "$WAPLE_REAL_PKGS" <<'PY'
+python3 - "$PRE" "$CAPTURE_ROOT/$LABEL" "$WAPLE_REAL_PKGS" <<'PY'
 import json, os, sys
 import struct
 pre, post, corpus = sys.argv[1], sys.argv[2], sys.argv[3]

@@ -27,7 +27,7 @@
 "API 키 발급: steamcommunity.com/dev/apikey" = "Get an API key: steamcommunity.com/dev/apikey";
 "API 키 변경" = "Change API key";
 "API 키 붙여넣기" = "Paste API key";
-"API 키를 저장하지 못했습니다 — Keychain 이 기존 항목 삭제를 거부했습니다(권한/서명 변경 가능성). macOS '키체인 접근' 앱에서 'kr.yaki.waple.steam-api-key' 항목을 지운 뒤 다시 시도하세요." = "Could not save the API key — the Keychain refused to delete the existing item (its permissions or the app signature may have changed). Delete the 'kr.yaki.waple.steam-api-key' item in the macOS Keychain Access app, then try again.";
+"API 키를 저장하지 못했습니다 — Keychain 이 기존 항목 갱신을 거부했습니다(권한/서명 변경 가능성). macOS '키체인 접근' 앱에서 'kr.yaki.waple.steam-api-key' 항목을 지운 뒤 다시 시도하세요." = "Could not save the API key — the Keychain refused to update the existing item (its permissions or the app signature may have changed). Delete the 'kr.yaki.waple.steam-api-key' item in the macOS Keychain Access app, then try again.";
 "API 키를 저장하지 못했습니다." = "Could not save the API key.";
 "Finder에서 보기" = "Show in Finder";
 "Keychain 의 Steam Web API 키를 지우고 다시 입력" = "Remove the Steam Web API key from the Keychain and enter it again";

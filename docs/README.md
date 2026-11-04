@@ -12,6 +12,7 @@
 
 | 문서 | 내용 |
 | --- | --- |
+| [audit-fixes-2026-11-05.md](audit-fixes-2026-11-05.md) | 전체 감사 확정 51건의 수정·독립 리뷰 기록, 회귀 검사 참조와 통합 검증 상태 |
 | [RELEASING.md](RELEASING.md) | 태그 push → `release.yml` → `Waple.dmg` 자동 배포 절차, 서명·공증 현황 |
 | [snapshot-regression.md](snapshot-regression.md) | 씬 170종 픽셀 스냅샷 회귀 게이트(`WapleCompat --capture`/`--compare`). 렌더러를 건드렸다면 이걸 돌린다 |
 | [playback-architecture.html](playback-architecture.html) | 재생 정책·플레이리스트·렌더러 상태 전파를 보여 주는 대화형 구조도 |
@@ -128,7 +129,9 @@ WE 엔진 이식 프로그램의 차터·스펙·계획은 [superpowers/](superp
 
 ### 감사
 
-- [../AUDIT-FULL-2026-08-31.md](../AUDIT-FULL-2026-08-31.md) — **최신 감사.** Waple과
+- [audit-fixes-2026-11-05.md](audit-fixes-2026-11-05.md) — `b2b4fbee` 기준 확정 51건의 후속 수정 기록.
+  소스 리뷰와 실행 검증 범위를 구분한다.
+- [../AUDIT-FULL-2026-08-31.md](../AUDIT-FULL-2026-08-31.md) — **2026-08-31 감사.** Waple과
   `Waple-wallpaper-source` 전체를 다시 재현한 수정 전 스냅샷. 머리말의 2026-08-31
   후속 정정을 함께 읽어라.
 - [../WAPLE-ANALYSIS-SUMMARY-2026-08-27.md](../WAPLE-ANALYSIS-SUMMARY-2026-08-27.md) — 2026-08-27
