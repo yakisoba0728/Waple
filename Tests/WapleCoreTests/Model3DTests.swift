@@ -313,11 +313,11 @@ final class Model3DTests: XCTestCase {
         func appendAnim(_ name: String, _ mode: String, _ fps: Float, _ length: Int, tracks: [[(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>)]]) {
             d.append(Data(name.utf8)); d.append(0)
             d.append(Data(mode.utf8)); d.append(0)
-            f(fps, into: &d); u(UInt32(length), into: &d); u(0, into: &d); u(UInt32(tracks.count), into: &d); u(0, into: &d)
+            f(fps, into: &d); u(UInt32(length), into: &d); u(0, into: &d); u(UInt32(tracks.count), into: &d)
             for keys in tracks {
+                u(0, into: &d)  // trackFlags, not a trailing blob size
                 u(UInt32(keys.count * 36), into: &d)
                 for k in keys { appendKey(k.0, k.1, k.2) }
-                u(0, into: &d)  // blob2
             }
         }
         // anim0: idle, 2 키(length 1), 본0 정지 / 본1 z회전
@@ -325,10 +325,10 @@ final class Model3DTests: XCTestCase {
             [(SIMD3(0, 0, 0), SIMD3(0, 0, 0), SIMD3(1, 1, 1)), (SIMD3(0, 0, 0), SIMD3(0, 0, 0), SIMD3(1, 1, 1))],
             [(SIMD3(3, 0, 0), SIMD3(0, 0, 0), SIMD3(1, 1, 1)), (SIMD3(3, 0, 0), SIMD3(0, 0, 1), SIMD3(1, 1, 1))],
         ])
-        // 트레일러(가변 32B): u16 0 | AABB 6f | u32 0 | u16 0
-        var z16: UInt16 = 0; withUnsafeBytes(of: &z16) { d.append(contentsOf: $0) }
-        for _ in 0..<6 { f(0, into: &d) }
-        u(0, into: &d); withUnsafeBytes(of: &z16) { d.append(contentsOf: $0) }
+        // [2026-11-05 정정] 종전 32B 합성 꼬리는 v6 게이트/이벤트수와 다음 u64 id를
+        // 생략했다. 게이트가 전부 0인 실제 v6 꼬리는 35B이고 그 다음은 클립1 id다.
+        d.append(Data(repeating: 0, count: 35))
+        u(101, into: &d); u(0, into: &d)
         // anim1: glance, 1 키(length 0)
         appendAnim("test|glance_bone", "single", 24, 0, tracks: [
             [(SIMD3(0, 0, 0), SIMD3(0, 0, 0), SIMD3(1, 1, 1))],
@@ -413,8 +413,8 @@ final class Model3DTests: XCTestCase {
 
     /// C③: 종전의 **고정 오프셋**(꼬리 시작 +31 의 u16)은 이제 어디에서도 안 읽힌다. 그 자리에
     /// 눈에 띄는 값을 심어도 id 에 새어 나오면 안 된다.
-    /// (아래 꼬리는 길이를 39바이트로 늘려 그 자리를 실제 id 와 갈라놓은 **합성** 바이트다 —
-    ///  실물 꼬리 길이 분포는 이 컨테이너에서 잴 수 없다.)
+    /// [2026-11-05 정정] 종전 임의39B 꼬리는 올바른 스트림이 아니었다. flags bit0의
+    /// 실제18B 레코드를 포함해 옛 고정 위치를 다음 id와 분리한다(0xC0는 힙 크기).
     func testAnimationClipIdIsNotReadFromTheOldFixedTrailerOffset() throws {
         let vSkin = SynthVert(pos: SIMD3(1, 1, 1), nrm: SIMD3(0, 1, 0), tan: SIMD4(0, 0, 1, -1), uv: SIMD2(1, 1),
                               bones: SIMD4(1, 0, 0, 0), weights: SIMD4(1, 0, 0, 0))
@@ -432,16 +432,16 @@ final class Model3DTests: XCTestCase {
         d.append(Data("MDLA0006".utf8)); d.append(0)
         u(0, into: &d); u(99, into: &d)
         func appendU64(_ v: UInt64) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
-        func appendClipBody(_ name: String, _ mode: String) {
+        func appendClipBody(_ name: String, _ mode: String, flags: UInt32 = 0) {
             d.append(Data(name.utf8)); d.append(0)
             d.append(Data(mode.utf8)); d.append(0)
-            f(30, into: &d); u(1, into: &d); u(0, into: &d); u(1, into: &d)
+            f(30, into: &d); u(1, into: &d); u(flags, into: &d); u(1, into: &d)
             u(0, into: &d); u(36, into: &d)
             for x: Float in [0, 0, 0, 0, 0, 0, 1, 1, 1] { f(x, into: &d) }
         }
-        appendU64(555); appendClipBody("clipA", "loop")
-        // 39바이트 꼬리. 종전 코드가 읽던 자리(마지막 트랙 끝 +35)에 0xBEEF 를 심는다.
-        var tail = [UInt8](repeating: 0, count: 39)
+        appendU64(555); appendClipBody("clipA", "loop", flags: 1)
+        // 31B 게이트/경계 + 18B flags 레코드 + 4B 이벤트수. 옛 +35 위치는 레코드 내부다.
+        var tail = [UInt8](repeating: 0, count: 53)
         tail[35] = 0xEF; tail[36] = 0xBE
         d.append(contentsOf: tail)
         appendU64(777); appendClipBody("clipB", "loop")

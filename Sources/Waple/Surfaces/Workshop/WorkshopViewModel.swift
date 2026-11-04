@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import WapleLibrary
 
 // Steam 워크샵 검색·페이징·다운로드 상태머신. 순수 로직(WorkshopAPI/SteamCmdDownloader)을 얇게 배선한다.
@@ -45,6 +46,10 @@ final class WorkshopViewModel: ObservableObject {
     private let keyProvider: () -> String?
     private let keySaver: (String) -> SteamAPIKeyStore.SaveFailure?
     private let downloader: Downloader
+    private let usernameSaver: (String) -> Void
+    private var libraryCancellable: AnyCancellable?
+    private var downloadTasks: [String: SteamCmdDownloader.DownloadTask] = [:]
+    private var downloadGenerations: [String: UUID] = [:]
     private var page = 1
     private var attemptedInitialLoad = false
     // F492: steamcmd 출력 신호(다운로드별) — 완료 콜백의 nil 하나로는 원인을 알 수 없어,
@@ -57,7 +62,7 @@ final class WorkshopViewModel: ObservableObject {
 
     struct DownloadUIState: Equatable {
         enum Phase: Equatable {
-            case downloading(Double?), verifying, committing, importing, done, failed
+            case downloading(Double?), verifying, committing, importing, done, failed, cancelled
         }
         var phase: Phase
         var entryId: String?   // 임포트된 라이브러리 엔트리 id(적용용)
@@ -80,12 +85,14 @@ final class WorkshopViewModel: ObservableObject {
     /// 그대로 대입된다 — 넓은 쪽이 좁은 쪽 자리에 들어가는 방향이기 때문이다.
     typealias Downloader = (_ itemId: String, _ username: String,
                             _ progress: @escaping @Sendable (SteamCmdDownloader.Progress) -> Void,
-                            _ completion: @escaping @Sendable (URL?) -> Void) -> Void
+                            _ completion: @escaping @Sendable (URL?) -> Void) -> SteamCmdDownloader.DownloadTask?
 
     init(client: WorkshopClient = .live(), library: LibraryViewModel,
          keyProvider: @escaping () -> String? = { SteamAPIKeyStore.load() },
          keySaver: @escaping (String) -> SteamAPIKeyStore.SaveFailure? = { SteamAPIKeyStore.save($0) },
          steamcmdAvailable: Bool = SteamCmdDownloader.isAvailable,
+         usernameProvider: () -> String = { SteamCmdDownloader.username },
+         usernameSaver: @escaping (String) -> Void = { SteamCmdDownloader.username = $0 },
          downloader: @escaping Downloader = { itemId, username, progress, completion in
              SteamCmdDownloader.download(itemId: itemId, username: username,
                                          progress: progress, completion: completion)
@@ -96,8 +103,12 @@ final class WorkshopViewModel: ObservableObject {
         self.keySaver = keySaver
         self.steamcmdAvailable = steamcmdAvailable
         self.downloader = downloader
+        self.usernameSaver = usernameSaver
         self.hasAPIKey = keyProvider() != nil
-        self.usernameInput = SteamCmdDownloader.username
+        self.usernameInput = usernameProvider()
+        libraryCancellable = library.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     // MARK: - API 키
@@ -210,7 +221,20 @@ final class WorkshopViewModel: ObservableObject {
 
     // MARK: - 다운로드 → 임포트 → 적용 (레거시 그대로 이동)
 
+    private func installedEntry(for item: WorkshopItem) -> LibraryEntry? {
+        library.entries.last { $0.workshopItemID == item.id }
+    }
+
+    func downloadState(for item: WorkshopItem) -> DownloadUIState? {
+        if let entry = installedEntry(for: item) {
+            return DownloadUIState(phase: .done, entryId: entry.id, failureReason: nil)
+        }
+        guard let state = downloads[item.id], state.phase != .done else { return nil }
+        return state
+    }
+
     func download(_ item: WorkshopItem) {
+        guard installedEntry(for: item) == nil else { return }
         guard steamcmdAvailable else {
             statusMessage = NSLocalizedString("steamcmd 가 필요합니다: brew install steamcmd",
                                               comment: "다운로더 미설치")
@@ -222,13 +246,35 @@ final class WorkshopViewModel: ObservableObject {
                                               comment: "계정 미입력")
             return
         }
-        SteamCmdDownloader.username = username
+        if downloadGenerations[item.id] != nil {
+            guard downloads[item.id]?.phase == .failed else { return }
+            cancelDownload(item)
+        }
+        usernameSaver(username)
+        let generation = UUID()
+        downloadGenerations[item.id] = generation
         downloads[item.id] = DownloadUIState(phase: .downloading(nil), entryId: nil, failureReason: nil)
         sawErrorSignal.remove(item.id)   // F492: 재시도 시 이전 실행의 신호가 섞이지 않게 초기화
         sawSuccessSignal.remove(item.id)
-        downloader(item.id, username,
-                   { [weak self] p in Task { @MainActor in self?.applyProgress(item.id, p) } },
-                   { [weak self] url in Task { @MainActor in self?.finishDownload(item, url) } })
+        downloadTasks[item.id] = downloader(item.id, username,
+            { [weak self] progress in Task { @MainActor in
+                guard let self, self.downloadGenerations[item.id] == generation else { return }
+                self.applyProgress(item.id, progress)
+            } },
+            { [weak self] url in Task { @MainActor in
+                guard let self, self.downloadGenerations[item.id] == generation else { return }
+                self.downloadGenerations.removeValue(forKey: item.id)
+                self.downloadTasks.removeValue(forKey: item.id)
+                self.finishDownload(item, url)
+            } })
+    }
+
+    func cancelDownload(_ item: WorkshopItem) {
+        guard downloadGenerations.removeValue(forKey: item.id) != nil else { return }
+        downloadTasks.removeValue(forKey: item.id)?.cancel()
+        sawErrorSignal.remove(item.id)
+        sawSuccessSignal.remove(item.id)
+        downloads[item.id] = DownloadUIState(phase: .cancelled, entryId: nil, failureReason: nil)
     }
 
     private func applyProgress(_ id: String, _ p: SteamCmdDownloader.Progress) {
@@ -281,7 +327,7 @@ final class WorkshopViewModel: ObservableObject {
         }
         sawErrorSignal.remove(item.id)
         sawSuccessSignal.remove(item.id)
-        guard let entry = library.importDownloaded(url) else {
+        guard let entry = library.importDownloaded(url, workshopItemID: item.id) else {
             // [2026-08-25] **이 분기는 사유를 아예 안 남기고 있었다.** 다운로드는 성공했는데
             // 라이브러리 임포트가 실패한 경우인데, 타일은 "다운로드 실패" 만 말하고 화면 어디에도
             // 왜인지가 없었다(위 세 분기와 달리 `statusMessage` 도 안 세웠다). 문구를 새로 만든다.
@@ -298,7 +344,7 @@ final class WorkshopViewModel: ObservableObject {
     }
 
     func apply(_ item: WorkshopItem) {
-        guard let entryId = downloads[item.id]?.entryId,
+        guard let entryId = downloadState(for: item)?.entryId,
               let entry = library.entries.first(where: { $0.id == entryId }) else { return }
         _ = library.apply(entry)
     }

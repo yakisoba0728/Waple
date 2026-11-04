@@ -279,6 +279,7 @@ public struct ParticleSimulator {
     // 원샷도 지연이 다른 이미터마다 첫 방출 기회를 기다린다.
     private var oneShotEmittersPending: Set<Int>?
     private var hasStepped = false
+    private var wasStopped = false
     private let parentSeed: UInt64
     private var nextUID = 1
     /// 자식 인스턴스 제어(부모 sim 이 설정): 스폰 위치 오프셋 / 방출 정지(고아·원샷).
@@ -543,6 +544,35 @@ public struct ParticleSimulator {
     }
 
     public var liveCount: Int { particles.count }
+    public var isPlaying: Bool { !isDrained }
+
+    /// IParticleSystem.stop removes particles immediately; it does not merely pause new emission.
+    public mutating func stop() {
+        emissionPaused = true
+        wasStopped = true
+        particles.removeAll(keepingCapacity: true)
+        for i in childStates.indices {
+            childStates[i].removeAll(keepingCapacity: true)
+            childDisplaysCache[i].removeAll(keepingCapacity: true)
+        }
+    }
+
+    /// play resumes a pause, and restarts a stopped system (including its static child instances).
+    public mutating func play() {
+        guard wasStopped else { emissionPaused = false; return }
+        var animations: [String: PropertyAnimation] = [:]
+        for item in controlPointPositionAnimations { animations["controlpoint\(item.slot)"] = item.animation }
+        for item in controlPointAngleAnimations { animations["controlpointangle\(item.slot)"] = item.animation }
+        let basis = worldBasis
+        let audio = currentAudio
+        let origin = emitOrigin
+        let carriesParent = emitOriginCarriesParentParticle
+        self = ParticleSimulator(def: def, seed: parentSeed, instanceOverrideAnimations: animations)
+        worldBasis = basis
+        currentAudio = audio
+        emitOrigin = origin
+        emitOriginCarriesParentParticle = carriesParent
+    }
 
     /// 빈 스냅샷만으로 끝났다고 볼 수 없다 — 지연 중인 이미터·무한 always 자식은 다시 방출한다.
     /// 반대로 유한 창이 모두 은퇴한 always 자식은 emissionPaused 없이도 끝나므로 트리 전체로 판정한다.

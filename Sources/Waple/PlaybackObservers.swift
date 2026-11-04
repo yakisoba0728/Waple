@@ -98,9 +98,8 @@ enum PlaybackConditionsBuilder {
     /// 관측 결과를 `PlaybackConditions` 로 접는다. **여기에는 I/O 가 없다** — 그래서 조건
     /// 조립 규칙(마스크 계산·화면 수 → allMonitorsMask)이 전부 테스트된다.
     ///
-    /// `layout` 은 지금 항상 `.perMonitor` 다. Waple 은 아직 stretch/clone 배치를 갖지 않는다 —
-    /// 갖게 되면 여기에 실제 배치를 넘겨야 하고, 그 전까지 `.perMonitor` 가 **가장 좁은**
-    /// 가정이다(부분 정지가 허용되는 쪽이라 전 화면을 한꺼번에 멈추지 않는다).
+    /// The app supplies its selected display layout; default remains per-monitor
+    /// for callers that do not span or clone wallpaper content.
     static func make(windows: [DesktopVisibilityMonitor.WindowSnapshot],
                      frontmostProcessId: Int?,
                      currentProcessId: Int,
@@ -108,9 +107,11 @@ enum PlaybackConditionsBuilder {
                      visibleFrames: [CGRect],
                      displayAsleep: Bool,
                      onBattery: Bool,
-                     audioPlaying: Bool) -> PlaybackConditions {
+                     audioPlaying: Bool,
+                     resourcePressure: Bool = false,
+                     layout: MonitorLayout = .perMonitor) -> PlaybackConditions {
         PlaybackConditions(
-            layout: .perMonitor,
+            layout: layout,
             allMonitorsMask: PlaybackMasks.allMonitors(count: screenFrames.count),
             unfocusedMask: PlaybackMasks.unfocused(windows: windows,
                                                    frontmostProcessId: frontmostProcessId,
@@ -124,10 +125,42 @@ enum PlaybackConditionsBuilder {
                                                      screenFrames: screenFrames),
             audioPlaying: audioPlaying,
             displayAsleep: displayAsleep,
-            onBattery: onBattery)
-        // `vramPressure` 는 넘기지 않는다 — 표본을 만드는 측정기가 없다(`VRAMHysteresis` 는
-        // 모델만 있고 `MTLDevice.currentAllocatedSize` 를 먹이는 자리가 아직 없다).
-        // 기본값 false 로 두는 것이 "압박 없음" 이라 무회귀 쪽이다.
+            onBattery: onBattery,
+            vramPressure: resourcePressure)
+        // resourcePressure is the macOS system memory warning latch, not a
+        // fabricated sample of Windows adapter VRAM. The raw WE model is retained.
         // `external*Request`·`forcePauseAll` 도 같다 — 트레이/IPC 가 붙을 때 함께 본다.
     }
+}
+
+/// macOS reports system pressure, not Windows adapter VRAM counters. Wait for
+/// a normal event before restoring resources; our own release must not reset it.
+@MainActor
+final class ResourcePressureObserver {
+    private var source: DispatchSourceMemoryPressure?
+    private(set) var isPressured = false
+    var onChange: (() -> Void)?
+
+    func start() {
+        guard source == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: .all, queue: .main)
+        source.setEventHandler { [weak self, weak source] in
+            guard let source else { return }
+            MainActor.assumeIsolated { self?.accept(source.data) }
+        }
+        self.source = source
+        source.resume()
+    }
+
+    func accept(_ event: DispatchSource.MemoryPressureEvent) {
+        let next: Bool
+        if !event.intersection([.warning, .critical]).isEmpty { next = true }
+        else if event.contains(.normal) { next = false }
+        else { return }
+        guard next != isPressured else { return }
+        isPressured = next
+        onChange?()
+    }
+
+    deinit { source?.cancel() }
 }

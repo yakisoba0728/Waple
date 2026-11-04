@@ -62,7 +62,8 @@ public protocol LiveMediaSettingsApplying: AnyObject {
 /// 실제 실행 규율은 위 문단(메인 큐 한정 + mountToken 세대 가드)이고, 그것이 이 표기의 근거다.
 @MainActor
 public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSettingsApplying,
-                                  @unchecked Sendable {
+                                  WallpaperFrameCapturing, @unchecked Sendable {
+    public static let playbackCycleEndedNotification = Notification.Name("waple.videoPlaybackCycleEnded")
     /// Conservative AVFoundation-native containers used directly without conversion.
     /// F230: WapleCore.VideoFormats.nativeExtensions 가 단일 소스 — 여기서 다시 선언하지 않는다.
     nonisolated public static let nativeVideoExtensions: Set<String> = VideoFormats.nativeExtensions
@@ -79,11 +80,15 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSetting
     private var statusObservation: NSKeyValueObservation?
     private weak var container: NSView?
     private var occlusionObserver: NSObjectProtocol?
+    private var cycleEndObserver: NSObjectProtocol?
     private var pausedByOcclusion = false
     private var pausedManually = false
     /// 재생정책 음소거(stage 3①). **사용자 음량과 별개의 층**이라 값을 덮어쓰지 않는다 —
     /// 끄면 `VideoSettings.volume(id:)` 가 그대로 돌아온다.
     private var policyMuted = false
+    private var audioOutputEnabled = true
+    private var volumeRamp: VideoVolumeRamp?
+    private var volumeRampTimer: Timer?
     private var mountToken: UInt64 = 0
     private var attemptedPlaybackRecovery = false
     /// F550: 현재 장착된 소스가 ffmpeg 변환 결과물인지 — 결과물 자체의 재생 실패는 재변환하지 않는다.
@@ -235,13 +240,25 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSetting
         item.audioTimePitchAlgorithm = .spectral
         let queue = AVQueuePlayer()
         let looper = AVPlayerLooper(player: queue, templateItem: item)
+        cycleEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main
+        ) { [weak self, weak queue, weak looper] notification in
+            MainActor.assumeIsolated {
+                guard let self, let queue, let looper, self.mountToken == token,
+                      self.player === queue, let ended = notification.object as? AVPlayerItem,
+                      looper.loopingPlayerItems.contains(where: { $0 === ended }),
+                      let projectID = self.projectId else { return }
+                NotificationCenter.default.post(name: Self.playbackCycleEndedNotification,
+                    object: self, userInfo: ["projectId": projectID])
+            }
+        }
         // 배경별 음량/배속(기본: 음소거, 1배속). defaultRate 는 루프 재시작에도 유지된다.
         let volume = VideoSettings.volume(id: project.id)
         queue.volume = volume
         // stage 3①: 마운트도 정책 음소거를 거친다. 안 거치면 정책이 음소거를 요구하는 동안
         // 배경을 바꾸거나 모니터를 착탈할 때마다 **새 렌더러가 소리부터 내고** 다음 정책
         // 틱(≤1초)에 꺼진다 — 사용자에게는 1초짜리 소음이다.
-        queue.isMuted = Self.effectiveMute(volume: volume, policyMuted: policyMuted)
+        queue.isMuted = Self.effectiveMute(volume: volume, policyMuted: policyMuted, audioOutputEnabled: audioOutputEnabled)
         queue.defaultRate = VideoSettings.rate(id: project.id)
 
         let layer = AVPlayerLayer(player: queue)
@@ -287,8 +304,8 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSetting
             MainActor.assumeIsolated {
                 guard let self, let win = self.container?.window, sender === win else { return }
                 if win.occlusionState.contains(.visible) {
-                    if self.pausedByOcclusion, !self.pausedManually { self.player?.play() }
                     self.pausedByOcclusion = false
+                    self.synchronizeAudioRamp()
                 } else {
                     // r4-16: 종전 가드는 `player?.rate != 0` 이었다 — **이미 정지 중이면 가림
                     // 플래그를 안 세운다**는 뜻이라, 수동 정지(pause()) 상태에서 창이 가려지면
@@ -299,7 +316,7 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSetting
                     // 본다 — 같은 모델로 맞춘다. pause() 는 멱등이라 중복 호출이 안전하다.
                     guard !self.pausedByOcclusion else { return }
                     self.pausedByOcclusion = true
-                    self.player?.pause()
+                    self.synchronizeAudioRamp()
                 }
             }
         }
@@ -381,14 +398,13 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSetting
     /// 수동 정지·가림 정지의 합성(WebRenderer 의 isEffectivelyPaused 와 같은 모델).
     private var isEffectivelyPaused: Bool { pausedManually || pausedByOcclusion }
 
-    public func pause() { pausedManually = true; player?.pause() }
+    public func pause() { pausedManually = true; synchronizeAudioRamp() }
     /// F840: 종전 resume() 은 무조건 play() 라 **가려진 창의 영상이 되살아났다**(가림 정지의 목적인
     /// 절전이 무효화되고, 이후 visible 복귀 시엔 pausedByOcclusion 이 여전히 true 라 상태도 어긋난다).
     /// 가림 정지 중이면 플래그만 내리고 재생은 occlusion 옵저버의 visible 복귀에 맡긴다.
     public func resume() {
         pausedManually = false
-        guard !isEffectivelyPaused else { return }
-        player?.play()
+        synchronizeAudioRamp()
     }
 
     /// F820: 음량/배속 라이브 반영(자기 `projectId` 로 값을 되읽는 편의 진입점).
@@ -405,8 +421,9 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSetting
     /// 즉시 반영한다.
     public func applyLiveMediaSettings(volume: Float, rate: Float) {
         guard let player else { return }
+        volumeRampTimer?.invalidate(); volumeRampTimer = nil; volumeRamp = nil
         player.volume = volume
-        player.isMuted = Self.effectiveMute(volume: volume, policyMuted: policyMuted)
+        player.isMuted = Self.effectiveMute(volume: volume, policyMuted: policyMuted, audioOutputEnabled: audioOutputEnabled)
         player.defaultRate = rate
         // defaultRate 는 다음 play() 부터 적용 — 재생 중이면 현재 rate 도 즉시 맞춘다.
         // 정지(수동/가림, rate==0) 중 대입은 재생 재개를 뜻하므로 건드리지 않는다.
@@ -421,15 +438,50 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSetting
     /// `isMuted` 를 같이 세워야 "지금 소리가 나는가" 를 한 값으로 읽을 수 있다. 종전 두 자리
     /// (`attachPlayer`·`applyLiveVideoSettings`)가 이 규칙을 각자 복사하고 있었고, 정책 음소거를
     /// 얹으면서 그 복사가 셋이 되기 전에 한 자리로 모은다.
-    static func effectiveMute(volume: Float, policyMuted: Bool) -> Bool {
-        policyMuted || volume <= 0
+    static func effectiveMute(volume: Float, policyMuted: Bool, audioOutputEnabled: Bool = true) -> Bool {
+        policyMuted || !audioOutputEnabled || volume <= 0
+    }
+
+    public func setAudioOutputEnabled(_ enabled: Bool) {
+        audioOutputEnabled = enabled
+        synchronizeAudioRamp()
+    }
+
+    private func synchronizeAudioRamp() {
+        guard let player, let id = projectId else { return }
+        let target = VideoSettings.volume(id: id)
+        if volumeRamp == nil { volumeRamp = VideoVolumeRamp(volume: player.isMuted ? 0 : player.volume) }
+        volumeRamp?.update(target: target, paused: isEffectivelyPaused, muted: policyMuted,
+                           outputEnabled: audioOutputEnabled)
+        if !isEffectivelyPaused { player.play() }
+        applyVolumeRampStep(advance: false)
+        guard volumeRamp?.isComplete == false, volumeRampTimer == nil else { return }
+        let token = mountToken
+        let timer = Timer(timeInterval: VideoVolumeRamp.interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.mountToken == token else { return }
+                self.applyVolumeRampStep(advance: true)
+            }
+        }
+        volumeRampTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// The timer and regression tests drive the same physical player transition.
+    func applyVolumeRampStep(advance: Bool = true) {
+        guard let player, var ramp = volumeRamp else { return }
+        if advance { ramp.tick() }
+        player.volume = ramp.current
+        player.isMuted = ramp.current <= 0 || !audioOutputEnabled
+        if ramp.shouldPauseTransport { player.pause() }
+        volumeRamp = ramp
+        if ramp.isComplete { volumeRampTimer?.invalidate(); volumeRampTimer = nil }
     }
 
     /// 정책 음소거. 렌더 루프는 건드리지 않는다 — 음소거는 정지가 아니다(프로토콜 주석).
     public func setPolicyMuted(_ muted: Bool) {
         policyMuted = muted
-        guard let player, let id = projectId else { return }
-        player.isMuted = Self.effectiveMute(volume: VideoSettings.volume(id: id), policyMuted: muted)
+        synchronizeAudioRamp()
     }
 
     /// 오디오 축의 뺄셈 항. 순간 상태(`rate`)가 아니라 **의도**를 답한다 — `rate` 는 루프
@@ -437,7 +489,23 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSetting
     public var isPlayingAudio: Bool {
         guard player != nil, let id = projectId else { return false }
         return !isEffectivelyPaused
-            && !Self.effectiveMute(volume: VideoSettings.volume(id: id), policyMuted: policyMuted)
+            && !Self.effectiveMute(volume: VideoSettings.volume(id: id), policyMuted: policyMuted, audioOutputEnabled: audioOutputEnabled)
+    }
+
+    /// Snapshot the current decoded video time; asynchronous decode never advances the player clock.
+    public func captureCurrentImage(completion: @escaping @MainActor (NSImage?) -> Void) {
+        guard let player, let item = player.currentItem else { completion(nil); return }
+        let token = mountToken
+        let time = player.currentTime()
+        let generator = AVAssetImageGenerator(asset: item.asset)
+        generator.appliesPreferredTrackTransform = true
+        Task { [weak self, weak player] in
+            let image = try? await generator.image(at: time).image
+            guard let self, let player, self.mountToken == token, self.player === player else {
+                completion(nil); return
+            }
+            completion(image.map { NSImage(cgImage: $0, size: .zero) })
+        }
     }
 
     public func teardown() {
@@ -451,6 +519,9 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSetting
     }
 
     private func stopPlayback() {
+        volumeRampTimer?.invalidate(); volumeRampTimer = nil; volumeRamp = nil
+        if let observer = cycleEndObserver { NotificationCenter.default.removeObserver(observer) }
+        cycleEndObserver = nil
         if let o = occlusionObserver { NotificationCenter.default.removeObserver(o) }
         occlusionObserver = nil
         statusObservation?.invalidate()

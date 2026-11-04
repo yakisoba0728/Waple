@@ -30,9 +30,9 @@ final class DynamicVertexBuffer {
 }
 
 extension SceneRenderer {
-    /// EngineU 버퍼: mvp(항등) + timeAndPad(time,pointer,dt) + pointerLastAndPad + texRes[8](슬롯별 실제 dims)
-    /// + texWrap[8](F162/F163: 슬롯별 1=clamp/0=repeat, pass.texWrap 그대로 — 빌드 시 고정이라 런타임 재계산 불요)
-    /// + texFilter[8](감사 V07: 슬롯별 1=nearest/0=linear, pass.texFilter 그대로 — TexImage.noInterpolation)
+    /// EngineU 버퍼: mvp(항등) + timeAndPad(time,pointer,dt) + pointerLastAndPad + texRes[10](슬롯별 실제 dims)
+    /// + texWrap[12](F162/F163: 슬롯별 1=clamp/0=repeat, pass.texWrap 그대로 — 빌드 시 고정이라 런타임 재계산 불요)
+    /// + texFilter[12](감사 V07: 슬롯별 1=nearest/0=linear, pass.texFilter 그대로 — TexImage.noInterpolation)
     /// + layerTint[4](H1: 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값) + X-⑤ targetRes[4]
     /// (g_TexelSize/g_TexelSizeHalf 전용 — 이펙트 체인 경로는 출력(dst) 해상도 고정값, 전 패스 불변)
     /// + parallaxAndPad[4](`g_ParallaxPosition` 전용 vec2; 포인터 슬롯과 분리).
@@ -45,7 +45,7 @@ extension SceneRenderer {
                        layerTint: SIMD4<Float> = SIMD4(1, 1, 1, 1),
                        targetRes: SIMD4<Float>,
                        mvp: simd_float4x4? = nil) -> [Float] {
-        var e = [Float](repeating: 0, count: 16 + 8 + 32 + 8 + 8 + 4 + 4 + 4)
+        var e = [Float](repeating: 0, count: 100)
         let m = mvp ?? simd_float4x4(1)
         e[0] = m.columns.0.x; e[1] = m.columns.0.y; e[2] = m.columns.0.z; e[3] = m.columns.0.w
         e[4] = m.columns.1.x; e[5] = m.columns.1.y; e[6] = m.columns.1.z; e[7] = m.columns.1.w
@@ -59,24 +59,25 @@ extension SceneRenderer {
         // `0x14018162d` 가 세운다. 종전 `pointerDown ? 1 : 0` 은 누르고 있는 내내 1 이라
         // cursorripple(`× 5.0`)/fluidsimulation 이 실물보다 훨씬 강하게 계속 밀어냈다.
         e[22] = pointerButton.clickImpulse
-        for n in 0..<8 {
+        for n in 0..<10 {
             let r = n < texRes.count ? texRes[n] : SIMD4<Float>(1, 1, 1, 1)
             let o = 24 + n * 4
             e[o] = r.x; e[o + 1] = r.y; e[o + 2] = r.z; e[o + 3] = r.w
         }
-        for n in 0..<8 where n < texWrap.count { e[56 + n] = texWrap[n] }
-        for n in 0..<8 where n < texFilter.count { e[64 + n] = texFilter[n] }  // 감사 V07: texWrap 직후
-        e[72] = layerTint.x; e[73] = layerTint.y; e[74] = layerTint.z; e[75] = layerTint.w
-        e[76] = targetRes.x; e[77] = targetRes.y; e[78] = targetRes.z; e[79] = targetRes.w  // X-⑤
-        e[80] = parallaxPosition.x; e[81] = parallaxPosition.y  // g_ParallaxPosition, zw pad=0
+        for n in 0..<10 where n < texWrap.count { e[64 + n] = texWrap[n] }
+        for n in 0..<10 where n < texFilter.count { e[76 + n] = texFilter[n] }  // 감사 V07: texWrap 직후
+        e[88] = layerTint.x; e[89] = layerTint.y; e[90] = layerTint.z; e[91] = layerTint.w
+        e[92] = targetRes.x; e[93] = targetRes.y; e[94] = targetRes.z; e[95] = targetRes.w  // X-⑤
+        e[96] = parallaxPosition.x; e[97] = parallaxPosition.y  // g_ParallaxPosition, zw pad=0
         return e
     }
 
     func runtimeTexRes(for pass: TranslatedPass, src: MTLTexture, fboTex: [MTLTexture],
                        overrides: [(slot: Int, tex: MTLTexture)] = []) -> [SIMD4<Float>] {
-        var texRes = pass.texRes
+        var texRes = Array(pass.texRes.prefix(10))
+        texRes += Array(repeating: SIMD4<Float>(1, 1, 1, 1), count: max(0, 10 - texRes.count))
         func set(_ slot: Int, _ tex: MTLTexture) {
-            guard slot >= 0, slot < 8 else { return }
+            guard slot >= 0, slot < 10 else { return }
             let w = Float(max(1, tex.width)), h = Float(max(1, tex.height))
             texRes[slot] = SIMD4(w, h, w, h)
         }
@@ -96,6 +97,9 @@ extension SceneRenderer {
             for slot in pass.fullFrameSlots where slot >= 0 && slot < 128 {
                 textures.append((slot, snapshot))
             }
+        }
+        for (slot, layerID) in pass.compositeSlots {
+            if let texture = compositeLayerTextures[layerID] { textures.append((slot, texture)) }
         }
         for (slot, previous) in pass.mediaArtworkSlots where slot >= 0 && slot < 128 {
             if let texture = previous ? mediaPreviousArtworkTexture : mediaArtworkTexture {
@@ -170,7 +174,8 @@ extension SceneRenderer {
                 let nxt = sys.frames[max(0, min(fc - 1, pair.next))]
                 let tw = sys.texture.width, th = sys.texture.height
                 let q0 = TexImage.sheetFrameQuadUV(cur, textureWidth: tw, textureHeight: th)
-                let q1 = TexImage.sheetFrameQuadUV(nxt, textureWidth: tw, textureHeight: th)
+                let q1 = TexImage.sheetFrameQuadUV(nxt, textureWidth: sys.nextTexture?.width ?? tw,
+                                                     textureHeight: sys.nextTexture?.height ?? th)
                 uv = (0..<4).map { q0.corner($0) }
                 uvNext = (0..<4).map { q1.corner($0) }
                 blend = pair.blend
@@ -296,13 +301,22 @@ extension SceneRenderer {
         // 라는 **다른 셰이더**이고 그 셋에는 `SPRITESHEET`/`SPRITESHEETBLEND` 문자열이 하나도 없다
         // (동봉 자산 grep 실측 0건). 그래서 `u1,v1 = u0,v0` · `blend = 0` 으로 실어 렌더가
         // 종전과 비트동일하게 둔다.
+        var rotation = 0
+        var fu0: Float = 0, fu1: Float = 1, fv0: Float = 0, fv1: Float = 1
         func push(_ pt: (Float, Float), _ u: Float, _ vv: Float, _ al: Float) {
-            verts.append(contentsOf: [pt.0, pt.1, u, vv, r, g, b, al, u, vv, 0, 0])
+            var local = SIMD2<Float>((u - fu0) / max(1e-8, fu1 - fu0), (vv - fv0) / max(1e-8, fv1 - fv0))
+            switch rotation {
+            case 1: local = SIMD2(1 - local.y, local.x)
+            case 2: local = 1 - local
+            case 3: local = SIMD2(local.y, 1 - local.x)
+            default: break
+            }
+            let uv = SIMD2(fu0, fv0) + local * SIMD2(fu1 - fu0, fv1 - fv0)
+            verts.append(contentsOf: [pt.0, pt.1, uv.x, uv.y, r, g, b, al, uv.x, uv.y, 0, 0])
         }
         // 스프라이트시트: 선택 프레임 렉트로 u(가로)/v(길이) 재매핑(discharge rope 등 —
         // 미적용 시 시트 전 프레임이 리본에 통째로 늘어난다).
         // 축 이름은 WE 규약 기준이다 — fu*=폭 방향, fv*=길이 방향(아래 삼각 조립 주석 참조).
-        var fu0: Float = 0, fu1: Float = 1, fv0: Float = 0, fv1: Float = 1
         if !sys.frames.isEmpty {
             let fc = sys.frames.count
             let idx = p.frame >= 0
@@ -313,8 +327,7 @@ extension SceneRenderer {
                                                seqMul: sys.def.sequenceMultiplier)  // F740(S-22): 쿼드 경로와 동일 폴터
             let fr = sys.frames[max(0, min(fc - 1, idx))]
             let tw = Float(max(1, sys.texture.width)), th = Float(max(1, sys.texture.height))
-            // 서브렉트는 atlas*(회전 프레임의 실제 extent). ponytail: 리본은 rotationQuarters 미반영 —
-            // spritetrail/rope 가 회전 아틀라스를 쓰는 실물이 코퍼스에 없어 보류(발견 시 코너 회전 이식).
+            rotation = fr.rotationQuarters
             fu0 = fr.atlasX / tw; fu1 = min(1, (fr.atlasX + fr.atlasWidth) / tw)
             fv0 = fr.atlasY / th; fv1 = min(1, (fr.atlasY + fr.atlasHeight) / th)
         }
@@ -437,7 +450,8 @@ extension SceneRenderer {
     /// 우선) 이펙트 체인 결과(srcTex)는 그대로 유지한 채 저작 블렌드 모드가 적용된다.
     func runFrameBufferLayer(_ layer: GPULayer, acc: MTLTexture, cb: MTLCommandBuffer,
                                      ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
-                                     aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+                                     aspectScale: inout SIMD2<Float>, hasChildren: Bool = false,
+                                     renderChildren: (MTLTexture) -> Bool = { _ in true }) -> MTLRenderCommandEncoder? {
         enc.endEncoding()
         var srcTex: MTLTexture? = nil
         var backdrop: MTLTexture? = nil
@@ -461,6 +475,11 @@ extension SceneRenderer {
                 guard let blit = cb.makeBlitCommandEncoder() else { return nil }
                 blit.copy(from: acc, to: snap)
                 blit.endEncoding()
+                if hasChildren, let auxSnap = pooledOffscreen(acc.width, acc.height, device, bgra: true) {
+                    guard let copy = cb.makeBlitCommandEncoder() else { return nil }
+                    copy.copy(from: acc, to: auxSnap); copy.endEncoding()
+                    fullFrame = auxSnap
+                }
             } else {
                 // 풀 고갈(드문 경우)이면 fullFrame 은 snap(투명) 유지 — aux 슬롯만 무크래시 폴백,
                 // chain src(투명 클리어)는 항상 그대로 진행.
@@ -478,22 +497,14 @@ extension SceneRenderer {
                 guard let clearEnc = cb.makeRenderCommandEncoder(descriptor: clearRPD) else { return nil }
                 clearEnc.endEncoding()
             }
-            // ⚠️ r4-34: `backdrop` 은 f_blend 의 **dst**(= 이 레이어가 얹힐 배경)로 쓰인다.
-            // `copyBackground:true` 면 `snap` 은 acc 스냅샷이라 옳다. 그러나 `copyBackground:false`
-            // 분기에서는 방금 위에서 `snap` 을 `loadAction = .clear` 로 **투명하게 비웠다** —
-            // 즉 블렌드 dst 가 "이 시점까지의 씬 컬러" 가 아니라 투명 텍스처다. 실제 acc 스냅샷은
-            // `auxSnap`(= `fullFrame`)에 따로 떠 있는데 그건 `_rt_FullFrameBuffer` aux 슬롯 전용이라
-            // 여기로 오지 않는다. 그래서 `copyBackground:false` + `colorBlendMode != 0` 인 레이어는
-            // 배경 없는 블렌드가 된다(예: multiply 가 투명 위에서 결과를 잃는다).
-            //
-            // 지금 `fullFrame` 으로 바꾸지 않는 이유: `copyBackground:false` 의 근사 자체가
-            // "자식 RT 대신 무(無)" 라는 위 B2-effects④ 의 의도적 단순화이고, 여기만 acc 로 되돌리면
-            // chain src(투명)와 blend dst(불투명)가 서로 다른 배경 전제를 갖게 된다. 두 값을
-            // 정합시키려면 compose 레이어별 자식 RT 가 필요하다(BACKLOG B2-effects④).
-            // 도달: `copyBackground:false` **그리고** `colorBlendMode != 0` 인 레이어 — 동봉·설치본
-            // 코퍼스에서 확인된 조합은 없다(잠복).
-            backdrop = snap
+            guard renderChildren(snap) else { return nil }
+            // Blend destination remains the parent's scene, independent of child-source copyBackground.
+            backdrop = fullFrame
             var current: MTLTexture = snap
+            if hasChildren {
+                guard let straight = straightCompositeTexture(snap, commandBuffer: cb, device: device) else { return nil }
+                current = straight
+            }
             for eff in layer.effects {
                 guard effectVisible(eff, time: time) else { continue }  // X-⑥: 꺼진 이펙트만 건너뜀
                 guard let next = pooledOffscreen(acc.width, acc.height, device) else { break }
@@ -502,6 +513,7 @@ extension SceneRenderer {
                 current = next
             }
             srcTex = current
+            if let id = compositionID(for: layer) { compositeLayerTextures[id] = current }
         }
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = acc
@@ -1101,20 +1113,24 @@ extension SceneRenderer {
                                 // 방출 게이트를 웜업 스텝 전에 확정해야 해서 먼저 평가한다). nil = 여기서 평가
                                 // (라이브 draw — 종전 경로 그대로). 스크립트 프레임당 1회 평가 계약 유지용.
                                 particleVisible: ((Int) -> Bool)? = nil,
-                                aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
-        cameraParallaxFrameOriginByOrder.removeAll(keepingCapacity: true)
-        prepareLateCameraParallaxAnimatedImageRoots(time: time)
-        pendingInteractionGeometry.removeAll(keepingCapacity: true)
+                                aspectScale: inout SIMD2<Float>, compositionRootID: Int? = nil) -> MTLRenderCommandEncoder? {
+        if compositionRootID == nil {
+            cameraParallaxFrameOriginByOrder.removeAll(keepingCapacity: true)
+            prepareLateCameraParallaxAnimatedImageRoots(time: time)
+            pendingInteractionGeometry.removeAll(keepingCapacity: true)
+        }
+        let plan = compositionDrawPlan(rootID: compositionRootID)
+        var displayTextures = displayTextures
         var enc = enc
         var i = 0
-        while i < drawPlan.count {
-            let item = drawPlan[i]
+        while i < plan.count {
+            let item = plan[i]
             if item.kind == .mesh3D {
                 // F721: 연속 mesh3D 런을 한 메시 패스로 묶어 뎁스 공유(메시 상호 은폐 정합) —
                 // 오브젝트별 분할이면 런 사이에 뎁스가 클리어되어 겹친 메시가 잘못 합성된다.
                 var run = [item.idx]
                 var j = i + 1
-                while j < drawPlan.count, drawPlan[j].kind == .mesh3D { run.append(drawPlan[j].idx); j += 1 }
+                while j < plan.count, plan[j].kind == .mesh3D { run.append(plan[j].idx); j += 1 }
                 guard let next = runOrtho3DMeshes(run, acc: acc, cb: cb, ending: enc, device: device,
                                                   time: time, aspectScale: &aspectScale) else { return nil }
                 enc = next
@@ -1128,6 +1144,21 @@ extension SceneRenderer {
                !(particleVisible?(item.idx) ?? particleScriptVisible(item.idx, time: time)) {
                 i += 1
                 continue
+            }
+            if item.kind == .layer, !layers[item.idx].isFrameBuffer,
+               layers[item.idx].effects.contains(where: requiresLiveComposite) {
+                enc.endEncoding()
+                guard let background = pooledOffscreen(acc.width, acc.height, device, bgra: true),
+                      let blit = cb.makeBlitCommandEncoder() else { return nil }
+                blit.copy(from: acc, to: background); blit.endEncoding()
+                displayTextures[item.idx] = liveEffectTexture(layers[item.idx], source: displayTextures[item.idx],
+                    background: background, commandBuffer: cb, device: device, time: time)
+                let pass = MTLRenderPassDescriptor()
+                pass.colorAttachments[0].texture = acc
+                pass.colorAttachments[0].loadAction = .load
+                pass.colorAttachments[0].storeAction = .store
+                guard let resumed = cb.makeRenderCommandEncoder(descriptor: pass) else { return nil }
+                enc = resumed
             }
             switch item.kind {
             case .mesh3D:
@@ -1159,9 +1190,27 @@ extension SceneRenderer {
                           time: time, device: device,
                           displayTexture: item.idx < textTextures.count ? textTextures[item.idx] : nil)
             case .layer where layers[item.idx].isFrameBuffer:
-                guard let next = runFrameBufferLayer(layers[item.idx], acc: acc, cb: cb, ending: enc,
-                                                     device: device, time: time,
-                                                     aspectScale: &aspectScale) else { return nil }
+                let layer = layers[item.idx]
+                let rootID = compositionID(for: layer)
+                let hasChildren = rootID.map { !compositionDrawPlan(rootID: $0).isEmpty } ?? false
+                var childAspect = aspectScale
+                guard let next = runFrameBufferLayer(layer, acc: acc, cb: cb, ending: enc,
+                    device: device, time: time, aspectScale: &aspectScale, hasChildren: hasChildren,
+                    renderChildren: { target in
+                        guard hasChildren, let rootID else { return true }
+                        let pass = MTLRenderPassDescriptor()
+                        pass.colorAttachments[0].texture = target
+                        pass.colorAttachments[0].loadAction = .load
+                        pass.colorAttachments[0].storeAction = .store
+                        guard let childEncoder = cb.makeRenderCommandEncoder(descriptor: pass),
+                              let result = self.encodeDrawPlan(startingWith: childEncoder, acc: target,
+                                cb: cb, device: device, time: time, displayTextures: displayTextures,
+                                textTextures: textTextures, particleSnapshot: particleSnapshot,
+                                particleVisible: particleVisible, aspectScale: &childAspect,
+                                compositionRootID: rootID) else { return false }
+                        result.endEncoding()
+                        return true
+                    }) else { return nil }
                 enc = next
             case .layer where layers[item.idx].colorBlendMode != 0:
                 // colorBlendMode: 그 시점까지의 acc 스냅샷을 dst 로 셰이더 블렌드(컴포지션과 동일한
@@ -1299,7 +1348,7 @@ extension SceneRenderer {
                 u.rim = SIMD4(mesh.rimAmount, mesh.rimExponent, mesh.rimLighting ? 1 : 0, mesh.shadingGradient ? 1 : 0)
                 // WE `#if HDR albedo.rgb *= g_Brightness` — encode3D 와 동일 규약(게이트 근거는 그쪽 주석).
                 // 이 경로는 자체 MeshUniform 을 만들므로 새 슬롯을 여기서도 실어야 한다.
-                u.extra = SIMD4(sceneIsHDR ? mesh.brightness : 1, 0, 0, 0)
+                u.extra = SIMD4(sceneIsHDR ? mesh.brightness : 1, Float(mesh.vertexFloats), 0, 0)
                 let useSkin = mesh.skinned && boneBuf != nil
                 // H4: REFRACT 메시(정적·비커스텀 한정): 여기까지의 acc(하위 order 2D 레이어+선행 메시 누적)를
                 // 스냅샷 떠 노멀 오프셋 재샘플·곱(인코더 분할 — encode3D 의 H4 분기와 동형). 스냅샷 실패 시
@@ -1457,7 +1506,7 @@ extension SceneRenderer {
         // NaN/비수치 방어: num() 이 null 로 떨어뜨리면 아래 NSNumber 캐스트가 실패해 해당 키만 미적용.
         guard let v = ctx.evaluateScript("""
         (function(i){
-            var l = (thisScene.layers && i >= 0 && i < thisScene.layers.length) ? thisScene.layers[i] : null;
+            var l = __wapleScriptLayerAt(i);
             if (!l) { return null; }
             function num(x){ return (typeof x === 'number' && isFinite(x)) ? x : null; }
             function v3(v){ return v ? [num(v.x), num(v.y), num(v.z)] : null; }
@@ -1545,7 +1594,7 @@ extension SceneRenderer {
                 animValue("angles", 1, def.angleY),
                 animValue("angles", 2, def.angleZ)
             )
-            var quadDirty = def.animations["origin"] != nil || def.animations["scale"] != nil || def.animations["angles"] != nil
+            var quadDirty = automaticProjection || def.animations["origin"] != nil || def.animations["scale"] != nil || def.animations["angles"] != nil
             // attachment(이름 본-슬롯 부착): 부모 퍼펫 부착점 프레임 A(t) → 씬 델타 D = P∘(Y·A·Y)∘P⁻¹ 를
             // 베이크된 월드 변환에 합성. childWorld(t) = P∘A(t)∘childLocal 이 되어 정적 배치(부착점 상대)와
             // 본 애니 추종을 한 식으로 해소. 부착점 부재/퇴화 스케일 → 무부착(기존 위치 유지 — 무회귀).
@@ -1760,6 +1809,17 @@ extension SceneRenderer {
         // (캐스케이드 블렌드 소비자 전용 — 정적 파스값 def.animationLayers 는 불변, current 인자로 재공급).
         // propScripts 와 동일하게 draw 스킵보다 먼저 평가(shared 사이드이펙트 보존). 예외/무update → 정적값 유지.
         var effLayers = layer.def?.animationLayers ?? []
+        for index in effLayers.indices {
+            let base = effLayers[index]
+            for (key, animation) in base.propertyAnimations {
+                switch key {
+                case "blend": effLayers[index].blend = animation.value(component: 0, atTime: time, base: base.blend)
+                case "rate": effLayers[index].rate = animation.value(component: 0, atTime: time, base: base.rate)
+                case "visible": effLayers[index].visible = animation.value(component: 0, atTime: time, base: base.visible ? 1 : 0) >= 0.5
+                default: break
+                }
+            }
+        }
         for sc in layer.animLayerScripts where sc.layerIndex < effLayers.count {
             sc.engine.setRuntime(Double(time))
             switch sc.key {
@@ -1792,7 +1852,7 @@ extension SceneRenderer {
             // effLayers = 정적 파스값 + per-frame 스크립트 평가값(위 animLayerScripts 루프).
             let eff = effLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
             let mats: [simd_float4x4]
-            if eff.count >= 2 {
+            if !eff.isEmpty {
                 let resolved = eff.map { (pos, L) in
                     (anim: PuppetPose.clipIndex(model: pm, name: L.name, fallback: pos, clipId: L.clipId),
                      additive: L.additive, weight: L.blend, rate: L.rate)
@@ -1807,6 +1867,7 @@ extension SceneRenderer {
                 var phaseTouched = false
                 for (i, e) in eff.enumerated() {
                     guard layer.animLayerScripts.contains(where: { $0.key == "rate" && $0.layerIndex == e.offset })
+                        || e.element.propertyAnimations["rate"] != nil
                     else { continue }
                     let prev: Float? = phase[i].isNaN ? nil : phase[i]
                     let r = PuppetPose.integratedCascadeFrame(model: pm, anim: resolved[i].anim,
@@ -1926,18 +1987,13 @@ extension SceneRenderer {
             var mat = custom.material
             for sc in custom.scripts {
                 sc.engine.setRuntime(Double(time))
-                let cur = mat[sc.slot]
-                if let v = sc.engine.evaluateVec(current: [cur.x, cur.y, cur.z]) {
-                    if v.count >= 3 { mat[sc.slot] = SIMD4(v[0], v[1], v[2], cur.w) }
-                    else if v.count == 1 { mat[sc.slot] = SIMD4(v[0], cur.y, cur.z, cur.w) }
+                if let parameter = custom.materialParams.first(where: { $0.slotOffset == sc.slot }) {
+                    if let values = sc.engine.evaluateVec(current: logicalUniform(mat, parameter: parameter)) {
+                        replaceUniform(&mat, parameter: parameter, values: values)
+                    }
                 }
             }
-            if !mat.isEmpty {
-                mat.withUnsafeBytes {
-                    enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0)
-                    enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
-                }
-            }
+            guard bindUniformSlots(mat, to: enc, index: 0) else { return }
             // X-⑤ 스코프 밖: 이 경로는 tex0(custom.texRes.first, 레이어 자산 텍스처 해상도)를 그대로
             // targetRes 에 실어 무회귀만 유지한다. 이펙트 체인 경로(위 g_TexelSize 정본)와 규약이
             // 이원화된 상태이며, tex0=타깃이라는 근거는 확인되지 않았다(레이어 자산 해상도와 합성
@@ -1951,8 +2007,13 @@ extension SceneRenderer {
                 enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
                 enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
             }
+            guard bindEngineParameters(custom.engineParams, to: enc) else { return }
+            enc.setVertexTexture(texture, index: 0)
             enc.setFragmentTexture(texture, index: 0)
-            for (slot, tex) in custom.aux { enc.setFragmentTexture(tex, index: slot) }
+            for (slot, tex) in custom.aux {
+                enc.setVertexTexture(tex, index: slot)
+                enc.setFragmentTexture(tex, index: slot)
+            }
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             return
         }
@@ -2065,7 +2126,10 @@ extension SceneRenderer {
                             time: Float = 0, device: MTLDevice? = nil,
                             displayTexture: MTLTexture? = nil,   // F741(S-13): 이펙트 적용 텍스처(없으면 원본)
                             blendSnapshot: MTLTexture? = nil) {  // C⑥: colorBlendMode dst 스냅샷(이미지 레이어와 동형)
-        guard let pipeline, let tex = displayTexture ?? t.texture else { return }
+        let colorSeparated = t.def.effects.isEmpty && t.rasterBlackTexture != nil
+        let selectedPipeline: MTLRenderPipelineState? = colorSeparated ? textShaderPipelines?.normal : pipeline
+        let selectedBlendPipeline: MTLRenderPipelineState? = colorSeparated ? textShaderPipelines?.blend : blendPipeline
+        guard let pipeline = selectedPipeline, let tex = displayTexture ?? t.texture else { return }
         var tint = t.tint
         var vbuf = t.vertexBuffer
         var origin = t.def.origin, scale = t.def.scale
@@ -2075,7 +2139,7 @@ extension SceneRenderer {
         var projectiveDepth = t.projectiveDepth
         // rasterize() 자체가 정적 perspective/originZ/세 각을 이미 굽는다. 여기서는
         // 프로퍼티 스크립트 또는 content update의 thisLayer 직접 대입이 있을 때만 재계산한다.
-        var quadDirty = false
+        var quadDirty = automaticProjection
         // 모든 스크립트를 먼저 평가(shared 사이드이펙트 보존)한 뒤 visible 이 거짓이면 draw 스킵
         // (GPULayer.propScripts 루프와 동일 순서 원칙).
         for sc in t.propScripts {
@@ -2166,13 +2230,8 @@ extension SceneRenderer {
             origin: SIMD3(origin.x, origin.y, originZ), scale: SIMD3(scale.x, scale.y, scaleZ),
             angles: angles)
         cameraParallaxFrameOriginByOrder[t.order] = origin
-        let hitSize = PointerHit.textHitSize(
-            inkBox: SIMD2<Float>(t.rasterWidth, t.rasterHeight),
-            padding: SIMD2<Float>(t.def.padding.x, t.def.padding.y),
-            paddingActive: PointerHit.textPaddingActive(
-                hasEffects: !t.def.effects.isEmpty,
-                opaqueBackground: t.def.opaqueBackground,
-                colorBlendMode: t.def.colorBlendMode))
+        let hitSize = t.rasterHitSize.x > 0 && t.rasterHitSize.y > 0
+            ? t.rasterHitSize : SIMD2<Float>(t.rasterWidth, t.rasterHeight)
         let hitAlign = Self.textAlignmentString(h: t.def.horizontalAlign, v: t.def.verticalAlign)
         let leaf = cameraParallaxLeafByOrder[t.order]
         let leafOrigin = leaf.map {
@@ -2225,7 +2284,7 @@ extension SceneRenderer {
         var depth = SIMD2<Float>(1, 1)
         // C⑥: colorBlendMode — 이미지 레이어(encodeLayer)와 동일 f_blend 경로 재사용. 스냅샷 없으면
         // (인코더 미분할 호출자 등) 일반 premult-over 폴백(무회귀).
-        if let blendSnapshot, let blendPipeline, t.def.colorBlendMode != 0 {
+        if let blendSnapshot, let blendPipeline = selectedBlendPipeline, t.def.colorBlendMode != 0 {
             enc.setRenderPipelineState(blendPipeline)
             enc.setVertexBuffer(vbuf, offset: 0, index: 0)
             enc.setVertexBytes(&drawCamOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
@@ -2239,7 +2298,10 @@ extension SceneRenderer {
             enc.setFragmentTexture(blendSnapshot, index: 1)
             var mode = Int32(clamping: t.def.colorBlendMode)  // F530-sweep: 이미지 레이어(:1450)와 동형
             enc.setFragmentBytes(&mode, length: MemoryLayout<Int32>.stride, index: 1)
-            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
+            drawTextTiles(colorSeparated ? t.rasterTiles : [], fallbackTexture: tex,
+                          fallbackBlackTexture: colorSeparated ? t.rasterBlackTexture : nil,
+                          vertexBuffer: vbuf, vertexCount: vertexCount,
+                          projectiveDepth: projectiveDepth, encoder: enc)
             return
         }
         enc.setRenderPipelineState(pipeline)
@@ -2252,7 +2314,10 @@ extension SceneRenderer {
         enc.setVertexBytes(&projectiveDepth, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
         enc.setFragmentTexture(tex, index: 0)
         enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
-        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
+        drawTextTiles(colorSeparated ? t.rasterTiles : [], fallbackTexture: tex,
+                          fallbackBlackTexture: colorSeparated ? t.rasterBlackTexture : nil,
+                          vertexBuffer: vbuf, vertexCount: vertexCount,
+                          projectiveDepth: projectiveDepth, encoder: enc)
     }
 
     /// E1(④): 2D 파티클 visible 프로퍼티 스크립트 재평가(레이어 encodeLayer/텍스트 encodeText 의 "visible"
@@ -2277,7 +2342,14 @@ extension SceneRenderer {
 
     /// 파티클 시스템 1개의 스냅샷을 빌보드 쿼드로 드로우(additive/translucent).
     func encodeParticle(_ sys: GPUParticleSystem, snapshot: [Particle], into enc: MTLRenderCommandEncoder,
-                                device: MTLDevice, aspectScale: inout SIMD2<Float>) {
+                                device: MTLDevice, aspectScale: inout SIMD2<Float>, pageResolved: Bool = false) {
+        if !pageResolved, let batches = pagedParticleBatches(snapshot, system: sys, device: device) {
+            for batch in batches {
+                encodeParticle(batch.system, snapshot: batch.particles, into: enc, device: device,
+                               aspectScale: &aspectScale, pageResolved: true)
+            }
+            return
+        }
         // 감사 V07: 알베도 NoInterpolation 은 nearest 변형 우선(미빌드 시 대응 선형 폴터 — 무회귀).
         let linearPipe = sys.blendAdditive ? additivePipeline : translucentPipeline
         let nearPipe = sys.noInterp ? (sys.blendAdditive ? additiveNearestPipeline : translucentNearestPipeline) : nil
@@ -2286,7 +2358,11 @@ extension SceneRenderer {
         let verts = particleVertices(snapshot, sys)
         // 트레일은 파티클당 정점 수가 가변(붕괴 시 0) — 빈 버텍스면 드로우 스킵.
         let vertexCount = verts.count / ParticleShaders.vertexFloats2D
-        guard vertexCount > 0, let vbuf = sys.scratch.load(verts, device: device) else { return }
+        guard vertexCount > 0 else { return }
+        let buffer = pageResolved ? verts.withUnsafeBytes { raw in
+            raw.baseAddress.flatMap { device.makeBuffer(bytes: $0, length: raw.count) }
+        } : sys.scratch.load(verts, device: device)
+        guard vertexCount > 0, let vbuf = buffer else { return }
         enc.setRenderPipelineState(pipe)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         var drawCamOffset = renderCameraParallaxOffset(order: sys.order)
@@ -2297,6 +2373,7 @@ extension SceneRenderer {
         var shake = frameShakeOffset  // camerashake 전역 지터(pv_main buffer 4). 파티클도 함께 흔들림. 비활성=0.
         enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
         enc.setFragmentTexture(sys.texture, index: 0)
+        enc.setFragmentTexture(sys.nextTexture ?? sys.texture, index: 3)
         var overbright = sys.overbright  // C4-(ii): pf_main buffer 0(기본 1 — 비트동일).
         enc.setFragmentBytes(&overbright, length: MemoryLayout<Float>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
@@ -2334,11 +2411,22 @@ extension SceneRenderer {
     /// pf_refract 파이프라인 사용. 정점(프레임 UV 포함)은 particleVertices 공유 — 노멀은 알베도와 같은 uv 로 샘플.
     func encodeRefractParticle(_ sys: GPUParticleSystem, snapshot: [Particle], framebuffer: MTLTexture,
                                pipe: MTLRenderPipelineState, into enc: MTLRenderCommandEncoder,
-                               device: MTLDevice, aspectScale: inout SIMD2<Float>) {
+                               device: MTLDevice, aspectScale: inout SIMD2<Float>, pageResolved: Bool = false) {
+        if !pageResolved, let batches = pagedParticleBatches(snapshot, system: sys, device: device) {
+            for batch in batches {
+                encodeRefractParticle(batch.system, snapshot: batch.particles, framebuffer: framebuffer,
+                    pipe: pipe, into: enc, device: device, aspectScale: &aspectScale, pageResolved: true)
+            }
+            return
+        }
         guard !snapshot.isEmpty, let normal = sys.normalTexture else { return }
         let verts = particleVertices(snapshot, sys)
         let vertexCount = verts.count / ParticleShaders.vertexFloats2D
-        guard vertexCount > 0, let vbuf = sys.scratch.load(verts, device: device) else { return }
+        guard vertexCount > 0 else { return }
+        let buffer = pageResolved ? verts.withUnsafeBytes { raw in
+            raw.baseAddress.flatMap { device.makeBuffer(bytes: $0, length: raw.count) }
+        } : sys.scratch.load(verts, device: device)
+        guard vertexCount > 0, let vbuf = buffer else { return }
         enc.setRenderPipelineState(pipe)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         var drawCamOffset = renderCameraParallaxOffset(order: sys.order)
@@ -2349,6 +2437,7 @@ extension SceneRenderer {
         var shake = frameShakeOffset  // camerashake 전역 지터(pv_main buffer 4). refract 파티클도 함께 흔들림.
         enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
         enc.setFragmentTexture(sys.texture, index: 0)     // 알베도(g_Texture0)
+        enc.setFragmentTexture(sys.nextTexture ?? sys.texture, index: 3)
         enc.setFragmentTexture(normal, index: 1)          // 노멀맵(g_Texture1)
         enc.setFragmentTexture(framebuffer, index: 2)     // 씬 컬러 스냅샷(g_Texture3 = _rt_FullFrameBuffer)
         // C4-(ii): z 슬롯(종전 예약 0) = overbright(기본 1 — 비트동일).
@@ -2476,13 +2565,15 @@ extension SceneRenderer {
     /// blit 과 텍셀 동일(비-BC bit-identical). f_spriteframe 은 tint/premultiply 없음 — straight-alpha 규약(§3) 보존.
     /// ponytail: 회전 미지원(코퍼스 회전 프레임 0건) + 프레임 dims 균일 가정(코퍼스 균일).
     func spriteFrameTexture(_ layer: GPULayer, time: Float, device: MTLDevice, cb: MTLCommandBuffer) -> MTLTexture {
-        let atlas = layer.texture
+        let fr = layer.frames[runtimeSpriteFrameIndex(layer, time: time)]
+        let atlas = pagedTextureSources[ObjectIdentifier(layer.texture)]?.texture(page: fr.imageId,
+            renderer: self, device: device) ?? layer.texture
         let aw = atlas.width, ah = atlas.height
-        let fr = layer.frames[TexImage.spriteFrameIndex(frames: layer.frames, time: time)]
         let (sx, sy, fw, fh) = Self.spriteSubrect(atlasW: aw, atlasH: ah, frame: fr)
         // 파이프라인/버퍼 부재(빌드 실패) 시 원본 아틀라스 폴백(무크래시 — advisor).
+        let oddRotation = fr.rotationQuarters % 2 != 0
         guard let pipe = spriteFramePipeline, let vbuf = effectVertexBuffer,
-              let dst = pooledOffscreen(fw, fh, device) else { return atlas }
+              let dst = pooledOffscreen(oddRotation ? fh : fw, oddRotation ? fw : fh, device) else { return atlas }
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = dst
         rpd.colorAttachments[0].loadAction = .dontCare   // 전 픽셀 덮어씀(클리어 불필요)
@@ -2495,6 +2586,8 @@ extension SceneRenderer {
         var rect = SIMD4<Float>(Float(sx) / Float(aw), Float(sy) / Float(ah),
                                 Float(fw) / Float(aw), Float(fh) / Float(ah))
         enc.setFragmentBytes(&rect, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+        var rotation = UInt32(clamping: fr.rotationQuarters)
+        enc.setFragmentBytes(&rotation, length: MemoryLayout<UInt32>.stride, index: 1)
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
         return dst
@@ -2521,6 +2614,7 @@ extension SceneRenderer {
     /// 스프라이트시트 레이어는 원본 대신 **현재 프레임 텍스처**를 base 로 삼는다(효과 유무 공통 — 프레임
     /// 선택이 효과 체인 앞에 오므로 효과+스프라이트가 정상). 라이브 draw 와 헤드리스 captureFrames 가 공유.
     func buildDisplayTextures(device: MTLDevice, time: Float, cb: MTLCommandBuffer) -> [MTLTexture] {
+        compositeLayerTextures.removeAll(keepingCapacity: true)
         beginFramePool()  // 프레임 시작: 모든 풀 텍스처를 재사용 가능 상태로 + 미사용 크기 evict
         // DIRECTDRAW 체인 출력 플래그는 매 프레임 재계산한다(이펙트 visible 스크립트가 프레임마다
         // 마지막 실행 패스를 바꿀 수 있으므로 stale 유지 금지).
@@ -2554,7 +2648,13 @@ extension SceneRenderer {
                 base = spriteFrameTexture(layer, time: time, device: device, cb: cb)
             }
             // 컴포지션 레이어의 효과는 사전 계산 불가(src = 그 시점 프레임버퍼 스냅샷) — draw 루프에서 처리.
-            if layer.effects.isEmpty || layer.isFrameBuffer { out.append(base); continue }
+            if layer.effects.isEmpty || layer.isFrameBuffer || layer.effects.contains(where: requiresLiveComposite) {
+                out.append(base)
+                if let document = runtimeSceneDocument, layer.uid < document.layers.count {
+                    compositeLayerTextures[document.layers[layer.uid].id] = base
+                }
+                continue
+            }
             // 베이스 복사 불필요: base 를 직접 첫 src 로 사용(아래 루프는 항상 새 dst 로 출력).
             var current = base
             // 실제로 마지막까지 실행된 이펙트의 규약만 남긴다 — 비가시(continue)·인코드 실패(break)로
@@ -2570,6 +2670,9 @@ extension SceneRenderer {
             }
             if premultiplied { premultipliedDisplayLayers.insert(layer.uid) }
             out.append(current)
+            if let document = runtimeSceneDocument, layer.uid < document.layers.count {
+                compositeLayerTextures[document.layers[layer.uid].id] = current
+            }
         }
         return out
     }
@@ -2919,10 +3022,10 @@ extension SceneRenderer {
                     // 상수 프로퍼티 스크립트: update(현재값) → 슬롯 갱신(컬러 사이클 등 시간 함수).
                     for sc in pass.scripts {
                         sc.engine.setRuntime(Double(time))
-                        let cur = mat[sc.slot]
-                        if let v = sc.engine.evaluateVec(current: [cur.x, cur.y, cur.z]) {
-                            if v.count >= 3 { mat[sc.slot] = SIMD4(v[0], v[1], v[2], cur.w) }
-                            else if v.count == 1 { mat[sc.slot] = SIMD4(v[0], cur.y, cur.z, cur.w) }
+                        if let parameter = pass.materialParams.first(where: { $0.slotOffset == sc.slot }) {
+                            if let values = sc.engine.evaluateVec(current: logicalUniform(mat, parameter: parameter)) {
+                                replaceUniform(&mat, parameter: parameter, values: values)
+                            }
                         }
                     }
                     // X-⑦: constantshadervalues 의 {animation:{...}} 키프레임 — 레이어 origin/scale/alpha
@@ -2937,10 +3040,7 @@ extension SceneRenderer {
                         }
                         mat[a.slot] = v
                     }
-                    mat.withUnsafeBytes {
-                        enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0)
-                        enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
-                    }
+                    guard bindUniformSlots(mat, to: enc, index: 0) else { enc.endEncoding(); return false }
                 }
                 let dynamicTextures = dynamicEffectTextures(for: pass, fullFrameSnapshot: fullFrameSnapshot)
                 let eng = engineUniform(time: time, texRes: runtimeTexRes(for: pass, src: passSrc, fboTex: fboTex,
@@ -2950,14 +3050,23 @@ extension SceneRenderer {
                     enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
                     enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
                 }
+                guard bindEngineParameters(pass.engineParams, to: enc) else { enc.endEncoding(); return false }
                 for (slot, source) in pass.binds {
                     // T09-D2: `previous`(source == −1) 는 이펙트 입력이 아니라 **체인의 현재 소스**다.
                     // compose 가 없는 이펙트에서는 `passSrc === src` 라 종전과 같은 텍스처가 물린다.
-                    enc.setFragmentTexture(source == -1 ? passSrc : fboTex[source], index: slot)
+                    let texture = source == -1 ? passSrc : fboTex[source]
+                    enc.setVertexTexture(texture, index: slot)
+                    enc.setFragmentTexture(texture, index: slot)
                 }
-                for (slot, tex) in pass.aux { enc.setFragmentTexture(tex, index: slot) }
+                for (slot, tex) in pass.aux {
+                    enc.setVertexTexture(tex, index: slot)
+                    enc.setFragmentTexture(tex, index: slot)
+                }
                 // uniform과 같은 최종 선택을 사용해야 동적 snapshot/artwork의 texel 크기가 일치한다.
-                for (slot, texture) in dynamicTextures { enc.setFragmentTexture(texture, index: slot) }
+                for (slot, texture) in dynamicTextures {
+                    enc.setVertexTexture(texture, index: slot)
+                    enc.setFragmentTexture(texture, index: slot)
+                }
                 if pass.usesAudio {  // 스펙트럼 버퍼(16:2/3, 32:5/6, 64:7/8).
                     func bind(_ arr: [Float], _ idx: Int) {
                         arr.withUnsafeBytes {

@@ -1,4 +1,5 @@
 import Metal
+import WapleCore
 
 extension SceneRenderer {
     /// Scene-global output selection for live and headless 2D/3D.
@@ -11,11 +12,47 @@ extension SceneRenderer {
         device: MTLDevice,
         allocateBloomTexture: ((Int, Int) -> MTLTexture?)? = nil
     ) -> Bool {
+        let fade = runtimeSceneDocument?.cameraFade == true ? cameraFadeAlpha : 0
+        if colorGradingSettings.usesColor || colorGradingLUT != nil || fade > 0 {
+            if postProcessIntermediate?.width != destination.width || postProcessIntermediate?.height != destination.height
+                || postProcessIntermediate?.pixelFormat != destination.pixelFormat {
+                let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: destination.pixelFormat,
+                    width: destination.width, height: destination.height, mipmapped: false)
+                descriptor.usage = [.renderTarget, .shaderRead]
+                descriptor.storageMode = .private
+                postProcessIntermediate = device.makeTexture(descriptor: descriptor)
+                colorGradingPass = nil
+            }
+            if colorGradingPass == nil { colorGradingPass = try? SceneColorGradingPass(device: device, pixelFormat: destination.pixelFormat) }
+            guard let intermediate = postProcessIntermediate, let colorGradingPass,
+                  finalizeSceneBase(source: source, destination: intermediate, commandBuffer: commandBuffer,
+                    device: device, allocateBloomTexture: allocateBloomTexture) else { return false }
+            return colorGradingPass.encode(source: intermediate, destination: destination, commandBuffer: commandBuffer,
+                settings: colorGradingSettings, lut: colorGradingLUT, hdr: sceneIsHDR,
+                fadeAlpha: fade, fadeTint: cameraFadeTint)
+        }
+        return finalizeSceneBase(source: source, destination: destination, commandBuffer: commandBuffer,
+            device: device, allocateBloomTexture: allocateBloomTexture)
+    }
+
+    /// Explicit test/injected parameters remain effective values; mounted scenes use authored extraction math.
+    var effectiveHDRFallbackParameters: HDRBloomParameters {
+        guard runtimeSceneDocument != nil else { return hdrBloomParameters }
+        return HDRBloomParameters(
+            strength: HDRBloomMath.normalizedStrength(strength: hdrBloomPyramidStrength,
+                scatter: hdrBloomPyramidScatter, levels: 1),
+            threshold: hdrBloomParameters.threshold, feather: hdrBloomParameters.feather,
+            tint: hdrBloomParameters.tint)
+    }
+
+    private func finalizeSceneBase(source: MTLTexture, destination: MTLTexture,
+        commandBuffer: MTLCommandBuffer, device: MTLDevice,
+        allocateBloomTexture: ((Int, Int) -> MTLTexture?)?) -> Bool {
         // Existing HDR behavior is only relocated behind the common entry point.
         if hdrActive {
             // #22 HDR bloom(hdr && bloom, 2D 7씬): soft-knee 추출→blur13→saturate(base+bloom) —
-            // EOTF 디코드는 이식하지 않는다(WE sRGB-뷰 스왑체인의 하드웨어 인코드와 상쇄되는 쌍이라
-            // 비-sRGB 타깃엔 이중감마가 된다 — 근거·실측은 HDRBloomPass 헤더/합성부 주석).
+            // Preserve the measured clamp output; WE's swapchain is non-sRGB.
+            // EOTF non-adoption follows golden measurements, not a nonexistent hardware re-encode.
             // 이 분기(블룸)와 아래 hdrPost 폴백은 이제 동일 saturate 규약 — hdr&&!bloom 은
             // hdrPost(클램프)로 확정, 블룸 실패 폴백도 같은 클램프라 폴백 시각 점프 없음.
             // 3D HDR 씬도 이 경로 도달(hdrActive 는 이제 sceneIsHDR && accPixelFormat==.rgba16Float, P① —
@@ -83,7 +120,7 @@ extension SceneRenderer {
                    eighth: eighth,
                    bloom: bloom,
                    destination: destination,
-                   parameters: hdrBloomParameters) {
+                   parameters: effectiveHDRFallbackParameters) {
                 return true
             }
             if let hdrPost {

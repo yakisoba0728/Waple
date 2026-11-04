@@ -59,6 +59,9 @@ extension SceneRenderer {
         /// X-⑦: 상수 키프레임 애니메이션(슬롯 → PropertyAnimation) — per-frame value(atTime:) 로 material
         /// 갱신(스크립트와 동일 위치, 레이어 origin/scale/alpha 애니와 동일 평가기).
         var animations: [(slot: Int, anim: PropertyAnimation)] = []
+        var engineParams: [ShaderEngineParam] = []
+        var materialParams: [MaterialParam] = []
+        var compositeSlots: [(slot: Int, layerID: Int)] = []
     }
     /// X-①: 이름 있는 FBO 1개의 할당 스펙 — 세 갈래다.
     ///   ① `fit`(실물 cursorripple `fit:512`, fluidsimulation `fit:256`) — **정사각이 아니다**.
@@ -371,7 +374,10 @@ extension SceneRenderer {
         // projectionWidth/Height 를 0 으로 만들지 않는다**"(0 은 씬을 붕괴시키므로 폴백
         // 1920×1080 으로 접는다)고 명시한다. 즉 파서가 0 을 통과시키는 경로는 지금 없고,
         // 이 클램프는 그 규약을 재확인하는 방어선(depth-in-depth)으로 남긴다.
-        let w = Float(max(1, doc.projectionWidth)), h = Float(max(1, doc.projectionHeight))
+        // Explicit projections belong to the supplied document, including direct builder callers.
+        // Only orthoAuto consumes the renderer's drawable-derived projection.
+        let w = doc.orthoAuto ? projW : Float(max(1, doc.projectionWidth))
+        let h = doc.orthoAuto ? projH : Float(max(1, doc.projectionHeight))
         var out: [GPULayer] = []
         // attachment 자식들이 공유하는 부모 퍼펫 캐시(경로→파스 결과, 실패도 캐시 — 재파스 방지).
         var attachPuppets: [String: PuppetModel?] = [:]
@@ -573,7 +579,7 @@ extension SceneRenderer {
                                 // perspective parallax는 object origin에 shift를 굽고, lit parallax는 같은
                                 // shifted origin으로 world rect를 재구성해야 하므로 정적이어도 def가 필요하다.
                                 def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty
-                                      && attach == nil && !layer.perspective && !layerLit) ? nil : layer,
+                                      && attach == nil && !layer.perspective && !layerLit && !doc.orthoAuto) ? nil : layer,
                                 puppet: puppetModel, propScripts: propScripts,
                                 animLayerScripts: animLayerScripts,
                                 materialScripts: materialScripts,
@@ -849,7 +855,8 @@ extension SceneRenderer {
                                          usesAudio: t.usesAudio,
                                          texRes: plan.texRes, texWrap: plan.texWrap, texFilter: plan.texFilter,
                                          scripts: passScripts, fullFrameSlots: plan.fullFrameSlots, swapPair: nil,
-                                         mediaArtworkSlots: plan.mediaArtworkSlots, animations: passAnimations))
+                                         mediaArtworkSlots: plan.mediaArtworkSlots, animations: passAnimations,
+                                         engineParams: t.engineParams, materialParams: t.materialParams, compositeSlots: plan.compositeSlots))
         }
         // 출력(= fbo 타깃 없음 **그리고** swap 아님)이 하나도 없으면 화면에 아무것도 못 쓴다 → 폴백.
         // r4-23: `makeSwapPass` 가 만드는 `command:"swap"` 패스도 `target == nil` 이지만 드로우가
@@ -947,14 +954,14 @@ extension SceneRenderer {
             WapleLog.warn("[Waple] copy pass 의 target 을 못 풀었다(\(effName)) — 효과 출력으로 폴백")
         }
         let dims = SIMD4<Float>(lw, lh, lw, lh)
-        var wrap = [Float](repeating: 0, count: 8)
+        var wrap = [Float](repeating: 0, count: 10)
         wrap[0] = 1  // slot0 = fbo bind(자산 없음) → 항상 clamp.
         // 명령 패스는 `compose` 를 안 읽는다 — 원본 파서도 command 패스에 같은 키 파스를 태우지만
         // 동봉 자산에 도달 0건이고(compose 보유 2건은 전부 셰이더 패스), false 가 종전 동작이다.
         return TranslatedPass(pipeline: pipe, material: [], aux: [],
                               binds: [(0, srcIdx)], target: tgtIdx, compose: false, usesAudio: false,
-                              texRes: [SIMD4<Float>](repeating: dims, count: 8), texWrap: wrap,
-                              texFilter: [Float](repeating: 0, count: 8),  // fbo→fbo 복사 — 자산 없음, 선형 고정
+                              texRes: [SIMD4<Float>](repeating: dims, count: 10), texWrap: wrap,
+                              texFilter: [Float](repeating: 0, count: 10),  // fbo→fbo 복사 — 자산 없음, 선형 고정
                               scripts: [], fullFrameSlots: [], swapPair: nil, mediaArtworkSlots: [], animations: [])
     }
 
@@ -973,8 +980,8 @@ extension SceneRenderer {
         }
         return TranslatedPass(pipeline: pipe, material: [], aux: [],
                               binds: [], target: nil, compose: false, usesAudio: false,
-                              texRes: [SIMD4<Float>](repeating: .zero, count: 8),
-                              texWrap: [Float](repeating: 0, count: 8), texFilter: [Float](repeating: 0, count: 8),
+                              texRes: [SIMD4<Float>](repeating: .zero, count: 10),
+                              texWrap: [Float](repeating: 0, count: 10), texFilter: [Float](repeating: 0, count: 10),
                               scripts: [], fullFrameSlots: [], swapPair: (srcIdx, tgtIdx), mediaArtworkSlots: [], animations: [])
     }
 
@@ -1176,11 +1183,7 @@ extension SceneRenderer {
         let resolved: (MaterialParam) -> [Float] = { p in
             scriptWrites[p.sceneKey] ?? constants[p.sceneKey] ?? p.defaultValue
         }
-        var material: [SIMD4<Float>] = t.materialParams.map { p in
-            let v = resolved(p)
-            return SIMD4<Float>(v.count > 0 ? v[0] : 0, v.count > 1 ? v[1] : 0,
-                                v.count > 2 ? v[2] : 0, v.count > 3 ? v[3] : 0)
-        }
+        var material = packedMaterial(t.materialParams, values: resolved)
         var passScripts: [(slot: Int, engine: TextScriptEngine)] = []
         var passAnimations: [(slot: Int, anim: PropertyAnimation)] = []
         // G-C4-01: 패스 상수에 붙은 스크립트의 `thisObject` 는 **이 패스의 머티리얼**(IMaterial)이다 —
@@ -1189,11 +1192,13 @@ extension SceneRenderer {
         // 씨앗은 슬롯 현재값 **전체** — WE 계약상 스크립트는 자기 상수만이 아니라 머티리얼 전체를 본다.
         var seed: [String: [Float]] = [:]
         var slotOfKey: [String: Int] = [:]
-        for (slot, p) in t.materialParams.enumerated() {
+        for p in t.materialParams {
+            let slot = p.slotOffset
             seed[p.sceneKey] = resolved(p)
             slotOfKey[p.sceneKey] = slot
         }
-        for (slot, p) in t.materialParams.enumerated() {
+        for p in t.materialParams {
+            let slot = p.slotOffset
             if let src = scenePass.constantScripts[p.sceneKey],
                let engine = makeScriptEngine(src, scriptPropsJSON: scenePass.constantScriptProps[p.sceneKey],
                                              owner: .material(constants: seed)) {
@@ -1202,10 +1207,9 @@ extension SceneRenderer {
                 // 값이 씨앗 그대로면 스크립트가 안 쓴 것 — 건너뛴다. update 로만 동작하는 상수 스크립트
                 // (실물 razer_bedroom 무지개 6건)는 여기서 아무 일도 일어나지 않는다(무회귀).
                 for (key, comps) in engine.boundObjectMaterialWrites.first ?? [:] where seed[key] != comps {
-                    guard let target = slotOfKey[key] else { continue }
-                    var v = material[target]
-                    for (c, f) in comps.prefix(4).enumerated() { v[c] = f }
-                    material[target] = v
+                    guard let parameter = t.materialParams.first(where: { $0.sceneKey == key }) else { continue }
+                    let packed = GLSLTranslator.packUniform(type: parameter.type, arrayCount: parameter.arrayCount, values: comps)
+                    for (index, value) in packed.enumerated() { material[parameter.slotOffset + index] = value }
                 }
             }
             if let anim = scenePass.constantAnimations[p.sceneKey] {
@@ -1230,7 +1234,7 @@ extension SceneRenderer {
                                    instanceCombos: [String: Int] = [:])
         -> (binds: [(slot: Int, source: Int)], texRes: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)],
             texWrap: [Float], texFilter: [Float], target: Int?, fullFrameSlots: [Int],
-            mediaArtworkSlots: [(slot: Int, previous: Bool)])? {
+            mediaArtworkSlots: [(slot: Int, previous: Bool)], compositeSlots: [(slot: Int, layerID: Int)])? {
         var binds: [(slot: Int, source: Int)] = []
         for b in mp.binds {
             // X-⑪: bind 조건이 거짓이면 **그 슬롯만 언바인드**되고 패스는 정상 실행된다.
@@ -1260,10 +1264,10 @@ extension SceneRenderer {
         }
         if binds.isEmpty { binds = [(0, -1)] }
         let bindSlots = Set(binds.map { $0.slot })
-        var texRes = [SIMD4<Float>](repeating: SIMD4(lw, lh, lw, lh), count: 8)
+        var texRes = [SIMD4<Float>](repeating: SIMD4(lw, lh, lw, lh), count: 10)
         // F162/F163: bind(fbo/previous) 슬롯은 TexImage 가 없는 파이프라인-내부 렌더타깃 — 항상 clamp
         // (콘텐츠 경계 밖 랩은 아티팩트, W4a 실측). aux(실 자산) 슬롯은 아래에서 TexImage.clampUVs 로 채운다.
-        var texWrap = [Float](repeating: 0, count: 8)
+        var texWrap = [Float](repeating: 0, count: 10)
         // **[2026-08-21 확정] 아래 fbo 갈래가 채우는 `texRes` 는 translated 경로에서 죽은 값이다.**
         // 근거(전수 추적):
         //   · 이 함수의 `texRes` 는 `TranslatedPass.texRes` 로만 흘러간다(:814 이 유일한 소비).
@@ -1287,7 +1291,7 @@ extension SceneRenderer {
         // 그럼에도 코드를 지우지 않는 이유: 이 배열은 `runtimeTexRes` 가 덮기 **전**의 기본값이고
         // (bind/aux 어디에도 없는 선언 슬롯은 그대로 남는다), 프레임 시점 덮어쓰기가 미래에
         // 좁아지면 여기가 유일한 방어선이 된다. 값이 규약과 어긋난 채로 남는 쪽이 더 나쁘다.
-        for (slot, source) in binds where slot < 8 && source >= 0 {
+        for (slot, source) in binds where slot < 10 && source >= 0 {
             let fbo = fbos[source]
             // W-FIT(2026-08-21): `fit` 은 정사각이 아니라 "긴 변을 N 으로, 종횡비 보존, 확대 금지" 다
             // (`EffectManifest.FBO.fittedBox` — 원본 `0x1401eb2cc`–`0x1401eb381`). 이 슬롯의
@@ -1314,23 +1318,24 @@ extension SceneRenderer {
                 texRes[slot] = SIMD4(lw / s, lh / s, lw / s, lh / s)
             }
         }
-        for slot in bindSlots where slot < 8 { texWrap[slot] = 1 }
+        for slot in bindSlots where slot < 10 { texWrap[slot] = 1 }
         // X-①: `uvs:"repeat"` FBO(실물 glitter `_rt_GlitterTiles` 타일 아틀라스)를 소스로 삼는 bind 슬롯은
         // 위의 기본 clamp 를 repeat 로 재정의.
-        for (slot, source) in binds where slot < 8 && source >= 0 && fbos[source].uvsRepeat {
+        for (slot, source) in binds where slot < 10 && source >= 0 && fbos[source].uvsRepeat {
             texWrap[slot] = 0
         }
         // 감사 V07: 슬롯별 샘플 필터(1=nearest/0=linear — TexImage.noInterpolation, WE tex Flags bit0).
         // previous(bind -1) 슬롯은 baseNoInterp(체인 첫 이펙트의 베이스 직결 — applyEffect 가 previous 를
         // 항상 효과 입력 src 로 바인드)일 때만 nearest, fbo bind 슬롯은 선형(FBO 출력 — 손-포팅 fbNearest
         // 의 V06 정합과 동일). aux 슬롯은 아래에서 자산 플래그로 채운다.
-        var texFilter = [Float](repeating: 0, count: 8)
+        var texFilter = [Float](repeating: 0, count: 10)
         if baseNoInterp {
-            for (slot, source) in binds where slot < 8 && source == -1 { texFilter[slot] = 1 }
+            for (slot, source) in binds where slot < 10 && source == -1 { texFilter[slot] = 1 }
         }
         var aux: [(slot: Int, tex: MTLTexture)] = []
         var fullFrameSlots: [Int] = []
         var mediaArtworkSlots: [(slot: Int, previous: Bool)] = []
+        var compositeSlots: [(slot: Int, layerID: Int)] = []
         for slot in t.textureSlots where slot > 0 && slot < 128 && !bindSlots.contains(slot) {
             // X-③: usertextures 의 시스템 키($mediaThumbnail/$mediaPreviousThumbnail, 47씬/268슬롯) —
             // 유저 키(비-시스템)는 이미 파스 시점에 textureNames 로 병합됐다(SceneDocument.parseEffects
@@ -1359,7 +1364,10 @@ extension SceneRenderer {
                 name = nil
                 if n.hasPrefix("_rt_imageLayerComposite_") {
                     let digits = n.dropFirst("_rt_imageLayerComposite_".count).prefix { $0.isNumber }
-                    if let layerID = Int(digits) { name = compositeImageTextures[layerID] }
+                    if let layerID = Int(digits) {
+                        compositeSlots.append((slot, layerID))
+                        name = compositeImageTextures[layerID]
+                    }
                 } else if n == "_rt_FullFrameBuffer" {
                     fullFrameSlots.append(slot)
                 }
@@ -1373,7 +1381,7 @@ extension SceneRenderer {
             // `root` 는 전역 미스 뒤에만 쓰이므로 순수 가산이다.
             if let tex = resolveTexture(name, package: package, device: device, root: root) {
                 aux.append((slot, tex))
-                if slot < 8 {
+                if slot < 10 {
                     let w = Float(max(1, tex.width)), h = Float(max(1, tex.height))
                     texRes[slot] = SIMD4(w, h, w, h)
                     texWrap[slot] = resolveTextureClampUVs(name, package: package, root: root) ? 1 : 0
@@ -1387,7 +1395,7 @@ extension SceneRenderer {
         if mp.target != nil, target == nil {
             NSLog("%@", "[Waple] unknown target '\(mp.target ?? "")' in \(effName) — 이펙트 출력으로 폴백")
         }
-        return (binds, texRes, aux, texWrap, texFilter, target, fullFrameSlots, mediaArtworkSlots)
+        return (binds, texRes, aux, texWrap, texFilter, target, fullFrameSlots, mediaArtworkSlots, compositeSlots)
     }
 
     /// F162/F163: 텍스처 자산의 ClampUVs 헤더 플래그(`TexImage.clampUVs` = `flags & 0x2`,
@@ -1852,13 +1860,10 @@ extension SceneRenderer {
             NSLog("%@", "[Waple] custom layer pipeline compile failed: \(shaderName)")
             return nil
         }
-        let material: [SIMD4<Float>] = t.materialParams.map { p in
-            let v = layer.materialConstants[p.sceneKey] ?? p.defaultValue
-            return SIMD4<Float>(v.count > 0 ? v[0] : 0, v.count > 1 ? v[1] : 0,
-                                v.count > 2 ? v[2] : 0, v.count > 3 ? v[3] : 0)
-        }
+        let material = packedMaterial(t.materialParams) { layer.materialConstants[$0.sceneKey] ?? $0.defaultValue }
         var scripts: [(slot: Int, engine: TextScriptEngine)] = []
-        for (slot, p) in t.materialParams.enumerated() {
+        for p in t.materialParams {
+            let slot = p.slotOffset
             if let src = layer.materialConstantScripts[p.sceneKey],
                let engine = makeScriptEngine(src, scriptPropsJSON: layer.materialConstantScriptProps[p.sceneKey]) {
                 scripts.append((slot, engine))
@@ -1866,9 +1871,9 @@ extension SceneRenderer {
             }
         }
         let lw = Float(max(1, texture.width)), lh = Float(max(1, texture.height))
-        var texRes = [SIMD4<Float>](repeating: SIMD4(lw, lh, lw, lh), count: 8)
-        var texWrap = [Float](repeating: 0, count: 8)
-        var texFilter = [Float](repeating: 0, count: 8)
+        var texRes = [SIMD4<Float>](repeating: SIMD4(lw, lh, lw, lh), count: 10)
+        var texWrap = [Float](repeating: 0, count: 10)
+        var texFilter = [Float](repeating: 0, count: 10)
         texRes[0] = SIMD4(lw, lh, lw, lh)
         texWrap[0] = resolveTextureClampUVs(layer.textureEntryName, package: package) ? 1 : 0
         texFilter[0] = resolveTextureNoInterpolation(layer.textureEntryName, package: package) ? 1 : 0
@@ -1877,7 +1882,7 @@ extension SceneRenderer {
             let name = slot < layer.materialTextureNames.count ? layer.materialTextureNames[slot] : nil
             if let tex = resolveTexture(name, package: package, device: device) {
                 aux.append((slot, tex))
-                if slot < 8 {
+                if slot < 10 {
                     let w = Float(max(1, tex.width)), h = Float(max(1, tex.height))
                     texRes[slot] = SIMD4(w, h, w, h)
                     texWrap[slot] = resolveTextureClampUVs(name, package: package) ? 1 : 0
@@ -1887,7 +1892,7 @@ extension SceneRenderer {
         }
         return CustomLayerShader(pipeline: pipe, material: material, aux: aux,
                                  texRes: texRes, texWrap: texWrap, texFilter: texFilter,
-                                 scripts: scripts)
+                                 scripts: scripts, engineParams: t.engineParams, materialParams: t.materialParams)
     }
 
     /// 효과 보조 텍스처 슬롯 이름 → MTLTexture. 이름 nil/디코드 실패 → 흰색 1x1 폴백
@@ -1911,6 +1916,12 @@ extension SceneRenderer {
         if multipage, !tex.frames.isEmpty,
            let stacked = stackedAtlas(tex: tex, data: d, device: device) {
             return stacked
+        }
+        if multipage, !tex.frames.isEmpty,
+           let page = TexDecoder.rgba(from: tex, data: d, imageIndex: 0, keepFullAtlas: true),
+           let texture = makeTexture(page.pixels, page.width, page.height, device) {
+            pagedTextureSources[ObjectIdentifier(texture)] = PagedTextureSource(image: tex, data: d, first: texture)
+            return (texture, tex.frames)
         }
         // 단일-이미지 다중프레임 시트는 아틀라스 전체 보존(imgW/imgH 크롭 시 frame≥1 소실 → 흑화).
         // keepFullAtlas 는 makeImageTexture 가 full decode dims 로 상주(BC 면 네이티브, 비-BC 면 CPU rgba8) —
@@ -2454,6 +2465,12 @@ extension SceneRenderer {
     /// f_spriteframe 샘플로 프레임을 뽑으므로 아틀라스가 BC 로 상주해도 무방(전 크롭 금지 위해 nativeBC 에 full dims 요청).
     func makeImageTexture(tex: TexImage, data: Data, device: MTLDevice, keepFullAtlas: Bool = false)
         -> (texture: MTLTexture, width: Int, height: Int)? {
+        if tex.depth > 1 {
+            guard let volume = TexDecoder.volumeRGBA(from: tex, data: data),
+                  let texture = makeVolumeTexture(volume.pixels, width: volume.width,
+                      height: volume.height, depth: volume.depth, device: device) else { return nil }
+            return (texture, volume.width, volume.height)
+        }
         if ProcessInfo.processInfo.environment["WAPLE_BC_NATIVE"] != "0",
            device.supportsBCTextureCompression,
            let bc = TexDecoder.nativeBC(from: tex, data: data, properties: variantProperties, keepFullAtlas: keepFullAtlas),
@@ -2471,6 +2488,27 @@ extension SceneRenderer {
         guard let dec = TexDecoder.rgba(from: tex, data: data, properties: variantProperties, keepFullAtlas: keepFullAtlas),
               let t = makeTexture(dec.pixels, dec.width, dec.height, device) else { return nil }
         return (t, dec.width, dec.height)
+    }
+
+    func makeVolumeTexture(_ pixels: Data, width: Int, height: Int, depth: Int,
+                           device: MTLDevice) -> MTLTexture? {
+        guard width > 0, height > 0, depth > 0, width <= 2048, height <= 2048, depth <= 128,
+              pixels.count == width * height * depth * 4 else { return nil }
+        let descriptor = MTLTextureDescriptor()
+        descriptor.textureType = .type3D
+        descriptor.pixelFormat = .rgba8Unorm
+        descriptor.width = width; descriptor.height = height; descriptor.depth = depth
+        descriptor.storageMode = .shared
+        descriptor.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
+        pixels.withUnsafeBytes { raw in
+            if let base = raw.baseAddress {
+                texture.replace(region: MTLRegionMake3D(0, 0, 0, width, height, depth),
+                    mipmapLevel: 0, slice: 0, withBytes: base,
+                    bytesPerRow: width * 4, bytesPerImage: width * height * 4)
+            }
+        }
+        return texture
     }
 
     private func bitmapRGBAFile(_ path: String) -> (pixels: Data, width: Int, height: Int)? {
@@ -2560,16 +2598,40 @@ extension SceneRenderer {
     /// rasterWidth/Height(비-스케일 글리프 픽셀 크기)를 저장 — encodeText 가 프로퍼티 스크립트로
     /// per-frame 지오메트리를 재계산할 때 재래스터 없이 재사용한다.
     func rasterize(_ g: inout GPUText, device: MTLDevice) {
-        guard let r = TextRasterizer.render(text: g.lastText, fontData: g.fontData,
-                                            systemFontName: g.systemFontName, pointSize: g.def.pointSize,
-                                            maxWidth: g.def.maxWidth, maxRows: g.def.maxRows,
-                                            ellipsis: g.def.overflowEllipsis, justify: g.def.justify,
-                                            align: g.def.horizontalAlign) else {
-            g.texture = nil; g.vertexBuffer = nil; g.vertexCount = 0
+        let style = TextRasterizer.Style(layer: g.def)
+        if g.def.effects.isEmpty,
+           let pair = TextRasterizer.renderTintTiles(text: g.lastText, fontData: g.fontData,
+                                                     systemFontName: g.systemFontName, pointSize: g.def.pointSize,
+                                                     maxWidth: g.def.maxWidth, maxRows: g.def.maxRows,
+                                                     ellipsis: g.def.overflowEllipsis, justify: g.def.justify,
+                                                     align: g.def.horizontalAlign, style: style) {
+            let tiles = uploadTextTintTiles(pair, device: device)
+            guard let first = tiles.first else {
+                g.texture = nil; g.rasterBlackTexture = nil; g.rasterTiles = []
+                g.vertexBuffer = nil; g.vertexCount = 0; g.rasterHitSize = .zero
+                return
+            }
+            g.rasterTiles = tiles
+            g.texture = first.texture
+            g.rasterBlackTexture = first.blackTexture
+            g.rasterWidth = Float(pair.white.width); g.rasterHeight = Float(pair.white.height)
+            g.rasterHitSize = pair.white.hitSize
+        } else if let r = TextRasterizer.render(text: g.lastText, fontData: g.fontData,
+                                                systemFontName: g.systemFontName, pointSize: g.def.pointSize,
+                                                maxWidth: g.def.maxWidth, maxRows: g.def.maxRows,
+                                                ellipsis: g.def.overflowEllipsis, justify: g.def.justify,
+                                                align: g.def.horizontalAlign, style: style) {
+            // External effect scripts still run once. Keep their established white-bitmap +
+            // float GPU tint path until tint is resolved before the effect prepass.
+            g.texture = makeTexture(r.rgba, r.width, r.height, device)
+            g.rasterBlackTexture = nil; g.rasterTiles = []
+            g.rasterWidth = Float(r.width); g.rasterHeight = Float(r.height)
+            g.rasterHitSize = r.hitSize
+        } else {
+            g.texture = nil; g.rasterBlackTexture = nil; g.rasterTiles = []
+            g.vertexBuffer = nil; g.vertexCount = 0; g.rasterHitSize = .zero
             return
         }
-        g.texture = makeTexture(r.rgba, r.width, r.height, device)
-        g.rasterWidth = Float(r.width); g.rasterHeight = Float(r.height)
         // 정적 텍스트도 동적 encodeText 와 같은 정점 소비자를 쓴다. 종전 수기 x0/y0
         // 경로는 정사영 angle=0에서만 같았고 perspective/originZ/x·y·z angles를 전부 버렸다.
         let align = Self.textAlignmentString(h: g.def.horizontalAlign, v: g.def.verticalAlign)

@@ -15,6 +15,11 @@ public typealias AudioWindowAccumulator = WapleCore.AudioWindowAccumulator
 /// 무음 게이트 순수 판정부도 같은 이유로 `WapleCore` 에 있다.
 public typealias AudioCaptureGate = WapleCore.AudioCaptureGate
 
+protocol AudioCaptureSubscribing: AnyObject {
+    func add(_ provider: SystemAudioSpectrumProvider)
+    func remove(_ provider: SystemAudioSpectrumProvider)
+}
+
 protocol AudioSpectrumProviding: AnyObject {
     var onFrame: (([Float]) -> Void)? { get set }
     func start()
@@ -70,11 +75,27 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
     // running 은 메인 스레드(start/stop)와 코어 팬아웃(waple.audio 콜백 큐)에서 동시 접근 — lock 으로 직렬화.
     private let lock = NSLock()
     private var running = false
+    private var sessionGeneration: UInt64 = 0
+    private var lastPacketUptime: TimeInterval = 0
+    private var lastSampleRate: Double?
+    private var starved = false
+    private var watchdog: DispatchSourceTimer?
+    private let capture: AudioCaptureSubscribing
+    private let uptime: () -> TimeInterval
+    private let automaticWatchdog: Bool
     // 채널별 링버퍼(WapleCore.AudioWindowAccumulator) — 패킷을 누적해 FFT 창이 찰 때만 분석한다.
     // process(waple.audio 큐)/stop(메인) 양쪽에서 접근 — running 과 같은 lock 으로 보호.
     private var accumulator: AudioWindowAccumulator
 
-    public override init() {
+    public override convenience init() {
+        self.init(capture: SharedAudioCaptureCore.shared)
+    }
+
+    init(capture: AudioCaptureSubscribing, uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+         automaticWatchdog: Bool = true) {
+        self.capture = capture
+        self.uptime = uptime
+        self.automaticWatchdog = automaticWatchdog
         log2n = vDSP_Length(round(log2(Double(fftSize))))
         let setup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
         fftSetup = setup
@@ -90,25 +111,54 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
         }
     }
 
-    deinit { if let fftSetup { vDSP_destroy_fftsetup(fftSetup) } }
+    deinit { stop(); if let fftSetup { vDSP_destroy_fftsetup(fftSetup) } }
+
+    /// Called only after explicit user retry/permission changes; does not alter audio settings.
+    public static func retrySharedCapture() { SharedAudioCaptureCore.shared.retry() }
 
     public func start() {
-        // FFT setup 이 없으면 캡처를 띄우지 않고 무음만 공급(배경은 계속 렌더).
-        guard fftSetup != nil else { feedZeros(); return }
         lock.lock()
         if running { lock.unlock(); return }
         running = true
+        sessionGeneration &+= 1
+        lastPacketUptime = uptime()
+        starved = false
+        if automaticWatchdog {
+            let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+            timer.schedule(deadline: .now() + 0.25, repeating: 0.25)
+            timer.setEventHandler { [weak self] in self?.checkForStarvation() }
+            watchdog = timer
+            timer.resume()
+        }
         lock.unlock()
-        SharedAudioCaptureCore.shared.add(self)   // F536: 실제 캡처는 공유 코어가 참조 카운트로 관리
+        guard fftSetup != nil else { feedZeros(); return }
+        capture.add(self)
     }
 
     public func stop() {
         lock.lock()
         if !running { lock.unlock(); return }
         running = false
-        accumulator.reset()   // 미완성 창 잔여는 세션을 넘기지 않는다(엔진도 무음/실패 경로에서 캐리 리셋 — `0x1400d1f58`)
+        sessionGeneration &+= 1
+        accumulator.reset()
+        lastSampleRate = nil
+        let timer = watchdog
+        watchdog = nil
         lock.unlock()
-        SharedAudioCaptureCore.shared.remove(self)   // 마지막 구독자가 나가면 코어가 스트림을 닫는다
+        timer?.cancel()
+        capture.remove(self)
+    }
+
+    /// Engine no-packet timeout is1000ms. Consumer smoothing also stops when callbacks stop,
+    /// so it cannot replace this reset. Clock injection keeps the boundary test deterministic.
+    func checkForStarvation() {
+        lock.lock()
+        guard running, !starved, uptime() - lastPacketUptime >= 1 else { lock.unlock(); return }
+        starved = true
+        accumulator.reset()
+        let generation = sessionGeneration
+        lock.unlock()
+        enqueueFrame([Float](repeating: 0, count: 128), generation: generation)
     }
 
     private func isRunning() -> Bool {
@@ -133,28 +183,40 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
         // 주파수 매핑의 진실원은 **이 버퍼의 포맷**이지 구성 요청값이 아니다. 상태로 들지 않고
         // 인자로 흘린다 — 락이 늘지 않고, 창을 채운 패킷의 레이트가 그 창의 분석에 그대로 따라간다.
         let rate = Self.sampleRate(of: sampleBuffer) ?? Self.captureSampleRate
+        process(left: l, right: r, sampleRate: rate)
+    }
+
+    /// Shared ingestion path for native capture and injected PCM sources; still performs the real FFT.
+    func process(left: [Float], right: [Float], sampleRate: Double) {
+        guard sampleRate.isFinite, sampleRate > 0, !left.isEmpty, !right.isEmpty else { return }
         lock.lock()
-        let windows = running ? accumulator.append(left: l, right: r) : []
+        guard running else { lock.unlock(); return }
+        if let previous = lastSampleRate, previous != sampleRate { accumulator.reset() }
+        lastSampleRate = sampleRate
+        lastPacketUptime = uptime()
+        starved = false
+        let generation = sessionGeneration
+        let windows = accumulator.append(left: left, right: right)
         lock.unlock()
-        for (wl, wr) in windows { analyzeWindow(left: wl, right: wr, sampleRate: rate) }
+        for (wl, wr) in windows { analyzeWindow(left: wl, right: wr, sampleRate: sampleRate, generation: generation) }
     }
 
     /// 창 1개(채널별 fftSize 샘플)를 분석해 onFrame 디스패치. 무음 게이트가 문 창은 0 스펙트럼 공급
     /// — 엔진도 무음이면 출력 128 float 을 통째로 memset 한다(`0x1400d1f5b`, 폭 `0x200`).
-    /// 엔진은 그 밖에도 **패킷이 1,000 ms 동안 한 건도 안 오면** 같은 memset 을 한다
-    /// (`0x1400d14ac` 의 `comiss xmm7, 1000.0`). 우리는 폴링이 아니라 푸시 콜백이라 그 타이머가
-    /// 없다 — 캡처가 끊기면 마지막 스펙트럼이 남는데, 소비단(`AudioSpectrumProcessor`)의 엔벨로프
-    /// 감쇠가 그 자리를 덮으므로 별도 워치독을 두지 않았다.
-    private func analyzeWindow(left l: [Float], right r: [Float], sampleRate: Double) {
-        guard let setup = fftSetup else { feedZeros(); return }
+    /// No-packet1000ms reset (`0x1400d14ac`) is owned by checkForStarvation.
+    private func analyzeWindow(left l: [Float], right r: [Float], sampleRate: Double, generation: UInt64) {
+        guard let setup = fftSetup else {
+            enqueueFrame([Float](repeating: 0, count: 128), generation: generation)
+            return
+        }
         guard let out = Self.analyzeWindow(l: l, r: r, fftSize: fftSize, log2n: log2n, setup: setup,
                                            threshold: AudioInputSettings.threshold,
                                            volume: AudioInputSettings.volume,
                                            sampleRate: sampleRate) else {
-            feedZeros()
+            enqueueFrame([Float](repeating: 0, count: 128), generation: generation)
             return
         }
-        DispatchQueue.main.async { [weak self] in self?.onFrame?(out) }
+        enqueueFrame(out, generation: generation)
     }
 
     /// 창 분석 순수 계산부(커버리지 가능): 게이트 → 채널별 FFT → 64+64 비닝 → volume 스칼라.
@@ -203,8 +265,21 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
     /// 무음 공급(권한 거부/캡처 실패 폴백). 코어가 실패를 구독자 전원에 브로드캐스트할 때도 호출한다.
     /// internal: 같은 파일의 SharedAudioCaptureCore 가 호출.
     func feedZeros() {
-        let zeros = [Float](repeating: 0, count: 128)
-        DispatchQueue.main.async { [weak self] in self?.onFrame?(zeros) }
+        lock.lock()
+        accumulator.reset()
+        let generation = sessionGeneration
+        lock.unlock()
+        enqueueFrame([Float](repeating: 0, count: 128), generation: generation)
+    }
+
+    private func enqueueFrame(_ frame: [Float], generation: UInt64) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let current = self.running && self.sessionGeneration == generation
+            self.lock.unlock()
+            if current { self.onFrame?(frame) }
+        }
     }
 
     /// 이 버퍼가 **실제로** 들고 온 샘플레이트(CMSampleBuffer → ASBD `mSampleRate`).
@@ -417,6 +492,18 @@ public enum AudioInputSettings {
     public static var threshold: Float { AudioSpectrum.inputThreshold(setting: thresholdSetting) }
 }
 
+protocol AudioCaptureSession: AnyObject, Sendable {
+    func stop() async
+    func owns(_ stream: SCStream) -> Bool
+}
+
+private final class StreamAudioCaptureSession: AudioCaptureSession, @unchecked Sendable {
+    let stream: SCStream
+    init(_ stream: SCStream) { self.stream = stream }
+    func stop() async { try? await stream.stopCapture() }
+    func owns(_ stream: SCStream) -> Bool { self.stream === stream }
+}
+
 /// F536(F-51): 프로세스 전역 단일 SCStream 캡처 코어. 구독자(SystemAudioSpectrumProvider)가 1명 이상이면
 /// 캡처를 유지하고 원시 sampleBuffer 를 전원에게 팬아웃, 0명이 되면 스트림을 닫는다(참조 카운트).
 /// 세대(generation) 관리는 구 per-instance 구현과 동형 — 급속 stop/start 시 고아 스트림 방지.
@@ -425,7 +512,7 @@ public enum AudioInputSettings {
 /// stopCaptureIfRunningLocked 가 접근점의 전부다(교착 회피를 위해 stopCapture 만 락 밖, F544).
 /// 이 코어는 애초에 여러 스레드(SCStream 콜백 큐 · 구독자 start/stop · startCapture Task)에서
 /// 불리도록 설계됐고 락이 그 계약이다 — 컴파일러가 못 보는 그 계약을 표기로 알린다.
-private final class SharedAudioCaptureCore: NSObject, SCStreamOutput, @unchecked Sendable {
+nonisolated final class SharedAudioCaptureCore: NSObject, SCStreamOutput, SCStreamDelegate, AudioCaptureSubscribing, @unchecked Sendable {
     static let shared = SharedAudioCaptureCore()
 
     /// 약한 구독자 상자 — provider 가 stop 없이 해제돼도 코어가 영구 유지되지 않게 한다.
@@ -436,10 +523,28 @@ private final class SharedAudioCaptureCore: NSObject, SCStreamOutput, @unchecked
 
     private let lock = NSLock()
     private var subscribers: [ObjectIdentifier: WeakBox] = [:]
-    private var stream: SCStream?
+    private var session: AudioCaptureSession?
+    private let starter: @Sendable (SharedAudioCaptureCore, Int) async throws -> AudioCaptureSession
+    private let scheduleRetry: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
+    private var retryAttempts = 0
+
+    init(starter: @escaping @Sendable (SharedAudioCaptureCore, Int) async throws -> AudioCaptureSession = { core, generation in
+        try await SharedAudioCaptureCore.makeSession(core: core, generation: generation)
+    }, scheduleRetry: @escaping @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void = { delay, action in
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay, execute: action)
+    }) {
+        self.starter = starter
+        self.scheduleRetry = scheduleRetry
+        super.init()
+    }
     private var running = false
     // 매 캡처 세션마다 증가. in-flight startCapture Task 는 자기 세대가 현재일 때만 stream 을 할당.
     private var generation = 0
+
+    var hasActiveSession: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return running && session != nil
+    }
 
     func add(_ p: SystemAudioSpectrumProvider) {
         lock.lock()
@@ -459,17 +564,17 @@ private final class SharedAudioCaptureCore: NSObject, SCStreamOutput, @unchecked
         let s = subscribers.isEmpty ? stopCaptureIfRunningLocked() : nil   // 다른 구독자 잔존 — 캡처 유지
         lock.unlock()
         // F544(F-115): async 권고 형태. stopCapture 는 lock 밖에서 호출(콜백 큐와의 교착 방지).
-        Task { try? await s?.stopCapture() }
+        Task { await s?.stop() }
     }
 
     /// lock 보유 상태에서 캡처 중단(진행 중 startCapture 무효화 포함). stop 해야 할 stream 반환 —
     /// 실제 stopCapture 는 호출자가 lock 밖에서 수행(교착 방지).
-    private func stopCaptureIfRunningLocked() -> SCStream? {
+    private func stopCaptureIfRunningLocked() -> AudioCaptureSession? {
         guard running else { return nil }
         running = false
         generation += 1   // 진행 중인 startCapture Task 를 무효화(고아 스트림 방지)
-        let s = stream
-        stream = nil
+        let s = session
+        session = nil
         return s
     }
 
@@ -480,11 +585,12 @@ private final class SharedAudioCaptureCore: NSObject, SCStreamOutput, @unchecked
 
     /// gen 이 현재 세대이고 running 이면 stream 을 교체하고 (이전 stream, true) 반환.
     /// 아니면 (nil, false). 이전/거부된 stream 의 stopCapture 는 호출자가 lock 밖에서 수행.
-    private func swapStreamIfCurrent(_ s: SCStream, generation gen: Int) -> (old: SCStream?, assigned: Bool) {
+    private func swapStreamIfCurrent(_ s: AudioCaptureSession, generation gen: Int) -> (old: AudioCaptureSession?, assigned: Bool) {
         lock.lock(); defer { lock.unlock() }
         guard running, gen == generation else { return (nil, false) }
-        let old = stream
-        stream = s
+        let old = session
+        session = s
+        retryAttempts = 0
         return (old, true)
     }
 
@@ -497,13 +603,22 @@ private final class SharedAudioCaptureCore: NSObject, SCStreamOutput, @unchecked
     }
 
     private func startCapture(generation gen: Int) async {
+        guard isCurrent(gen) else { return }
         do {
+            let newSession = try await starter(self, gen)
+            // Atomic generation+assignment preserves F544 orphan-start cancellation.
+            let (old, assigned) = swapStreamIfCurrent(newSession, generation: gen)
+            if let old { await old.stop() }
+            if !assigned { await newSession.stop() }
+        } catch { captureFailed(error, generation: gen) }
+    }
+
+    private static func makeSession(core: SharedAudioCaptureCore, generation: Int) async throws -> AudioCaptureSession {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-            guard isCurrent(gen) else { return }
+            guard core.isCurrent(generation) else { throw CancellationError() }
             guard let display = content.displays.first else {
                 NSLog("%@", "[Waple] audio capture: no displays available, feeding silence")
-                liveSubscribers().forEach { $0.feedZeros() }
-                return
+                throw NSError(domain: SCStreamErrorDomain, code: SCStreamError.Code.noDisplayList.rawValue)
             }
             let filter = SCContentFilter(display: display, excludingWindows: [])
             let config = SCStreamConfiguration()
@@ -516,22 +631,68 @@ private final class SharedAudioCaptureCore: NSObject, SCStreamOutput, @unchecked
             config.height = 2
             config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
 
-            let stream = SCStream(filter: filter, configuration: config, delegate: nil)
-            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: DispatchQueue(label: "waple.audio"))
+            let stream = SCStream(filter: filter, configuration: config, delegate: core)
+            try stream.addStreamOutput(core, type: .audio, sampleHandlerQueue: DispatchQueue(label: "waple.audio"))
             try await stream.startCapture()
-            // 세대 확인 + stream 할당을 한 임계 구역에서. 전원 stop() 이 await 도중 일어났다면 이 Task 는
-            // 더 이상 현재 세대가 아니므로 방금 만든 stream 을 즉시 중단(고아 방지).
-            let (old, assigned) = swapStreamIfCurrent(stream, generation: gen)
-            if let old { try? await old.stopCapture() }  // F544: 이론상 nil(직전 stream 은 remove 가 정리). 방어적.
-            if !assigned {
-                try? await stream.stopCapture()   // F544(F-115): async 권고 형태
-                return
+        return StreamAudioCaptureSession(stream)
+    }
+
+    /// Explicit retry after a permission change; transient failures also retry with capped backoff.
+    func retry() {
+        lock.lock()
+        subscribers = subscribers.filter { $0.value.provider != nil }
+        guard !subscribers.isEmpty else { lock.unlock(); return }
+        let old = session
+        session = nil
+        running = true
+        generation += 1
+        retryAttempts = 0
+        let gen = generation
+        lock.unlock()
+        Task { await old?.stop(); await startCapture(generation: gen) }
+    }
+
+    private func captureFailed(_ error: Error, generation gen: Int) {
+        lock.lock()
+        guard running, generation == gen else { lock.unlock(); return }
+        let old = session
+        session = nil
+        generation += 1
+        let nextGeneration = generation
+        retryAttempts += 1
+        let delay = min(30.0, pow(2.0, Double(min(retryAttempts - 1, 5))))
+        let nsError = error as NSError
+        let userStopped = nsError.domain == SCStreamErrorDomain &&
+            [SCStreamError.Code.userDeclined.rawValue, SCStreamError.Code.userStopped.rawValue,
+             SCStreamError.Code.missingEntitlements.rawValue].contains(nsError.code)
+        // Respect user denial/stop. The explicit retry API is required after permission changes.
+        if userStopped { running = false }
+        lock.unlock()
+        NSLog("%@", "[Waple] audio capture failed, feeding silence: \(error)")
+        liveSubscribers().forEach { $0.feedZeros() }
+        Task { await old?.stop() }
+        if !userStopped {
+            scheduleRetry(delay) { [weak self] in
+                guard let self else { return }
+                Task { await self.startCapture(generation: nextGeneration) }
             }
-        } catch {
-            // 화면 기록 권한 거부가 흔한 원인. 폴백(무음)은 유지하되 진단 가능하도록 로깅한다.
-            NSLog("%@", "[Waple] audio capture failed (screen-recording permission?), feeding silence: \(error)")
-            liveSubscribers().forEach { $0.feedZeros() }
         }
+    }
+
+    func sessionFailed(_ failedSession: AudioCaptureSession, error: Error) {
+        lock.lock()
+        let gen = generation
+        let current = running && session === failedSession
+        lock.unlock()
+        if current { captureFailed(error, generation: gen) }
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        lock.lock()
+        let failedSession = session
+        let current = failedSession?.owns(stream) == true
+        lock.unlock()
+        if current, let failedSession { sessionFailed(failedSession, error: error) }
     }
 
     /// SCStreamOutput 의 유일한 요구사항도 **optional @objc** 다 — 후킹이 풀리면 sampleBuffer 가 한 번도
@@ -546,7 +707,7 @@ private final class SharedAudioCaptureCore: NSObject, SCStreamOutput, @unchecked
             lock.lock()
             let s = stopCaptureIfRunningLocked()
             lock.unlock()
-            Task { try? await s?.stopCapture() }
+            Task { await s?.stop() }
             return
         }
         for p in live { p.process(sampleBuffer: sampleBuffer) }

@@ -72,7 +72,11 @@ PLIST
 # SPM 은 .saver 번들 타깃을 만들 수 없으므로 clang -bundle 로 직접 컴파일해
 # Resources 에 동봉한다. 앱의 ScreenSaverController 가 ~/Library/Screen Savers 로 설치.
 SAVER="$APP/Contents/Resources/Waple.saver"
-mkdir -p "$SAVER/Contents/MacOS"
+mkdir -p "$SAVER/Contents/MacOS" "$SAVER/Contents/Resources"
+cp -R Sources/WapleSaver/Resources/*.lproj "$SAVER/Contents/Resources/"
+for language in ko en; do
+  test -s "$SAVER/Contents/Resources/$language.lproj/Localizable.strings" || exit 1
+done
 xcrun clang -fobjc-arc -bundle -mmacosx-version-min=13.0 \
   -framework AppKit -framework AVFoundation -framework CoreMedia \
   -framework QuartzCore -framework ScreenSaver \

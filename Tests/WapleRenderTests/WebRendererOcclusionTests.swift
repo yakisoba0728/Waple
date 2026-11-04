@@ -53,7 +53,7 @@ final class WebRendererOcclusionTests: XCTestCase {
         XCTAssertEqual(pausedLog(), [1, 0, 1, 0], "resume() 이 재개를 전달해야")
     }
 
-    func testManualResumeWaitsForOcclusionBeforeRestartingAllConsumers() throws {
+    @MainActor func testManualResumeWaitsForOcclusionBeforeRestartingAllConsumers() throws {
         final class FakeAudioProvider: AudioSpectrumProviding {
             var onFrame: (([Float]) -> Void)?
             private(set) var running = false

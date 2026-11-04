@@ -287,7 +287,8 @@ enum Scene3DLighting {
     // 또 다른 함수 `0x1400f5cb0–0x1400f8520`(GLSL→HLSL 백엔드)이 `cbuffer g_bufLights` 안에
     // `const float4 g_LPoint_Color[`(0x140487688) 형태로 찍는다. 범위를 남의 주석에서 베끼지 말 것.
     // 전문·표는 `docs/re/scene-lighting.md` §1–§3.
-    static let maximumLights = 8
+    // Four 4-bit V1 budgets plus four legacy lights: the complete representable authoring budget.
+    static let maximumLights = 64
 
     // `general.lightconfig` → 종류별 슬롯 예산. **본체는 `SceneLightSlotBudget`(WapleCore)** 이다 —
     // 순수 산술이라 리눅스 코어 테스트(`SceneLightConfigBudgetTests`)로 규약을 못박아 두려고 옮겼다.
@@ -479,7 +480,8 @@ enum Scene3DLighting {
                                         outerCone: cone.outer,
                                         // 실물은 radius×0.99(0x140198760)를 셰이더에 넣고 반경 구로 레이마치 구간을 제한한다.
                                         // 배선 전 생성자 기본 1.0(0x140190494) 때문에 헐이 보이지 않던 경계다.
-                                        radius: light.radius)
+                                        radius: light.radius,
+                                        isPointLight: light.type == "lpoint")
     }
 
     /// 영벡터/비유한 방어 정규화(셰이더 normalizedOr 과 동일 시맨틱).

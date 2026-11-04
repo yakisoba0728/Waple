@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import SwiftUI
 import WapleCore
 import WapleLibrary
@@ -81,6 +82,7 @@ struct PropertyEditorView: View {
     /// 값이 실제로 영속화될 때마다 호출된다(호출부의 "저장됨" 표시용).
     var onCommit: () -> Void = {}
     @State private var props: [WallpaperProperty] = []
+    @State private var collapsedGroups: Set<String> = []
     /// textInput 미커밋 편집 추적 — Enter 없이 포커스 이동/시트 닫힘 시에도 커밋(변경 유실 방지).
     /// (키스트로크 커밋은 부적절: setProperty 가 현재 배경 리마운트를 유발.)
     @FocusState private var focusedText: Int?
@@ -131,7 +133,18 @@ struct PropertyEditorView: View {
     /// `PropertyGrouping`). 섹션 헤더로 그리면 뒤에 아무 것도 없는 빈 카드가 뜬다.
     @ViewBuilder
     private func sectionView(_ section: PropertySection) -> some View {
-        if section.rows.isEmpty {
+        if let title = section.title, props.indices.contains(title), props[title].type.lowercased() == "group" {
+            Section {
+                DisclosureGroup(isExpanded: Binding(
+                    get: { !collapsedGroups.contains(props[title].key) },
+                    set: { expanded in
+                        if expanded { collapsedGroups.remove(props[title].key) }
+                        else { collapsedGroups.insert(props[title].key) }
+                    })) {
+                    ForEach(section.rows, id: \.self) { control(for: $0) }
+                } label: { Text(verbatim: label(props[title])) }
+            }
+        } else if section.rows.isEmpty {
             if let title = section.title, props.indices.contains(title) {
                 Section { Text(verbatim: label(props[title])).font(Typography.caption)
                               .foregroundStyle(.secondary) }
@@ -216,20 +229,21 @@ struct PropertyEditorView: View {
                 get: { if case .bool(let b) = props[i].value { return b }; return false },
                 set: { commit(i, .bool($0)) })) { Text(verbatim: label(p)) }
         case .slider:
+            let configuration = PropertySliderConfiguration(p)
             VStack(alignment: .leading, spacing: Space.xxs) {
                 HStack(spacing: Space.xs) {
                     Text(verbatim: label(p)).font(Typography.caption)
                     Spacer(minLength: Space.xs)
                     // 드래그 중 자리수가 바뀌어도 폭이 튀지 않도록 고정폭 숫자.
-                    Text(verbatim: String(format: "%.2f", sliderValue(i)))
+                    Text(verbatim: configuration.formattedValue(sliderValue(i)))
                         .font(Typography.metric).foregroundStyle(.secondary)
                 }
                 // F494: 드래그 틱마다 commit(setProperty → 전체 리마운트)하지 않고, 로컬 값만 갱신하다가
                 // 드래그 종료(onEditingChanged false) 시 1회 커밋 — 초당 수십 회 리마운트·깜빡임 방지.
                 Slider(value: Binding(
-                    get: { sliderValue(i) },
-                    set: { props[i].value = .number($0); dirtySliders.insert(i) }),
-                    in: PropertyControl.sliderRange(min: p.min, max: p.max),
+                    get: { configuration.clampedValue(sliderValue(i)) },
+                    set: { props[i].value = .number(configuration.committedValue($0)); dirtySliders.insert(i) }),
+                    in: configuration.range, step: configuration.step,
                     onEditingChanged: { editing in if !editing { commitDirtySlider(i) } })
                     .accessibilityLabel(Text(verbatim: label(p)))
             }
@@ -276,8 +290,66 @@ struct PropertyEditorView: View {
         case .directory:
             resourcePicker(for: i, directory: true)
         case .displayOnly:
-            // 섹션 제목으로 승격되지 못한 잔여(그룹핑이 걸러 주므로 보통 오지 않는다).
-            Text(verbatim: label(p)).font(Typography.caption).foregroundStyle(.secondary)
+            if p.type.lowercased() == "usershortcut" {
+                shortcutPicker(for: i)
+            } else {
+                // 섹션 제목으로 승격되지 못한 잔여(그룹핑이 걸러 주므로 보통 오지 않는다).
+                Text(verbatim: label(p)).font(Typography.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func shortcutPicker(for i: Int) -> some View {
+        VStack(alignment: .leading, spacing: Space.xxs) {
+            Text(verbatim: label(props[i])).font(Typography.caption)
+            Text("이 배경의 스크립트가 연결한 앱이나 웹 주소를 열 수 있습니다.")
+                .font(Typography.badge).foregroundStyle(.secondary)
+            if let url = viewModel.shortcutBindings(for: entry.id)[props[i].key] {
+                Text(verbatim: url.isFileURL ? url.lastPathComponent : url.absoluteString)
+                    .font(Typography.badge).lineLimit(1).truncationMode(.middle)
+            } else {
+                Text("연결 안 됨").font(Typography.badge).foregroundStyle(.secondary)
+            }
+            HStack {
+                Button("앱 선택") { chooseShortcutApplication(for: i) }
+                Button("웹 주소 연결") { chooseShortcutWebURL(for: i) }
+                if viewModel.shortcutBindings(for: entry.id)[props[i].key] != nil {
+                    Button("연결 해제") { saveShortcut(nil, for: i) }
+                }
+            }
+            .controlSize(.small)
+        }
+    }
+
+    private func saveShortcut(_ url: URL?, for i: Int) {
+        if viewModel.setShortcutBinding(url, propertyKey: props[i].key, for: entry) { onCommit() }
+    }
+
+    private func chooseShortcutApplication(for i: Int) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.message = NSLocalizedString("이 배경의 스크립트가 연결한 앱이나 웹 주소를 열 수 있습니다.", comment: "바로가기 권한 설명")
+        if panel.runModal() == .OK, let url = panel.url { saveShortcut(url, for: i) }
+    }
+
+    private func chooseShortcutWebURL(for i: Int) {
+        let alert = NSAlert()
+        alert.messageText = NSLocalizedString("웹 주소 연결", comment: "바로가기 웹 주소")
+        alert.informativeText = NSLocalizedString("이 배경의 스크립트가 연결한 앱이나 웹 주소를 열 수 있습니다.", comment: "바로가기 권한 설명")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        field.placeholderString = "https://example.com"
+        alert.accessoryView = field
+        alert.addButton(withTitle: NSLocalizedString("연결", comment: "바로가기 저장"))
+        alert.addButton(withTitle: NSLocalizedString("취소", comment: "바로가기 취소"))
+        if alert.runModal() == .alertFirstButtonReturn {
+            if let url = URL(string: field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                saveShortcut(url, for: i)
+            } else {
+                viewModel.onNotify?(NSLocalizedString("바로가기를 저장하지 못했습니다. 앱 또는 올바른 http/https 웹 주소를 선택하세요.", comment: "바로가기 URL 형식 오류"))
+            }
         }
     }
 
@@ -325,7 +397,9 @@ struct PropertyEditorView: View {
         panel.canChooseDirectories = directory
         panel.canChooseFiles = !directory
         panel.canCreateDirectories = false
-        if panel.runModal() == .OK, let url = panel.url {
+        if !directory { panel.allowedContentTypes = PropertyResourceSelection.allowedContentTypes(for: props[i]) }
+        if panel.runModal() == .OK, let url = panel.url,
+           directory || PropertyResourceSelection.accepts(url, for: props[i]) {
             commit(i, .string(url.path))
         }
     }

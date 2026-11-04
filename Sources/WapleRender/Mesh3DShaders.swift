@@ -46,6 +46,9 @@ enum Mesh3DShaders {
     struct VOut {
         float4 pos [[position]];
         float2 uv;
+        float2 uv1;
+        float3 worldTangent;
+        float3 worldBitangent;
         float3 worldPos;
         float3 worldNormal;
     };
@@ -62,7 +65,8 @@ enum Mesh3DShaders {
     vertex VOut mv_main(uint vid [[vertex_id]],
                         const device float* vtx [[buffer(0)]],
                         constant MeshU& u [[buffer(1)]]) {
-        uint b = vid * 8;
+        uint stride = u.extra.y > 0.0 ? uint(u.extra.y) : 8u;
+        uint b = vid * stride;
         float3 localPos = float3(vtx[b], vtx[b + 1], vtx[b + 2]);
         float3 localNormal = float3(vtx[b + 3], vtx[b + 4], vtx[b + 5]);
         float4 world = u.model * float4(localPos, 1.0);
@@ -72,7 +76,12 @@ enum Mesh3DShaders {
         o.worldNormal = normalizedOr((u.normalMatrix * float4(localNormal, 0.0)).xyz,
                                      normalizedOr(localNormal, float3(0.0, 0.0, 1.0)));
         // UV 원점 = 상단(V flip 없음): 기존 3D A/B 실측 규약 보존.
-        o.uv = float2(vtx[b + 6], vtx[b + 7]);
+        uint uvOffset = stride >= 14u ? 10u : 6u;
+        o.uv = float2(vtx[b + uvOffset], vtx[b + uvOffset + 1]);
+        o.uv1 = stride >= 14u ? float2(vtx[b+12], vtx[b+13]) : float2(0.0);
+        float4 tangent = stride >= 14u ? float4(vtx[b+6], vtx[b+7], vtx[b+8], vtx[b+9]) : float4(1,0,0,1);
+        o.worldTangent = (u.normalMatrix * float4(tangent.xyz, 0)).xyz;
+        o.worldBitangent = (u.normalMatrix * float4(cross(localNormal, tangent.xyz) * tangent.w, 0)).xyz;
         return o;
     }
 
@@ -80,15 +89,20 @@ enum Mesh3DShaders {
                         const device float* vtx [[buffer(0)]],
                         constant MeshU& u [[buffer(1)]],
                         const device float4x4* bones [[buffer(2)]]) {
-        uint b = vid * 16;
+        uint stride = u.extra.y > 0.0 ? uint(u.extra.y) : 16u;
+        uint b = vid * stride;
         float3 localPos = float3(vtx[b], vtx[b + 1], vtx[b + 2]);
         float3 localNormal = float3(vtx[b + 3], vtx[b + 4], vtx[b + 5]);
-        uint4 idx = uint4(uint(vtx[b + 8] + 0.5), uint(vtx[b + 9] + 0.5),
-                          uint(vtx[b + 10] + 0.5), uint(vtx[b + 11] + 0.5));
-        float4 weights = float4(vtx[b + 12], vtx[b + 13], vtx[b + 14], vtx[b + 15]);
+        uint4 idx = stride == 22u
+            ? as_type<uint4>(float4(vtx[b+14], vtx[b+15], vtx[b+16], vtx[b+17]))
+            : uint4(uint(vtx[b+8]+0.5), uint(vtx[b+9]+0.5), uint(vtx[b+10]+0.5), uint(vtx[b+11]+0.5));
+        uint weightOffset = stride == 22u ? 18u : 12u;
+        float4 weights = float4(vtx[b+weightOffset], vtx[b+weightOffset+1], vtx[b+weightOffset+2], vtx[b+weightOffset+3]);
         float weightSum = weights.x + weights.y + weights.z + weights.w;
         float3 skinnedPos = localPos;
         float3 skinnedNormal = localNormal;
+        float4 tangent = stride == 22u ? float4(vtx[b+6], vtx[b+7], vtx[b+8], vtx[b+9]) : float4(1,0,0,1);
+        float3 skinnedTangent = tangent.xyz;
         if (weightSum > 0.0) {
             weights /= weightSum;
             skinnedPos = (weights.x * (bones[idx.x] * float4(localPos, 1.0))
@@ -100,23 +114,35 @@ enum Mesh3DShaders {
                            + weights.z * (bones[idx.z] * float4(localNormal, 0.0))
                            + weights.w * (bones[idx.w] * float4(localNormal, 0.0))).xyz;
         }
+        if (weightSum > 0.0) {
+            skinnedTangent = (weights.x * (bones[idx.x] * float4(tangent.xyz, 0))
+                            + weights.y * (bones[idx.y] * float4(tangent.xyz, 0))
+                            + weights.z * (bones[idx.z] * float4(tangent.xyz, 0))
+                            + weights.w * (bones[idx.w] * float4(tangent.xyz, 0))).xyz;
+        }
         float4 world = u.model * float4(skinnedPos, 1.0);
         VOut o;
         o.pos = u.mvp * float4(skinnedPos, 1.0);
         o.worldPos = world.xyz;
         o.worldNormal = normalizedOr((u.normalMatrix * float4(skinnedNormal, 0.0)).xyz,
                                      normalizedOr(skinnedNormal, float3(0.0, 0.0, 1.0)));
-        o.uv = float2(vtx[b + 6], vtx[b + 7]);
+        uint uvOffset = stride == 22u ? 10u : 6u;
+        o.uv = float2(vtx[b + uvOffset], vtx[b + uvOffset + 1]);
+        o.uv1 = stride == 22u ? float2(vtx[b+12], vtx[b+13]) : float2(0.0);
+        o.worldTangent = (u.normalMatrix * float4(skinnedTangent, 0)).xyz;
+        o.worldBitangent = (u.normalMatrix * float4(cross(skinnedNormal, skinnedTangent) * tangent.w, 0)).xyz;
         return o;
     }
 
     vertex ShadowVOut sv_main(uint vid [[vertex_id]],
                               const device float* vtx [[buffer(0)]],
                               constant MeshU& u [[buffer(1)]]) {
-        uint b = vid * 8;
+        uint stride = u.extra.y > 0.0 ? uint(u.extra.y) : 8u;
+        uint b = vid * stride;
         ShadowVOut o;
         o.pos = u.mvp * float4(vtx[b], vtx[b + 1], vtx[b + 2], 1.0);
-        o.uv = float2(vtx[b + 6], vtx[b + 7]);
+        uint uvOffset = stride >= 14u ? 10u : 6u;
+        o.uv = float2(vtx[b + uvOffset], vtx[b + uvOffset + 1]);
         return o;
     }
 
@@ -124,11 +150,14 @@ enum Mesh3DShaders {
                               const device float* vtx [[buffer(0)]],
                               constant MeshU& u [[buffer(1)]],
                               const device float4x4* bones [[buffer(2)]]) {
-        uint b = vid * 16;
+        uint stride = u.extra.y > 0.0 ? uint(u.extra.y) : 16u;
+        uint b = vid * stride;
         float3 localPos = float3(vtx[b], vtx[b + 1], vtx[b + 2]);
-        uint4 idx = uint4(uint(vtx[b + 8] + 0.5), uint(vtx[b + 9] + 0.5),
-                          uint(vtx[b + 10] + 0.5), uint(vtx[b + 11] + 0.5));
-        float4 weights = float4(vtx[b + 12], vtx[b + 13], vtx[b + 14], vtx[b + 15]);
+        uint4 idx = stride == 22u
+            ? as_type<uint4>(float4(vtx[b+14], vtx[b+15], vtx[b+16], vtx[b+17]))
+            : uint4(uint(vtx[b+8]+0.5), uint(vtx[b+9]+0.5), uint(vtx[b+10]+0.5), uint(vtx[b+11]+0.5));
+        uint weightOffset = stride == 22u ? 18u : 12u;
+        float4 weights = float4(vtx[b+weightOffset], vtx[b+weightOffset+1], vtx[b+weightOffset+2], vtx[b+weightOffset+3]);
         float weightSum = weights.x + weights.y + weights.z + weights.w;
         float3 skinnedPos = localPos;
         if (weightSum > 0.0) {
@@ -140,7 +169,8 @@ enum Mesh3DShaders {
         }
         ShadowVOut o;
         o.pos = u.mvp * float4(skinnedPos, 1.0);
-        o.uv = float2(vtx[b + 6], vtx[b + 7]);
+        uint uvOffset = stride == 22u ? 10u : 6u;
+        o.uv = float2(vtx[b + uvOffset], vtx[b + uvOffset + 1]);
         return o;
     }
 
@@ -577,7 +607,7 @@ enum Mesh3DShaders {
         float3 N = normalizedOr(in.worldNormal, float3(0.0, 0.0, 1.0));
         float3 V = normalizedOr(frame.cameraEye.xyz - in.worldPos, float3(0.0, 0.0, 1.0));
         float3 direct = float3(0.0);
-        int count = clamp(int(frame.meta.x + 0.5), 0, 8);   // F660: 라이트 캡 4 → 8(젤다 6슬롯)
+        int count = clamp(int(frame.meta.x + 0.5), 0, 64);   // F660: 라이트 캡 4 → 8(젤다 6슬롯)
         for (int i = 0; i < count; ++i) {
             float kind = lights[i].shadow.z;
             if (kind < 0.5) {          // point: 감쇠 + 6면 큐브 섀도우
@@ -667,12 +697,10 @@ enum Mesh3DShaders {
         // x=alpha*2-0.965/y=green*2-1 — 통일하면 둘 중 하나가 깨지므로 의도된 차이, 임의 정리 금지).
         // RG88 은 Waple 디코드가 byte0→(r,g,b) 복제·byte1→a(TexDecoder.swift rg88)라 x=.r/y=.a 로 대응.
         if (normalParams.z > 0.5) {
-            float3 dpx = dfdx(in.worldPos);
-            float3 dpy = dfdy(in.worldPos);
-            float2 duvx = dfdx(in.uv);
-            float2 duvy = dfdy(in.uv);
-            float3 T = normalizedOr(dpx * duvy.y - dpy * duvx.y, float3(1.0, 0.0, 0.0));
-            float3 B = normalizedOr(dpy * duvx.x - dpx * duvy.x, float3(0.0, 1.0, 0.0));
+            // N is normalized above; normalize the other axes too so uniform object scale
+            // cannot attenuate the sampled normal's x/y components relative to z.
+            float3 T = normalizedOr(in.worldTangent, float3(1.0, 0.0, 0.0));
+            float3 B = normalizedOr(in.worldBitangent, float3(0.0, 1.0, 0.0));
             float3x3 TBN = float3x3(T, B, N);
             float4 nraw = normalTex.sample(s, in.uv);
             float nx, ny;
@@ -704,7 +732,7 @@ enum Mesh3DShaders {
 
         float3 V = normalizedOr(frame.cameraEye.xyz - in.worldPos, float3(0.0, 0.0, 1.0));
         float3 direct = float3(0.0);
-        int count = clamp(int(frame.meta.x + 0.5), 0, 8);
+        int count = clamp(int(frame.meta.x + 0.5), 0, 64);
         for (int i = 0; i < count; ++i) {
             float kind = lights[i].shadow.z;
             if (kind < 0.5) {
@@ -783,7 +811,7 @@ enum Mesh3DShaders {
         float3 N = normalizedOr(in.worldNormal, float3(0.0, 0.0, 1.0));
         float3 V = normalizedOr(frame.cameraEye.xyz - in.worldPos, float3(0.0, 0.0, 1.0));
         float3 direct = float3(0.0);
-        int count = clamp(int(frame.meta.x + 0.5), 0, 8);
+        int count = clamp(int(frame.meta.x + 0.5), 0, 64);
         for (int i = 0; i < count; ++i) {
             float kind = lights[i].shadow.z;
             if (kind < 0.5) {
@@ -862,7 +890,7 @@ enum Mesh3DShaders {
             lit = albedo;
         } else {
             float3 direct = float3(0.0);
-            int count = clamp(int(frame.meta.x + 0.5), 0, 8);
+            int count = clamp(int(frame.meta.x + 0.5), 0, 64);
             for (int i = 0; i < count; ++i) {
                 float kind = lights[i].shadow.z;
                 if (kind < 0.5) {

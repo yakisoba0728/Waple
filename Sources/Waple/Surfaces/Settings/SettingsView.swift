@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import WaplePolicy
 import WapleRender
+import WapleCore
 
 /// 설정 창 — 트레이에 흩어져 있던 설정을 grouped Form 으로 통합(SP5′).
 /// 시각은 전부 시스템: grouped Form·시맨틱 컬러·SF Symbols. 치수는 Metrics.settingsSize 만.
@@ -58,7 +59,10 @@ struct SettingsView: View {
         Form {
             playbackSection
             playbackPolicySection
+            wallpaperPolicySection
+            audioInputSection
             playlistSection
+            transitionSection
             videoSection
             systemSection
             desktopSyncSection
@@ -74,6 +78,12 @@ struct SettingsView: View {
 
     private var playbackSection: some View {
         Section {
+            Picker("디스플레이 배치", selection: Binding(get: { vm.monitorLayout },
+                set: { vm.setMonitorLayout($0) })) {
+                Text("화면마다 다른 배경").tag(MonitorLayout.perMonitor)
+                Text("하나의 배경을 모든 화면에 늘이기").tag(MonitorLayout.stretch)
+                Text("모든 화면에 같은 배경 복제").tag(MonitorLayout.clone)
+            }
             Picker("화면 맞춤", selection: Binding(get: { vm.fitMode }, set: { vm.setFit($0) })) {
                 ForEach(FitMode.allCases, id: \.self) { Self.fitLabel($0).tag($0) }
             }
@@ -84,6 +94,10 @@ struct SettingsView: View {
             Picker("프레임 상한", selection: Binding(get: { vm.maxFPS }, set: { vm.setMaxFPS($0) })) {
                 ForEach(SceneFPSCap.allCases, id: \.self) { Self.fpsLabel($0).tag($0) }
             }
+            Toggle("동영상 소리 출력", isOn: Binding(get: { vm.videoOutputEnabled },
+                set: { vm.setVideoOutputEnabled($0) }))
+            Toggle("창이 닫혀 있을 때 시스템 알림", isOn: Binding(get: { vm.notificationsEnabled },
+                set: { vm.setSystemNotices($0) }))
         } header: {
             Text("배경 재생")
         } footer: {
@@ -114,6 +128,8 @@ struct SettingsView: View {
                 }
             }
             Button("Wallpaper Engine 기본값으로 되돌리기") { vm.resetPlaybackPolicy() }
+            Toggle("메모리 압박 시 자원 해제", isOn: Binding(
+                get: { vm.playbackPolicy.pauseVRAM }, set: { vm.setResourcePressureEnabled($0) }))
         } header: {
             Text("자동 정지 규칙")
         } footer: {
@@ -122,8 +138,47 @@ struct SettingsView: View {
             // 사실을 숨기지 않는다 — 조용히 다르게 동작하는 것이 이 리포가 막으려는 실패다.
             // 리터럴 하나로 둔다 — `"a" + "b"` 는 `Text(String)`(비현지화 오버로드)로 해석돼
             // 영어 시스템에서도 한국어로 남고 커버리지 오라클도 뒤쪽 조각을 못 본다(§5.0).
-            Text("‘중지’ 는 현재 일시정지와 같게 동작합니다 — 화면은 멈추지만 메모리는 유지됩니다. ‘음소거’ 는 배경 자체의 소리만 끕니다(웹 배경이 Web Audio 로 직접 합성하는 소리는 제외).")
+            Text("‘중지’ 는 배경의 자원을 해제하고 조건이 풀리면 다시 불러옵니다. 메모리 압박은 macOS의 시스템 경고를 따릅니다. ‘음소거’ 는 배경 자체의 소리만 끕니다(웹 배경이 Web Audio 로 직접 합성하는 소리는 제외).")
                 .font(Typography.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var audioInputSection: some View {
+        Section {
+            Stepper(value: Binding(get: { vm.audioInputVolume },
+                set: { vm.setAudioInputVolume($0) }), in: 0...200) {
+                HStack { Text("입력 감도"); Spacer(); Text(String(vm.audioInputVolume)) }
+            }
+            Slider(value: Binding(get: { Double(vm.audioInputThreshold) },
+                set: { vm.setAudioInputThreshold(Float($0)) }), in: 0...10, step: 0.1) {
+                HStack {
+                    Text("무음 임계값")
+                    Spacer()
+                    Text(vm.audioInputThreshold, format: .number.precision(.fractionLength(1)))
+                }
+            }
+            Button("오디오 입력 기본값으로 재설정") {
+                vm.setAudioInputVolume(50)
+                vm.setAudioInputThreshold(0)
+            }
+            Button("오디오 캡처 다시 시도") { vm.onRetryAudioCapture() }
+        } header: { Text("오디오 입력") }
+    }
+
+    @ViewBuilder private var wallpaperPolicySection: some View {
+        if let target = vm.wallpaperPolicyEntry {
+            Section {
+                Text(target.title).font(Typography.bodyEmphasis)
+                ForEach(PlaybackTrigger.allCases, id: \.self) { trigger in
+                    Picker(selection: Binding(get: { vm.wallpaperPolicyOverride(for: trigger) },
+                        set: { vm.setWallpaperPolicyOverride($0, for: trigger) })) {
+                        Text("배경의 기본 규칙 따르기").tag("")
+                        ForEach(vm.playbackOptions(for: trigger), id: \.self) { action in
+                            Self.playbackActionLabel(action).tag(action.weConfigValue)
+                        }
+                    } label: { Self.playbackTriggerLabel(trigger) }
+                }
+            } header: { Text("선택한 배경의 자동 정지 규칙") }
         }
     }
 
@@ -184,23 +239,134 @@ struct SettingsView: View {
 
     private var playlistSection: some View {
         Section {
+            Picker("저장된 재생목록", selection: Binding(get: { vm.selectedPlaylistId }, set: { vm.selectPlaylist($0) })) {
+                ForEach(vm.savedPlaylists, id: \.id) { Text($0.name).tag($0.id) }
+            }
+            TextField("재생목록 이름", text: $vm.playlistName)
+            HStack {
+                Button("새 재생목록") { vm.createPlaylist() }
+                Button("이름 변경") { vm.renamePlaylist() }
+                Button("재생목록 삭제", role: .destructive) { vm.removePlaylist() }
+                    .disabled(vm.savedPlaylists.count < 2)
+            }
             Toggle("자동 전환",
                    isOn: Binding(get: { vm.playlistEnabled }, set: { vm.setPlaylistEnabled($0) }))
-            // F490: NowPlayingBar 팝오버(Stepper 1...240)와 같은 저장소를 쓰는데 Picker 가
-            // [5,15,30,60]만 제공해 그 외 값이면 선택 표시가 비어 보였다 — Stepper 로 정합.
-            Stepper(String(format: NSLocalizedString("전환 간격: %lld분", comment: "설정 전환 간격"), vm.playlistInterval),
-                    value: Binding(get: { vm.playlistInterval }, set: { vm.setPlaylistInterval($0) }),
-                    in: 1...240)
+            Picker("전환 방식", selection: Binding(get: { vm.playlistConfiguration.mode },
+                set: { mode in vm.updatePlaylist { $0.mode = mode } })) {
+                Text("간격마다").tag(PlaylistMode.timer)
+                Text("시간대별").tag(PlaylistMode.daytime)
+                Text("요일별").tag(PlaylistMode.dayOfWeek)
+                Text("자동 전환 안 함").tag(PlaylistMode.never)
+            }
+            HStack {
+                Text("전환 간격(분)")
+                TextField("전환 간격(분)", value: Binding(get: { vm.playlistConfiguration.delayMinutes },
+                    set: { delay in vm.updatePlaylist { $0.delayMinutes = delay } }), format: .number)
+                    .frame(width: 100)
+            }
             .font(Typography.metricBody)   // 자리수가 바뀌어도 라벨 폭이 튀지 않게
-            .disabled(!vm.playlistEnabled)
+            .disabled(!vm.playlistEnabled || vm.playlistConfiguration.mode != .timer)
             Toggle("셔플(무작위 순서)",
                    isOn: Binding(get: { vm.playlistShuffle }, set: { vm.setPlaylistShuffle($0) }))
+            Toggle("동영상이 끝나면 전환", isOn: Binding(get: { vm.playlistConfiguration.videoSequence },
+                set: { value in vm.updatePlaylist { $0.videoSequence = value } }))
+            Toggle("일시정지 중에도 전환", isOn: Binding(get: { vm.playlistConfiguration.updateOnPause },
+                set: { value in vm.updatePlaylist { $0.updateOnPause = value } }))
+            Toggle("시작할 때 첫 배경 적용", isOn: Binding(get: { vm.playlistConfiguration.beginFirst },
+                set: { value in vm.updatePlaylist { $0.beginFirst = value } }))
+                .disabled(vm.playlistConfiguration.mode != .timer)
+            Toggle("첫 배경을 인트로로 한 번 재생", isOn: Binding(get: { vm.playlistConfiguration.playIntro },
+                set: { value in vm.updatePlaylist { $0.playIntro = value } }))
+                .disabled(!vm.playlistConfiguration.beginFirst || vm.playlistConfiguration.mode != .timer)
+            playlistSlots
+            if vm.playlistConfiguration.mode == .dayOfWeek && vm.playlistConfiguration.ids.count > 7 {
+                Text("요일별 재생은 앞의 일곱 항목을 사용합니다.").font(Typography.caption)
+            }
         } header: {
             Text("재생목록")
         } footer: {
             Text("항목 추가는 라이브러리 타일 우클릭 → 재생목록.")
                 .font(Typography.caption).foregroundStyle(.secondary)
         }
+    }
+
+    @ViewBuilder private var playlistSlots: some View {
+        if vm.playlistConfiguration.mode == .daytime || vm.playlistConfiguration.mode == .dayOfWeek {
+            ForEach(Array(vm.playlistConfiguration.ids.enumerated()), id: \.element) { index, id in
+                VStack(alignment: .leading) {
+                    HStack {
+                        if vm.playlistConfiguration.mode == .dayOfWeek {
+                            let weekdays = Calendar.current.weekdaySymbols
+                            Text(weekdays[(Calendar.current.firstWeekday - 1 + index) % 7])
+                        }
+                        Text(id).lineLimit(1)
+                        Spacer()
+                        Button { vm.movePlaylistEntry(id, offset: -1) } label: {
+                            Label("위로", systemImage: "chevron.up")
+                        }.disabled(index == 0)
+                        Button { vm.movePlaylistEntry(id, offset: 1) } label: {
+                            Label("아래로", systemImage: "chevron.down")
+                        }.disabled(index == vm.playlistConfiguration.ids.count - 1)
+                    }
+                    if vm.playlistConfiguration.mode == .daytime {
+                        let end = vm.playlistConfiguration.daytimeEnds[id]
+                            ?? Float(index + 1) / Float(max(vm.playlistConfiguration.ids.count, 1))
+                        HStack {
+                            Slider(value: Binding(get: { Double(end) },
+                                set: { vm.setDaytimeEnd(entryId: id, value: Float($0)) }), in: 0...1, step: 1.0 / 1440) {
+                                Text("시간대 종료")
+                            }.disabled(index == vm.playlistConfiguration.ids.count - 1)
+                            let minutes = safeInt(Double(end * 1440)) ?? 0
+                            Text(String(format: "%02d:%02d", minutes / 60, minutes % 60))
+                                .font(Typography.metricBody)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var transitionSection: some View {
+        Section {
+            Picker("재생목록 전환 효과", selection: Binding(
+                get: { vm.playlistConfiguration.transitionConfigValue },
+                set: { value in vm.updatePlaylist { $0.transitionConfigValue = value } })) {
+                ForEach(PlaylistTransitionKind.allCases, id: \.self) { kind in
+                    Text(kind.weDisplayName).tag(kind.weConfigValue)
+                }
+            }
+            Stepper(String(format: NSLocalizedString("전환 시간: %lld밀리초", comment: "전환 시간"),
+                           vm.playlistConfiguration.transitionTimeMillis), value: Binding(
+                get: { vm.playlistConfiguration.transitionTimeMillis },
+                set: { value in vm.updatePlaylist { $0.transitionTimeMillis = value } }), in: 0...3000, step: 50)
+            if vm.playlistConfiguration.transitionConfigValue == PlaylistTransitionKind.random.weConfigValue {
+                DisclosureGroup("무작위 전환에 포함할 효과") {
+                    ForEach(PlaylistTransitionKind.allEffects, id: \.self) { kind in
+                        Toggle(isOn: Binding(get: {
+                            let pool = vm.playlistConfiguration.transitionPool
+                            return pool.isEmpty || pool.contains(kind.weConfigValue)
+                        }, set: { included in
+                            vm.updatePlaylist { configuration in
+                                var pool = configuration.transitionPool.isEmpty
+                                    ? PlaylistTransitionKind.allEffects.map(\.weConfigValue) : configuration.transitionPool
+                                if included && !pool.contains(kind.weConfigValue) { pool.append(kind.weConfigValue) }
+                                if !included && pool.count > 1 { pool.removeAll { $0 == kind.weConfigValue } }
+                                configuration.transitionPool = pool
+                            }
+                        })) { Text(kind.weDisplayName) }
+                    }
+                }
+            }
+            Picker("직접 선택할 때 전환 효과", selection: Binding(get: { vm.browseTransition },
+                set: { vm.setBrowseTransition($0) })) {
+                ForEach(PlaylistTransitionKind.allCases, id: \.self) { kind in
+                    Text(kind.weDisplayName).tag(kind.weConfigValue)
+                }
+            }
+            Stepper(String(format: NSLocalizedString("직접 선택 전환 시간: %lld밀리초", comment: "수동 전환 시간"),
+                           vm.browseTransitionTime), value: Binding(get: { vm.browseTransitionTime },
+                set: { vm.setBrowseTransitionTime($0) }), in: 0...3000, step: 50)
+        } header: { Text("배경 전환") }
     }
 
     /// w5d-settings-ia: 음량/배속 조절은 재생 컨텍스트를 이미 아는 하단 Now Playing 바(스피커

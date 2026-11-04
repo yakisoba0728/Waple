@@ -49,25 +49,14 @@ final class ShaderPreprocessorRequireTests: XCTestCase {
 
     /// 생성기 게이트: 이름 == `LightingV1` **그리고** `LIGHTING` 이 정의되고 값이 0 이 아닐 때만
     /// 실물이 코드를 주입한다(0x1401691eb 이름 · 0x1401691b8/0x14016920c 존재 · 0x140169223 값).
-    /// Waple 은 그 자리에서 주입 대신 경고를 낸다 — **경고가 곧 "여기서 실물과 갈린다"는 표시**다.
-    /// 게이트가 닫힌 경우(대부분)는 실물도 아무것도 안 하므로 조용해야 한다.
-    func testWarnsOnlyWhenEngineWouldHaveInjected() {
-        func warnings(_ src: String, _ combos: [String: Int]) -> [String] {
-            var captured: [String] = []
-            let saved = WapleLog.warnHandler
-            WapleLog.warnHandler = { captured.append($0) }
-            defer { WapleLog.warnHandler = saved }
-            _ = ShaderPreprocessor.preprocess(src, combos: combos)
-            return captured.filter { $0.contains("#require") }
-        }
+    /// The same gate controls generation; unknown require names remain consumed without injection.
+    func testInjectsOnlyWhenEngineWouldHaveInjected() {
         let req = "#require LightingV1\nbody;"
-        XCTAssertEqual(warnings(req, ["LIGHTING": 1]).count, 1, "LIGHTING!=0 이면 실물은 주입한다")
-        XCTAssertEqual(warnings(req, ["LIGHTING": 0]).count, 0, "LIGHTING==0 → 실물도 주입 안 함")
-        XCTAssertEqual(warnings(req, [:]).count, 0, "LIGHTING 미정의 → 실물도 주입 안 함")
-        XCTAssertEqual(warnings("#require Other\nbody;", ["LIGHTING": 1]).count, 0,
-                       "이름이 LightingV1 이 아니면 실물도 빈 문자열 반환")
-        // 소스 `#define LIGHTING 1` 로도 게이트가 열린다(실물은 같은 매크로맵을 본다).
-        XCTAssertEqual(warnings("#define LIGHTING 1\n" + req, [:]).count, 1)
+        XCTAssertTrue(ShaderPreprocessor.preprocess(req, combos: ["LIGHTING": 1]).contains("vec3 PerformLighting_V1("))
+        XCTAssertFalse(ShaderPreprocessor.preprocess(req, combos: ["LIGHTING": 0]).contains("PerformLighting_V1"))
+        XCTAssertFalse(ShaderPreprocessor.preprocess(req, combos: [:]).contains("PerformLighting_V1"))
+        XCTAssertFalse(ShaderPreprocessor.preprocess("#require Other\nbody;", combos: ["LIGHTING": 1]).contains("PerformLighting_V1"))
+        XCTAssertTrue(ShaderPreprocessor.preprocess("#define LIGHTING 1\n" + req, combos: [:]).contains("vec3 PerformLighting_V1("))
     }
 
     /// 동봉 실물 도달. `#require LightingV1` 은 8곳에 있고 그중 **GLSL 번역 레인을 타는 것은
@@ -129,22 +118,8 @@ final class ShaderPreprocessorRequireTests: XCTestCase {
         }
     }
 
-    /// **"소비만 하면 조용히 틀린 그림이 되는가" 에 대한 반대 방향 못박기.**
-    ///
-    /// 걱정의 형태는 이렇다 — 지시문 줄을 삼키면 `PerformLighting_V1(...)` **호출부만 남고 정의가
-    /// 없어진다**. 그래서 여기서 정확히 그것을 단정한다: `LIGHTING != 0` 이면 호출부는 방출
-    /// MSL 에 **그대로 남아야 한다.** 남아 있으면 Metal 컴파일이 확정 실패하고 이펙트가 폴백한다
-    /// = 조용하지 않다. 호출부가 사라지는 쪽이야말로 조용한 오답이다(라이팅이 통째로 빠진 그림이
-    /// 컴파일에 성공한다) — 이 테스트는 그 퇴행을 막는다.
-    ///
-    /// 실측 근거 둘:
-    ///  1. 소비 분기 도입 전후로 동봉 239쌍 × 3구성 = **717 구성의 MSL 지문이 전건 동일**하다
-    ///     (FNV-1a). 즉 소비는 오늘의 방출물에 대해 **무동작**이라 새 오답을 만들 수 없다.
-    ///     (`#require` 줄은 종전에도 MSL 에 안 갔다 — `GLSLTranslator.swift:2059` 의 조립부가
-    ///     파스된 선언·함수만 싣기 때문. 전처리 출력에는 남아 있었고 그건 형제 게이트가 잡는다.)
-    ///  2. `GLSLBundledShaderRegressionTests.knownGapsSweep["엔진 주입 함수"]` 가 8 셰이더를
-    ///     **양방향 집합 일치**로 못 박는다 — 호출부가 조용히 사라지면 그쪽이 먼저 터진다.
-    func testLightingCallSiteSurvivesSoTheFailureStaysLoud() throws {
+    /// A require request supplies the function definition without removing its real call site.
+    func testLightingCallSiteAndGeneratedDefinitionSurviveTogether() throws {
         guard let root = GLSLBundledShaderRegressionTests.assetsRoot() else { throw XCTSkip("WAPLE_WE_ASSETS 미지정") }
         let base = "effects/fluidsimulation/shaders/effects/fluidsimulation_combine"
         let fm = FileManager.default
@@ -162,14 +137,13 @@ final class ShaderPreprocessorRequireTests: XCTestCase {
         let off = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag,
                                                          combos: ["LIGHTING": 0], include: include))
         XCTAssertFalse(off.msl.contains("PerformLighting_V1"), "LIGHTING=0 에서는 호출부 자체가 없어야 한다")
-        // LIGHTING=1 — 실물은 여기서 씬 라이트 수만큼 언롤한 본문을 주입한다. 우리는 못 한다.
-        // 그러면 호출부는 **반드시 남아 있어야** 컴파일이 실패하고 폴백한다.
+        // LIGHTING=1 supplies the unrolled definition, including the legitimate zero-light case.
         let on = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag,
                                                         combos: ["LIGHTING": 1], include: include))
         XCTAssertTrue(on.msl.contains("PerformLighting_V1("),
                       "LIGHTING=1 인데 호출부가 사라졌다 — 라이팅 없는 그림이 조용히 컴파일된다")
-        XCTAssertFalse(on.msl.contains("float3 PerformLighting_V1("),
-                       "정의를 주입하기 시작했다면 이 테스트와 knownGaps 를 같이 고쳐라")
+        XCTAssertTrue(on.msl.contains("float3 PerformLighting_V1("),
+                      "LIGHTING=1 must carry the generated definition as well as its call")
     }
 
     // MARK: - G2: `#if` 식 문법 8종

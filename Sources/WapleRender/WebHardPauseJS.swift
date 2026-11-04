@@ -173,10 +173,43 @@ enum WebHardPauseJS {
       }
 
       var audioEntries = [];
+      var audioOutputEntries = typeof WeakMap === 'function' ? new WeakMap() : null;
+      var audioPolicyMuted = !!window.__wapleMuted;
+      var nativeAudioConnect = window.AudioNode && window.AudioNode.prototype.connect;
+      var nativeAudioDisconnect = window.AudioNode && window.AudioNode.prototype.disconnect;
+      function redirectedDestination(node, destination) {
+        var entry = audioOutputEntries && audioOutputEntries.get(node.context);
+        return entry && entry.policyGain && node !== entry.policyGain && destination === node.context.destination
+          ? entry.policyGain : destination;
+      }
+      if (nativeAudioConnect && nativeAudioDisconnect) {
+        window.AudioNode.prototype.connect = function(destination) {
+          var args = Array.prototype.slice.call(arguments);
+          args[0] = redirectedDestination(this, destination);
+          var result = nativeAudioConnect.apply(this, args);
+          return args[0] !== destination ? destination : result;
+        };
+        window.AudioNode.prototype.disconnect = function() {
+          var args = Array.prototype.slice.call(arguments);
+          if (args.length && typeof args[0] === 'object') { args[0] = redirectedDestination(this, args[0]); }
+          return nativeAudioDisconnect.apply(this, args);
+        };
+      }
+      window.__wapleSetAudioMuted = function(muted) {
+        audioPolicyMuted = !!muted;
+        audioEntries.forEach(function(entry) {
+          if (entry.policyGain) { entry.policyGain.gain.value = audioPolicyMuted ? 0 : 1; }
+        });
+        for (var i = 0; i < window.frames.length; ++i) {
+          try { if (window.frames[i].__wapleSetAudioMuted) { window.frames[i].__wapleSetAudioMuted(audioPolicyMuted); } } catch (_) {}
+        }
+      };
+
 
       function removeAudioEntry(entry) {
         var index = audioEntries.indexOf(entry);
         if (index >= 0) { audioEntries.splice(index, 1); }
+        if (audioOutputEntries) { audioOutputEntries.delete(entry.context); }
       }
 
       function enqueueAudio(entry, transition, onCompletion) {
@@ -229,6 +262,15 @@ enum WebHardPauseJS {
           resumeAfterPause: false
         };
         audioEntries.push(entry);
+        // A unity output gain changes loudness without suspending the AudioContext's clock.
+        if (audioOutputEntries && nativeAudioConnect && typeof context.createGain === 'function') {
+          try {
+            entry.policyGain = context.createGain();
+            entry.policyGain.gain.value = audioPolicyMuted ? 0 : 1;
+            nativeAudioConnect.call(entry.policyGain, context.destination);
+            audioOutputEntries.set(context, entry);
+          } catch (error) { report(error); }
+        }
 
         try {
           Object.defineProperty(context, 'resume', {

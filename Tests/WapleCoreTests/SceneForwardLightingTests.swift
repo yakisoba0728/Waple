@@ -40,11 +40,12 @@ final class SceneForwardLightingTests: XCTestCase {
         XCTAssertEqual(u5.positions[4], SIMD4<Float>(4, 0, 0, 1))    // 5번째도 이제 들어간다
 
         // 슬롯을 넘기면 앞 slotCount 개만.
-        let nine = (0..<9).map { light(Vec3(x: Float($0), y: 0, z: 0), Vec3(x: 1, y: 1, z: 1), intensity: 1, radius: 10) }
-        let u9 = SceneLight3D.forwardUniforms(nine, ambient: Vec3(x: 0, y: 0, z: 0), skylight: Vec3(x: 0, y: 0, z: 0))
-        XCTAssertEqual(u9.count, SceneLight3D.ForwardUniforms.slotCount)
-        XCTAssertEqual(SceneLight3D.ForwardUniforms.slotCount, 8)    // QuadShaders.f_lit 루프 상한과 같은 계약
-        XCTAssertEqual(u9.positions[7], SIMD4<Float>(7, 0, 0, 1))    // 8번째(idx7), 9번째 미포함
+        let lights = (0..<65).map { light(Vec3(x: Float($0), y: 0, z: 0), Vec3(x: 1, y: 1, z: 1), intensity: 1, radius: 10) }
+        let packed = SceneLight3D.forwardUniforms(lights, ambient: Vec3(x: 0, y: 0, z: 0), skylight: Vec3(x: 0, y: 0, z: 0))
+        XCTAssertEqual(packed.count, 64)
+        XCTAssertEqual(SceneLight3D.ForwardUniforms.slotCount, 64) // Four native4-bit counts plus four legacy slots.
+        XCTAssertEqual(packed.positions[8], SIMD4<Float>(8, 0, 0, 1))
+        XCTAssertEqual(packed.positions[63], SIMD4<Float>(63, 0, 0, 1))
     }
 
     func testParsedExponentReachesPackedForwardUniform() throws {

@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// scene.json 효과 항목의 패스별 사용자 데이터(effect.json passes[] 와 인덱스 정렬).
 public struct SceneEffectPass: Equatable {
@@ -63,6 +68,8 @@ public struct SceneEffect: Equatable {
 }
 
 public struct SceneLayer: Equatable {
+    public var foggy: Bool = true
+    public var castShadow: Bool = false
     public let textureEntryName: String
     public var name: String = ""
     /// scene.json objects[] 의 id(부모 트랜스폼 룩업용 — 퍼펫 레이어 parent 체인 합성에 사용).
@@ -403,6 +410,7 @@ public struct SceneParticle: Equatable {
 
 /// 텍스트 오브젝트(시계/날짜/곡정보 등). text 는 평문 또는 JS 프로퍼티 스크립트(script)로 계산.
 public struct SceneTextLayer: Equatable {
+    public var foggy: Bool = true
     public var name: String = ""
     /// W3-⑤: scene.json objects[].id — 다른 오브젝트가 이 텍스트를 parent 로 참조할 때 룩업 키
     /// (레이어/노드와 동일 규약). 0 = 미지정(그런 텍스트는 부모 후보에서 제외 — buildParentTransformMap 참조).
@@ -598,6 +606,15 @@ public struct SceneTextLayer: Equatable {
     /// 그래서 기본값을 4 로 바꿔도 **그림이 바뀌는 씬은 0건**이다(위 세 코퍼스 전건 `outline` 미저작
     /// 또는 false, `outline:true` 3건은 `outlinethickness` 를 명시한다).
     public var outlineThickness: Float = 4
+    /// Text ctor 0x140256c38..0x140256c82: flags=0, blur/shadow size=6, opacity=1, offset=(4,4).
+    public var msdf: Bool = false
+    public var blur: Bool = false
+    public var blurSize: Float = 6
+    public var dropShadow: Bool = false
+    public var dropShadowSize: Float = 6
+    public var dropShadowOpacity: Float = 1
+    public var dropShadowColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
+    public var dropShadowOffset: Vec2 = Vec2(x: 4, y: 4)
     public var opaqueBackground: Bool = false
     public var backgroundColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
     /// F4-polish①: `anchor`(에디터 "Anchor"). 기본 `"none"` = 변환 없음 — 디스크립터 타입 5 enum ·
@@ -797,6 +814,7 @@ public struct AnimationLayer: Equatable {
     /// (3737268876 젤다 blend 핸들러 19개, 3351179520/3396722575 visible 핸들러, 2955378002/3448290956
     /// rate 오디오 배속). 렌더러가 엔진 생성 + per-frame 재평가(2D 퍼펫 캐스케이드 소비자).
     public var scripts: [String: String] = [:]
+    public var propertyAnimations: [String: PropertyAnimation] = [:]
     /// blend/visible 바인딩의 이벤트 마커 타임라인(options.events 보유분만 — 젤다 "surprise" 등).
     /// 값 구동(blend 키프레임 적용)은 미구현 — 마커 발화 클록으로만 사용(정적 blend 무회귀).
     public var eventTimelines: [PropertyAnimation] = []
@@ -809,6 +827,8 @@ public struct AnimationLayer: Equatable {
 /// 3D 메시 오브젝트. 2D 레이어(image→json→puppet 인다이렉션)와 달리 `model` 키가 pkg 의
 /// `.mdl` 을 **직접** 참조한다. origin/angles/scale 은 모두 3성분(월드 좌표/오일러 라디안/축별 배율).
 public struct SceneObject3D: Equatable {
+    public var color: Vec3 = Vec3(x: 1, y: 1, z: 1)
+    public var alpha: Float = 1
     public let id: Int
     public let name: String
     public let model: String       // "models/.../X.mdl" — pkg 내 .mdl 직접 참조(2D image 우회)
@@ -824,6 +844,9 @@ public struct SceneObject3D: Equatable {
     /// 변환/가시성을 갱신(태양계 planet 은 부모 그룹 origin 스크립트가 궤도를 그린다). 정적 value 는
     /// 위 필드에 이미 언랩됨 — 스크립트는 재평가용.
     public var propertyScripts: [String: String] = [:]
+    public var propertyScriptProps: [String: String] = [:]
+    public var propertyAnimations: [String: PropertyAnimation] = [:]
+    public var initialVisible: Bool = true
     /// 활성 애니메이션(animationlayers 파스). nil = 정지(바인드 포즈). 렌더러가 이름 매칭 후 GPU 스키닝.
     public var animation: AnimationSelection? = nil
     /// animationlayers 전 레이어(스크립트·이벤트 타임라인 — 실물 젤다 blend 의 animationEvent 훅 서식지).
@@ -862,6 +885,8 @@ public struct SceneNode3D: Equatable {
     /// 프로퍼티 스크립트(origin/angles/scale/visible). 그룹 노드도 스크립트를 가진다 — 태양계 컨트롤러
     /// (Main: visible 스크립트로 shared 궤도 파라미터 세팅), 월드 스케일/화면 회전 노드(scale/angles 스크립트)가 모두 그룹.
     public var propertyScripts: [String: String] = [:]
+    public var propertyScriptProps: [String: String] = [:]
+    public var propertyAnimations: [String: PropertyAnimation] = [:]
     /// M(⑤): 오브젝트 `attachment`(부모 퍼펫 모델 이름 부착점) — SceneLayer.attachment(62행)와 동일
     /// 원시 문자열 규약. **파스만**: 실물 5씬(3629379075·3478434536·3486806915·3737268876·3492627662)의
     /// 콘텐츠 없는 그룹(가면/머리 액세서리 부착)이 이 경로를 거치나, 이 5씬은 camera3D 부재(2D 퍼펫 씬)라
@@ -927,6 +952,9 @@ public struct SceneLight3D: Equatable {
     /// color 1건(3737268876 젤다). TODO(소비 미배선): per-frame 재평가는 코퍼스 저빈도라 YAGNI 보류 —
     /// 렌더러는 현재 정적 초기값(위 필드)만 소비한다.
     public var propertyScripts: [String: String] = [:]
+    public var propertyScriptProps: [String: String] = [:]
+    public var propertyAnimations: [String: PropertyAnimation] = [:]
+    public var initialVisible: Bool = true
     public init(id: Int, name: String, type: String, origin: Vec3, angles: Vec3, color: Vec3,
                 radius: Float, intensity: Float, exponent: Float,
                 innerCone: Float = 0, outerCone: Float = 0,
@@ -1000,7 +1028,8 @@ public extension SceneLight3D {
         /// lightPositions/lightColorRadius/lightAxisCone/lightKindCone 배열 길이와 같은 값이어야 한다.**
         /// F660 이 3D 레인을 8(Scene3DLighting.maximumLights)로 올릴 때 2D 레인만 4 로 남아 있었다 —
         /// 같은 씬에서 5번째 라이트부터 2D 라이팅 레이어에만 안 잡혔다. 8 로 맞춘다.
-        public static let slotCount = 8
+        // Shared render budget: native four4-bit light-kind counts (60) plus four legacy slots.
+        public static let slotCount = 64
         public var positions: [SIMD4<Float>]   // xyz=world, w=finite-light exponent
         public var colorRadius: [SIMD4<Float>] // rgb=color×intensity, w=radius
         public var ambientTerm: SIMD3<Float>
@@ -1200,6 +1229,10 @@ public extension SceneLight3D {
 ///   single·parent 보유에 집중). mintime/maxtime(비-loop 재트리거 간격 추정)은 파스만 하고 미반영.
 public struct SceneSound: Equatable {
     public let id: Int
+    public var origin: Vec3
+    public var angles: Vec3
+    public var scale: Vec3
+    public var parent: Int?
     /// scene.json objects[] 의 "name"(트리거 스크립트의 `thisScene.getLayer(name).play()` 대상 — 실측: 사운드
     /// 오브젝트도 레이어처럼 name 으로 주소지정, 이름 없으면 파일 basename 근사). 빈 문자열이면 트리거 불가(자동재생 전용).
     public let name: String
@@ -1227,9 +1260,12 @@ public struct SceneSound: Equatable {
     public var attenuation: Float = 1
     public var minDistance: Float = 1
     public init(id: Int, name: String = "", sounds: [String], volume: Float, playbackMode: String,
-                startSilent: Bool, minTime: Float, maxTime: Float) {
+                startSilent: Bool, minTime: Float, maxTime: Float,
+                origin: Vec3 = Vec3(x: 0, y: 0, z: 0), angles: Vec3 = Vec3(x: 0, y: 0, z: 0),
+                scale: Vec3 = Vec3(x: 1, y: 1, z: 1), parent: Int? = nil) {
         self.id = id; self.name = name; self.sounds = sounds; self.volume = volume; self.playbackMode = playbackMode
         self.startSilent = startSilent; self.minTime = minTime; self.maxTime = maxTime
+        self.origin = origin; self.angles = angles; self.scale = scale; self.parent = parent
     }
 }
 
@@ -1985,7 +2021,8 @@ extension SceneDocument {
                 continue
             }
             let objectID = intVal(obj["id"]) ?? 0
-            if !initialVisible && visibleScript == nil && !imageLayerCompositeIDs.contains(objectID) {
+            let visibleAnimation = (obj["visible"] as? [String: Any]).flatMap(PropertyAnimation.parse)
+            if !initialVisible && visibleScript == nil && visibleAnimation == nil && !imageLayerCompositeIDs.contains(objectID) {
                 // V06: 정적 비가시 콘텐츠 오브젝트도 id 가 있으면 트랜스폼을 비가시 노드로 보존 —
                 // 가시 자식의 parent 체인 합성(2D composeParentTransforms localT·3D nodeMap)이 끊기지
                 // 않게 한다. 렌더 대상(layers/objects3D/…)에는 계속 미포함(무회귀).
@@ -2002,6 +2039,8 @@ extension SceneDocument {
                     // 스크립트가 shared.xx 세팅 → text id=181 이 소비 → shared.vvv → Hollow Cylinder 스케일).
                     // 종전엔 트랜스폼만 보존하고 스크립트를 버려 컨트롤러 체인이 끊겼다(소비 지오메트리 NaN).
                     invNode.propertyScripts = transformScripts(obj)
+                    invNode.propertyAnimations = propertyAnimations(obj, keys: ["origin", "angles", "scale", "visible"])
+                    invNode.propertyScriptProps = propertyScriptProps(obj, keys: ["origin", "angles", "scale", "visible"])
                     invNode.order = order                // id 중복 승자 판정용(claimObjectID 주석)
                     nodes3D.append(invNode)
                 }
@@ -2021,7 +2060,7 @@ extension SceneDocument {
             } else if let particlePath = contentValue(obj["particle"]) as? String {
                 if var p = parseParticle(particlePath, obj: obj, package: package,
                                          assets: resolvedAssets,
-                                         initialVisible: initialVisible,
+                                         initialVisible: initialVisible, orthographic: orthographic,
                                          userProps: userProps) {
                     p.order = order
                     particles.append(p)
@@ -2317,6 +2356,8 @@ extension SceneDocument {
         // H1: 커스텀 머티리얼 셰이더/콤보/상수/텍스처 파스 보존.
         layer.materialShader = materialShader
         layer.materialCombos = materialCombos
+        layer.foggy = materialCombos.first(where: { $0.key.lowercased() == "fog" }).map { $0.value != 0 } ?? true
+        layer.castShadow = weBool(obj["castshadow"])
         layer.materialConstants = materialConstants
         layer.materialConstantScripts = materialConstantScripts
         layer.materialConstantScriptProps = materialConstantScriptProps
@@ -2418,7 +2459,10 @@ extension SceneDocument {
             playbackMode: (unwrap(obj["playbackmode"]) as? String) ?? "single",
             startSilent: weBool(obj["startsilent"]),
             minTime: float(obj["mintime"]) ?? 0,
-            maxTime: float(obj["maxtime"]) ?? 0)
+            maxTime: float(obj["maxtime"]) ?? 0,
+            origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+            angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
+            scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1), parent: intVal(obj["parent"]))
         // 이펙트 상수(:1323)·레이어(:731-739)와 동일 비대칭 수정: float() 의 {value} 언랩이 형제 script 를
         // 삼키므로 스크립트는 별도로 먼저 캡처(정적 volume 은 위에서 이미 언랩됨).
         if let bind = obj["volume"] as? [String: Any], let sc = bind["script"] as? String {
@@ -2500,6 +2544,8 @@ extension SceneDocument {
         var ps = transformScripts(obj)
         if let vs = visibleScript { ps["visible"] = vs }
         node.propertyScripts = ps
+        node.propertyAnimations = propertyAnimations(obj, keys: ["origin", "angles", "scale", "visible"])
+        node.propertyScriptProps = propertyScriptProps(obj, keys: ["origin", "angles", "scale", "visible"])
         node.attachment = obj["attachment"] as? String   // M(⑤): 파스만(SceneNode3D.attachment 주석 참조)
         node.order = order                               // id 중복 승자 판정용(claimObjectID 주석)
         return node
@@ -2750,6 +2796,14 @@ extension SceneDocument {
         t.outlineColor = vec3(obj["outlinecolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         // 기본 4.0 — WE 생성자 `0x140256c43`(선언부 주석). 소비는 outline 켜질 때만 max(값,1.0).
         t.outlineThickness = float(obj["outlinethickness"]) ?? 4
+        t.msdf = weBool(obj["msdf"])
+        t.blur = weBool(obj["blur"])
+        t.blurSize = float(obj["blursize"]) ?? 6
+        t.dropShadow = weBool(obj["dropshadow"])
+        t.dropShadowSize = float(obj["dropshadowsize"]) ?? 6
+        t.dropShadowOpacity = float(obj["dropshadowopacity"]) ?? 1
+        t.dropShadowColor = vec3(obj["dropshadowcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
+        t.dropShadowOffset = uniformVec2(obj["dropshadowoffset"]) ?? Vec2(x: 4, y: 4)
         t.opaqueBackground = weBool(obj["opaquebackground"])
         t.backgroundColor = vec3(obj["backgroundcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         // F4-polish①: anchor/padding/backgroundbrightness — 파스·보존만(SceneTextLayer 필드 주석 참조).
@@ -2785,6 +2839,16 @@ extension SceneDocument {
         var ps = transformScripts(obj)
         if let vs = visibleScript { ps["visible"] = vs }
         o.propertyScripts = ps
+        for key in ["color", "alpha"] {
+            if let binding = obj[key] as? [String: Any], let script = binding["script"] as? String {
+                o.propertyScripts[key] = script
+            }
+        }
+        o.color = vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1)
+        o.alpha = float(obj["alpha"]) ?? 1
+        o.propertyAnimations = propertyAnimations(obj, keys: ["origin", "angles", "scale", "visible", "alpha", "color"])
+        o.propertyScriptProps = propertyScriptProps(obj, keys: ["origin", "angles", "scale", "visible", "alpha", "color"])
+        o.initialVisible = weBool(obj["visible"], true)
         o.animation = parseAnimationLayers(obj["animationlayers"])
         o.animationLayers = parseAllAnimationLayers(obj["animationlayers"])
         // F696: 명시 렌더 의존 id 목록(레이어 경로와 동형 — 소비는 렌더러 책임).
@@ -2824,10 +2888,15 @@ extension SceneDocument {
             castVolumetrics: weBool(obj["castvolumetrics"]),   // castshadow 와 동일 사유
             volumetricsExponent: float(obj["volumetricsexponent"]) ?? SceneLight3D.WEDefaults.volumetricsExponent,
             density: float(obj["density"]) ?? SceneLight3D.WEDefaults.density,
-            // ltube 세그먼트 단점 B(WE g_LTube_OriginB — 키는 wallpaper64.exe 스트링 실측 소문자).
-            originB: vec3(obj["originb"]))
+            // Original descriptor +0x2d8 is controlpoint, ctor default (2,0,0); originb is a legacy alias.
+            originB: vec3(obj["controlpoint"]) ?? vec3(obj["originb"]) ?? Vec3(x: 2, y: 0, z: 0))
         // SceneObject3D/SceneNode3D 의 propertyScripts/transformScripts 와 동형 캡처(파스만 — TODO 위 참조).
-        for key in ["color", "intensity", "radius", "origin", "angles"] {
+        let dynamicKeys = ["visible", "color", "intensity", "radius", "origin", "angles", "exponent",
+                           "innercone", "outercone", "density", "volumetricsexponent", "castvolumetrics", "castshadow"]
+        light.initialVisible = weBool(obj["visible"], true)
+        light.propertyAnimations = propertyAnimations(obj, keys: dynamicKeys)
+        light.propertyScriptProps = propertyScriptProps(obj, keys: dynamicKeys)
+        for key in dynamicKeys {
             if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String { light.propertyScripts[key] = sc }
         }
         return light
@@ -3314,7 +3383,10 @@ extension SceneDocument {
             for key in ["blend", "visible", "rate"] {
                 guard let bind = l[key] as? [String: Any] else { continue }
                 if let sc = bind["script"] as? String { al.scripts[key] = sc }
-                if let a = PropertyAnimation.parse(bind), !a.events.isEmpty { al.eventTimelines.append(a) }
+                if let a = PropertyAnimation.parse(bind) {
+                    al.propertyAnimations[key] = a
+                    if !a.events.isEmpty { al.eventTimelines.append(a) }
+                }
             }
             return al
         }
@@ -3429,13 +3501,13 @@ extension SceneDocument {
     /// children[] 링크는 재귀 리졸브(순환/깊이 4 가드) — 자식도 자체 material 포함 완전한 def.
     private static func parseParticle(_ path: String, obj: [String: Any], package: ScenePackage,
                                       assets: ((String) -> Data?)?,
-                                      initialVisible: Bool,
+                                      initialVisible: Bool, orthographic: Bool,
                                       userProps: [String: Any] = [:]) -> SceneParticle? {
         // instanceoverride(인스턴스 모디파이어): 프리셋 def 에 배수/CP 대체를 적용해 인스턴스별 다양화
         // (실측 127씬/866건). 종전 통째 드롭 — 재사용 프리셋 전 인스턴스가 동일 기본값으로 렌더됐다.
         let (override, overrideAnims) = particleInstanceOverride(obj["instanceoverride"])
         guard let def = parseParticleDef(path, package: package, visited: [path],
-                                         instanceOverride: override, assets: assets,
+                                         instanceOverride: override, assets: assets, orthographic: orthographic,
                                          userProps: userProps) else {
             WapleLog.warn("[Waple] SP4 particle load failed: \(path)")
             return nil
@@ -3478,7 +3550,7 @@ extension SceneDocument {
     private static func parseParticleDef(_ path: String, package: ScenePackage,
                                          visited: Set<String>,
                                          instanceOverride: ParticleInstanceOverride? = nil,
-                                         assets: ((String) -> Data?)? = nil,
+                                         assets: ((String) -> Data?)? = nil, orthographic: Bool = true,
                                          userProps: [String: Any] = [:]) -> ParticleSystemDef? {
         // F430: 이미지 레이어 requiredData 와 동일한 pkg→공유에셋 폴터 — 종전 pkg 한정이라
         // base-assets 에만 있는 파티클 json/머티리얼은 씬에서 통째 드롭됐다.
@@ -3492,13 +3564,13 @@ extension SceneDocument {
            let mjson = AssetJSON.dictionary(mData) {
             material = ParticleMaterial.parse(mjson, userProps: userProps)
         }
-        return ParticleSystemDef.parse(pjson, material: material, instanceOverride: instanceOverride) { childPath in
+        return ParticleSystemDef.parse(pjson, material: material, orthographic: orthographic, instanceOverride: instanceOverride) { childPath in
             guard !visited.contains(childPath), visited.count < 4 else {
                 WapleLog.warn("[Waple] particle child cycle/depth cap, dropped: \(childPath)")
                 return nil
             }
             return parseParticleDef(childPath, package: package, visited: visited.union([childPath]),
-                                    assets: assets, userProps: userProps)
+                                    assets: assets, orthographic: orthographic, userProps: userProps)
         }
     }
 
@@ -3737,6 +3809,10 @@ extension SceneDocument {
     ///   (b) nested `{"user":{"condition":"<옵션값>","name":"<콤보키>"}}` (combo) → value =
     ///       (현재 콤보값 == 옵션값). TEXB0004 TexImage.VariantCondition 과 동형 그래머(동등비교).
     /// 둘 다 userProps 에 키가 있을 때만 갱신 — 없으면(미변경) 저작 스냅샷 유지(동일 계약, 무회귀).
+    public static func resolvingUserBindings(_ node: Any, userProps: [String: Any]) -> Any {
+        resolveUserBindings(node, userProps: userProps, depth: 0)
+    }
+
     private static func resolveUserBindings(_ node: Any, userProps: [String: Any], depth: Int) -> Any {
         guard depth < 32 else { return node }
         if var dict = node as? [String: Any] {
@@ -3774,6 +3850,25 @@ extension SceneDocument {
             if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String { out[key] = sc }
         }
         return out
+    }
+
+    private static func propertyAnimations(_ obj: [String: Any], keys: [String]) -> [String: PropertyAnimation] {
+        var result: [String: PropertyAnimation] = [:]
+        for key in keys {
+            if let binding = obj[key] as? [String: Any], let animation = PropertyAnimation.parse(binding) {
+                result[key] = animation
+            }
+        }
+        return result
+    }
+
+    private static func propertyScriptProps(_ obj: [String: Any], keys: [String]) -> [String: String] {
+        var result: [String: String] = [:]
+        for key in keys {
+            guard let binding = obj[key] as? [String: Any], binding["script"] is String else { continue }
+            if let properties = scriptPropsJSON(binding["scriptproperties"]) { result[key] = properties }
+        }
+        return result
     }
 
     /// NSNull → nil 정규화(콘텐츠 키 존재 판정·접근 공통) — 실물 21오브젝트가 image/model 에 JSON null 을
@@ -3920,8 +4015,16 @@ extension SceneDocument {
     /// **[미해결]** 1-토큰 문자열(`"3"`)은 실물이 `(3, 0)` 인데 여기선 `(3, 3)` 이 된다 —
     /// 세 코퍼스 전부 도달 0 이라 맞추지 않았다(`SceneTextLayer.spacing` 주석과 같은 판단).
     private static func uniformVec2(_ v: Any?) -> Vec2? {
-        if let v2 = vec2(v) { return v2 }
-        if let s = float(v) { return Vec2(x: s, y: s) }
+        let value = unwrap(v)
+        if let string = value as? String {
+            func prefix(_ token: Substring) -> Float {
+                String(token).withCString { safeFloat(strtod($0, nil)) ?? 0 }
+            }
+            let x = prefix(string[...])
+            let y = string.firstIndex(of: " ").map { prefix(string[$0...].drop(while: { $0 == " " })) } ?? 0
+            return Vec2(x: x, y: y)
+        }
+        if let s = numericFloat(value) { return Vec2(x: s, y: s) }
         return nil
     }
     private static func vec3(_ v: Any?) -> Vec3? {

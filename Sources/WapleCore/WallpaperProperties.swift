@@ -24,6 +24,8 @@ public struct WallpaperProperty: Equatable {
     public var min: Double? = nil
     public var max: Double? = nil
     public var step: Double? = nil
+    public var precision: Int? = nil
+    public var fraction: Bool? = nil
     public var options: [Option]? = nil
     public var index: Int? = nil
     public var mode: String? = nil
@@ -31,7 +33,8 @@ public struct WallpaperProperty: Equatable {
 
     public init(key: String, type: String, value: PropertyValue, order: Double?, condition: String?,
                 text: String? = nil, min: Double? = nil, max: Double? = nil, step: Double? = nil,
-                options: [Option]? = nil, index: Int? = nil, mode: String? = nil, fileType: String? = nil) {
+                options: [Option]? = nil, index: Int? = nil, mode: String? = nil, fileType: String? = nil,
+                precision: Int? = nil, fraction: Bool? = nil) {
         self.key = key
         self.type = type
         self.value = value
@@ -41,6 +44,8 @@ public struct WallpaperProperty: Equatable {
         self.min = min
         self.max = max
         self.step = step
+        self.precision = precision
+        self.fraction = fraction
         self.options = options
         self.index = index
         self.mode = mode
@@ -131,9 +136,9 @@ public struct WallpaperProperty: Equatable {
 /// 나오는 프로퍼티도 **0건**이다(2,143 JSON 전수 워크에서 241/241 이 `/general/properties` 밑).
 ///
 /// **이 파서가 아직 안 읽는 키**(전부 편집 UI 메타, 런타임 값과 무관):
-/// `precision`(9) · `fraction`(6) · `editable`(3) · `shadername`(2) · `icon`(0) ·
+/// `editable`(3) · `shadername`(2) · `icon`(0) ·
 /// `disabledcondition`(0). 소비처(`PropertyEditorView`)가 생기기 전에는 담을 이유가 없어
-/// 두었다 — 담게 되면 위 "저장 규칙" 의 `precision` ±1 규약을 같이 옮겨야 한다.
+/// 두었다. `precision`·`fraction`은 슬라이더 UI가 소비하며 위 저장 규칙을 따른다.
 ///
 /// **정렬은 실물과 다르다(의도적).** 브라우저는 `i.sort((e,t) => e.order - t.order)` 하나뿐이라
 /// (char@88420) `order` 가 없는 프로퍼티는 비교값이 `NaN` 이 되어 V8 TimSort 의 삽입 순서로
@@ -171,7 +176,11 @@ public enum WallpaperProperties {
                 options: options,
                 index: parseInt(dict["index"]),
                 mode: dict["mode"] as? String,
-                fileType: dict["fileType"] as? String
+                fileType: dict["fileType"] as? String,
+                precision: parseInt(dict["precision"]),
+                fraction: (dict["fraction"] as? NSNumber).flatMap {
+                    CFGetTypeID($0) == CFBooleanGetTypeID() ? $0.boolValue : nil
+                }
             ))
         }
         return result.sorted {
@@ -187,7 +196,7 @@ public enum WallpaperProperties {
             if let b = raw as? Bool { return .bool(b) }
             if let s = raw as? String { return .bool(s == "true" || (lenientFloat(s) ?? 0) != 0) }
             return .bool(false)
-        case "slider":
+        case "slider", "volume":
             // 마찬가지로 문자열 숫자("0.5") 관용 — parseNumber(무회귀, Double 정밀도 보존) 우선 시도 후
             // 실패(비숫자·String)할 때만 lenientFloat 폴백. lenientFloat(raw) 를 바로 쓰지 않는 이유:
             // NSNumber(bool) 이 Swift 에서 `as? Double` 로도 브리지되어(1.0/0.0) parseNumber 의 CFBoolean

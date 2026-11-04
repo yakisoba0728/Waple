@@ -29,6 +29,27 @@ final class Model3DVertexLayoutTests: XCTestCase {
 
     // MARK: 표준 플래그 비트동일 회귀
 
+    func testEveryOriginalVertexChannelRetainsItsSourceBytesAndDescriptor() throws {
+        var bytes = Data()
+        for value in 1...83 { f(Float(value), into: &bytes) }  // original26 descriptors sum332B
+        let model = try XCTUnwrap(Model3D.parse(makeModel(meshFlag: 0x03ff_ffff, vertexBytes: bytes,
+                                                          vCount: 1, indices: [0, 0, 0])))
+        let mesh = try XCTUnwrap(model.meshes.first)
+        XCTAssertEqual(mesh.sourceVertexData, bytes)
+        XCTAssertEqual(mesh.sourceFormat, 0x03ff_ffff)
+        let layout = try XCTUnwrap(Model3D.vertexAttributeLayout(for: 0x03ff_ffff))
+        XCTAssertEqual(layout.stride, 332)
+        XCTAssertEqual(layout.attributes.count, 26)
+        let color = try XCTUnwrap(layout.attributes.first(where: { $0.name == "a_Color" }))
+        XCTAssertEqual(color.offset, 316)
+        XCTAssertEqual(color.components, 4)
+        XCTAssertFalse(color.isInteger)
+        let indices = try XCTUnwrap(layout.attributes.first(where: { $0.name == "a_BlendIndices" }))
+        XCTAssertEqual(indices.offset, 68)
+        XCTAssertTrue(indices.isInteger)
+        XCTAssertEqual(layout.attributes.filter { $0.name.hasSuffix("C5") }.map(\.components), [2, 3, 4])
+    }
+
     /// 0x0f → stride 48: pos@0, normal@12, tangent@24, uv@40 (종전 공식과 동일 오프셋).
     func testStandardStaticStride48Layout() throws {
         var vb = Data()

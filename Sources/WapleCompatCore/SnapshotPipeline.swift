@@ -42,18 +42,18 @@ public enum SnapshotPipeline {
     /// 재생성 필요. S4①(2026-07-27): getHours() 등 로컬 getter 는 TextScriptEngine.dateOverrideJS 가
     /// KST(UTC+9) 고정 오프셋으로 계산하므로 이 상수의 "KST 21:00" 해석은 캡처 머신의 실제 시스템 TZ 와
     /// 무관하게 항상 성립(호스트 TZ 미고정이 원인이던 하네스 결함 수정).
-    static let captureEpochMillis: Double = 1_704_110_400_000
+    static let captureEpochMillis = OffscreenCapture.sceneEpochMillis
     /// F1-nondet(2026-07-28): 씬 스크립트 `Math.random()` 결정화 시드 — 임의 상수(변경 시 팔레트/랜덤
     /// 분기 의존 씬 베이스라인 재생성 필요). TextScriptEngine.captureRandomSeed 참고(팔레트 컨트롤러
     /// 실물 3300031038 — localStorage 미보유 헤드리스 마운트마다 다른 초기 팔레트를 골라 셀프체크
     /// 비결정으로 잡히던 근본원인).
-    static let captureRandomSeed: UInt64 = 0xC0FFEE_1038
+    static let captureRandomSeed = OffscreenCapture.sceneRandomSeed
 
     /// 캡처 포인터 핀 값(0..1 UV, 상단 원점) — 마우스 미구동 규약과 동일한 중앙.
     /// 변경 시 포인터 반응 씬(g_PointerPosition 소비) 베이스라인 재생성 필요.
     /// [2026-08-26] 적용 지점은 `pinRenderSettings`(프로세스 전역)가 아니라 **캡처 렌더러 인스턴스**다 —
     /// `captureFrame` 이 `SceneRenderer()` 생성 직후 `r.capturePointerUV` 에 대입한다(그 주석 참조).
-    static let capturePointerUV = SIMD2<Float>(0.5, 0.5)
+    static let capturePointerUV = OffscreenCapture.scenePointerUV
 
     /// 폴링 없이 항상 "정지" — 미디어 씬이 osascript 를 스폰하지 않게(결정적·TCC 무).
     struct StoppedNowPlaying: NowPlayingProvider { func fetch() -> NowPlayingInfo? { nil } }
@@ -82,49 +82,29 @@ public enum SnapshotPipeline {
 
     /// 캡처 대상 씬 폴더 열거.
     ///
-    /// **[2026-08-21 클러스터 BE · 알려진 한계를 명시적 폴백으로만 메웠다]**
-    /// 1차 규칙은 종전 그대로 `scene.pkg`/`gifscene.pkg` **파일 존재**다. 이건 렌더러·분석기·
-    /// DeepScan 이 이미 버린 규약이고(마운트 결정자는 `project.json` 의 `file`,
-    /// `ScenePackage.resolveMountSource`), 그래서 **언팩 코퍼스에서는 0개를 준다** —
-    /// WE 2.8.42 설치본 씬 188/188 과 동봉 WEAssets 170/170 이 전부 언팩이라 두 트리 어디에
-    /// 겨눠도 `runCapture` 가 F520 가드로 `exit 2` 였다(조용한 실패는 아니지만 쓸 수는 없었다).
-    ///
-    /// 그런데 이 열거의 결과는 **256×144 골든 매니페스트의 엔트리 집합 그 자체**다
-    /// (`spec/golden/snapshot/baseline-*` 각 170항목). 규칙을 통째로 갈면 실물 개발 코퍼스
-    /// (`~/Downloads/wallpaper_dev` — **이 컨테이너에 없다**)에서 집합이 어떻게 움직이는지
-    /// 재 볼 수단이 없다. 재 보지 않은 재기준선은 이 리포가 금지하는 종류의 변경이다.
-    ///
-    /// 그래서 **pkg 규칙이 0개를 줄 때만** 형제 스캐너와 같은 열거로 폴백한다:
-    ///   · pkg 가 하나라도 있는 코퍼스 → 결과 **바이트 동일**(기준선 무영향, 이것이 이 설계의 요점).
-    ///   · 전건 언팩 코퍼스 → 이제 열거된다(종전 0개).
-    ///   · **섞인 코퍼스는 여전히 pkg 만 준다** — 남은 구멍이고, 메우려면 실물 코퍼스에서
-    ///     집합 델타를 세야 한다. 보고서의 [미해결] 항목.
-    ///
-    /// **도달 실측(과장 금지)**: `projectFolders(in:)` 는 컨테이너 **한 단계 아래**만 본다
-    /// (분석기의 원래 계약). 그래서 폴백이 실제로 살리는 것은 루트를 정확히 겨눴을 때뿐이다 —
-    /// `<설치본>/projects/defaultprojects` **0→16**, `<설치본>/assets/scenes` **0→3**,
-    /// `<동봉>/scenes` **0→3**. 설치본 루트·`assets`·`projects`·동봉 루트를 겨누면 종전처럼
-    /// **0→0** 이다(프로젝트 폴더가 두 단계 아래라 애초에 열거 대상이 아니다).
-    /// 동봉 170건 중 167건은 `effects/<이름>/preview/` 로 세 단계 아래이고, 그건 자산 프리뷰지
-    /// 캡처 대상 벽지가 아니다.
+    /// The same project.json scene selection applies to packed, unpacked and mixed corpora.
+    /// Legacy package-only folders remain visible so malformed projects are reported as failures.
     static func sceneFolders(root: String) -> [URL] {
         let base = sceneContainer(root: root)
         let fm = FileManager.default
-        func isScene(_ u: URL) -> Bool {
-            fm.fileExists(atPath: u.appendingPathComponent("scene.pkg").path)
-                || fm.fileExists(atPath: u.appendingPathComponent("gifscene.pkg").path)
+        func isLegacyScene(_ url: URL) -> Bool {
+            fm.fileExists(atPath: url.appendingPathComponent("scene.pkg").path)
+                || fm.fileExists(atPath: url.appendingPathComponent("gifscene.pkg").path)
         }
-        if isScene(base) { return [base] }   // 단일 씬 폴더 직접 지정
+        if fm.fileExists(atPath: base.appendingPathComponent("project.json").path) {
+            return declaredSceneFolders(container: base)
+        }
+        if isLegacyScene(base) { return [base] }
         let items = (try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)) ?? []
-        let packed = items.filter(isScene).sorted { $0.lastPathComponent < $1.lastPathComponent }
-        if !packed.isEmpty { return packed }
-        return unpackedSceneFolders(container: base)
+        let declared = declaredSceneFolders(container: base)
+        let legacy = items.filter {
+            isLegacyScene($0) && !fm.fileExists(atPath: $0.appendingPathComponent("project.json").path)
+        }
+        return (declared + legacy).sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
-    /// 언팩 폴백 — 형제 스캐너와 같은 열거(`project.json` 보유 폴더) 위에서 `ProjectJSONParser`
-    /// 가 `.scene` 으로 판정한 것만. 타입 추론(확장자 폴백 G-E3-03)까지 같은 함수를 타므로
-    /// `type` 을 생략한 설치본 2건(`fantasticcar` `audiophile`)도 씬으로 잡힌다.
-    static func unpackedSceneFolders(container: URL) -> [URL] {
+    /// Scene projects declared by project.json, including extension-based type inference.
+    static func declaredSceneFolders(container: URL) -> [URL] {
         let folders = (try? WallpaperCompatibilityAnalyzer.projectFolders(in: container)) ?? []
         return folders.filter { folder in
             guard let data = try? Data(contentsOf: folder.appendingPathComponent("project.json")),
@@ -148,25 +128,10 @@ public enum SnapshotPipeline {
         for t in captureTimes {
             try? fm.removeItem(at: tmp.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png"))
         }
-        let r = SceneRenderer()
-        r.nowPlayingProvider = StoppedNowPlaying()
-        // [2026-08-26] 포인터 핀은 **이 인스턴스에** 건다(종전엔 pinRenderSettings 가 프로세스 전역
-        // `SceneRenderer.capturePointerUV` 를 save/set/defer-restore 했다 — 그 전역이 라이브 렌더러까지
-        // 게이트해 버리고 백그라운드 캡처와 메인 액터 사이에 레이스를 만들었다. 근거와 4갈래 분석은
-        // `SceneRenderer` 클래스 선언의 [2026-08-26 정정] 문단). 핀 값·핀 시점(마운트 전)은 종전 그대로라
-        // 골든 픽셀은 불변이다 — 아래 `mount` 가 포인터·미디어·클릭 모니터를 셋 다 건너뛴다.
-        r.capturePointerUV = capturePointerUV
-        // `NSView.init(frame:)` 은 SDK 가 메인 액터 전용으로 선언한 API 다. 이 CLI 는 파이프라인
-        // 전체를 `main.swift` 최상위(= 메인 스레드)에서 **동기**로 실행한다 — 이 파일에도
-        // ProfilePipeline 에도 디스패치가 하나도 없고, 병렬을 쓰는 것은 DeepScan 뿐이다.
-        // 그래서 `assumeIsolated` 는 참인 단언이고, 나중에 누가 이 경로를 오프메인으로 옮기면
-        // 조용히 어긋나는 대신 즉시 트랩된다.
-        let container = MainActor.assumeIsolated { NSView(frame: NSRect(x: 0, y: 0, width: thumbW, height: thumbH)) }
-        try r.mount(in: container, project: project)
-        r.pause()                    // 라이브 입력(오디오 캡처·시차) 정지 → 결정성
-        r.setSpectrum(.silent)       // 오디오-반응 효과를 무신호로 고정
-        let urls = r.captureFrames(width: thumbW, height: thumbH, times: captureTimes, toDir: tmp)
-        r.teardown()
+        let urls = try MainActor.assumeIsolated {
+            try OffscreenCapture.scene(project: project, width: thumbW, height: thumbH,
+                                       times: captureTimes, toDir: tmp)
+        }
         let primaryName = "frame_t\(String(format: "%.1f", primaryCaptureTime)).png"
         if let exact = urls.first(where: { $0.lastPathComponent == primaryName }) {
             guard let rgba = pngToRGBA(exact, width: thumbW, height: thumbH) else { return .empty }

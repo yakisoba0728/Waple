@@ -21,8 +21,8 @@ import WapleCore
 ///   (랜덤 오브젝트 9개 전부가 다중 엔트리 음악/SFX 목록 — 셔플 재생 의도가 명백.)
 /// - `startsilent=true`(224/382)는 "씬 시작 시 자동재생 안 함" — WE 에선 트리거/SceneScript 로 기동
 ///   (single 148/224 + parent 보유 121/224 로 트리거성 SFX·보이스에 집중; false 157 은 비-parent
-///   loop 140 의 배경음악). Waple 은 사운드 트리거 미지원 → 스킵. 시작 시점 무음이라는 점에서 WE 와
-///   동일하고, 이후 트리거 재생만 미지원(한계).
+///   loop 140 의 배경음악). 이름 있는 사운드는 등록만 하고 SceneScript의 play/stop/pause/
+///   isPlaying/volume 브리지로 기동한다. 이름도 없으면 자동재생과 트리거 모두 없어 스킵한다.
 /// - 음량은 (오서 볼륨 × VideoSettings 배경별 설정)으로 합성 — 동영상 설정 메뉴의 음소거/음량이 그대로
 ///   씬 오디오에도 적용된다. 기본 VideoSettings.volume 은 0(음소거)이라 사용자가 명시적으로 올리기
 ///   전엔 소리 나지 않는다.

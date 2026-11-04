@@ -16,6 +16,18 @@ import simd
 /// 2D 와 달리 키0 ≠ bind 인 캐릭터가 흔함(바인드=T포즈, idle=이완포즈) — t=0 항등 가정은 버리되
 /// 위 식은 그대로 정답(애니 첫 프레임 포즈로 변형). 오일러 순서·bindWorld 합성은 렌더 실측으로 게이트.
 public enum Model3DPose {
+    public static func replacingLocalOrigin(in matrix: simd_float4x4, origin: SIMD3<Float>) -> simd_float4x4 {
+        var result = matrix
+        result.columns.3 = SIMD4(origin, matrix.columns.3.w)
+        return result
+    }
+
+    public static func replacingLocalAngles(in matrix: simd_float4x4,
+                                             anglesRadians: SIMD3<Float>) -> simd_float4x4? {
+        guard var pose = PuppetPose.decomposeTRS(matrix) else { return nil }
+        pose.rotation = PuppetPose.rotationQuaternion(anglesRadians)
+        return PuppetPose.trsMatrix(pose)
+    }
     /// 트랙 키 보간(프레임당 1키) → TRS. 빈 트랙 → nil(바인드 로컬 사용).
     ///
     /// 위치·스케일은 성분 lerp, **회전은 오일러 lerp 가 아니라 쿼터니언 nlerp**(최단호 부호보정 +
@@ -94,14 +106,16 @@ public enum Model3DPose {
     /// 경로는 WE 에 없다(동봉 셰이더 137개 grep 0건). 법선도 같은 가중합의 3×3 부분을 쓴다
     /// (`CAST3X3(g_Bones[…])` — `genericimage3.vert:170-173`). 근거 단일 소스는
     /// `PuppetPose.skinnedPositions` 주석. wsum 나눗셈은 Waple 자체 셰이더 정합용 발산이다.
-    public static func cpuSkinnedPacked(mesh: Model3D.Mesh, matrices: [simd_float4x4]) -> [Float] {
+    public static func cpuSkinnedPacked(mesh: Model3D.Mesh, matrices: [simd_float4x4],
+                                        includeTangents: Bool = false, includeUV1: Bool = false) -> [Float] {
         guard !matrices.isEmpty else { return [] }
         let mx = UInt32(matrices.count - 1)
         var out: [Float] = []
-        out.reserveCapacity(mesh.vertices.count * 8)
+        out.reserveCapacity(mesh.vertices.count * (8 + (includeTangents ? 4 : 0) + (includeUV1 ? 2 : 0)))
         for v in mesh.vertices {
             var p = v.position
             var n = v.normal
+            var tangent = SIMD3(v.tangent.x, v.tangent.y, v.tangent.z)
             let wsum = v.weights.x + v.weights.y + v.weights.z + v.weights.w
             if wsum > 0 {
                 let w = v.weights / wsum
@@ -109,19 +123,114 @@ public enum Model3DPose {
                                         min(v.boneIndices.z, mx), min(v.boneIndices.w, mx))
                 let p4 = SIMD4<Float>(v.position, 1)
                 let n4 = SIMD4<Float>(v.normal, 0)
+                let t4 = SIMD4<Float>(tangent, 0)
                 var sp = SIMD3<Float>(0, 0, 0)
                 var sn = SIMD3<Float>(0, 0, 0)
+                var st = SIMD3<Float>(0, 0, 0)
                 for k in 0..<4 {
                     let tp = matrices[Int(idx[k])] * p4
                     let tn = matrices[Int(idx[k])] * n4
                     sp += w[k] * SIMD3<Float>(tp.x, tp.y, tp.z)
                     sn += w[k] * SIMD3<Float>(tn.x, tn.y, tn.z)
+                    if includeTangents {
+                        let tt = matrices[Int(clamping: idx[k])] * t4
+                        st += w[k] * SIMD3<Float>(tt.x, tt.y, tt.z)
+                    }
                 }
                 p = sp; n = sn
+                if includeTangents { tangent = st }
             }
-            out.append(contentsOf: [p.x, p.y, p.z, n.x, n.y, n.z, v.uv.x, v.uv.y])
+            out.append(contentsOf: [p.x, p.y, p.z, n.x, n.y, n.z])
+            if includeTangents { out.append(contentsOf: [tangent.x, tangent.y, tangent.z, v.tangent.w]) }
+            out.append(contentsOf: [v.uv.x, v.uv.y])
+            if includeUV1 { out.append(contentsOf: [v.uv1.x, v.uv1.y]) }
         }
         return out
+    }
+
+    /// The Model3D track type uses the same recovered cascade/TRS math as PuppetPose.worldMatrices.
+    public static func worldMatrices(model: Model3D,
+                                      layers: [(anim: Int, additive: Bool, weight: Float, rate: Float)],
+                                      time: Float, overrideFrames: [Float?]? = nil,
+                                      localOverrides: [Int: simd_float4x4] = [:]) -> [simd_float4x4] {
+        guard !model.bones.isEmpty else { return [] }
+        if layers.isEmpty && localOverrides.isEmpty { return buildBindWorlds(model.bones) }
+        let frames = layers.enumerated().map { (i, layer) -> Float in
+            if let overrideFrames, i < overrideFrames.count, let frame = overrideFrames[i] { return frame }
+            guard model.animations.indices.contains(layer.anim) else { return 0 }
+            let clip = model.animations[layer.anim]
+            return PuppetPose.frame(time: time * layer.rate, fps: clip.fps, length: clip.lengthFrames, mode: clip.mode)
+        }
+        var world = [simd_float4x4](repeating: matrix_identity_float4x4, count: model.bones.count)
+        for (i, bone) in model.bones.enumerated() {
+            let local: simd_float4x4
+            if var pose = PuppetPose.decomposeTRS(bone.bind) {
+                for (li, layer) in layers.enumerated() {
+                    guard model.animations.indices.contains(layer.anim) else { continue }
+                    let tracks = model.animations[layer.anim].tracks
+                    guard tracks.indices.contains(i), let clip = sampledTRS(tracks[i], frame: frames[li]) else { continue }
+                    if layer.additive {
+                        guard let reference = sampledTRS(tracks[i], frame: 0) else { continue }
+                        pose = PuppetPose.addTRS(pose, clip: clip, reference: reference, weight: layer.weight)
+                    } else {
+                        pose = PuppetPose.mixTRS(pose, clip, layer.weight)
+                    }
+                }
+                local = PuppetPose.trsMatrix(pose)
+            } else {
+                var matrix = bone.bind
+                for (li, layer) in layers.enumerated() {
+                    guard model.animations.indices.contains(layer.anim) else { continue }
+                    let tracks = model.animations[layer.anim].tracks
+                    guard tracks.indices.contains(i), let clip = sampledLocal(tracks[i], frame: frames[li]) else { continue }
+                    if layer.additive {
+                        let reference = sampledLocal(tracks[i], frame: 0) ?? bone.bind
+                        matrix = PuppetPose.mixLocal(matrix_identity_float4x4,
+                                                     clip * PuppetPose.safeInverse(reference), layer.weight) * matrix
+                    } else {
+                        matrix = PuppetPose.mixLocal(matrix, clip, layer.weight)
+                    }
+                }
+                local = matrix
+            }
+            let parent = Int(clamping: bone.parent)
+            let effectiveLocal = localOverrides[i] ?? local
+            world[i] = parent >= 0 && parent < i ? world[parent] * effectiveLocal : effectiveLocal
+        }
+        return world
+    }
+
+    public static func blendedSkinMatrices(model: Model3D,
+                                            layers: [(anim: Int, additive: Bool, weight: Float, rate: Float)],
+                                            time: Float, overrideFrames: [Float?]? = nil,
+                                            localOverrides: [Int: simd_float4x4] = [:]) -> [simd_float4x4] {
+        guard !layers.isEmpty || !localOverrides.isEmpty else {
+            return Array(repeating: matrix_identity_float4x4, count: model.bones.count)
+        }
+        let world = worldMatrices(model: model, layers: layers, time: time, overrideFrames: overrideFrames,
+                                  localOverrides: localOverrides)
+        let bind = buildBindWorlds(model.bones)
+        return world.indices.map { world[$0] * PuppetPose.safeInverse(bind[$0]) }
+    }
+
+    public static func attachmentFrame(model: Model3D, name: String,
+                                        layers: [(anim: Int, additive: Bool, weight: Float, rate: Float)],
+                                        time: Float, overrideFrames: [Float?]? = nil,
+                                        localOverrides: [Int: simd_float4x4] = [:]) -> simd_float4x4? {
+        guard let attachment = model.attachments.first(where: { $0.name == name }),
+              attachment.bone >= 0, Int(clamping: attachment.bone) < model.bones.count else { return nil }
+        // 3D animation=nil is a bind pose; unlike the 2D single-clip fallback it must not start clip0.
+        return worldMatrices(model: model, layers: layers, time: time,
+                             overrideFrames: overrideFrames, localOverrides: localOverrides)[Int(clamping: attachment.bone)] * attachment.local
+    }
+
+    public static func integratedCascadeFrame(model: Model3D, anim: Int, rate: Float, time: Float, dt: Float,
+                                               previousPhase: Float?) -> (phase: Float, frame: Float) {
+        guard model.animations.indices.contains(anim) else { return (0, 0) }
+        let clip = model.animations[anim]
+        let phase = previousPhase.map { $0 + dt * rate * clip.fps } ?? (time * rate * clip.fps)
+        return (phase, PuppetPose.frame(time: phase / max(clip.fps, 1e-6), fps: clip.fps,
+                                       length: clip.lengthFrames, mode: clip.mode))
     }
 
     /// animationlayers 레이어 → 파스된 애니 인덱스. C③: clipId(scene.json animationlayers[].animation,

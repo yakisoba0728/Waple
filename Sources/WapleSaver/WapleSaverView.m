@@ -4,6 +4,7 @@
 #import <ScreenSaver/ScreenSaver.h>
 #import <pwd.h>
 #import <unistd.h>
+#import <math.h>
 
 // Waple 화면보호기: kr.yaki.waple.saver 도메인의 videoPath 동영상(mp4/mov/m4v)을
 // AVPlayerLayer 로 무한 루프(음소거) 재생한다. 경로가 없거나 재생 불가면 검은 화면 + 안내 텍스트.
@@ -18,6 +19,8 @@
 @property(nonatomic, copy) NSString *loadedVideoPath;
 @property(nonatomic, copy) NSDictionary *loadedVideoIdentity;
 @property(nonatomic) BOOL hasLoadedContent;
+@property(nonatomic) BOOL animationActive;
+@property(nonatomic) NSUInteger playbackGeneration;
 @end
 
 @implementation WapleSaverView
@@ -40,13 +43,18 @@
 
 - (void)startAnimation {
     [super startAnimation];
+    self.animationActive = YES;
+    self.playbackGeneration += 1;
     // ScreenSaverEngine은 같은 인스턴스에 start/stop을 반복 호출한다. 설정이 그대로인데
     // player/observer/layer를 매번 버리면 재생 위치가 0으로 돌아가고 디코더도 재생성된다.
     [self reloadContentIfNeeded];
+    [self applyVideoSettings];
     [self.player play];
 }
 
 - (void)stopAnimation {
+    self.animationActive = NO;
+    self.playbackGeneration += 1;
     [self.player pause];
     [super stopAnimation];
 }
@@ -63,12 +71,10 @@
 // 앱(ScreenSaverController)이 CFPreferences 로 써 준 동영상 경로.
 // legacyScreenSaver 는 샌드박스라 CFPreferences 조회가 자기 컨테이너로 리다이렉트될 수 있어,
 // 실패 시 실제 홈의 ~/Library/Preferences/kr.yaki.waple.saver.plist 를 직접 읽어 폴백한다.
-- (NSString *)configuredVideoPath {
-    NSString *path = (__bridge_transfer NSString *)CFPreferencesCopyAppValue(
-        CFSTR("videoPath"), CFSTR("kr.yaki.waple.saver"));
-    if ([path isKindOfClass:NSString.class] && path.length > 0) {
-        return path;
-    }
+- (id)configuredValueForKey:(NSString *)key {
+    id value = (__bridge_transfer id)CFPreferencesCopyAppValue(
+        (__bridge CFStringRef)key, CFSTR("kr.yaki.waple.saver"));
+    if (value != nil) { return value; }
     struct passwd *pw = getpwuid(getuid());
     if (!pw || !pw->pw_dir) {
         return nil;
@@ -76,8 +82,24 @@
     NSString *plistPath = [NSString stringWithFormat:
         @"%s/Library/Preferences/kr.yaki.waple.saver.plist", pw->pw_dir];
     NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:plistPath];
-    NSString *fromFile = dict[@"videoPath"];
-    return [fromFile isKindOfClass:NSString.class] ? fromFile : nil;
+    return dict[key];
+}
+
+- (NSString *)configuredVideoPath {
+    id value = [self configuredValueForKey:@"videoPath"];
+    return [value isKindOfClass:NSString.class] ? value : nil;
+}
+
+- (void)applyVideoSettings {
+    id fit = [self configuredValueForKey:@"videoFitMode"];
+    self.playerLayer.videoGravity = [fit isEqual:@"fit"] ? AVLayerVideoGravityResizeAspect
+        : [fit isEqual:@"stretch"] ? AVLayerVideoGravityResize : AVLayerVideoGravityResizeAspectFill;
+    id rateValue = [self configuredValueForKey:@"videoPlaybackRate"];
+    float rate = [rateValue isKindOfClass:NSNumber.class] ? [rateValue floatValue] : 1.0f;
+    if (!isfinite(rate)) { rate = 1.0f; }
+    rate = fmaxf(0.1f, fminf(2.0f, rate));
+    self.player.defaultRate = rate;
+    if (self.animationActive) { self.player.rate = rate; }
 }
 
 // 존재하는 파일 + AVFoundation 이 확실히 재생하는 컨테이너만 허용.
@@ -136,7 +158,9 @@
     self.loadedVideoIdentity = [self videoFileIdentityForPath:path];
     self.hasLoadedContent = YES;
     if (![self isPlayableVideoPath:path]) {
-        [self showMessage:@"Waple\n재생할 동영상이 없습니다 — Waple 메뉴에서 동영상 배경을 적용한 뒤 다시 시도하세요."];
+        NSBundle *bundle = [NSBundle bundleForClass:WapleSaverView.class];
+        NSString *message = @"Waple\n재생할 동영상이 없습니다 — Waple 메뉴에서 동영상 배경을 적용한 뒤 다시 시도하세요.";
+        [self showMessage:[bundle localizedStringForKey:message value:message table:nil]];
         return;
     }
 
@@ -156,13 +180,23 @@
                     object:item
                      queue:NSOperationQueue.mainQueue
                 usingBlock:^(__unused NSNotification *notification) {
-        [item seekToTime:kCMTimeZero completionHandler:^(__unused BOOL finished) {
-            [weakSelf.player play];
+        WapleSaverView *view = weakSelf;
+        if (!view.animationActive || view.player.currentItem != item) { return; }
+        NSUInteger generation = view.playbackGeneration;
+        [item seekToTime:kCMTimeZero completionHandler:^(BOOL finished) {
+            // AVFoundation may complete on another queue, after stop or after a replacement/start.
+            dispatch_async(dispatch_get_main_queue(), ^{
+                WapleSaverView *current = weakSelf;
+                if (finished && current.animationActive && current.playbackGeneration == generation
+                    && current.player.currentItem == item) {
+                    [current.player play];
+                }
+            });
         }];
     }];
 
     [self layoutContent];
-    [self.player play];
+    [self applyVideoSettings];
 }
 
 // 검은 배경 위 중앙 안내 텍스트.
@@ -186,6 +220,7 @@
 }
 
 - (void)tearDownContent {
+    self.playbackGeneration += 1;
     if (self.endObserver) {
         [NSNotificationCenter.defaultCenter removeObserver:self.endObserver];
         self.endObserver = nil;

@@ -295,15 +295,30 @@ struct NowPlayingBar: View {
     /// 재생목록 관리: 자동 전환·간격 + 선택 항목 추가/제거 + 목록.
     private var playlistPopover: some View {
         VStack(alignment: .leading, spacing: Space.md) {
+            Picker("저장된 재생목록", selection: Binding(get: { viewModel.playlist.selectedPlaylistId },
+                set: { id in
+                    _ = viewModel.playlist.selectPlaylist(id: id)
+                    viewModel.objectWillChange.send()
+                    viewModel.onPlaylistChanged?()
+                })) {
+                ForEach(viewModel.playlist.savedPlaylists, id: \.id) { Text($0.name).tag($0.id) }
+            }
             // playlist(PlaylistStore)는 @Published 가 아니라 직접 mutate 만으로는 body(간격 라벨·부제)가
             // 재평가되지 않는다 — togglePlaylist 전례처럼 owning VM 에 objectWillChange 를 쏘아 갱신을 건다.
             Toggle("자동 전환", isOn: Binding(
                 get: { viewModel.playlist.enabled },
                 set: { viewModel.playlist.enabled = $0; viewModel.objectWillChange.send(); viewModel.onPlaylistChanged?() }))
-            Stepper(String(format: NSLocalizedString("간격: %lld분", comment: "재생목록 전환 간격"),
-                            viewModel.playlist.intervalMinutes), value: Binding(
-                get: { viewModel.playlist.intervalMinutes },
-                set: { viewModel.playlist.intervalMinutes = $0; viewModel.objectWillChange.send(); viewModel.onPlaylistChanged?() }), in: 1...240)
+            HStack {
+                Text("전환 간격(분)")
+                TextField("전환 간격(분)", value: Binding(
+                    get: { viewModel.playlist.configuration.delayMinutes },
+                    set: { value in
+                        var configuration = viewModel.playlist.configuration
+                        configuration.delayMinutes = value
+                        viewModel.playlist.configuration = configuration
+                        viewModel.objectWillChange.send(); viewModel.onPlaylistChanged?()
+                    }), format: .number)
+            }
             // w5d-playback: 고정 순서만 순환하던 자동 전환에 무작위 순서 옵션 추가.
             Toggle("셔플(무작위 순서)", isOn: Binding(
                 get: { viewModel.playlist.shuffle },

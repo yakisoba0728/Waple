@@ -113,6 +113,14 @@ public final class SceneVideoLayer {
     /// ponytail: 고정 3-deep 링. 티어링이 스모크에서 보이면 semaphore 완료핸들러 해제로 승급.
     private var frameHold: [(CVPixelBuffer, CVMetalTexture)] = []
     private var lastLiveTexture: MTLTexture?
+    private var runtimeLoops = true
+    private var runtimePlaying = true
+    private var runtimeRate: Double = 1
+    private var runtimeAnchorTime: Double = 0
+    private var runtimeAnchorPosition: Double = 0
+    private var runtimeLastSceneTime: Double = 0
+    private var runtimeHasControl = false
+    private var runtimeEndedGeneration: UInt64 = 0
     /// F5-2: startLive 가 채운다 — identity(기본값)면 기존 CVMetalTextureCache 제로카피 경로 그대로.
     private var trackOrientation: VideoTrackOrientation = .identity
 
@@ -202,8 +210,11 @@ public final class SceneVideoLayer {
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self, weak p] _ in
+            guard let self else { return }
+            self.runtimeEndedGeneration &+= 1
+            guard self.runtimeLoops else { self.runtimePlaying = false; p?.pause(); return }
             p?.seek(to: .zero)
-            guard self?.paused != true else { return }
+            guard !self.paused, self.runtimePlaying else { return }
             p?.play()
         }
         player = p
@@ -334,7 +345,46 @@ public final class SceneVideoLayer {
     /// `rate` 는 seek·이음매에서 0 을 스치는 **순간 상태**라 의도를 답하지 못한다.
     private var paused = false
     public func pause() { paused = true; player?.pause() }
-    public func resume() { paused = false; player?.play() }
+    public func resume() { paused = false; if runtimePlaying { player?.play() } }
+
+    var runtimeSnapshot: [String: Any] {
+        let time = player?.currentTime().seconds ?? runtimePosition(at: runtimeLastSceneTime)
+        let length = player?.currentItem?.duration.seconds ?? duration
+        return ["currentTime": time.isFinite ? max(0, time) : 0,
+                "duration": length.isFinite ? max(0, length) : 0,
+                "rate": runtimeRate, "loop": runtimeLoops,
+                "playing": runtimePlaying && !paused, "endedGeneration": runtimeEndedGeneration]
+    }
+
+    private func runtimePosition(at time: Double) -> Double {
+        guard runtimeHasControl else { return time }
+        return runtimeAnchorPosition + (runtimePlaying ? max(0, time - runtimeAnchorTime) * runtimeRate : 0)
+    }
+
+    func applyRuntime(action: String, value: Any?) -> Bool {
+        let position = player?.currentTime().seconds ?? runtimePosition(at: runtimeLastSceneTime)
+        runtimeAnchorPosition = position.isFinite ? max(0, position) : 0
+        runtimeAnchorTime = runtimeLastSceneTime
+        runtimeHasControl = true
+        switch action {
+        case "play": runtimePlaying = true; if !paused { player?.play() }
+        case "pause": runtimePlaying = false; player?.pause()
+        case "stop": runtimePlaying = false; runtimeAnchorPosition = 0; player?.pause(); player?.seek(to: .zero)
+        case "setCurrentTime", "seek":
+            guard let number = value as? NSNumber, number.doubleValue.isFinite else { return false }
+            runtimeAnchorPosition = max(0, number.doubleValue)
+            player?.seek(to: CMTime(seconds: runtimeAnchorPosition, preferredTimescale: 600))
+        case "setRate", "rate":
+            guard let number = value as? NSNumber, number.doubleValue.isFinite else { return false }
+            runtimeRate = max(0.1, number.doubleValue)
+            if runtimePlaying, !paused { player?.rate = Float(runtimeRate) }
+        case "setLoop", "loop":
+            guard let enabled = value as? Bool else { return false }
+            runtimeLoops = enabled
+        default: return false
+        }
+        return true
+    }
 
     // MARK: 라이브 실패 정적 폴 백 (감사 V06)
 
@@ -375,10 +425,13 @@ public final class SceneVideoLayer {
     /// 동일 scene-time 프레임을 낸다(clamp 아님 — 루프 재생 정합). 디코드 실패(LZ4-mp4 등
     /// AVFoundation 미해독)면 nil → 호출부가 placeholder 폴백(형제 레이어 보존).
     public func headlessTexture(at t: Float, device: MTLDevice) -> MTLTexture? {
+        runtimeLastSceneTime = Double(t)
+        let requested = runtimePosition(at: Double(t))
+        let position = runtimeLoops ? wrappedTime(requested) : min(max(0, requested), max(0, duration))
         let cg: CGImage
         do {
             cg = try generator.copyCGImage(
-                at: CMTime(seconds: wrappedTime(Double(t)), preferredTimescale: 600), actualTime: nil)
+                at: CMTime(seconds: position, preferredTimescale: 600), actualTime: nil)
         } catch {
             guard let zero = try? generator.copyCGImage(at: .zero, actualTime: nil) else { return nil }
             cg = zero

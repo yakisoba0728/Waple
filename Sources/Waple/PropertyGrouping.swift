@@ -36,8 +36,21 @@ enum PropertyGrouping {
     static func sections(in properties: [WallpaperProperty], visible: [Int]) -> [PropertySection] {
         var out: [PropertySection] = []
         var current = PropertySection(title: nil, rows: [])
-        for i in visible where properties.indices.contains(i) {
-            if PropertyControl.kind(forType: properties[i].type) == .displayOnly {
+        let visible = Set(visible)
+        var explicitGroup = false
+        var groupVisible = true
+        // Group boundaries must survive filtering: a hidden header also hides its children.
+        for i in properties.indices {
+            if properties[i].type.lowercased() == "group" {
+                if current.title != nil || !current.rows.isEmpty { out.append(current) }
+                groupVisible = visible.contains(i)
+                explicitGroup = true
+                current = PropertySection(title: groupVisible ? i : nil, rows: [])
+                continue
+            }
+            guard groupVisible, visible.contains(i) else { continue }
+            if !explicitGroup, properties[i].type.lowercased() != "usershortcut",
+               PropertyControl.kind(forType: properties[i].type) == .displayOnly {
                 // 선두의 빈 덩어리는 버린다 — 첫 속성이 곧 구분 문구인 경우가 흔한데,
                 // 그때 제목도 내용도 없는 섹션을 하나 만들면 카드 하나가 빈 채로 뜬다.
                 if current.title != nil || !current.rows.isEmpty { out.append(current) }

@@ -13,10 +13,12 @@ public struct LibraryEntry: Codable, Equatable {
     public var contentRating: String?
     /// 워크샵 평점 0…1(vote_data.score, 다운로드 시 저장). 로컬 임포트는 nil.
     public var rating: Double?
+    /// Remote publishedfileid, independent of the local project/uniquified entry id.
+    public var workshopItemID: String?
 
     public init(id: String, title: String, typeRaw: String,
                 fileName: String?, previewName: String?, bookmark: Data,
-                tags: [String]? = nil, contentRating: String? = nil, rating: Double? = nil) {
+                tags: [String]? = nil, contentRating: String? = nil, rating: Double? = nil, workshopItemID: String? = nil) {
         self.id = id
         self.title = title
         self.typeRaw = typeRaw
@@ -26,5 +28,6 @@ public struct LibraryEntry: Codable, Equatable {
         self.tags = tags
         self.contentRating = contentRating
         self.rating = rating
+        self.workshopItemID = workshopItemID
     }
 }

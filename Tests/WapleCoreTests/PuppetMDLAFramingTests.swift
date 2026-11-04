@@ -325,19 +325,20 @@ final class PuppetMDLAFramingTests: XCTestCase {
 
     // MARK: - 클립 flags bit0 → 꼬리 0xC0 레코드 (r2-H2)
 
-    /// 엔진 기본값을 흉내낸 192바이트 레코드 — 선두 u32 가 `-1`(0xFFFFFFFF) 이라 이벤트 수로는
+    /// [폐기된 최초 가설 — 실제 스트림은 아래18B] 엔진 기본값을 흉내낸 192바이트 레코드 — 선두 u32 가 `-1`(0xFFFFFFFF) 이라 이벤트 수로는
     /// 성립하지 않는다(`0x140264ff7` 이 심는 값). 나머지는 1.0f 로 채운다.
     private func flagBit0Record() -> [UInt8] {
-        var out: [UInt8] = [0xFF, 0xFF, 0xFF, 0xFF]
-        while out.count < 0xC0 { out.append(contentsOf: [0x00, 0x00, 0x80, 0x3F]) }   // 1.0f
-        return out
+        // [2026-11-05 correction]0xC0 was heap allocation; sourceC2865..2896 reads18B.
+        // u16 bone/tag index0, then four u32 fields. Firstu32 on the wire is65536, not an eventcount.
+        [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     }
 
-    /// **회귀 핀(r2-H2).** 클립 헤더의 `u32 flags` bit0 이 서면 본 트랙 뒤·이벤트 블록 앞에
-    /// 0xC0(192)바이트 레코드가 하나 더 붙는다. 종전 파서는 `flags` 를 아예 읽지 않고
+    /// **회귀 핀(r2-H2, 2026-11-05 형식 정정).** 클립 flags bit0 이 서면 본 트랙 뒤·이벤트 블록 앞에
+    /// u16+4u32(18B)가 붙는다. 최초192B 가설은 heap allocation을 파일바이트로 오인했다.
+    /// 종전 파서는 `flags` 를 아예 읽지 않고
     /// (`fps|frameCount|boneCount` 셋만 바인딩하고 `o += 16`) 그 레코드의 선두 u32 를
     /// 이벤트 수로 오독했다 — 그 클립과 **그 뒤의 모든 클립**이 사라진다.
-    func testClipFlagsBit0SkipsThe192ByteTailRecordBeforeTheEventBlock() throws {
+    func testClipFlagsBit0SkipsThe18ByteTailRecordBeforeTheEventBlock() throws {
         let clips = [
             Clip(id: 11, name: "flagged", mode: "loop", fps: 24, frameCount: 1,
                  flags: 1, tracks: [(0, [key(x: 3), key(x: 4)])],

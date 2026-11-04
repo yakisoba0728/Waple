@@ -12,10 +12,12 @@ public enum GLSLTypeAdapter {
         /// 소스에 선언된 struct 의 멤버 이름 전체. `.a`/`.st`/`.xy`/`.rgba` 처럼 **스위즐 글자로만**
         /// 이루어진 필드 이름을 스위즐로 오독하지 않기 위한 화이트리스트(F612 재발 차단 — 아래 사용처 참조).
         public var structFields: Set<String>
+        public var arrayElements: [String: Int]
         public init(vars: [String: Int], functions: [String: Int] = [:], functionParams: [String: [Int]] = [:],
-                    intVars: Set<String> = [], structFields: Set<String> = []) {
+                    intVars: Set<String> = [], structFields: Set<String> = [], arrayElements: [String: Int] = [:]) {
             self.vars = vars; self.functions = functions; self.functionParams = functionParams; self.intVars = intVars
             self.structFields = structFields
+            self.arrayElements = arrayElements
         }
     }
 
@@ -75,10 +77,10 @@ public enum GLSLTypeAdapter {
 
     static func typeSize(_ name: String) -> Int? {
         switch GLSLType.from(name) {
-        case .some(.float): return 1
-        case .some(.vec2): return 2
-        case .some(.vec3): return 3
-        case .some(.vec4): return 4
+        case .some(.float), .some(.int), .some(.uint): return 1
+        case .some(.vec2), .some(.uvec2), .some(.ivec2): return 2
+        case .some(.vec3), .some(.uvec3), .some(.ivec3): return 3
+        case .some(.vec4), .some(.uvec4), .some(.ivec4): return 4
         case .some(.mat2), .some(.mat3), .some(.mat4), .some(.mat4x3): return 0
         case .some(.sampler2D), .some(.sampler2DComparison), .some(.sampler3D): return 0
         case .none:
@@ -213,6 +215,7 @@ public enum GLSLTypeAdapter {
             if typeTok == "int" || typeTok == "uint" { p.intVars.insert(nameTok.text) }
             if p.peek() == "[" {  // 배열 선언 — 크기 파싱 후 불투명 등록
                 p.env.vars[nameTok.text] = 0
+                p.env.arrayElements[nameTok.text] = declaredSize
                 p.out += p.advance().full  // '['
                 var sizeText = ""
                 while p.pos < p.toks.count, p.peek() != "]" { let tk = p.advance(); sizeText += tk.text; p.out += tk.full }
@@ -429,6 +432,7 @@ public enum GLSLTypeAdapter {
 
     private static func postfix(_ p: P) -> Node {
         var base = primary(p)
+        var arrayElement = p.env.arrayElements[base.text.trimmingCharacters(in: .whitespacesAndNewlines)]
         var preSwizzle: (text: String, size: Int)? = nil
         while let t = p.peek() {
             if t == "." {
@@ -468,7 +472,8 @@ public enum GLSLTypeAdapter {
                 }
                 var text = base.text + open + idxText
                 if p.peek() == "]" { text += p.advance().full }
-                base = Node(text: text, size: base.size > 1 ? 1 : 0)
+                base = Node(text: text, size: arrayElement ?? (base.size > 1 ? 1 : 0))
+                arrayElement = nil
             } else if t == "++" || t == "--" {
                 base = Node(text: base.text + p.advance().full, size: base.size)
             } else { break }

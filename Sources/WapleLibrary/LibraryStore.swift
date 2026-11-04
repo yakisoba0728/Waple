@@ -16,6 +16,7 @@ import WapleCore
 /// 새로 생기면) 이 표기는 거짓이 되므로, 새 메서드를 백그라운드에서 부르기 전에 위 둘을 확인할 것.
 public final class LibraryStore: @unchecked Sendable {
     private let baseDirectory: URL
+    public var storageDirectory: URL { baseDirectory }
     private let indexURL: URL
     public private(set) var entries: [LibraryEntry] = []
     public private(set) var selectedId: String?
@@ -84,13 +85,13 @@ public final class LibraryStore: @unchecked Sendable {
     }
 
     @discardableResult
-    public func importFolder(_ folderURL: URL) throws -> LibraryEntry {
-        try importFolder(folderURL, saving: true)
+    public func importFolder(_ folderURL: URL, workshopItemID: String? = nil) throws -> LibraryEntry {
+        try importFolder(folderURL, saving: true, workshopItemID: workshopItemID)
     }
 
     /// F582: 일괄 임포트(importFolders)는 폴더마다 save() 하지 않고 마지막에 한 번만 저장한다
     /// (호출마다 전체 인덱스 재작성 O(n²) 방지). 단건 임포트는 종전대로 즉시 저장.
-    private func importFolder(_ folderURL: URL, saving: Bool) throws -> LibraryEntry {
+    private func importFolder(_ folderURL: URL, saving: Bool, workshopItemID: String? = nil) throws -> LibraryEntry {
         let project = try ProjectJSONParser.parse(folderURL: folderURL)
         let bookmark = try folderURL.bookmarkData(
             options: [], includingResourceValuesForKeys: nil, relativeTo: nil
@@ -136,7 +137,9 @@ public final class LibraryStore: @unchecked Sendable {
         // `importFolders(scanImportableFolders(in:))`(:152) 한 번에 **모든 평점이 무통지로
         // 소실**됐다 — 재다운로드한 것만 복구되는 사용자 데이터 소실이다.
         // id 가 uniqueEntryId 로 새로 발급된 경우엔 기존 엔트리가 없어 자연히 nil 이 된다(정상).
-        entry.rating = entries.first { $0.id == entry.id }?.rating
+        let previous = entries.first { $0.id == entry.id }
+        entry.rating = previous?.rating
+        entry.workshopItemID = workshopItemID ?? previous?.workshopItemID ?? project.workshopId
         entries.removeAll { $0.id == entry.id }
         entries.append(entry)
         if saving { save() }

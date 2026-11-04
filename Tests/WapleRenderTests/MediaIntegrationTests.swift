@@ -8,7 +8,8 @@ final class NowPlayingParseTests: XCTestCase {
         let out = "1\tSong A\tArtist B\tAlbum C\t12.5\t240.0\n"
         let i = AppleScriptNowPlayingProvider.parse(out, app: "Music")
         XCTAssertEqual(i, NowPlayingInfo(state: .playing, title: "Song A", artist: "Artist B",
-                                         album: "Album C", position: 12.5, duration: 240.0))
+                                         album: "Album C", position: 12.5, duration: 240.0,
+                                         sessionID: "Music"))
     }
 
     func testParseSpotifyDurationMs() {

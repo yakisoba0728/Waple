@@ -20,6 +20,10 @@
 
 usage:
     python scripts/spec/measure_particle_fields.py
+    python scripts/spec/measure_particle_fields.py --refresh-source-refs
+
+`--refresh-source-refs`는 현재 소스로 재현 가능한 소비 위치·주석·파일 근거만 갱신한다.
+워크샵 도수와 나머지 코퍼스 측정값은 읽은 그대로 보존하며, 입력 코퍼스를 대체하지 않는다.
 """
 import collections
 import json
@@ -513,7 +517,33 @@ def build(r):
     ]
 
 
+def refresh_source_refs(path=OUT):
+    """Recompute only source-derived references without replacing measured corpus facts."""
+    line = _flags_consume_lineno()
+    if line is None:
+        raise SystemExit("[particle-fields] flags consumption source not found; nothing written")
+    with open(path, encoding="utf-8") as source:
+        document = json.load(source)
+    entries = [entry for entry in document.get("entries", [])
+               if isinstance(entry, dict) and entry.get("id") == "engine.particle.systemFlagsUnused"]
+    if len(entries) != 1 or not isinstance(entries[0].get("value"), dict):
+        raise SystemExit("[particle-fields] expected one existing flags entry; nothing written")
+    entry = entries[0]
+    file_evidence = [evidence for evidence in entry.get("evidence", [])
+                     if isinstance(evidence, dict) and evidence.get("kind") == "file"]
+    if len(file_evidence) != 1 or not str(file_evidence[0].get("ref", "")).startswith(RSRC + ":"):
+        raise SystemExit("[particle-fields] unexpected source evidence; nothing written")
+    entry["value"]["consumeSite"] = flags_consume_site()
+    entry["value"]["staleComment"] = flags_comment_staleness()
+    file_evidence[0]["ref"] = f"{RSRC}:{line}"
+    specfmt.dump(document, path)
+    print(f"[particle-fields] refreshed source references: {RSRC}:{line}; corpus facts preserved")
+
+
 def main():
+    if sys.argv[1:] == ["--refresh-source-refs"]:
+        refresh_source_refs()
+        return
     specfmt.require_inputs("measure_particle_fields",
                            ("dir", T.WS, "WE_WORKSHOP", "워크샵 코퍼스"))
     r = scan()

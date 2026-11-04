@@ -288,7 +288,7 @@ final class WebPropertyDeliveryTests: XCTestCase {
         XCTAssertTrue((got["files"] as? [String])?.contains(expectedPath) == true)
     }
 
-    func testAudioCaptureStartsOnlyAfterAudioListenerRegistration() throws {
+    @MainActor func testAudioCaptureStartsOnlyAfterAudioListenerRegistration() throws {
         final class FakeAudioProvider: AudioSpectrumProviding {
             var onFrame: (([Float]) -> Void)?
             var startCount = 0

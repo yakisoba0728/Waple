@@ -1,7 +1,7 @@
 import Foundation
 
-public enum GLSLType: String, Equatable, Sendable {
-    case float, vec2, vec3, vec4, mat2, mat3, mat4, mat4x3, sampler2D
+public enum GLSLType: String, Equatable, Hashable, Sendable {
+    case float, int, uint, vec2, vec3, vec4, uvec2, uvec3, uvec4, ivec2, ivec3, ivec4, mat2, mat3, mat4, mat4x3, sampler2D
     /// 비교(섀도우) 샘플러 — `sampler2DComparison`(shader-strings.txt :25)은 HLSL 백엔드에서
     /// `Texture2D` + `SamplerComparisonState` 쌍으로 선언된다(같은 파일 :32 `SamplerComparisonState:register(s`,
     /// :34 `SamplerComparisonState `). MSL 대응은 `depth2d<float>` + `sampler_compare`.
@@ -26,14 +26,18 @@ public enum GLSLType: String, Equatable, Sendable {
         // 포함 정수 벡터는 크기 추론용으로 vecN 등가 취급(MSL 스펠링 치환은 typeAndMacroRenames/mslType).
         case "uvec2", "ivec2": return .vec2; case "uvec3", "ivec3": return .vec3
         case "uvec4", "ivec4": return .vec4
+        case "uint2": return .uvec2; case "uint3": return .uvec3; case "uint4": return .uvec4
+        case "int2": return .ivec2; case "int3": return .ivec3; case "int4": return .ivec4
         case "sampler2DBackBuffer": return .sampler2D   // WE shim :22 — texture2d<float> 취급
         default: return nil
         }
     }
-    var components: Int { switch self { case .float: return 1; case .vec2: return 2; case .vec3: return 3; case .vec4: return 4; default: return 0 } }
-    var msl: String {
+    public var components: Int { switch self { case .float, .int, .uint: return 1; case .vec2, .uvec2, .ivec2: return 2; case .vec3, .uvec3, .ivec3: return 3; case .vec4, .uvec4, .ivec4: return 4; default: return 0 } }
+    public var msl: String {
         switch self {
-        case .float: return "float"; case .vec2: return "float2"; case .vec3: return "float3"
+        case .float: return "float"; case .int: return "int"; case .uint: return "uint"; case .vec2: return "float2"; case .vec3: return "float3"
+        case .uvec2: return "uint2"; case .uvec3: return "uint3"; case .uvec4: return "uint4"
+        case .ivec2: return "int2"; case .ivec3: return "int3"; case .ivec4: return "int4"
         case .vec4: return "float4"; case .mat2: return "float2x2"; case .mat3: return "float3x3"; case .mat4: return "float4x4"
         case .mat4x3: return "float4x3"   // WE shim :46 #define mat4x3 float4x3(MSL float4x3 존재)
         case .sampler2D: return "texture2d<float>"
@@ -49,7 +53,7 @@ public enum GLSLType: String, Equatable, Sendable {
         switch self { case .sampler2D, .sampler2DComparison, .sampler3D: return true; default: return false }
     }
     /// float4 슬롯 내 스위즐(파라미터당 float4 패킹).
-    var swizzle: String { switch self { case .float: return ".x"; case .vec2: return ".xy"; case .vec3: return ".xyz"; default: return "" } }
+    var swizzle: String { switch self { case .float, .int, .uint: return ".x"; case .vec2, .uvec2, .ivec2: return ".xy"; case .vec3, .uvec3, .ivec3: return ".xyz"; default: return "" } }
 }
 
 /// 머티리얼 파라미터(선언 순서 보존). 값은 scene.json constantshadervalues[sceneKey] 또는 default.
@@ -58,11 +62,21 @@ public struct MaterialParam: Equatable {
     public let type: GLSLType
     public let sceneKey: String
     public let defaultValue: [Float]
+    public let arrayCount: Int
+    public let isArray: Bool
+    public let slotOffset: Int
+    public var slotCount: Int { type.uniformSlotCount(arrayCount: arrayCount) }
 }
 
 public struct TranslatedShader: Equatable {
     public let msl: String                 // ev_main + ef_main 단일 라이브러리
     public let materialParams: [MaterialParam]
+    public var materialSlotCount: Int { materialParams.last.map { $0.slotOffset + $0.slotCount } ?? 0 }
+    public let engineParams: [ShaderEngineParam]
+    public var engineSlotCount: Int { engineParams.last.map { $0.slotOffset + $0.slotCount } ?? 0 }
+    public let textureKinds: [Int: GLSLType]
+    public let vertexTextureSlots: [Int]
+    public let fragmentTextureSlots: [Int]
     public let textureSlots: [Int]         // 선언된 g_TextureN 의 N 들(오름차순)
     public let usesAudio: Bool
     /// F-X4: 샘플러 주석의 `"default":"경로"`(문자열) — 씬/머티리얼이 슬롯을 지정하지 않을 때의 텍스처
@@ -93,15 +107,35 @@ public enum GLSLTranslator {
     /// `a_Normal` 17파일(저작레인 8) · `a_Color` 9(1) · `a_Tangent4` 8(1) ·
     /// `a_BlendIndices`/`a_BlendWeights` 10/9(0) — `docs/re/shader-uniforms.md` §7.6 의 표.
     ///
-    /// **`a_Normal` 만 넣은 이유**는 그것만 정점 버퍼에 **실제로 있기** 때문이다. 메시 정점은
-    /// `pos3+normal3+uv2`(8f, stride 32)라 법선이 오프셋 12 에 이미 있다. `a_Color`/`a_Tangent4`/
-    /// 스키닝 attribute 는 버퍼에 없으므로 `VIn` 에만 실으면 **컴파일 실패가 파이프라인 생성
-    /// 실패로 바뀔 뿐**이다(둘 다 폴백이지만 진단이 나빠진다). 그 셋은 버퍼 레이아웃 확장이
-    /// 선행돼야 하는 별건이다.
+    /// Extended attributes require their matching producer layout: rigid/skinned mesh buffers carry
+    /// tangent and UV1 data; particle channels use their own descriptor. Attribute names alone are not data.
     public static let vertexAttributeWhitelist: [(name: String, type: GLSLType, slot: Int)] = [
         ("a_Position", .vec3, 0),
         ("a_TexCoord", .vec2, 1),
         ("a_Normal", .vec3, 2),
+        ("a_TexCoordVec4", .vec4, 1),
+        ("a_Tangent4", .vec4, 3),
+        ("a_BlendIndices", .uvec4, 4),
+        ("a_BlendWeights", .vec4, 5),
+        ("a_Color", .vec4, 6),
+        ("a_TexCoordC2", .vec2, 7),
+        ("a_TexCoordVec4C1", .vec4, 8),
+        ("a_PositionVec4", .vec4, 9),
+        ("a_PositionC1", .vec3, 10),
+        ("a_TexCoordVec3", .vec3, 11),
+        ("a_TexCoordC1", .vec2, 12),
+        ("a_TexCoordVec3C1", .vec3, 13),
+        ("a_TexCoordVec3C2", .vec3, 14),
+        ("a_TexCoordVec4C2", .vec4, 15),
+        ("a_TexCoordC3", .vec2, 16),
+        ("a_TexCoordVec3C3", .vec3, 17),
+        ("a_TexCoordVec4C3", .vec4, 18),
+        ("a_TexCoordC4", .vec2, 19),
+        ("a_TexCoordVec3C4", .vec3, 20),
+        ("a_TexCoordVec4C4", .vec4, 21),
+        ("a_TexCoordC5", .vec2, 22),
+        ("a_TexCoordVec3C5", .vec3, 23),
+        ("a_TexCoordVec4C5", .vec4, 24),
     ]
 
     /// 슬롯 0·1 은 **무조건** 싣는다 — 이 리포의 세 정점 디스크립터가 전부 그 둘을 선언하고,
@@ -316,7 +350,14 @@ public enum GLSLTranslator {
         let vVaryingTypes = Dictionary(uniqueKeysWithValues: vVaryings.map { ($0.name, $0.type) })
         let allUniforms = mergeUniforms(vUniforms + fUniforms)
         // BK/G7: **엔진 행렬 유니폼의 선언 타입은 mat4 가 아닐 수 있다.** 아래 참조.
+        guard allUniforms.allSatisfy({ (1...4096).contains($0.arrayCount) }) else { return nil }
         let engineTypes = engineDeclaredTypes(allUniforms)
+        var engineParams: [ShaderEngineParam] = []
+        for uniform in allUniforms where usesEngineData(uniform.name) {
+            let offset = engineParams.last.map { $0.slotOffset + $0.slotCount } ?? 0
+            engineParams.append(ShaderEngineParam(name: uniform.name, type: uniform.type,
+                arrayCount: uniform.arrayCount, isArray: uniform.isArray, slotOffset: offset))
+        }
 
         var textures: [Int] = []
         var textureDefaults: [Int: String] = [:]
@@ -336,7 +377,9 @@ public enum GLSLTranslator {
             else if !u.type.isTextureSampler {
                 let key = u.annotationMaterial ?? defaultKey(u.name)
                 materials.append(MaterialParam(glslName: u.name, type: u.type, sceneKey: key,
-                                               defaultValue: u.annotationDefault ?? engineNeutralDefault(u.name, u.type)))
+                                               defaultValue: u.annotationDefault ?? engineNeutralDefault(u.name, u.type),
+                                               arrayCount: u.arrayCount, isArray: u.isArray,
+                                               slotOffset: materials.last.map { $0.slotOffset + $0.slotCount } ?? 0))
             }
         }
         // 본문/함수/const 스캔은 주석 제거본에서 — 주석 속 토큰(예: 죽은 코드의 g_AudioSpectrum16Left)이
@@ -365,6 +408,13 @@ public enum GLSLTranslator {
         }
         textures = Array(Set(textures)).sorted()
 
+        for name in bodyIds.sorted() where usesEngineData(name) && !engineParams.contains(where: { $0.name == name }) {
+            guard let type = implicitEngineDataType(name) else { continue }
+            let offset = engineParams.last.map { $0.slotOffset + $0.slotCount } ?? 0
+            engineParams.append(ShaderEngineParam(name: name, type: type, arrayCount: 1, isArray: false, slotOffset: offset))
+        }
+        guard (materials.last.map { $0.slotOffset + $0.slotCount } ?? 0) <= 16384,
+              (engineParams.last.map { $0.slotOffset + $0.slotCount } ?? 0) <= 16384 else { return nil }
         // 심볼 치환 사전 구축.
         var frag = symbolMap(materials: materials)
         var vert = symbolMap(materials: materials)
@@ -390,6 +440,10 @@ public enum GLSLTranslator {
             if frag[id] == nil { frag[id] = rep }
             if vert[id] == nil { vert[id] = rep }
         }
+        for uniform in engineParams {
+            let expression = uniform.type.uniformExpression(buffer: "we_engine", offset: uniform.slotOffset, isArray: uniform.isArray)
+            frag[uniform.name] = expression; vert[uniform.name] = expression
+        }
         // 표준 attribute 는 VIn 에 상시 존재 — 선언 없이도 vertex 에서 매핑.
         if vert["a_Position"] == nil { vert["a_Position"] = "vin.a_Position" }
         if vert["a_TexCoord"] == nil { vert["a_TexCoord"] = "vin.a_TexCoord" }
@@ -413,8 +467,10 @@ public enum GLSLTranslator {
         var vFns = parseFunctions(vClean, structs: structNames)
         var fFns = parseFunctions(fClean, structs: structNames)
         var overloadSizeEnv: [String: Int] = engineSymbolSizes
+        for a in parseAttributes(vsrc) { overloadSizeEnv[a.name] = a.type.components }
         for vy in varyings { overloadSizeEnv[vy.name] = vy.type.components }
-        for m in materials { overloadSizeEnv[m.glslName] = m.type.components }
+        for m in materials { overloadSizeEnv[m.glslName] = m.isArray ? 0 : m.type.components }
+        for u in engineParams { overloadSizeEnv[u.name] = u.isArray ? 0 : u.type.components }
         for id in bodyIds where isEngine(id) && (id.hasSuffix("Resolution") || id.hasSuffix("Texel")) { overloadSizeEnv[id] = 4 }
         var vertexOverloadSizeEnv = overloadSizeEnv
         for (name, type) in vVaryingTypes where type.components > 0 { vertexOverloadSizeEnv[name] = type.components }
@@ -425,7 +481,7 @@ public enum GLSLTranslator {
         // 공용 wrapper도 stage별 하위 함수를 부르면 분리해야 한다.
         var fragmentSpecific = Set(fFns.filter { h in
             h.name != "main" && vFns.contains(where: {
-                $0.name == h.name && ($0.params.map(\.type) != h.params.map(\.type) || $0.body != h.body)
+                $0.name == h.name && ($0.ret != h.ret || $0.params != h.params || $0.body != h.body)
             })
         }.map(\.name))
         var changedHelpers = true
@@ -520,8 +576,10 @@ public enum GLSLTranslator {
         // Stage-3 phase 2: 식-레벨 타입체커 — HLSL-관용 벡터 크기 혼합을 절단 삽입으로 MSL 화.
         // 확실한 크기만 개입(미지 0 = 무개입). 스테이지별 env(frag 는 frag 선언 varying 타입 우선).
         var sizeEnv: [String: Int] = engineSymbolSizes
+        for a in parseAttributes(vsrc) { sizeEnv[a.name] = a.type.components }
         for vy in varyings { sizeEnv[vy.name] = vy.type.components }
-        for m in materials { sizeEnv[m.glslName] = m.type.components }
+        for m in materials { sizeEnv[m.glslName] = m.isArray ? 0 : m.type.components }
+        for u in engineParams { sizeEnv[u.name] = u.isArray ? 0 : u.type.components }
         for id in bodyIds where isEngine(id) && (id.hasSuffix("Resolution") || id.hasSuffix("Texel")) { sizeEnv[id] = 4 }
         var fnSizes: [String: Int] = [:]
         var fnParamSizes: [String: [Int]] = [:]
@@ -535,12 +593,16 @@ public enum GLSLTranslator {
         var vertSizeEnv = sizeEnv
         for (name, type) in vVaryingTypes where type.components > 0 { vertSizeEnv[name] = type.components }
         let fragSizeEnv = sizeEnv  // varying 크기는 union(Vary 멤버 실타입) — frag 소형 선언은 어댑터가 coerce
+        var uniformArrayElements: [String: Int] = [:]
+        for m in materials where m.isArray { uniformArrayElements[m.glslName] = m.type.components }
+        for u in engineParams where u.isArray { uniformArrayElements[u.name] = u.type.components }
+        for a in vArrays + fArrays { uniformArrayElements[a.name] = a.type.components }
         let fragMainBody = GLSLTypeAdapter.adapt(body: fragMainBodyPre,
                                                  env: .init(vars: fragSizeEnv, functions: fnSizes, functionParams: fnParamSizes,
-                                                            structFields: structFieldSet))
+                                                            structFields: structFieldSet, arrayElements: uniformArrayElements))
         let vertMainBody = GLSLTypeAdapter.adapt(body: vertMainF.body,
                                                  env: .init(vars: vertSizeEnv, functions: fnSizes, functionParams: fnParamSizes,
-                                                            structFields: structFieldSet))
+                                                            structFields: structFieldSet, arrayElements: uniformArrayElements))
 
         // Stage-3 ①②: 지역 섀도잉(varying/머티리얼과 동명의 로컬 선언) → 해당 본문 맵에서 제외
         // (치환하면 `float4 in.x = ...` 로 깨짐); fragment 의 varying 대입 → 로컬 사본으로 승격.
@@ -562,17 +624,20 @@ public enum GLSLTranslator {
             if fragLocals.contains(m.glslName) { fragMap.removeValue(forKey: m.glslName) }
             if vertLocals.contains(m.glslName) { vertMap.removeValue(forKey: m.glslName) }
         }
-        // perTextureSampler: true 는 최상위 frag 본문 한정(F162/F163) — vert/헬퍼/file-scope const 호출부는
-        // 모두 기본값(false)이라 무변경(vert 는 애초 smp 미선언 — 텍스처 샘플 시 기존과 동일하게 컴파일 실패).
+        // Both entry stages have the same texture metadata and sampler variants; helpers capture samplers.
         guard let fragBodyT = translateBody(fragMainBody, symbols: fragMap, isFragment: true, perTextureSampler: true),
-              let vertBodyT = translateBody(vertMainBody, symbols: vertMap, isFragment: false) else { return nil }
+              let vertBodyT = translateBody(vertMainBody, symbols: vertMap, isFragment: false, perTextureSampler: true) else { return nil }
         var fragBody = fragVaryingPrelude + fragBodyT
         var vertBody = vertBodyT
 
         // 헬퍼 캡처 분석: 본문이 참조하는 컨텍스트 심볼(머티리얼/엔진/varying/attribute/텍스처/오디오/샘플러)을
         // 추가 파라미터로 승격. 호출 그래프 전이 폐쇄(A→B 호출 시 A ⊇ B).
-        let captureOf = computeCaptures(helpers: helpers, materials: materials, varyings: varyings,
-                                        textures: textures, textureKinds: textureKinds)
+        let reconstructedMatrices = (vMats + fMats).reduce(into: [String: GLSLType]()) { $0[$1.name] = $1.type }
+        let reconstructedArrays = (vArrays + fArrays).reduce(into: [String: ArrayVarying]()) { $0[$1.name] = $1 }
+        let captureVaryings = varyings + reconstructedMatrices.map { (type: $0.value, name: $0.key) }
+        let captureOf = computeCaptures(helpers: helpers, materials: materials, varyings: captureVaryings,
+                                        textures: textures, textureKinds: textureKinds, engineParams: engineParams,
+                                        varyingArrays: reconstructedArrays, varyingMatrices: Set(reconstructedMatrices.keys))
 
         // 헬퍼 방출: 프로토타입 전량 선행(정의 순서 무관 호출 가능) + 정의.
         // 헬퍼 내부의 다른 헬퍼 호출엔 캡처 인자를 원 이름으로 전달(자신의 파라미터로 존재).
@@ -584,12 +649,14 @@ public enum GLSLTranslator {
                                             textureKinds: textureKinds,
                                             engineTypes: engineTypes) else { continue }  // 미지원 타입 → 스킵
             var helperEnv = sizeEnv
+            var helperArrays = uniformArrayElements
+            for prm in h.params where prm.array { helperArrays[prm.name] = GLSLTypeAdapter.typeSize(prm.type) ?? 0 }
             for prm in h.params { helperEnv[prm.name] = prm.array ? 0 : (GLSLTypeAdapter.typeSize(prm.type) ?? 0) }
             // int/uint 파라미터명은 어댑터에 int 로 알려 min/max(int,float) 모호성 해소(실물 multistage_wave).
             let intParams = Set(h.params.filter { $0.type == "int" || $0.type == "uint" }.map { $0.name })
             let adaptedBody = GLSLTypeAdapter.adapt(body: h.body,
                                                     env: .init(vars: helperEnv, functions: fnSizes, functionParams: fnParamSizes,
-                                                               intVars: intParams, structFields: structFieldSet),
+                                                               intVars: intParams, structFields: structFieldSet, arrayElements: helperArrays),
                                                     returnSize: GLSLTypeAdapter.typeSize(h.ret))
             let withCalls = appendCaptureArgs(adaptedBody, helpers: helpers, captureOf: captureOf) { cap in
                 rawCaptureName(cap, materials: materials)
@@ -602,11 +669,15 @@ public enum GLSLTranslator {
         fragBody = appendCaptureArgs(fragBody, helpers: helpers, captureOf: captureOf) { cap in
             // 승격 varying 은 로컬 사본을 전달 — `in.<n>` 은 대입 전 보간값이라 헬퍼가 낡은 값을 읽는다.
             // (GLSL 에서 varying 은 전역: main 의 대입을 헬퍼가 봐야 한다.)
-            if case .varying(let n, _, _) = cap, promotedVaryings.contains(n) { return n }
+            if case .varying(let n, _, _) = cap,
+               promotedVaryings.contains(n) || reconstructedMatrices[n] != nil { return n }
+            if case .varyingArray(let n, _) = cap { return n }
             return captureCallArg(cap, isFragment: true, materials: materials, engineTypes: engineTypes)
         }
         vertBody = appendCaptureArgs(vertBody, helpers: helpers, captureOf: captureOf) { cap in
-            captureCallArg(cap, isFragment: false, materials: materials, engineTypes: engineTypes)
+            if case .varying(let n, _, _) = cap, reconstructedMatrices[n] != nil { return n }
+            if case .varyingArray(let n, _) = cap { return n }
+            return captureCallArg(cap, isFragment: false, materials: materials, engineTypes: engineTypes)
         }
         // 배열 varying 로컬 배열: frag 는 진입 시 Vary 스칼라 멤버로 구성, vert 는 선언 후 말미에 out 으로 복사.
         for a in fArrays {
@@ -614,7 +685,7 @@ public enum GLSLTranslator {
             fragBody = "\(a.type.msl) \(a.name)[\(a.count)] = { \(init0) };\n" + fragBody
         }
         for a in vArrays {
-            vertBody = "\(a.type.msl) \(a.name)[\(a.count)];\n" + vertBody
+            vertBody = "\(a.type.msl) \(a.name)[\(a.count)] = {};\n" + vertBody
             vertBody += "\n" + (0..<a.count).map { "out.\(a.name)_\($0) = \(a.name)[\($0)];" }.joined(separator: "\n")
         }
         // 행렬 varying 로컬(같은 규약): frag 는 열 벡터 멤버로 재구성, vert 는 선언 후 말미에 열별로 out 에 복사.
@@ -627,7 +698,7 @@ public enum GLSLTranslator {
             fragBody = "\(m.type.msl) \(m.name) = \(m.type.msl)(\(cols));\n" + fragBody
         }
         for m in vMats {
-            vertBody = "\(m.type.msl) \(m.name);\n" + vertBody
+            vertBody = "\(m.type.msl) \(m.name) = \(m.type.msl)(0.0);\n" + vertBody
             vertBody += "\n" + (0..<m.count).map { "out.\(m.name)_\($0) = \(m.name)[\($0)];" }.joined(separator: "\n")
         }
 
@@ -665,15 +736,23 @@ public enum GLSLTranslator {
         // `vertexBuiltins` 와 같은 규율이다 — 안 쓰는 셰이더의 방출물을 종전 그대로 두려면
         // 참조 여부를 **번역이 끝난 본문**에서 봐야 한다(선언만 보고 실으면 `#if` 로 잘려 나간
         // 참조까지 세어 2D 쿼드 파이프라인을 깬다).
-        let vertexAttributes = alwaysLoadedVertexAttributes + vertexAttributeWhitelist
+        var vertexAttributes = alwaysLoadedVertexAttributes + vertexAttributeWhitelist
             .filter { !alwaysLoadedVertexAttributes.contains($0.name) }
             .sorted { $0.slot < $1.slot }
             .filter { referencesVertexAttribute($0.name, in: vertBody) }
             .map { $0.name }
+        if vertexAttributes.contains("a_TexCoordVec4") {
+            vertexAttributes.removeAll { $0 == "a_TexCoord" }
+            vertBody = replaceIdentifiers(vertBody, ["a_TexCoord": "a_TexCoordVec4.xy"])
+        }
+        let vertexTextureSlots = textures.filter { vertIds.contains("g_Texture\($0)") }
+        let fragmentTextureSlots = textures.filter { fragIds.contains("g_Texture\($0)") }
+        for slot in textures where textureKinds[slot] == nil { textureKinds[slot] = .sampler2D }
         // 소스 struct 정의: 멤버 타입 리네임(vec2→float2 등) 후 프리앰블 선두에 방출(헬퍼 시그니처가 참조).
         let structBlock = structDefs.map { "struct \($0.name) {" + replaceIdentifiers($0.body, typeAndMacroRenames()) + "};" }
             .joined(separator: "\n")
-        let msl = assemble(varyings: varyings, textures: textures, textureKinds: textureKinds,
+        let msl = assemble(varyings: varyings, textures: fragmentTextureSlots, textureKinds: textureKinds,
+                           vertexTextures: vertexTextureSlots, engineDataCount: engineParams.count,
                            vertexBuiltins: vertexBuiltins, vertexAttributes: vertexAttributes,
                            materialCount: materials.count,
                            vertAudioNames: audioBufferNames.filter { vertIds.contains($0.name) },
@@ -681,7 +760,9 @@ public enum GLSLTranslator {
                            consts: consts, helperProtos: helperProtos, helperDefs: helperDefs,
                            vertBody: vertBody, fragBody: fragBody, structs: structBlock,
                            premultiplyOutput: premultiplyOutput)
-        return TranslatedShader(msl: msl, materialParams: materials, textureSlots: textures, usesAudio: usesAudio,
+        return TranslatedShader(msl: msl, materialParams: materials, engineParams: engineParams,
+                                textureKinds: textureKinds, vertexTextureSlots: vertexTextureSlots,
+                                fragmentTextureSlots: fragmentTextureSlots, textureSlots: textures, usesAudio: usesAudio,
                                 textureDefaults: textureDefaults, vertexAttributes: vertexAttributes)
     }
 
@@ -1406,8 +1487,23 @@ public enum GLSLTranslator {
         return nil
     }
 
-    struct Uniform { let type: GLSLType; let name: String; let annotationMaterial: String?; let annotationDefault: [Float]?
-                     let annotationDefaultTexture: String? }
+    struct Uniform {
+        let type: GLSLType
+        let name: String
+        let annotationMaterial: String?
+        let annotationDefault: [Float]?
+        let annotationDefaultTexture: String?
+        let arrayCount: Int
+        let isArray: Bool
+
+        init(type: GLSLType, name: String, annotationMaterial: String?, annotationDefault: [Float]?,
+             annotationDefaultTexture: String?, arrayCount: Int = 1, isArray: Bool = false) {
+            self.type = type; self.name = name
+            self.annotationMaterial = annotationMaterial; self.annotationDefault = annotationDefault
+            self.annotationDefaultTexture = annotationDefaultTexture
+            self.arrayCount = arrayCount; self.isArray = isArray
+        }
+    }
 
     static func parseUniforms(_ src: String) -> [Uniform] {
         var out: [Uniform] = []
@@ -1424,14 +1520,23 @@ public enum GLSLTranslator {
             let names = parts[1].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             for (idx, rawName) in names.enumerated() {
                 var name = rawName
-                if let br = name.firstIndex(of: "[") { name = String(name[..<br]) }  // 배열 유니폼(g_AudioSpectrum16Left[16])
+                var arrayCount = 1
+                let isArray = name.contains("[")
+                if let br = name.firstIndex(of: "[") {
+                    if let end = name[br...].firstIndex(of: "]") {
+                        let suffix = name[name.index(after: end)...].trimmingCharacters(in: .whitespaces)
+                        arrayCount = suffix.isEmpty ? (ExprEval.evalChecked(String(name[name.index(after: br)..<end]), defines: [:]) ?? 0) : 0
+                    } else { arrayCount = 0 }
+                    name = String(name[..<br]).trimmingCharacters(in: .whitespaces)
+                }
                 guard !name.isEmpty else { continue }
                 // F-X4: sampler2D 의 "default" 는 텍스처 경로 문자열(예: "util/noise", "_rt_FullFrameBuffer")
                 // — jsonFloats 는 이를 숫자 파싱 실패로 빈 배열을 내므로 별도 jsonStr 로 포착.
                 out.append(Uniform(type: type, name: name,
                                    annotationMaterial: idx == 0 ? jsonStr(ann, "material") : nil,
                                    annotationDefault: idx == 0 ? jsonFloats(ann, "default") : nil,
-                                   annotationDefaultTexture: idx == 0 && type.isTextureSampler ? jsonStr(ann, "default") : nil))
+                                   annotationDefaultTexture: idx == 0 && type.isTextureSampler ? jsonStr(ann, "default") : nil,
+                                   arrayCount: arrayCount, isArray: isArray))
             }
         }
         return out
@@ -1447,7 +1552,7 @@ public enum GLSLTranslator {
             guard toks.count >= 2, let type = GLSLType.from(toks[0]) else { continue }
             // 실물 오타 관용: `varying vec4 v_Size.xy;` — 이름은 식별자까지만.
             let name = String(toks[1].prefix(while: { $0.isLetter || $0.isNumber || $0 == "_" }))
-            guard !name.isEmpty else { continue }
+            guard !name.isEmpty, name != "gl_ViewportIndex" else { continue }
             if seen.insert(name).inserted {
                 out.append((type, name))
             } else if let i = out.firstIndex(where: { $0.1 == name }), type.components > out[i].0.components {
@@ -1491,9 +1596,9 @@ public enum GLSLTranslator {
     /// 1 회 계산(bind 출처=clamp 고정, aux 출처=TexImage.clampUVs, WE 기본=repeat) — 번역 캐시는 GLSL
     /// 소스 기반(프로세스 전역, 재마운트·크로스씬 공유)이라 실제 바인딩 자산을 텍스트에 구울 수 없어
     /// 반드시 런타임 분기. 슬롯 미상(헬퍼 로컬 별칭 등 — capture 매커니즘은 원명 유지라 실전 거의 없음)이거나
-    /// texRes 와 동일한 8 슬롯 상한 밖이면 폴백 smp(기존 clamp 동작, 무회귀).
+    /// texRes 와 동일한 10 슬롯 상한 밖이면 폴백 smp(기존 clamp 동작, 무회귀).
     private static func perTextureSamplerExpr(_ texExpr: String) -> String {
-        guard let n = textureIndex(texExpr), (0..<8).contains(n) else { return "smp" }
+        guard let n = textureIndex(texExpr), (0..<10).contains(n) else { return "smp" }
         // 감사 V07: 바깥=eng.texFilter(1=nearest/0=linear — TexImage.noInterpolation, WE tex Flags bit0),
         // 안쪽=eng.texWrap — 2×2 런타임 분기(필터만 point, 어드레스 모드는 wrap 차원이 그대로 결정 — WE 의미론).
         let wrap = "eng.texWrap[\(n / 4)][\(n % 4)] > 0.5"
@@ -1553,8 +1658,23 @@ public enum GLSLTranslator {
         return out
     }
 
+    static func usesEngineData(_ name: String) -> Bool {
+        if name == "g_ModelViewProjectionMatrix" || name == "g_EffectModelViewProjectionMatrix" { return false }
+        return name.contains("Matrix") && name.hasPrefix("g_")
+            || ["g_EyePosition", "g_ViewRight", "g_ViewUp", "g_ViewForward", "g_LightAmbientColor", "g_LightSkylightColor",
+                "g_LightsPosition", "g_LightsColorRadius", "g_LightsColorPremultiplied", "g_Bones", "g_MorphOffsets", "g_MorphWeights"].contains(name)
+            || name.hasPrefix("g_LPoint_") || name.hasPrefix("g_LSpot_") || name.hasPrefix("g_LTube_")
+            || name.hasPrefix("g_LDirectional_") || name.hasPrefix("g_LFeature_Shadow")
+    }
+
+    private static func implicitEngineDataType(_ name: String) -> GLSLType? {
+        if name.contains("Matrix") { return .mat4 }
+        if ["g_EyePosition", "g_ViewRight", "g_ViewUp", "g_ViewForward", "g_LightAmbientColor", "g_LightSkylightColor"].contains(name) { return .vec3 }
+        return nil
+    }
+
     static func isEngine(_ name: String) -> Bool {
-        name == "g_Time" || name == "g_ModelViewProjectionMatrix" || name == "g_PointerPosition"
+        usesEngineData(name) || name == "g_Time" || name == "g_ModelViewProjectionMatrix" || name == "g_PointerPosition"
             || name == "g_TexelSize" || name == "g_TexelSizeHalf"
             || name == "g_ParallaxPosition"
             || name == "g_Frametime" || name == "g_PointerPositionLast"  // ★짝 — last 단독 배선 시 유령 링플
@@ -1720,7 +1840,7 @@ public enum GLSLTranslator {
         if name == "g_AudioSpectrum64Right" { return "audioR64" }
         if name.hasPrefix("g_Texture"), name.hasSuffix("Resolution"),
            let n = Int(name.dropFirst("g_Texture".count).dropLast("Resolution".count)),
-           (0..<8).contains(n) {   // EngineU.texRes 는 [8] 고정 — N≥8 은 미치환(컴파일 실패→폴백)
+           (0..<10).contains(n) {   // EngineU.texRes[10], WE engine slots0..9
             return "eng.texRes[\(n)]"
         }
         // WE g_TextureNTexel = 슬롯 N 텍스처의 (1/w, 1/h, w, h) — g_TexelSize 동족(텍스처별 텍셀 크기).
@@ -1728,7 +1848,7 @@ public enum GLSLTranslator {
         // `% morphTexel.z`)가 .zw(=dims)를 쓰므로 .xy 만 주면 재파손 — vec4 전체 치환.
         if name.hasPrefix("g_Texture"), name.hasSuffix("Texel"),
            let n = Int(name.dropFirst("g_Texture".count).dropLast("Texel".count)),
-           (0..<8).contains(n) {   // Resolution 과 동일 상한 — N≥8 은 미치환(컴파일 실패→폴백)
+           (0..<10).contains(n) {   // Resolution 과 동일한 slots0..9
             return "float4(1.0 / eng.texRes[\(n)].xy, eng.texRes[\(n)].xy)"
         }
         return name
@@ -1848,7 +1968,7 @@ public enum GLSLTranslator {
 
     private static func symbolMap(materials: [MaterialParam]) -> [String: String] {
         var m: [String: String] = [:]
-        for (i, p) in materials.enumerated() { m[p.glslName] = "p[\(i)]\(p.type.swizzle)" }
+        for p in materials { m[p.glslName] = p.type.uniformExpression(buffer: "p", offset: p.slotOffset, isArray: p.isArray) }
         return m
     }
     private static func typeAndMacroRenames() -> [String: String] {
@@ -2040,7 +2160,9 @@ public enum GLSLTranslator {
     /// 파라미터로 승격한다(설계 §2).
     enum Capture: Hashable {
         case material(Int)                    // materials[i] — 원 GLSL 이름의 값 파라미터
+        case engineData(ShaderEngineParam)
         case engine(String)                   // g_Time / g_ModelViewProjectionMatrix / g_TextureNResolution
+        case varyingArray(String, GLSLType)
         case varying(String, GLSLType, written: Bool)  // written: 헬퍼(전이 포함)가 대입하는가 → 참조 승격
         case attribute(String, GLSLType)      // a_Position / a_TexCoord
         case texture(Int)                     // g_TextureN
@@ -2054,7 +2176,8 @@ public enum GLSLTranslator {
     /// 헬퍼별 캡처 목록(결정적 순서) + 호출 그래프 전이 폐쇄.
     static func computeCaptures(helpers: [GLSLFunction], materials: [MaterialParam],
                                 varyings: [(type: GLSLType, name: String)], textures: [Int],
-                                textureKinds: [Int: GLSLType] = [:]) -> [String: [Capture]] {
+                                textureKinds: [Int: GLSLType] = [:], engineParams: [ShaderEngineParam] = [],
+                                varyingArrays: [String: ArrayVarying] = [:], varyingMatrices: Set<String> = []) -> [String: [Capture]] {
         let helperNames = Set(helpers.map { $0.name })
         var refsOf: [String: Set<String>] = [:]
         for h in helpers {
@@ -2099,13 +2222,14 @@ public enum GLSLTranslator {
             let refs = refsOf[h.name] ?? []
             var caps: [Capture] = []
             for (i, m) in materials.enumerated() where refs.contains(m.glslName) { caps.append(.material(i)) }
-            for name in refs.filter({ isEngine($0) && !$0.contains("AudioSpectrum") }).sorted() { caps.append(.engine(name)) }
+            for p in engineParams where refs.contains(p.name) { caps.append(.engineData(p)) }
+            let dataNames = Set(engineParams.map(\.name))
+            for name in refs.filter({ isEngine($0) && !$0.contains("AudioSpectrum") && !dataNames.contains($0) }).sorted() { caps.append(.engine(name)) }
             for v in varyings where refs.contains(v.name) {
-                caps.append(.varying(v.name, v.type, written: (writesOf[h.name] ?? []).contains(v.name)))
+                caps.append(.varying(v.name, v.type, written: varyingMatrices.contains(v.name) || (writesOf[h.name] ?? []).contains(v.name)))
             }
-            for (n, t) in [("a_Position", GLSLType.vec3), ("a_TexCoord", GLSLType.vec2)] where refs.contains(n) {
-                caps.append(.attribute(n, t))
-            }
+            for name in varyingArrays.keys.sorted() where refs.contains(name) { caps.append(.varyingArray(name, varyingArrays[name]!.type)) }
+            for a in vertexAttributeWhitelist where refs.contains(a.name) { caps.append(.attribute(a.name, a.type)) }
             for n in textures where refs.contains("g_Texture\(n)") { caps.append(.texture(n)) }
             for n in ["g_AudioSpectrum16Left", "g_AudioSpectrum16Right",
                       "g_AudioSpectrum32Left", "g_AudioSpectrum32Right",
@@ -2139,7 +2263,9 @@ public enum GLSLTranslator {
     static func rawCaptureName(_ cap: Capture, materials: [MaterialParam]) -> String {
         switch cap {
         case .material(let i): return materials[i].glslName
+        case .engineData(let p): return p.name
         case .engine(let n): return n
+        case .varyingArray(let n, _): return n
         case .varying(let n, _, _): return n
         case .attribute(let n, _): return n
         case .texture(let n): return "g_Texture\(n)"
@@ -2153,8 +2279,12 @@ public enum GLSLTranslator {
     static func captureCallArg(_ cap: Capture, isFragment: Bool, materials: [MaterialParam],
                                engineTypes: [String: GLSLType] = [:]) -> String {
         switch cap {
-        case .material(let i): return "p[\(i)]\(materials[i].type.swizzle)"
+        case .material(let i):
+            let p = materials[i]
+            return p.type.uniformExpression(buffer: "p", offset: p.slotOffset, isArray: p.isArray)
+        case .engineData(let p): return p.type.uniformExpression(buffer: "we_engine", offset: p.slotOffset, isArray: p.isArray)
         case .engine(let n): return engineReplacement(n, engineTypes: engineTypes)
+        case .varyingArray(let n, _): return n
         case .varying(let n, _, _): return isFragment ? "in.\(n)" : "out.\(n)"
         case .attribute(let n, _): return "vin.\(n)"  // fragment 에선 비합법 → 컴파일 실패 → 폴백(의도)
         case .texture(let n): return "g_Texture\(n)"
@@ -2168,7 +2298,10 @@ public enum GLSLTranslator {
                                          textureKinds: [Int: GLSLType] = [:],
                                          engineTypes: [String: GLSLType] = [:]) -> String {
         switch cap {
-        case .material(let i): return "\(materials[i].type.msl) \(materials[i].glslName)"
+        case .material(let i):
+            let p = materials[i]
+            return "\(p.isArray ? "constant " : "")\(p.type.msl)\(p.isArray ? "*" : "") \(p.glslName)"
+        case .engineData(let p): return "\(p.isArray ? "constant " : "")\(p.type.msl)\(p.isArray ? "*" : "") \(p.name)"
         case .engine(let n):
             // BK/G7: 헬퍼 캡처 파라미터의 타입도 선언 타입을 따라야 한다 — 호출부가 넘기는
             // `captureCallArg` 값(`float3x3(1.0)`)과 갈리면 그 자리에서 컴파일이 깨진다.
@@ -2180,6 +2313,7 @@ public enum GLSLTranslator {
                         : (n == "g_PointerPosition" || n == "g_ParallaxPosition" || n == "g_PointerPositionLast"
                             || n == "g_TexelSize" || n == "g_TexelSizeHalf" ? "float2" : "float")))
             return "\(t) \(n)"
+        case .varyingArray(let n, let t): return "thread \(t.msl)* \(n)"
         case .varying(let n, let t, let written):
             // F420: 헬퍼가 쓰는 varying 은 참조로 — by-value 면 호출부(out.<n>)와 끊긴 지역 사본이라
             // 헬퍼의 대입이 유실된다(컴파일 성공·오렌더). 읽기 전용은 기존 값 파라미터 유지.
@@ -2212,16 +2346,22 @@ public enum GLSLTranslator {
                                 engineTypes: [String: GLSLType] = [:]) -> String? {
         guard let ret = mslType(h.ret, structs: structs) else { return nil }
         var ps: [String] = []
+        var arrayTemplates: [String] = []
         for p in h.params {
             guard let t = mslType(p.type, structs: structs) else { return nil }
-            // 배열 파라미터는 constant 포인터(호출부의 audioL/캡처 배열과 정합; MSL 은 값-배열 불가).
-            if p.array { ps.append("constant \(t)* \(p.name)") }
+            // Uniforms and reconstructed varyings inhabit different Metal address spaces.
+            if p.array {
+                let generic = "we_array_\(arrayTemplates.count)"
+                arrayTemplates.append("typename \(generic)")
+                ps.append("\(generic) \(p.name)")
+            }
             else { ps.append(p.byRef ? "thread \(t)& \(p.name)" : "\(t) \(p.name)") }
         }
         ps.append(contentsOf: captures.map {
             captureParamDecl($0, materials: materials, textureKinds: textureKinds, engineTypes: engineTypes)
         })
-        return "inline \(ret) \(h.name)(\(ps.joined(separator: ", ")))"
+        let template = arrayTemplates.isEmpty ? "" : "template<\(arrayTemplates.joined(separator: ", "))> "
+        return "\(template)inline \(ret) \(h.name)(\(ps.joined(separator: ", ")))"
     }
 
     /// vertex 스테이지 빌트인 사용 플래그(전부 false 면 방출물이 종전과 바이트 동일).
@@ -2232,7 +2372,7 @@ public enum GLSLTranslator {
     }
 
     private static func assemble(varyings: [(type: GLSLType, name: String)], textures: [Int],
-                                 textureKinds: [Int: GLSLType] = [:],
+                                 textureKinds: [Int: GLSLType] = [:], vertexTextures: [Int] = [], engineDataCount: Int = 0,
                                  vertexBuiltins: VertexBuiltins = VertexBuiltins(),
                                  vertexAttributes: [String] = alwaysLoadedVertexAttributes,
                                  materialCount: Int,
@@ -2246,7 +2386,7 @@ public enum GLSLTranslator {
         // 레이어드 렌더 타깃 선택자(실물 shadowcaster 계열: 아틀라스 슬라이스를 인스턴스로 고른다).
         // MSL 은 uint + [[viewport_array_index]] 를 요구한다 — GLSL 원문의 `varying uint` 과 같은 폭.
         if vertexBuiltins.viewportIndex { vary += "  uint gl_ViewportIndex [[viewport_array_index]];\n" }
-        for v in varyings { vary += "  \(v.type.msl) \(v.name);\n" }
+        for v in varyings { vary += "  \(v.type.msl) \(v.name)\(v.type == .int || v.type == .uint || v.type.rawValue.hasPrefix("ivec") || v.type.rawValue.hasPrefix("uvec") ? " [[flat]]" : "");\n" }
         vary += "};\n"
         // [2026-08-21] 종전엔 이 줄이 `a_Position`/`a_TexCoord` **두 개 고정**이었다. 지금은
         // 화이트리스트에서 골라 싣는다 — 두 개만 실린 경우의 방출 문자열은 종전과 **글자 그대로
@@ -2257,16 +2397,16 @@ public enum GLSLTranslator {
         }
         let vin = "struct VIn { " + vinMembers.joined(separator: " ") + " };\n"
         // timeAndPad = (time, pointerUV.x, pointerUV.y, frametime dt) / pointerLastAndPad = (직전 프레임 포인터 UV.xy, g_PointerState.z 클릭힘, 0).
-        // texWrap[2](8 슬롯, texRes 와 동일 상한): 슬롯별 1=clamp/0=repeat(F162/F163) — buildPassBindings 가
+        // texWrap[3](10 슬롯 + 2 padding, texRes 와 동일 상한): 슬롯별 1=clamp/0=repeat(F162/F163) — buildPassBindings 가
         // bind 출처(fbo/previous)=clamp, aux 출처=TexImage.clampUVs 로 빌드 시 1 회 계산(WE 기본=repeat).
-        // texFilter[2](감사 V07, 동일 상한): 슬롯별 1=nearest/0=linear — TexImage.noInterpolation(WE tex Flags
+        // texFilter[3](감사 V07, 동일 상한): 슬롯별 1=nearest/0=linear — TexImage.noInterpolation(WE tex Flags
         // bit0). bind 출처=선형(단, 체인 첫 이펙트의 previous=베이스 직결은 baseNoInterp), aux 출처=자산 플래그.
         // Swift 측 단일 빌더 SceneRendererFrameEncoder.engineUniform 과 레이아웃 동기 필수.
         // H1: layerTint = 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값으로 물변경.
         // X-⑤: targetRes(layerTint 뒤 추가 — 앞 오프셋 불변) = 이펙트 **출력(dst)** 해상도, 전 패스 불변.
         // 채택 근거·이 근거의 판별력 한계·레이어 커스텀 경로와의 규약 이원화·라이브 A/B 대기 상태는
         // 위 g_TexelSize 치환부(computeUV 근처) 주석 참조 — "실측으로 확정" 아님.
-        let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; float4 texWrap[2]; float4 texFilter[2]; float4 layerTint; float4 targetRes; float4 parallaxAndPad; };\n"
+        let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[10]; float4 texWrap[3]; float4 texFilter[3]; float4 layerTint; float4 targetRes; float4 parallaxAndPad; };\n"
         // UV 암시적 절단(HLSL 방언 호환): 오버로드로 타입별 안전 절단.
         //
         // **[H3 정정 2026-08-30] 아래 `we_cast3x3(float s)` 의 근거가 다른 언어의 규칙이었다.**
@@ -2304,10 +2444,8 @@ public enum GLSLTranslator {
         //    회귀를 잡지 못한다.
         //  · 검증 경계: MSL 쪽(대각)은 컴파일로 직접 확인했다. HLSL 쪽(replicate)은 이 환경에 D3D
         //    툴체인이 없어 **문서 규칙 인용**이며 실측이 아니다.
-        // 그래서 실물과 다른 값을 **알고** 남긴다. 스칼라 CAST3X3 을 쓰는 실입력(워크샵 셰이더)이
-        // 관측되면 `float3x3(float3(s), float3(s), float3(s))` 로 바꾸고 위 테스트를 9성분 판정으로
-        // 확장할 것. **CAST2X2/CAST4X4 에는 이 논리를 적용하지 마라** — WE shim 에 없는 로컬 추가라
-        // 대응 HLSL 캐스트가 존재하지 않고, replicate 로 바꾸면 근거 없이 GLSL 에서 이탈한다.
+        // The scalar overload now follows that confirmed HLSL contract; GPU tests read off-diagonal values.
+        // CAST2X2/CAST4X4 are local GLSL-style extensions, so their constructors remain unchanged.
         let uvHelpers = """
         inline float2 we_uv(float2 v) { return v; }
         inline float2 we_uv(float3 v) { return v.xy; }
@@ -2317,9 +2455,8 @@ public enum GLSLTranslator {
         // 생성자 부재), mat3→통과(실물 depthparallax 의 g_EffectTextureProjectionMatrixInverse 회전 추출).
         inline float3x3 we_cast3x3(float4x4 m) { return float3x3(m[0].xyz, m[1].xyz, m[2].xyz); }
         inline float3x3 we_cast3x3(float3x3 m) { return m; }
-        // 스칼라: 대각. 실물 HLSL 캐스트는 replicate 라 값이 다르다 — 도달 0건이라 의도적으로 유지한다
-        // (근거·판정·교체 조건은 GLSLTranslator.swift 의 이 문자열 바로 위 [H3 정정 2026-08-30] 참조).
-        inline float3x3 we_cast3x3(float s) { return float3x3(s); }
+        // WE CAST3X3 uses HLSL scalar replication, including off-diagonal components.
+        inline float3x3 we_cast3x3(float s) { return float3x3(float3(s), float3(s), float3(s)); }
         // GLSL mod(x,y) = x - y*floor(x/y) — fmod 와 달리 음수에서 항상 y 부호(오프셋 스크롤 등에 중요).
         inline float we_mod(float x, float y) { return x - y * metal::floor(x / y); }
         inline float2 we_mod(float2 x, float y) { return x - y * metal::floor(x / y); }
@@ -2362,6 +2499,8 @@ public enum GLSLTranslator {
         func audioDecl(_ names: [(name: String, buffer: Int)], sep: String) -> String {
             names.map { "\(sep)constant float* \($0.name) [[buffer(\($0.buffer))]]" }.joined()
         }
+        let engineData = engineDataCount > 0 ? ", constant float4* we_engine [[buffer(9)]]" : ""
+        let vertexTex = vertexTextures.map { ", \((textureKinds[$0] ?? .sampler2D).msl) g_Texture\($0) [[texture(\($0))]]" }.joined()
         let audioParams = audioDecl(vertAudioNames, sep: ", ")
         let audioFrag = audioDecl(fragAudioNames, sep: ",\n                        ")
         let pFrag = materialCount > 0 ? ",\n                        constant float4* p [[buffer(0)]]" : ""
@@ -2400,14 +2539,19 @@ public enum GLSLTranslator {
         let builtinParams = (vertexBuiltins.vertexID ? ", uint gl_VertexID [[vertex_id]]" : "")
             + (vertexBuiltins.instanceID ? ", uint gl_InstanceID [[instance_id]]" : "")
         let vertSig = """
-        vertex Vary ev_main(VIn vin [[stage_in]]\(materialCount > 0 ? ", constant float4* p [[buffer(0)]]" : ""), constant EngineU& eng [[buffer(1)]]\(audioParams)\(builtinParams)) {
+        vertex Vary ev_main(VIn vin [[stage_in]]\(materialCount > 0 ? ", constant float4* p [[buffer(0)]]" : ""), constant EngineU& eng [[buffer(1)]]\(audioParams)\(builtinParams)\(engineData)\(vertexTex)) {
+            constexpr sampler smp(filter::linear, mip_filter::linear, address::clamp_to_edge);
+            constexpr sampler smpRepeat(filter::linear, mip_filter::linear, address::repeat);
+            constexpr sampler smpNearest(filter::nearest, mip_filter::linear, address::clamp_to_edge);
+            constexpr sampler smpRepeatNearest(filter::nearest, mip_filter::linear, address::repeat);
+        \(cmpSampler)
             Vary out = {};
         \(indent(vertBody))
             return out;
         }
         """
         let fragSig = """
-        fragment float4 ef_main(Vary in [[stage_in]]\(pFrag), constant EngineU& eng [[buffer(1)]]\(fragTex)\(audioFrag)) {
+        fragment float4 ef_main(Vary in [[stage_in]]\(pFrag), constant EngineU& eng [[buffer(1)]]\(fragTex)\(audioFrag)\(engineData)) {
             // 1단계 mip 활성화(mip_filter::linear): mipCount>1 텍스처는 실제 mip 샘플, 단일레벨은 LOD 클램프로 비트동일.
             // level() 명시 LOD 도 none 이면 base 클램프(TexMipChainUploadTests 실측 주석)였던 것이
             // linear 로 지정 레벨이 유효해진다 — WE texture2DLod 의미론 복원이며 단일레벨은 역시 동일(클램프).

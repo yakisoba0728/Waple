@@ -71,7 +71,7 @@ final class PlaylistWiringTests: XCTestCase {
     func testPlaylistTimerTicksEverySecondInsteadOfSleepingForTheWholeInterval() throws {
         let code = stripComments(try body(of: "private func schedulePlaylistTimer() {",
                                           in: try appDelegateSource()))
-        XCTAssertTrue(code.contains("Timer(timeInterval: 1,"),
+        XCTAssertTrue(code.contains("Timer(timeInterval: max(0.1, min(1, seconds)),"),
                       "간격만큼 한 번 깨는 타이머로 되돌아갔다 — 정지 중 정지·5초 상한·경과시간 영속이 전부 죽는다")
         XCTAssertFalse(code.contains("PlaylistScheduling.intervalSeconds"),
                        "간격을 타이머 주기로 쓰면 시계의 소유자가 다시 운영체제가 된다")

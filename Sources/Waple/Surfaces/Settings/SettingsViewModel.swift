@@ -24,6 +24,13 @@ final class SettingsViewModel: ObservableObject {
     @Published var playlistEnabled = false
     @Published var playlistInterval = 15
     @Published var playlistShuffle = false
+    @Published var playlistConfiguration = PlaylistConfiguration()
+    @Published var playlistName = ""
+    @Published var browseTransition = GlobalPlaybackSettings.browseTransition
+    @Published var browseTransitionTime = GlobalPlaybackSettings.browseTransitionTime
+    @Published var monitorLayout = GlobalPlaybackSettings.monitorLayout
+    @Published var videoOutputEnabled = VideoSettings.audioOutputEnabled()
+    @Published var notificationsEnabled = false
     @Published var loginEnabled = LoginItemController.isEnabled
     @Published var stillSync = false
     @Published var saverSelected = ScreenSaverController.isSelected
@@ -34,6 +41,9 @@ final class SettingsViewModel: ObservableObject {
     /// 없었고, 그래서 WE 기본값(최대화·전체화면 = 일시정지, 절전 = 정지)이 **끌 수 없는**
     /// 동작이었다. 이 화면이 그것을 끄거나 세게 만들 수 있게 한다.
     @Published var playbackPolicy: PlaybackPolicy = .weDefault
+    @Published private(set) var wallpaperPolicyEntry: (id: String, title: String)?
+    @Published var audioInputVolume = AudioInputSettings.volumeSetting
+    @Published var audioInputThreshold = AudioInputSettings.thresholdSetting
     /// **이미 현지화된** 문구. 뷰는 `Text(String)`(비현지화 오버로드)로 표시하므로, 여기서
     /// 완성해 넘기지 않으면 영어 시스템에서도 한국어로 남는다(청사진 §5.0 권장 (a)).
     /// 이 방식을 고른 이유: 리터럴이 `NSLocalizedString(` 안에 남아 커버리지 오라클에 그대로 걸린다.
@@ -63,11 +73,17 @@ final class SettingsViewModel: ObservableObject {
     /// 정책이 바뀌었다 — AppDelegate 가 **즉시** 재적용한다. 폴링이 ≤1초 뒤에 어차피 고치지만,
     /// 설정을 바꾼 직후의 1초는 사용자가 "안 먹었다" 로 읽는 구간이다.
     var onPlaybackPolicyChanged: (() -> Void)?
+    var onMonitorLayoutChanged: (() -> Void)?
+    var onMediaOutputChanged: (() -> Void)?
+    var systemNoticesEnabled: () -> Bool = { false }
+    var onSetSystemNotices: ((Bool, @escaping @MainActor (Bool) -> Void) -> Void)?
     var occlusionState: () -> (enabled: Bool, threshold: Double) = { (false, 0) }
     var stillSyncEnabled: () -> Bool = { false }
     /// 화면이 둘 이상인가 — 축별 선택지에서 `pauseall` 을 보일지 결정한다(WE UI 빌더 `k(e,t,a)`
     /// 의 첫 인자 `e = runtime.multimonitor`). 기본 false 는 프리뷰/테스트 안전값이다.
     var multiMonitor: () -> Bool = { false }
+    var wallpaperPolicyTarget: () -> (id: String, title: String)? = { nil }
+    var onRetryAudioCapture: () -> Void = { SystemAudioSpectrumProvider.retrySharedCapture() }
 
     init(playlist: PlaylistStore) {
         self.playlist = playlist
@@ -82,11 +98,21 @@ final class SettingsViewModel: ObservableObject {
         playlistEnabled = playlist.enabled
         playlistInterval = playlist.intervalMinutes
         playlistShuffle = playlist.shuffle
+        playlistConfiguration = playlist.configuration
+        playlistName = playlistConfiguration.name
+        browseTransition = GlobalPlaybackSettings.browseTransition
+        browseTransitionTime = GlobalPlaybackSettings.browseTransitionTime
+        monitorLayout = GlobalPlaybackSettings.monitorLayout
+        videoOutputEnabled = VideoSettings.audioOutputEnabled()
+        notificationsEnabled = systemNoticesEnabled()
         loginEnabled = LoginItemController.isEnabled
         stillSync = stillSyncEnabled()
         saverSelected = ScreenSaverController.isSelected
         baseAssetsPath = BaseAssetsSettings.baseAssetsDirectory?.path ?? Self.autoDetectedLabel
         playbackPolicy = GlobalPlaybackSettings.current
+        refreshWallpaperPolicy()
+        audioInputVolume = AudioInputSettings.volumeSetting
+        audioInputThreshold = AudioInputSettings.thresholdSetting
         statusMessage = nil
     }
 
@@ -98,6 +124,39 @@ final class SettingsViewModel: ObservableObject {
         GlobalPlaybackSettings.set(action, for: trigger)
         playbackPolicy[trigger] = action
         onPlaybackPolicyChanged?()
+    }
+
+    func setResourcePressureEnabled(_ enabled: Bool) {
+        GlobalPlaybackSettings.setPauseVRAM(enabled)
+        playbackPolicy.pauseVRAM = enabled
+        onPlaybackPolicyChanged?()
+    }
+
+    func wallpaperPolicyOverride(for trigger: PlaybackTrigger) -> String {
+        guard let target = wallpaperPolicyEntry else { return "" }
+        return GlobalPlaybackSettings.overrides(for: target.id)[trigger.weConfigKey] ?? ""
+    }
+
+    func setWallpaperPolicyOverride(_ raw: String, for trigger: PlaybackTrigger) {
+        guard let target = wallpaperPolicyEntry else { return }
+        GlobalPlaybackSettings.setOverride(raw.isEmpty ? nil : PlaybackAction(weConfigValue: raw),
+                                            for: trigger, entryId: target.id)
+        objectWillChange.send()
+        onPlaybackPolicyChanged?()
+    }
+
+    func refreshWallpaperPolicy() { wallpaperPolicyEntry = wallpaperPolicyTarget() }
+
+    func setAudioInputVolume(_ value: Int) {
+        let value = min(max(value, 0), 200)
+        AudioInputSettings.volumeSetting = value
+        audioInputVolume = value
+    }
+
+    func setAudioInputThreshold(_ value: Float) {
+        let value = value.isFinite ? min(max(value, 0), 10) : 0
+        AudioInputSettings.thresholdSetting = value
+        audioInputThreshold = value
     }
 
     /// 전 축을 미설정으로 되돌린다 = **WE 기본값**. "끄기" 가 아니라는 것이 요점이다 —
@@ -136,12 +195,14 @@ final class SettingsViewModel: ObservableObject {
     func setPlaylistEnabled(_ on: Bool) {
         playlist.enabled = on
         playlistEnabled = on
+        playlistConfiguration = playlist.configuration
         onPlaylistChanged?()
     }
 
     func setPlaylistInterval(_ minutes: Int) {
         playlist.intervalMinutes = minutes
         playlistInterval = minutes
+        playlistConfiguration = playlist.configuration
         onPlaylistChanged?()
     }
 
@@ -149,7 +210,109 @@ final class SettingsViewModel: ObservableObject {
     func setPlaylistShuffle(_ on: Bool) {
         playlist.shuffle = on
         playlistShuffle = on
+        playlistConfiguration = playlist.configuration
         onPlaylistChanged?()
+    }
+
+    var savedPlaylists: [PlaylistConfiguration] { playlist.savedPlaylists }
+    var selectedPlaylistId: String { playlist.selectedPlaylistId }
+
+    func updatePlaylist(_ mutate: (inout PlaylistConfiguration) -> Void) {
+        var configuration = playlist.configuration
+        mutate(&configuration)
+        playlist.configuration = configuration
+        refreshPlaylist()
+        onPlaylistChanged?()
+    }
+
+    func selectPlaylist(_ id: String) {
+        _ = playlist.selectPlaylist(id: id)
+        refreshPlaylist()
+        onPlaylistChanged?()
+    }
+
+    func createPlaylist() {
+        let name = playlistName.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = playlist.createPlaylist(name: name.isEmpty ? NSLocalizedString("새 재생목록", comment: "새 목록 기본 이름") : name)
+        refreshPlaylist()
+        onPlaylistChanged?()
+    }
+
+    func renamePlaylist() {
+        playlist.renamePlaylist(id: playlist.selectedPlaylistId, name: playlistName)
+        refreshPlaylist()
+        onPlaylistChanged?()
+    }
+
+    func removePlaylist() {
+        playlist.removePlaylist(id: playlist.selectedPlaylistId)
+        refreshPlaylist()
+        onPlaylistChanged?()
+    }
+
+    private func refreshPlaylist() {
+        playlistConfiguration = playlist.configuration
+        playlistName = playlistConfiguration.name
+        playlistEnabled = playlist.enabled
+        playlistInterval = playlist.intervalMinutes
+        playlistShuffle = playlist.shuffle
+    }
+
+    func setDaytimeEnd(entryId: String, value: Float) {
+        updatePlaylist { configuration in
+            guard let index = configuration.ids.firstIndex(of: entryId) else { return }
+            let count = configuration.ids.count
+            let lower: Float = index == 0 ? 0 : configuration.daytimeEnds[configuration.ids[index - 1]] ?? Float(index) / Float(count)
+            let upper: Float = index == count - 1 ? 1 : configuration.daytimeEnds[configuration.ids[index + 1]] ?? Float(index + 2) / Float(count)
+            configuration.daytimeEnds[entryId] = min(max(value, lower), upper)
+            if let last = configuration.ids.last { configuration.daytimeEnds[last] = 1 }
+        }
+    }
+
+    func movePlaylistEntry(_ id: String, offset: Int) {
+        updatePlaylist { configuration in
+            guard let index = configuration.ids.firstIndex(of: id),
+                  configuration.ids.indices.contains(index + offset) else { return }
+            let endpoints = configuration.ids.enumerated().map { position, id in
+                configuration.daytimeEnds[id] ?? Float(position + 1) / Float(configuration.ids.count)
+            }
+            configuration.ids.swapAt(index, index + offset)
+            for (position, id) in configuration.ids.enumerated() {
+                configuration.daytimeEnds[id] = endpoints[position]
+            }
+        }
+    }
+
+    func setBrowseTransition(_ value: Int) {
+        GlobalPlaybackSettings.browseTransition = value
+        browseTransition = value
+    }
+
+    func setBrowseTransitionTime(_ value: Int) {
+        GlobalPlaybackSettings.browseTransitionTime = value
+        browseTransitionTime = GlobalPlaybackSettings.browseTransitionTime
+    }
+
+    func setMonitorLayout(_ value: MonitorLayout) {
+        GlobalPlaybackSettings.monitorLayout = value
+        monitorLayout = value
+        onMonitorLayoutChanged?()
+    }
+
+    func setVideoOutputEnabled(_ enabled: Bool) {
+        VideoSettings.setAudioOutputEnabled(enabled)
+        videoOutputEnabled = enabled
+        onMediaOutputChanged?()
+    }
+
+    func setSystemNotices(_ enabled: Bool) {
+        onSetSystemNotices?(enabled) { [weak self] granted in
+            self?.notificationsEnabled = granted
+            if enabled && !granted {
+                self?.statusMessage = NSLocalizedString("알림을 허용하려면 패키징된 앱의 시스템 알림 설정을 확인하세요.",
+                                                        comment: "알림 권한 없음")
+            }
+        }
     }
 
     func setLogin(_ on: Bool) {

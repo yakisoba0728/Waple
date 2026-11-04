@@ -69,10 +69,11 @@ struct WorkshopTabView: View {
             LazyVGrid(columns: columns, spacing: Metrics.gridRowSpacing) {
                 ForEach(vm.results) { item in
                     RemoteTileView(item: item,
-                                   download: vm.downloads[item.id],
+                                   download: vm.downloadState(for: item),
                                    steamcmdAvailable: vm.steamcmdAvailable,
                                    onDownload: { vm.download(item) },
-                                   onApply: { vm.apply(item) })
+                                   onApply: { vm.apply(item) },
+                                   onCancel: { vm.cancelDownload(item) })
                         .onAppear {
                             if item.id == vm.results.last?.id { Task { await vm.loadMore() } }
                         }

@@ -232,10 +232,12 @@ final class Scene3DLightingTests: XCTestCase {
             resolved(castsShadow: true, position: SIMD3(3, 0, 0)),
         ])
 
-        // F660: 캡 8 — 3라이트 + 5개 비활성 슬롯.
+        // Four 15-slot V1 budgets plus four legacy slots: 3 active and61 inactive entries.
+        XCTAssertEqual(Scene3DLighting.maximumLights, 64)
         XCTAssertEqual(packed.count, Scene3DLighting.maximumLights)
-        XCTAssertEqual(packed.map { $0.shadow.x }, [0, -1, 1, -1, -1, -1, -1, -1])
-        XCTAssertEqual(packed.map { $0.shadow.y }, [0, -1, 6, -1, -1, -1, -1, -1])
+        let inactive = [Float](repeating: -1, count: 61)
+        XCTAssertEqual(packed.map { $0.shadow.x }, [0, -1, 1] + inactive)
+        XCTAssertEqual(packed.map { $0.shadow.y }, [0, -1, 6] + inactive)
         XCTAssertEqual(packed[0].positionExponent, SIMD4(1, 0, 0, 2))
         XCTAssertEqual(packed[1].colorRadius, SIMD4(1, 0.5, 0.25, 10))
         XCTAssertEqual(Scene3DLighting.shadowSliceCount(packed), 2)

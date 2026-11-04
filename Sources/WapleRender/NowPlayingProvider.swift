@@ -11,11 +11,49 @@ public struct NowPlayingInfo: Equatable, Sendable {
     public var album: String
     public var position: Double   // 초
     public var duration: Double   // 초
+    public var subTitle: String
+    public var albumArtist: String
+    public var genres: String
+    public var contentType: String
+    /// Stable source/track identity when a provider exposes it; display text is not an identifier.
+    public var sessionID: String
+    public var trackID: String
 
     public init(state: State, title: String = "", artist: String = "", album: String = "",
-                position: Double = 0, duration: Double = 0) {
+                position: Double = 0, duration: Double = 0, subTitle: String? = nil,
+                albumArtist: String = "", genres: String = "", contentType: String = "music",
+                sessionID: String = "", trackID: String = "") {
         self.state = state; self.title = title; self.artist = artist; self.album = album
-        self.position = position; self.duration = duration
+        self.position = position.isFinite ? max(0, position) : 0
+        self.duration = duration.isFinite ? max(0, duration) : 0
+        self.subTitle = subTitle ?? artist; self.albumArtist = albumArtist
+        self.genres = genres; self.contentType = contentType
+        self.sessionID = sessionID; self.trackID = trackID
+    }
+}
+
+
+extension NowPlayingInfo {
+    var artworkKey: String {
+        let identity = trackID.isEmpty ? [sessionID, title, artist, album] : [sessionID, trackID]
+        return String(data: (try? JSONEncoder().encode(identity)) ?? Data(), encoding: .utf8) ?? ""
+    }
+
+    var propertiesKey: [String] { [title, artist, album, subTitle, albumArtist, genres, contentType] }
+
+    /// Scene/web event builders share this payload so optional provider fields survive both paths.
+    public var timelineJSON: String {
+        let fields = ["position": position.isFinite ? max(0, position) : 0,
+                      "duration": duration.isFinite ? max(0, duration) : 0]
+        return String(data: (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data(),
+                      encoding: .utf8) ?? "{}"
+    }
+
+    public var propertiesJSON: String {
+        let fields = ["title": title, "artist": artist, "albumTitle": album, "subTitle": subTitle,
+                      "albumArtist": albumArtist, "genres": genres, "contentType": contentType]
+        return String(data: (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data(),
+                      encoding: .utf8) ?? "{}"
     }
 }
 
@@ -29,10 +67,26 @@ public protocol ArtworkProviding {
     func fetchArtwork() -> Data?
 }
 
+/// Bind artwork to the exact metadata session, even if another app starts between requests.
+public protocol SessionArtworkProviding: ArtworkProviding {
+    func fetchArtwork(for info: NowPlayingInfo) -> Data?
+}
+
 /// AppleScript 로 Music/Spotify 를 폴링(사설 API 불사용). **실행 중인 플레이어만** 질의해
 /// 앱을 실수로 띄우지 않는다. 최초 AppleEvent 전송 시 macOS 가 자동화(TCC) 프롬프트를 1회 표시.
 public final class AppleScriptNowPlayingProvider: NowPlayingProvider {
-    public init() {}
+    private let runningBundleIDs: () -> [String]
+    private let executeScript: (String) -> String?
+
+    public convenience init() {
+        self.init(runningBundleIDs: { NSWorkspace.shared.runningApplications.compactMap { $0.bundleIdentifier } },
+                  executeScript: { AppleScriptNowPlayingProvider.runOSAScript($0) })
+    }
+
+    init(runningBundleIDs: @escaping () -> [String], executeScript: @escaping (String) -> String?) {
+        self.runningBundleIDs = runningBundleIDs
+        self.executeScript = executeScript
+    }
 
     /// 실행 중인 지원 플레이어 앱 이름(AppleScript 타깃). 둘 다 있으면 재생 중일 확률이 높은 Spotify 우선.
     static func runningPlayer(bundleIds: [String]) -> String? {
@@ -41,15 +95,26 @@ public final class AppleScriptNowPlayingProvider: NowPlayingProvider {
         return nil
     }
 
-    /// osascript 소스: 탭 구분 6필드(state, title, artist, album, position, duration).
+    /// osascript 소스: JSON metadata. Foundation encoding preserves tabs/newlines in titles.
     /// 트랙 없음/정지는 "0" 한 필드만. 변수명 `st` 는 금지 — AppleScript 가 예약 용어로 파싱해
     /// 문법 오류(-2741, 실측 2026-07-04: `set st to 1` 단독으로도 실패) → stateNum.
     static func script(for app: String) -> String {
+        let additional = app == "Music" ? """
+            try
+                set albumArtistText to album artist of current track
+                set genreText to genre of current track
+                set trackIdentifier to persistent ID of current track
+            end try
+        """ : """
+            try
+                set trackIdentifier to id of current track
+            end try
         """
+        return """
+        use framework "Foundation"
+        use scripting additions
         tell application "\(app)"
-            if player state is stopped then
-                return "0"
-            end if
+            if player state is stopped then return "0"
             set stateNum to 1
             if player state is paused then set stateNum to 2
             set t to name of current track
@@ -57,8 +122,14 @@ public final class AppleScriptNowPlayingProvider: NowPlayingProvider {
             set al to album of current track
             set pos to player position
             set dur to duration of current track
-            return (stateNum as text) & tab & t & tab & ar & tab & al & tab & (pos as text) & tab & (dur as text)
+            set albumArtistText to ""
+            set genreText to ""
+            set trackIdentifier to ""
+            \(additional)
         end tell
+        set payload to current application's NSDictionary's dictionaryWithObjects:{stateNum, t, ar, al, pos, dur, albumArtistText, genreText, trackIdentifier} forKeys:{"state", "title", "artist", "album", "position", "duration", "albumArtist", "genres", "trackID"}
+        set jsonData to current application's NSJSONSerialization's dataWithJSONObject:payload options:0 |error|:(missing value)
+        return (current application's NSString's alloc()'s initWithData:jsonData encoding:(current application's NSUTF8StringEncoding)) as text
         """
     }
 
@@ -74,20 +145,36 @@ public final class AppleScriptNowPlayingProvider: NowPlayingProvider {
     static func parse(_ output: String, app: String) -> NowPlayingInfo? {
         let line = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty else { return nil }
+        if let data = line.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let raw = object["state"] as? Int, let state = NowPlayingInfo.State(rawValue: raw) {
+            func text(_ key: String) -> String { object[key] as? String ?? "" }
+            let duration = (object["duration"] as? Double ?? 0) / (app == "Spotify" ? 1000 : 1)
+            return NowPlayingInfo(state: state, title: text("title"), artist: text("artist"), album: text("album"),
+                                  position: object["position"] as? Double ?? 0, duration: duration,
+                                  albumArtist: text("albumArtist"), genres: text("genres"),
+                                  sessionID: app, trackID: text("trackID"))
+        }
         let f = line.components(separatedBy: "\t")
         guard let stRaw = Int(f[0]), let state = NowPlayingInfo.State(rawValue: stRaw) else { return nil }
-        guard f.count >= 6 else { return NowPlayingInfo(state: .stopped) }
+        guard f.count >= 6 else { return NowPlayingInfo(state: .stopped, sessionID: app) }
         var dur = Double(f[5].replacingOccurrences(of: ",", with: ".")) ?? 0
         if app == "Spotify" { dur /= 1000 }  // Spotify AppleScript 는 ms
         return NowPlayingInfo(state: state, title: f[1], artist: f[2], album: f[3],
                               position: Double(f[4].replacingOccurrences(of: ",", with: ".")) ?? 0,
-                              duration: dur)
+                              duration: dur, sessionID: app)
     }
 
     public func fetch() -> NowPlayingInfo? {
-        guard let app = Self.currentRunningPlayer() else { return nil }
-        guard let out = Self.runOSAScript(Self.script(for: app)) else { return nil }
-        return Self.parse(out, app: app)
+        let bundleIDs = runningBundleIDs()
+        let candidates = [("com.spotify.client", "Spotify"), ("com.apple.Music", "Music")]
+        var fallback: NowPlayingInfo?
+        for (bundleID, app) in candidates where bundleIDs.contains(bundleID) {
+            guard let output = executeScript(Self.script(for: app)), let info = Self.parse(output, app: app) else { continue }
+            if info.state == .playing { return info }
+            if fallback == nil || (fallback?.state == .stopped && info.state == .paused) { fallback = info }
+        }
+        return fallback
     }
 
     static func currentRunningPlayer() -> String? {
@@ -152,12 +239,15 @@ public final class AppleScriptNowPlayingProvider: NowPlayingProvider {
 /// 읽는다(osascript stdout 은 바이너리 부적합). Spotify 는 `artwork url` → HTTPS 다운로드.
 /// TCC 규약은 fetch() 와 동일: 대상 앱이 실행 중일 때만 AppleEvent 를 보내고, 최초 1회 macOS
 /// 자동화 프롬프트가 뜬다(추가 권한 불요 — 같은 앱 대상이라 기존 승인 재사용).
-extension AppleScriptNowPlayingProvider: ArtworkProviding {
+extension AppleScriptNowPlayingProvider: SessionArtworkProviding {
     /// Music 아트워크 추출 스크립트: raw data 를 destPath 에 기록, 성공 시 "ok".
-    static func musicArtworkScript(destPath: String) -> String {
-        """
+    static func musicArtworkScript(destPath: String, expectedTrackID: String = "") -> String {
+        let identityGuard = expectedTrackID.isEmpty ? "" :
+            "if (persistent ID of current track as text) is not \(appleScriptString(expectedTrackID)) then return \"\""
+        return """
         tell application "Music"
             if player state is stopped then return ""
+            \(identityGuard)
             if (count of artworks of current track) is 0 then return ""
             set d to raw data of artwork 1 of current track
         end tell
@@ -167,6 +257,13 @@ extension AppleScriptNowPlayingProvider: ArtworkProviding {
         close access f
         return "ok"
         """
+    }
+
+    private static func appleScriptString(_ value: String) -> String {
+        "\"" + value.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r") + "\""
     }
 
     static let spotifyArtworkURLScript = """
@@ -189,18 +286,31 @@ extension AppleScriptNowPlayingProvider: ArtworkProviding {
     }
 
     public func fetchArtwork() -> Data? {
-        guard let app = Self.currentRunningPlayer() else { return nil }
+        guard let info = fetch() else { return nil }
+        return fetchArtwork(for: info)
+    }
+
+    public func fetchArtwork(for info: NowPlayingInfo) -> Data? {
+        let app = info.sessionID
+        let bundleID = app == "Spotify" ? "com.spotify.client" : "com.apple.Music"
+        guard ["Spotify", "Music"].contains(app), runningBundleIDs().contains(bundleID) else { return nil }
         if app == "Music" {
             let tmp = Self.artworkTempURL()
             defer { try? FileManager.default.removeItem(at: tmp) }
-            guard let out = Self.runOSAScript(Self.musicArtworkScript(destPath: tmp.path)),
+            guard let out = executeScript(Self.musicArtworkScript(destPath: tmp.path, expectedTrackID: info.trackID)),
                   out.trimmingCharacters(in: .whitespacesAndNewlines) == "ok",
                   let data = try? Data(contentsOf: tmp), !data.isEmpty else { return nil }
             return data
         }
         // Spotify: artwork url → 동기 다운로드(유틸리티 큐에서 호출됨 — 10초 상한).
         // F564: 평문 http 차단 — https 만 허용(종전 hasPrefix("http") 는 평문 http 통과).
-        guard let out = Self.runOSAScript(Self.spotifyArtworkURLScript),
+        let artworkScript: String
+        if info.trackID.isEmpty { artworkScript = Self.spotifyArtworkURLScript }
+        else {
+            artworkScript = Self.spotifyArtworkURLScript.replacingOccurrences(of: "return artwork url of current track",
+                with: "if (id of current track as text) is not \(Self.appleScriptString(info.trackID)) then return \"\"\nreturn artwork url of current track")
+        }
+        guard let out = executeScript(artworkScript),
               let url = URL(string: out.trimmingCharacters(in: .whitespacesAndNewlines)),
               Self.isValidArtworkURL(url) else { return nil }
         // 지역 var 를 완료 클로저에서 변형하던 코드를 리포 관용(SemaphoreResultBox — SceneVideoLayer.swift:58,

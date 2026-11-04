@@ -66,9 +66,8 @@ final class LocalizationCoverageTests: XCTestCase {
     /// 넓혀도 소음이 없다는 것을 먼저 쟀다: 위 패턴으로 `Sources/Waple` **밖**에서 잡히는 한글
     /// 리터럴은 `WapleRender` 1건뿐이고 `WapleCore`·`WapleLibrary` 는 0건이다.
     ///
-    /// **`Sources/WapleSaver` 는 여전히 사각지대다** — Objective-C(`.m`)라 이 스캐너가 안 읽고,
-    /// 애초에 `.saver` 번들에 `.lproj` 자체가 없어 `NSLocalizedString` 으로 해결되지도 않는다.
-    /// 그건 번들 구조를 바꿔야 하는 별건이다(BACKLOG 참조).
+    /// Objective-C saver strings belong to its own resource bundle. Its native callback test
+    /// checks both bundled languages; this scanner covers the Swift application strings.
     private func sourceKeys() throws -> Set<String> {
         let root = Self.repoRoot.appendingPathComponent("Sources")
         var keys: Set<String> = []

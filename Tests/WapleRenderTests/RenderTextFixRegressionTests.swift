@@ -59,13 +59,16 @@ final class RenderTextFixRegressionTests: XCTestCase {
     }
 
     /// ASI 가 성립하는 위치(개행 경과·`;` 뒤)의 import 는 종전대로 중화된다(과교정 금지).
-    func testAsiImportsStillNeutralized() {
-        XCTAssertTrue(TextScriptEngine.stripModuleSyntax("var a = 1\nimport x from 'y';\nx;")
-                        .contains("var x = __noopProxy();"), "개행 ASI import 중화 실패")
-        XCTAssertTrue(TextScriptEngine.stripModuleSyntax("var a = 1;import x from 'y';")
-                        .contains("var x = __noopProxy();"), "; 뒤 import 중화 실패")
-        XCTAssertTrue(TextScriptEngine.stripModuleSyntax("var a = 1/*\n*/import x from 'y';")
-                        .contains("var x = __noopProxy();"), "블록 주석 내 개행 ASI import 중화 실패")
+    func testAsiImportsStillNeutralized() throws {
+        let prefixes = ["var a = 1\n", "var a = 1;", "var a = 1/*\n*/"]
+        for prefix in prefixes {
+            let script = prefix + """
+            import { mix as x } from 'WEMath';
+            export function update(v) { return String(x(a, 9, 0.5)); }
+            """
+            let engine = try XCTUnwrap(TextScriptEngine(script: script), "ASI import 로드 실패: \(prefix)")
+            XCTAssertEqual(engine.evaluate(current: ""), "5", "ASI import 실행 실패: \(prefix)")
+        }
     }
 
     // ── F473(F-88): 멀티라인 `export { ... }` 삭제 ──────────────────────────

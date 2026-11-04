@@ -1,5 +1,6 @@
 import AppKit
 import WapleCore
+import WapleRender
 
 // 화면보호기 연동(feat/screensaver).
 // 순수 결정 로직(ScreenSaverLogic — moduleDict 조립/설치 경로/대상 동영상)과
@@ -28,6 +29,13 @@ enum ScreenSaverLogic {
         let url = project.folderURL.appendingPathComponent(fileName)
         guard videoExtensions.contains(url.pathExtension.lowercased()) else { return nil }
         return url.path
+    }
+
+    /// The three values are synchronized together; changing non-video backgrounds preserves the last video.
+    static func videoConfiguration(for project: WallpaperProject?, fitMode: FitMode, rate: Float) -> [String: Any]? {
+        guard let path = videoPath(for: project) else { return nil }
+        let safeRate = rate.isFinite ? max(VideoSettings.minRate, min(VideoSettings.maxRate, rate)) : 1
+        return ["videoPath": path, "videoFitMode": fitMode.rawValue, "videoPlaybackRate": NSNumber(value: safeRate)]
     }
 
     /// enable 시 현재 시스템 선택(moduleDict)을 백업해 둘지 판정.
@@ -150,9 +158,13 @@ enum ScreenSaverController {
     /// 현재 배경이 동영상이면 그 경로를 saver 도메인에 기록. 아니면 기존 값 유지
     /// (마지막 동영상을 계속 재생 — 검은 화면보다 낫다). AppDelegate.apply 성공 경로에서 호출.
     static func syncVideoPath(for project: WallpaperProject?) {
-        guard let path = ScreenSaverLogic.videoPath(for: project) else { return }
-        CFPreferencesSetValue("videoPath" as CFString, path as CFString, saverDomain,
-                              kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+        let rate = project.map { VideoSettings.rate(id: $0.id) } ?? 1
+        guard let configuration = ScreenSaverLogic.videoConfiguration(for: project,
+            fitMode: SceneRenderSettings.fitMode, rate: rate) else { return }
+        for (key, value) in configuration {
+            CFPreferencesSetValue(key as CFString, value as CFPropertyList, saverDomain,
+                                  kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+        }
         CFPreferencesSynchronize(saverDomain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
     }
 

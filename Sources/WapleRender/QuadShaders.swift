@@ -63,9 +63,13 @@ enum QuadShaders {
         VOut o; o.pos = float4(p, 0.0, 1.0); o.uv = float2((p.x + 1.0) * 0.5, 1.0 - (p.y + 1.0) * 0.5); return o;
     }
     fragment float4 f_spriteframe(VOut in [[stage_in]], texture2d<float> atlas [[texture(0)]],
-                                  constant float4 &rect [[buffer(0)]]) {
+                                  constant float4 &rect [[buffer(0)]], constant uint &rotation [[buffer(1)]]) {
         constexpr sampler s(filter::nearest, address::clamp_to_edge);
-        float2 uv = float2(rect.x + in.uv.x * rect.z, rect.y + in.uv.y * rect.w);
+        float2 local = in.uv;
+        if (rotation == 1) local = float2(1.0 - local.y, local.x);
+        else if (rotation == 2) local = 1.0 - local;
+        else if (rotation == 3) local = float2(local.y, 1.0 - local.x);
+        float2 uv = rect.xy + local * rect.zw;
         return atlas.sample(s, uv);
     }
     // 컴포지션(_rt_FullFrameBuffer) 레이어 전용: 프레임버퍼 스냅샷(tex)을 **화면좌표**로 샘플한다
@@ -177,12 +181,12 @@ enum QuadShaders {
                           texture2d<float> tex [[texture(0)]],
                           constant float4 &tint [[buffer(0)]],
                           constant float4 *rect [[buffer(1)]],      // [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,_)
-                          constant float4 *lightPos [[buffer(2)]],  // [8] xyz=world, w=exponent
-                          constant float4 *lightCol [[buffer(3)]],  // [8] rgb=color×intensity, w=radius
+                          constant float4 *lightPos [[buffer(2)]],  // [64] xyz=world, w=exponent
+                          constant float4 *lightCol [[buffer(3)]],  // [64] rgb=color×intensity, w=radius
                           constant float4 &ambient [[buffer(4)]],   // xyz=flat ambient (genericimage4)
                           constant PBRMaterialUniforms &material [[buffer(5)]],
-                          constant float4 *lightAxisCone [[buffer(6)]],  // [8] xyz=forward|tube 단점B, w=cone outer cos
-                          constant float4 *lightKindCone [[buffer(7)]]) { // [8] x=kind(0/1/2/4), y=cone inner cos
+                          constant float4 *lightAxisCone [[buffer(6)]],  // [64] xyz=forward|tube 단점B, w=cone outer cos
+                          constant float4 *lightKindCone [[buffer(7)]]) { // [64] x=kind(0/1/2/4), y=cone inner cos
         constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
         float4 c = tex.sample(s, in.uv);
         // uv(0..1) → 레이어 로컬(-hw..hw) → 회전 → 월드 픽셀(quadVertices 역산). z = 레이어 originZ.
@@ -197,21 +201,9 @@ enum QuadShaders {
         float metallic = material.scalars.y;
         float3 F0 = mix(float3(0.04), albedo, metallic);
         float3 direct = float3(0.0);
-        // 슬롯 8 — 3D 레인(Scene3DLighting.maximumLights)과 같은 상한. F660 이 3D 를 8 로 올릴 때
-        // 이 2D 루프만 4 로 남아 5번째 라이트부터 2D 라이팅 레이어에서만 사라졌다.
-        // 바인딩 길이는 ForwardUniforms.slotCount(WapleCore) · SceneRenderer 의 light* 배열과 동기.
-        //
-        // ⚠️ WE 에는 이 상한이 없다 — 씬 `general.lightconfig` 의 종류별 카운트가 그대로 배열 길이가
-        // 되고(생성기 0x140169140–0x14016b0d4, 콤보 세터 0x1401a5c40) 저장 폭이 니블이라 종별 최대 15,
-        // 섀도우/쿠키 계열은 2비트라 최대 3 이다. 8 은 **Waple 쪽 캡**이다. 미사용 슬롯은
-        // `radius<=0`(kind!=1) 로 스킵되므로 카운트를 **줄이는** 쪽은 데이터만으로 재현되고,
-        // 늘리는 쪽만 퍼뮤테이션이 필요하다 — 규약 전문은 `SceneLightSlotBudget`(WapleCore) 주석과
-        // `docs/re/scene-lighting.md` §3/§6.
-        // 다만 이 2D 레인의 라이트 팩은 `SceneDocument.ForwardUniforms`(WapleCore, 타 레인 소유)라
-        // lightconfig 예산은 **아직 2D 에 배선되지 않았다**. 3D 레인은 배선됐다 —
-        // `SceneRenderer3D.build3D` 가 `scene3DLightConfig` 에 담고
-        // `Scene3DLighting.resolveLights(_:nodes:config:)` 가 `SceneLightSlotBudget` 으로 소비한다.
-        for (int i = 0; i < 8; i++) {
+        // Four authored nibble budgets (15 each), plus four legacy slots; CPU packer shares this bound.
+        // Unused entries carry zero radius and are skipped without dropping authored lights after slot eight.
+        for (int i = 0; i < 64; i++) {
             int kind = int(lightKindCone[i].x + 0.5);
             float3 L;
             float3 radiance;

@@ -82,10 +82,11 @@ struct DiscoverView: View {
             LazyHStack(alignment: .top, spacing: Metrics.gridSpacing) {
                 ForEach(items) { item in
                     RemoteTileView(item: item,
-                                   download: workshopVM.downloads[item.id],
+                                   download: workshopVM.downloadState(for: item),
                                    steamcmdAvailable: workshopVM.steamcmdAvailable,
                                    onDownload: { workshopVM.download(item) },
-                                   onApply: { workshopVM.apply(item) })
+                                   onApply: { workshopVM.apply(item) },
+                                   onCancel: { workshopVM.cancelDownload(item) })
                         .frame(width: Metrics.tileWidth)   // 레일은 고정폭 타일
                 }
             }

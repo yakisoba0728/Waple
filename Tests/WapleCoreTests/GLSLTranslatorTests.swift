@@ -451,7 +451,7 @@ final class GLSLTranslatorTests: XCTestCase {
         }
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
-        XCTAssertTrue(t.msl.contains("float3(1.0, 1.0, 1.0)"), "g_LightAmbientColor → vec3 흰색 중립값:\n\(t.msl)")
+        XCTAssertEqual(t.engineParams.filter { $0.name == "g_LightAmbientColor" || $0.name == "g_LightSkylightColor" }.map(\.type), [.vec3, .vec3])
         XCTAssertFalse(t.msl.contains("float4(1.0, 1.0, 1.0, 1.0)"),
                        "vec4 주입 재유입 금지 — 실물 선언은 전건 vec3 다:\n\(t.msl)")
         XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
@@ -493,8 +493,8 @@ final class GLSLTranslatorTests: XCTestCase {
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
         XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
-        XCTAssertTrue(t.msl.contains("float4(0.0, 0.0, 0.0, 0.0)"), "vec4 계열 → 0 벡터 중립값:\n\(t.msl)")
-        XCTAssertTrue(t.msl.contains("float4x4(1.0)"), "g_LFeature_ShadowProjection(mat4) → 항등:\n\(t.msl)")
+        XCTAssertEqual(t.engineParams.first { $0.name == "g_LFeature_ShadowProjection" }?.type, .mat4)
+        XCTAssertEqual(t.engineParams.first { $0.name == "g_LPoint_Color" }?.type, .vec4)
     }
 
     func testFrametimeAndPointerLastAreEngineUniforms() throws {
@@ -798,7 +798,7 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("float2 v_TexCoord_0;"), "Vary 는 스칼라 멤버: \(t.msl)")
         XCTAssertTrue(t.msl.contains("float2 v_TexCoord_2;"), t.msl)
         // 본문은 로컬 배열을 그대로 사용(변수 인덱스도 동작); vert 는 말미 복사, frag 는 진입 시 구성.
-        XCTAssertTrue(t.msl.contains("float2 v_TexCoord[3];"), "vert 로컬 배열 선언: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("float2 v_TexCoord[3] = {};"), "vert 로컬 배열은 복사 전 초기화되어야 한다: \(t.msl)")
         XCTAssertTrue(t.msl.contains("out.v_TexCoord_1 = v_TexCoord[1];"), "vert 복사-백: \(t.msl)")
         XCTAssertTrue(t.msl.contains("float2 v_TexCoord[3] = { in.v_TexCoord_0, in.v_TexCoord_1, in.v_TexCoord_2 };"),
                       "frag 로컬 배열 구성: \(t.msl)")
@@ -878,7 +878,8 @@ final class GLSLTranslatorTests: XCTestCase {
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
         XCTAssertTrue(t.usesAudio)
-        XCTAssertTrue(t.msl.contains("inline float CreateAudioResponse(constant float* bufferLeft, constant float* bufferRight)"), t.msl)
+        XCTAssertTrue(t.msl.contains("inline float CreateAudioResponse(we_array_0 bufferLeft, we_array_1 bufferRight)"), t.msl)
+        XCTAssertTrue(t.msl.contains("template<typename we_array_0, typename we_array_1>"), t.msl)
         XCTAssertTrue(t.msl.contains("CreateAudioResponse(audioL, audioR)"), t.msl)
     }
 
@@ -1519,7 +1520,7 @@ final class GLSLTranslatorTests: XCTestCase {
     /// 화이트리스트 **밖**의 attribute 는 여전히 안 싣는다 — 정점 버퍼에 그 데이터가 없기
     /// 때문이다(`a_Color` 9파일 · `a_Tangent4` 8 · 스키닝 10/9). 싣기만 하면 컴파일 실패가
     /// 파이프라인 실패로 바뀔 뿐이고, 둘 다 폴백이다. 버퍼 레이아웃 확장이 선행돼야 한다.
-    func testNonWhitelistedAttributesStayUnloaded() throws {
+    func testExtendedAttributesExposeTheirStableDescriptorContract() throws {
         let vert = """
         uniform mat4 g_ModelViewProjectionMatrix;
         attribute vec3 a_Position;
@@ -1536,13 +1537,11 @@ final class GLSLTranslatorTests: XCTestCase {
         void main() { gl_FragColor = v_Color; }
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
-        XCTAssertEqual(t.vertexAttributes, ["a_Position", "a_TexCoord"])
-        XCTAssertFalse(t.msl.contains("a_Color [[attribute("),
-                       "화이트리스트 밖은 VIn 에 안 실린다 — 실리면 파이프라인 생성이 깨진다")
-        XCTAssertTrue(t.msl.contains("vin.a_Color"), "참조는 남아 MSL 컴파일이 실패한다(= 폴백, 의도)")
-        XCTAssertEqual(GLSLTranslator.vertexAttributeWhitelist.map({ $0.name }),
-                       ["a_Position", "a_TexCoord", "a_Normal"],
-                       "화이트리스트를 넓히려면 정점 디스크립터 세 자리를 같이 봐야 한다")
+        XCTAssertEqual(t.vertexAttributes, ["a_Position", "a_TexCoord", "a_Color"])
+        XCTAssertTrue(t.msl.contains("a_Color [[attribute(6)]]"))
+        XCTAssertEqual(GLSLTranslator.vertexAttributeWhitelist.first { $0.name == "a_Tangent4" }?.slot, 3)
+        XCTAssertEqual(GLSLTranslator.vertexAttributeWhitelist.first { $0.name == "a_BlendIndices" }?.slot, 4)
+        XCTAssertEqual(GLSLTranslator.vertexAttributeWhitelist.first { $0.name == "a_BlendWeights" }?.slot, 5)
     }
 
     /// **(a)와 (b)는 함께 가야 한다.** `GLSLTranslator` 가 `a_Normal` 을 싣는데 정점

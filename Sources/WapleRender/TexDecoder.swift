@@ -8,6 +8,19 @@ public enum TexDecoder {
     private static let maxEmbeddedImageDimension = 8192
     private static let maxEmbeddedImageBytes = 256 << 20
 
+    /// Encoded volume mips store slices vertically; header image dimensions describe a horizontal strip.
+    public static func volumeRGBA(from tex: TexImage, data: Data)
+        -> (pixels: Data, width: Int, height: Int, depth: Int)? {
+        guard tex.depth > 1, tex.depth <= 128, let mip = tex.mip,
+              mip.depth == tex.depth, mip.decodeWidth > 0, mip.decodeHeight > 0,
+              tex.payload == .embeddedImage,
+              let image = rgba(from: tex, data: data),
+              image.width == mip.decodeWidth,
+              image.height == mip.decodeHeight * tex.depth,
+              image.pixels.count == image.width * image.height * 4 else { return nil }
+        return (image.pixels, mip.decodeWidth, mip.decodeHeight, tex.depth)
+    }
+
     /// keepFullAtlas: 단일-이미지 다중프레임 스프라이트시트는 imgW/imgH(단일 프레임 크기) 크롭을 건너뛰고
     /// 디코드 아틀라스(decodeW×decodeH) 전체를 보존한다 — TEXS 프레임 좌표(예 frame1 x=1920)가 imgW 를
     /// 넘어서므로 크롭하면 frame≥1 이 소실돼 spriteFrameTexture 가 경계 클램프 샘플(흑화)한다. 호출자
@@ -72,9 +85,9 @@ public enum TexDecoder {
     /// 특정 아틀라스 페이지(image index) 디코드. 다중 image = GIF 스프라이트 페이지(각 자체 mip0,
     /// frame.imageId 가 페이지 인덱스 — RePKG ConvertToGif). index 0/단일 image/범위 밖은 mip0(=rgba) 로.
     /// mip 기반(raw/DXT) 포맷에만 의미(임베디드 이미지 페이지는 단일이라 rgba 사용).
-    public static func rgba(from tex: TexImage, data: Data, imageIndex: Int) -> (pixels: Data, width: Int, height: Int)? {
-        guard imageIndex > 0, imageIndex < tex.mips.count else { return rgba(from: tex, data: data) }
-        return decodeMip(payload: tex.payload, mip: tex.mips[imageIndex], data: data)
+    public static func rgba(from tex: TexImage, data: Data, imageIndex: Int, keepFullAtlas: Bool = false) -> (pixels: Data, width: Int, height: Int)? {
+        guard imageIndex > 0, imageIndex < tex.mips.count else { return rgba(from: tex, data: data, keepFullAtlas: keepFullAtlas) }
+        return decodeMip(payload: tex.payload, mip: tex.mips[imageIndex], data: data, keepFullAtlas: keepFullAtlas)
     }
 
     public enum BCFormat { case bc1, bc2, bc3 }

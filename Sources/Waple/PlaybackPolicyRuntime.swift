@@ -67,6 +67,37 @@ enum GlobalPlaybackSettings {
 
     static func setPauseVRAM(_ on: Bool) { defaults.set(on, forKey: vramKey) }
 
+    static func overrides(for entryId: String) -> [String: String] {
+        defaults.dictionary(forKey: prefix + "wallpaper." + entryId) as? [String: String] ?? [:]
+    }
+
+    static func setOverride(_ action: PlaybackAction?, for trigger: PlaybackTrigger, entryId: String) {
+        var values = overrides(for: entryId)
+        values[trigger.weConfigKey] = action?.weConfigValue
+        let key = prefix + "wallpaper." + entryId
+        if values.isEmpty { defaults.removeObject(forKey: key) }
+        else { defaults.set(values, forKey: key) }
+    }
+
+    static func resetOverrides(entryId: String) {
+        defaults.removeObject(forKey: prefix + "wallpaper." + entryId)
+    }
+
+    static var browseTransition: Int {
+        get { defaults.object(forKey: "waple.browseTransition") as? Int ?? -1 }
+        set { defaults.set(newValue, forKey: "waple.browseTransition") }
+    }
+
+    static var browseTransitionTime: Int {
+        get { defaults.object(forKey: "waple.browseTransitionTime") as? Int ?? 1500 }
+        set { defaults.set(min(max(newValue, 0), 3000), forKey: "waple.browseTransitionTime") }
+    }
+
+    static var monitorLayout: MonitorLayout {
+        get { MonitorLayout(rawValue: defaults.integer(forKey: "waple.monitorLayout")) ?? .perMonitor }
+        set { defaults.set(newValue.rawValue, forKey: "waple.monitorLayout") }
+    }
+
     /// 전 축을 미설정으로 되돌린다(= WE 기본값). 테스트 격리에도 쓴다.
     static func reset() {
         for trigger in PlaybackTrigger.allCases { defaults.removeObject(forKey: key(for: trigger)) }
@@ -83,10 +114,13 @@ enum PlaybackPolicyResolver {
     /// "선언 없음 → nil → 평가기를 부르지 않고 `.running`" 이었는데, 그 단축은 전역면이
     /// 없다는 전제 위에서만 옳았다. 이제 선언이 없으면 **전역 정책이 그대로 적용된다** —
     /// WE 의 `""` 주입이 뜻하는 바와 같다.
-    static func effective(global: PlaybackPolicy, declaring properties: [String: String]) -> PlaybackPolicy {
+    static func effective(global: PlaybackPolicy, declaring properties: [String: String],
+                          userOverrides: [String: String] = [:]) -> PlaybackPolicy {
         var policy = global
         for trigger in PlaybackTrigger.allCases {
-            guard let raw = properties[trigger.weConfigKey], !raw.isEmpty else { continue }
+            let override = userOverrides[trigger.weConfigKey].flatMap { $0.isEmpty ? nil : $0 }
+            guard let raw = override ?? properties[trigger.weConfigKey],
+                  !raw.isEmpty else { continue }
             policy[trigger] = PlaybackAction(weConfigValue: raw)
         }
         return policy
@@ -96,7 +130,8 @@ enum PlaybackPolicyResolver {
     static func verdict(for project: WallpaperProject,
                         conditions: PlaybackConditions,
                         global: PlaybackPolicy = GlobalPlaybackSettings.current) -> PlaybackVerdict {
-        PlaybackEvaluator.evaluate(effective(global: global, declaring: project.playbackProperties), conditions)
+        PlaybackEvaluator.evaluate(effective(global: global, declaring: project.playbackProperties,
+            userOverrides: GlobalPlaybackSettings.overrides(for: project.id)), conditions)
     }
 }
 

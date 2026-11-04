@@ -62,6 +62,7 @@ enum ParticleShaders {
     // 1.0, range[0,5]). 곱셈은 순서 무관(스칼라)이라 premultiply 전/후 어디에 곱해도 동치 — 기본 1 이면
     // 렌더 비트동일. 3D 비-포그 파티클(particle3DAdditive/Translucent)도 이 함수를 공유해 함께 적용됨.
     fragment float4 pf_main(PVOut in [[stage_in]], texture2d<float> tex [[texture(0)]],
+                            texture2d<float> nextTex [[texture(3)]],
                             constant float& overbright [[buffer(0)]]) {
         constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
         // WE genericparticle.frag:73-77(SPRITESHEETBLEND) — **straight-alpha 상태**에서 두 프레임을
@@ -70,7 +71,7 @@ enum ParticleShaders {
         // 에서 두 번 그리기는 0, WE 는 0.25). blend == 0 이면 mix(x, y, 0) == x 라 비트동일이다.
         // 원저자 주석("This is wrong because it can sample colors that are invisible on one frame")이
         // 가리키는 알파 오염은 **실물의 성질**이라 여기서 고치지 않는다 — 고치면 WE 와 달라진다.
-        float4 t = mix(tex.sample(s, in.uv), tex.sample(s, in.uv2), in.blend);
+        float4 t = mix(tex.sample(s, in.uv), nextTex.sample(s, in.uv2), in.blend);
         float A = t.a * in.color.a;
         return float4(t.rgb * in.color.rgb * A * overbright, A);
     }
@@ -96,10 +97,11 @@ enum ParticleShaders {
     }
 
     fragment float4 pf3d_fog(PVOut3DFog in [[stage_in]], texture2d<float> tex [[texture(0)]],
+                            texture2d<float> nextTex [[texture(3)]],
                              constant FogU3D& fog [[buffer(0)]]) {
         constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
         // pf_main 과 같은 크로스페이드(WE 는 FOG 콤보와 SPRITESHEETBLEND 를 같은 프래그먼트에서 쓴다).
-        float4 t = mix(tex.sample(s, in.uv), tex.sample(s, in.uv2), in.blend);
+        float4 t = mix(tex.sample(s, in.uv), nextTex.sample(s, in.uv2), in.blend);
         float3 rgb = t.rgb * in.color.rgb;
         // C4-(ii): overbright — eye.xyz 만 거리 계산에 쓰이고 .w 는 미사용 패딩이라 재사용(기본 1, 무회귀).
         rgb *= fog.eye.w;
@@ -129,6 +131,7 @@ enum ParticleShaders {
     // refractParams = (g_RefractAmount, rg88Flag, g_Overbright(C4-(ii), 기본 1), 0).
     fragment float4 pf_refract(PVOut in [[stage_in]],
                                texture2d<float> albedoTex [[texture(0)]],
+                               texture2d<float> nextTex [[texture(3)]],
                                texture2d<float> normalTex [[texture(1)]],
                                texture2d<float> fbTex [[texture(2)]],
                                constant float4& refractParams [[buffer(0)]]) {
@@ -136,7 +139,7 @@ enum ParticleShaders {
         // 알베도만 크로스페이드한다 — WE 는 노멀맵(g_Texture1)을 `v_TexCoord.xy` 한 곳에서만 뜬다
         // (genericparticle.frag:84 `DecompressNormalWithMask(texSample2D(g_Texture1, v_TexCoord.xy))`).
         // pv_main 을 공유하므로 이 mix 를 빼면 굴절 파티클만 크로스페이드가 빠진다.
-        float4 t = mix(albedoTex.sample(s, in.uv), albedoTex.sample(s, in.uv2), in.blend);
+        float4 t = mix(albedoTex.sample(s, in.uv), nextTex.sample(s, in.uv2), in.blend);
         float4 nraw = normalTex.sample(s, in.uv);
         bool rg88 = refractParams.y > 0.5;
         // WE common_fragment.h DecompressNormalWithMask 포트. Waple RG88 디코드가 (b0,b0,b0,b1) 라

@@ -18,6 +18,19 @@ public enum VideoSettings {
     private static func volumeKey(_ id: String) -> String { "waple.video.volume.\(id)" }
     private static func rateKey(_ id: String) -> String { "waple.video.rate.\(id)" }
 
+    /// Global and optional display gates compose without changing a wallpaper's stored volume.
+    public static func audioOutputEnabled(screenID: String? = nil) -> Bool {
+        let defaults = UserDefaults.standard
+        let globalKey = "waple.video.audioOutputEnabled"
+        let global = defaults.object(forKey: globalKey) == nil || defaults.bool(forKey: globalKey)
+        guard global, let screenID else { return global }
+        let key = globalKey + "." + screenID
+        return defaults.object(forKey: key) == nil || defaults.bool(forKey: key)
+    }
+    public static func setAudioOutputEnabled(_ enabled: Bool, screenID: String? = nil) {
+        UserDefaults.standard.set(enabled, forKey: "waple.video.audioOutputEnabled" + (screenID.map { "." + $0 } ?? ""))
+    }
+
     public static func volume(id: String) -> Float {
         let d = UserDefaults.standard
         return d.object(forKey: volumeKey(id)) == nil ? 0 : d.float(forKey: volumeKey(id))

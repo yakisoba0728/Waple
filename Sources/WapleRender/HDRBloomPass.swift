@@ -74,11 +74,7 @@ protocol HDRBloomEncoding {
 /// additive 업샘플 — 글로우 반경이 골든 대비 가시적으로 좁으면 그때 피라미드로 승격
 /// (SceneDocument.bloomHDRIterations/Scatter 가 그 입력, upsample blend state 는 여전히 RE 미결).
 final class HDRBloomPass: HDRBloomEncoding {
-    /// ★캘리브레이션 노브: 실효 strength = 저작 strength × iterations × strengthScale.
-    /// WE 내부값 역산이 아니라(라이브 관측 0.3→0.00461 의 CPU 규칙은 RE 미결 — 단일 관측 일반화 금지)
-    /// **골든/작가 출력 대비 2점 실증**: 3299228616(it=8) WE 골든 sat% 3.88 ↔ ×8 캡처 3.76 정합,
-    /// 3147346398(it=2) 작가 preview 화염 구조 ↔ ×2 정합(×8 은 블롭화). iterations 비례 = 단일
-    /// 레벨이 WE N단 피라미드의 가산 누적 에너지를 단수만큼 보상하는 형태. 피라미드 승격 시 재캘리브 필수.
+    /// Kept as an identity compatibility constant; runtime extraction uses HDRBloomMath.normalizedStrength.
     static let strengthScale: Float = 1
 
     private struct ExtractUniforms {
