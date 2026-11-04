@@ -117,6 +117,8 @@ extension SceneRenderer {
         let baseVisible: Bool
         let order: Int
         var scripts: [Script3D] = []
+        var scriptLayerIndex: Int?
+        var scriptLayerName = ""
         // per-frame 현재값(스크립트 없으면 base 고정)
         var origin, angles, scale: SIMD3<Float>
         var visible: Bool
@@ -295,25 +297,7 @@ extension SceneRenderer {
             cameraScripts.append(Script3D(key: key, engine: e))
         }
 
-        // ── 변환 계층 노드(그룹 + 모델 오브젝트). 모델도 다른 모델/빌보드의 부모가 될 수 있다. ──
-        for g in doc.nodes3D {
-            let n = Node3D(id: g.id, parent: g.parent,
-                           origin: SIMD3(g.origin.x, g.origin.y, g.origin.z),
-                           angles: SIMD3(g.angles.x, g.angles.y, g.angles.z),
-                           scale: SIMD3(g.scale.x, g.scale.y, g.scale.z),
-                           visible: g.visible, order: 0)
-            attachScripts(n, sources: g.propertyScripts)
-            nodes3D.append(n)
-        }
-        for o in doc.objects3D {
-            let n = Node3D(id: o.id, parent: o.parent,
-                           origin: SIMD3(o.origin.x, o.origin.y, o.origin.z),
-                           angles: SIMD3(o.angles.x, o.angles.y, o.angles.z),
-                           scale: SIMD3(o.scale.x, o.scale.y, o.scale.z),
-                           visible: true, order: o.order)
-            attachScripts(n, sources: o.propertyScripts)
-            nodes3D.append(n)
-        }
+        build3DTransformNodes(doc: doc)
 
         // ── 메시 지오메트리(모델). 정적 비가시(조상 그룹) 판정은 base 트랜스폼 기준으로 프리컬 — 스크립트로
         //    다시 켜지는 서브트리는 드묾(젤다 link_adult 는 그룹 visible=false 고정). ──
@@ -545,18 +529,7 @@ extension SceneRenderer {
         // 텍스트 빌보드는 아래 W-① 블록에서 append 되므로 이 시점엔 존재하지 않는다). 원본과 동일 위치
         // (text3DControllers 로드보다 먼저 — 순서를 바꾸면 makeScriptEngine top-level 사이드이펙트가 다른
         // 씬 상태를 보게 될 위험이 있어 원본 상대순서를 그대로 보존한다). ──
-        func rebuildDrawOrders() {
-            var evalItems: [(order: Int, bb: Bool, idx: Int)] = []
-            for (i, n) in nodes3D.enumerated() where !n.scripts.isEmpty { evalItems.append((n.order, false, i)) }
-            for (i, b) in billboards.enumerated() where !b.scripts.isEmpty { evalItems.append((b.order, true, i)) }
-            // 안정 정렬(order, 삽입순) — 2D 경로와 동일 규약. 동률 order 의 상대 순서 고정.
-            eval3DOrder = evalItems.enumerated().sorted { ($0.1.order, $0.0) < ($1.1.order, $1.0) }.map { $0.1 }
-            var drawItems: [(order: Int, bb: Bool, idx: Int)] = []
-            for (i, m) in meshRenderables.enumerated() { drawItems.append((m.order, false, i)) }
-            for (i, b) in billboards.enumerated() { drawItems.append((b.order, true, i)) }
-            draw3DOrder = drawItems.enumerated().sorted { ($0.1.order, $0.0) < ($1.1.order, $1.0) }.map { $0.1 }
-        }
-        rebuildDrawOrders()
+        rebuild3DDrawOrders()
         // 3D 씬 text 컨트롤러 로드: 2D buildTexts(shared 통신용 엔진 로드)의 3D 대응. text 스크립트의
         // top-level + update 사이드이펙트(shared.vvv 등)가 3D 지오메트리 스크립트를 구동한다(미실행 시 NaN).
         // controllerOf[uid] = text3DControllers 인덱스(콘텐츠 확정은 프라이밍 이후 — 아래 W-① 참조).
@@ -662,13 +635,59 @@ extension SceneRenderer {
             // 텍스트 빌보드는 프라이밍 이후 추가되므로 eval3DOrder/draw3DOrder 재계산(스크립트 보유분은
             // encode3D 의 매프레임 evaluate3DScripts 가 그때부터 정상 평가 — 프라이밍 1회만 미적용, 무해
             // — F309 프라이밍 목적은 mesh/node 가 text 콘텐츠발 shared 를 초회부터 보는 것뿐).
-            rebuildDrawOrders()
+            rebuild3DDrawOrders()
             has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim || !text3DControllers.isEmpty
             NSLog("%@", "[Waple] 3D scene text: \(textBBLoaded) billboards (\(textBBSkipped) skipped)")
         }
 
         NSLog("%@", "[Waple] 3D scene: \(loaded) meshes (\(skipped) skipped), \(bbLoaded) billboards (\(bbSkipped) skipped), " +
               "\(nodes3D.count) nodes, \(eval3DOrder.count) scripted, lights=\(doc.lights3D.count)")
+    }
+
+    func build3DTransformNodes(doc: SceneDocument) {
+        var entries: [(node: Node3D, sources: [String: String])] = []
+        for g in doc.nodes3D {
+            let node = Node3D(id: g.id, parent: g.parent,
+                              origin: SIMD3(g.origin.x, g.origin.y, g.origin.z),
+                              angles: SIMD3(g.angles.x, g.angles.y, g.angles.z),
+                              scale: SIMD3(g.scale.x, g.scale.y, g.scale.z),
+                              visible: g.visible, order: g.order)
+            entries.append((node, g.propertyScripts))
+        }
+        for model in doc.objects3D {
+            let node = Node3D(id: model.id, parent: model.parent,
+                              origin: SIMD3(model.origin.x, model.origin.y, model.origin.z),
+                              angles: SIMD3(model.angles.x, model.angles.y, model.angles.z),
+                              scale: SIMD3(model.scale.x, model.scale.y, model.scale.z),
+                              visible: true, order: model.order)
+            node.scriptLayerName = model.name
+            entries.append((node, model.propertyScripts))
+        }
+        // top-level 스크립트가 부모·형제를 읽기 전에 모든 소유자 identity를 등록한다.
+        let firstIndex = sceneScript?.appendSceneLayers(entries.map { scriptLayerDescriptor($0.node) })
+        for (index, entry) in entries.enumerated() {
+            if let firstIndex { entry.node.scriptLayerIndex = firstIndex + index }
+            attachScripts(entry.node, sources: entry.sources)
+            nodes3D.append(entry.node)
+        }
+    }
+
+    private func scriptLayerDescriptor(_ node: Node3D) -> SceneScriptLayerDescriptor {
+        SceneScriptLayerDescriptor(name: node.scriptLayerName, visible: node.visible,
+                                   origin: node.origin, scale: node.scale, angles: node.angles,
+                                   id: node.id, parentId: node.parent)
+    }
+
+    func rebuild3DDrawOrders() {
+        var evalItems: [(order: Int, bb: Bool, idx: Int)] = []
+        for (i, n) in nodes3D.enumerated() where !n.scripts.isEmpty { evalItems.append((n.order, false, i)) }
+        for (i, b) in billboards.enumerated() where !b.scripts.isEmpty { evalItems.append((b.order, true, i)) }
+        // 안정 정렬(order, 삽입순) — authored 순서와 동률의 상대순서를 보존한다.
+        eval3DOrder = evalItems.enumerated().sorted { ($0.1.order, $0.0) < ($1.1.order, $1.0) }.map { $0.1 }
+        var drawItems: [(order: Int, bb: Bool, idx: Int)] = []
+        for (i, m) in meshRenderables.enumerated() { drawItems.append((m.order, false, i)) }
+        for (i, b) in billboards.enumerated() { drawItems.append((b.order, true, i)) }
+        draw3DOrder = drawItems.enumerated().sorted { ($0.1.order, $0.0) < ($1.1.order, $1.0) }.map { $0.1 }
     }
 
     /// text 컨트롤러(shared 생산/소비) → eval3DOrder(노드/빌보드 트랜스폼) 순서로 1회 평가. build3D 말미의
@@ -696,6 +715,9 @@ extension SceneRenderer {
                     angles: SIMD3(0, 0, bb.angleZ))
             }
             else { nodes3D[e.idx].evaluateScripts(time: time) }
+        }
+        if let firstIndex = nodes3D.first?.scriptLayerIndex {
+            sceneScript?.updateSceneLayers(nodes3D.map(scriptLayerDescriptor), startingAt: firstIndex)
         }
     }
 
@@ -805,7 +827,8 @@ extension SceneRenderer {
     /// 노드/빌보드에 프로퍼티 스크립트 엔진 부착(씬 공유 컨텍스트 — top-level 사이드이펙트가 로드 시점에 실행).
     func attachScripts(_ n: Node3D, sources: [String: String]) {
         for key in ["visible", "origin", "angles", "scale"] {
-            guard let src = sources[key], let e = makeScriptEngine(src) else { continue }
+            guard let src = sources[key],
+                  let e = makeScriptEngine(src, currentLayerIndex: n.scriptLayerIndex) else { continue }
             n.scripts.append(Script3D(key: key, engine: e))
         }
     }
@@ -2100,19 +2123,13 @@ extension SceneRenderer {
         // 그 뒤로도 이 호출부와 3D PBR 레인(Scene3DLighting.resolveLights)이 **서로 다른 콘 변환기**를
         // 써서 같은 라이트가 포워드와 갓레이에서 폭이 2배 갈렸는데, 지금은 두 이름이 한 구현이다.
         //
-        // ⚠️ **[2026-09-01] 콘은 합쳤지만 축은 아직 갈려 있다.** `Scene3DLighting.resolveLights` 는
-        // 라이트 forward 를 모델행렬 **col0(+X)** 로 정정했다(V1 PBR 유니폼 패커
-        // `wallpaper64.exe FUN_140190c80` 의 `glm::column(M, 0)` — 그 파일의 방향 규약 절 참조).
-        // 여기가 쓰는 `SceneLight3D.forwardLightAxis`(`SceneDocument.swift`, WapleCore)는 아직
-        // **col2(+Z)** 라, 같은 spot 이 메시 셰이딩과 볼류메트릭에서 다른 방향을 본다.
-        // 그 파일은 이 수정 레인의 소유가 아니라 함께 옮기지 못했다 — 옮길 때 이 주석도 같이 지운다.
+        // 부모 변환·가시성도 PBR과 같은 해석 경로를 쓴다.
         //
         // W-17 단계 1: `depthTex` 를 넘긴다 — 위 needsDepthStore(hasVolumetrics 포함)가 이 텍스처를
         // .store 로 남겨 두므로 내용이 유효하다. 진입 조건은 hasVolumetrics 와 같은 식이어야 한다.
         if let volumetricLightPass {
             for light in scene3DLights where light.castVolumetrics {
-                let axis = SceneLight3D.forwardLightAxis(angles: light.angles)
-                let cone = SceneLight3D.forwardSpotConeCosines(inner: light.innerCone, outer: light.outerCone)
+                guard let parameters = Scene3DLighting.volumetricParameters(for: light, nodes: nmap) else { continue }
                 let ok = volumetricLightPass.encode(
                     commandBuffer: cb,
                     destination: target,
@@ -2125,19 +2142,7 @@ extension SceneRenderer {
                     aspect: aspect,
                     nearZ: cam.nearZ,
                     farZ: cam.farZ,
-                    light: VolumetricLightParameters(
-                        color: SIMD3(light.color.x, light.color.y, light.color.z),
-                        position: SIMD3(light.origin.x, light.origin.y, light.origin.z),
-                        direction: axis,
-                        density: light.density,
-                        exponent: light.volumetricsExponent,
-                        intensity: light.intensity,
-                        innerCone: cone.inner,
-                        outerCone: cone.outer,
-                        // 라이트 반경. 실물은 셰이더에 `radius × 0.99` 로 넣고(0x140198760),
-                        // 레이마치 구간을 이 반경 구와의 교차로 잡는다 — 배선 전에는 WE 생성자
-                        // 기본 1.0(0x140190494) 이라 헐이 사실상 안 보였다.
-                        radius: light.radius))
+                    light: parameters)
                 if !ok {
                     WapleLog.warn("[Waple] VolumetricLightPass.encode 실패(light id=\(light.id), target format=\(target.pixelFormat)) — 갓레이 스킵")
                 }

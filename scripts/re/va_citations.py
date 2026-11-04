@@ -247,24 +247,6 @@ def containing(funcs, va):
 
 
 def main(argv):
-    try:
-        from capstone import Cs, CS_ARCH_X86, CS_MODE_64
-    except ImportError:
-        print("capstone 이 필요하다: pip install capstone")
-        return 0
-    import disasm
-
-    if not os.path.exists(disasm.BIN):
-        print(f"[va-citations] 바이너리가 없어 아무것도 검사하지 않았다: {disasm.BIN}")
-        print("               WE_ROOT 로 WE 설치본을 가리켜라. (이 검사는 CI 게이트가 아니다)")
-        return 0
-    data, secs = disasm.load()
-    funcs = pdata_functions(data, secs)
-    if not funcs:
-        print("[va-citations] .pdata 를 못 읽었다 — 바이너리가 예상과 다르다")
-        return 1
-    md = Cs(CS_ARCH_X86, CS_MODE_64)
-
     args = argv[1:]
     # `--also <경로>`(여러 번 가능): **다른 이미지에서 경계면 이탈로 세지 않는다.** WE 는 여러
     # 바이너리로 나뉘고 한 문서가 둘 이상을 섞어 인용하는 일이 흔하다(예: `misc-schema.json` 은
@@ -291,27 +273,42 @@ def main(argv):
     # `--binary <경로>` 로 **다른 WE 바이너리**를 재게 한다(함정 11). WE 는 여러 이미지로 나뉘고
     # 전부 imagebase 가 같아서, 한 이미지로만 재면 다른 이미지의 인용이 통째로 오탐이 된다.
     explicit_binary = bool(args) and args[0] == "--binary"
+    binary = None
     if explicit_binary:
         if len(args) < 2:
             print("--binary 다음에 경로가 필요하다")
             return 1
-        disasm.BIN = args[1]
+        binary = args[1]
         args = args[2:]
         # 준 경로가 그대로 없으면 **WE_ROOT 기준 상대경로**로 한 번 더 본다. `--binary
         # bin/webwallpaper64.exe` 처럼 쓰는 것이 자연스러운데 종전엔 절대경로만 받았다.
-        if not os.path.exists(disasm.BIN):
-            cand = os.path.join(os.environ.get("WE_ROOT", ""), disasm.BIN)
+        if not os.path.exists(binary):
+            cand = os.path.join(os.environ.get("WE_ROOT", ""), binary)
             if os.environ.get("WE_ROOT") and os.path.exists(cand):
-                disasm.BIN = cand
-        if not os.path.exists(disasm.BIN):
-            print(f"[va-citations] 바이너리가 없다: {disasm.BIN}")
+                binary = cand
+        if not os.path.exists(binary):
+            print(f"[va-citations] 바이너리가 없다: {binary}")
             return 1
-        data, secs = disasm.load()
-        funcs = pdata_functions(data, secs)
-        if not funcs:
-            print("[va-citations] .pdata 를 못 읽었다")
-            return 1
+
+    try:
+        from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+    except ImportError:
+        print("capstone 이 필요하다: pip install capstone")
+        return 0
+    import disasm
+    if binary is not None:
+        disasm.BIN = binary
         print(f"[va-citations] 기준 바이너리: {disasm.BIN}")
+    if not os.path.exists(disasm.BIN):
+        print(f"[va-citations] 바이너리가 없어 아무것도 검사하지 않았다: {disasm.BIN}")
+        print("               WE_ROOT 로 WE 설치본을 가리켜라. (이 검사는 CI 게이트가 아니다)")
+        return 0
+    data, secs = disasm.load()
+    funcs = pdata_functions(data, secs)
+    if not funcs:
+        print("[va-citations] .pdata 를 못 읽었다 — 바이너리가 예상과 다르다")
+        return 1
+    md = Cs(CS_ARCH_X86, CS_MODE_64)
     roots = args or list(DEFAULT_TARGETS)
     files = []
     for r in roots:

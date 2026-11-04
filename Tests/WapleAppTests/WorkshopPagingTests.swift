@@ -169,6 +169,108 @@ final class WorkshopPagingTests: XCTestCase {
         XCTAssertFalse(vm.isSearching, "최신 검색 종료 후 스피너 내려감(낡은 검색 defer 가 건드리지 않음)")
     }
 
+    func testClearingKeyDiscardsPendingSearchAndLoadsReplacementKey() async {
+        let entered = Latch()
+        let proceed = Latch()
+        let recorder = URLRecorder()
+        var key: String? = "K1"
+        let vm = WorkshopViewModel(client: WorkshopClient(transport: { url in
+            recorder.record(url)
+            if queryValue(url, "key") == "K1" {
+                await entered.signal()
+                await proceed.wait()
+                return (self.itemsJSON(ids: 1...5), 200)
+            }
+            return (self.itemsJSON(ids: 100...105), 200)
+        }), library: makeLibrary(), keyProvider: { key }, keySaver: {
+            key = $0.isEmpty ? nil : $0
+            return nil
+        })
+        let stale = Task { await vm.search() }
+        await entered.wait()
+        vm.clearAPIKey()
+        XCTAssertFalse(vm.hasAPIKey)
+        XCTAssertFalse(vm.isSearching)
+        await proceed.signal()
+        await stale.value
+        XCTAssertTrue(vm.results.isEmpty)
+
+        vm.apiKeyInput = "K2"
+        vm.saveAPIKey()
+        await vm.searchIfNeeded()
+
+        XCTAssertEqual(recorder.urls.compactMap { queryValue($0, "key") }, ["K1", "K2"])
+        XCTAssertEqual(vm.results.map(\.id), (100...105).map(String.init))
+    }
+
+    func testClearedKeyOldPageCompletionDoesNotClearReplacementPageLoading() async {
+        let oldEntered = Latch()
+        let oldProceed = Latch()
+        let newEntered = Latch()
+        let newProceed = Latch()
+        var key: String? = "K1"
+        let vm = WorkshopViewModel(client: WorkshopClient(transport: { url in
+            let firstKey = queryValue(url, "key") == "K1"
+            if queryValue(url, "page") == "2" {
+                if firstKey {
+                    await oldEntered.signal()
+                    await oldProceed.wait()
+                } else {
+                    await newEntered.signal()
+                    await newProceed.wait()
+                }
+                return (self.itemsJSON(ids: firstKey ? 31...60 : 130...159), 200)
+            }
+            return (self.itemsJSON(ids: firstKey ? 1...30 : 100...129), 200)
+        }), library: makeLibrary(), keyProvider: { key }, keySaver: {
+            key = $0.isEmpty ? nil : $0
+            return nil
+        })
+        await vm.searchIfNeeded()
+        let oldPage = Task { await vm.loadMore() }
+        await oldEntered.wait()
+        vm.clearAPIKey()
+        vm.apiKeyInput = "K2"
+        vm.saveAPIKey()
+        await vm.searchIfNeeded()
+        let newPage = Task { await vm.loadMore() }
+        await newEntered.wait()
+        await oldProceed.signal()
+        await oldPage.value
+        XCTAssertTrue(vm.isLoadingMore, "옛 페이지 완료가 새 키 페이지의 로딩 상태를 내리면 안 된다")
+        await newProceed.signal()
+        await newPage.value
+        XCTAssertFalse(vm.isLoadingMore)
+        XCTAssertEqual(vm.results.map(\.id), (100...159).map(String.init))
+    }
+
+    func testNewSearchInvalidatesPendingPageWithoutLeavingLoadingFlagStuck() async {
+        let entered = Latch()
+        let proceed = Latch()
+        let vm = makeVM { url in
+            let oldSort = queryValue(url, "query_type") == "9"
+            if queryValue(url, "page") == "2" {
+                if oldSort {
+                    await entered.signal()
+                    await proceed.wait()
+                }
+                return (self.itemsJSON(ids: oldSort ? 31...60 : 130...159), 200)
+            }
+            return (self.itemsJSON(ids: oldSort ? 1...30 : 100...129), 200)
+        }
+        await vm.search()
+        let stalePage = Task { await vm.loadMore() }
+        await entered.wait()
+        vm.sort = .latest
+        await vm.search()
+        XCTAssertFalse(vm.isLoadingMore)
+        await vm.loadMore()
+        await proceed.signal()
+        await stalePage.value
+        XCTAssertEqual(vm.results.map(\.id), (100...159).map(String.init))
+        XCTAssertFalse(vm.isLoadingMore)
+    }
+
     func testSearchIfNeededRunsOnceAndSkipsWithoutKey() async {
         let recorder = URLRecorder()
         let vm = makeVM { url in recorder.record(url); return (self.itemsJSON(ids: 1...30), 200) }

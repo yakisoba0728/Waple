@@ -21,12 +21,14 @@ func readU16LE(_ bytes: [UInt8], at: Int) -> UInt16? {
 }
 
 /// NUL 종료 문자열을 **UTF-8** 로 디코드. next = NUL 다음 오프셋. NUL 없이 버퍼 끝에 닿으면 nil.
+/// maxLength는 NUL을 제외한 바이트 상한 — 헤더 리싱크가 파일 꼬리 전체를 재탐색하지 않게 한다.
 /// UTF-8 고정 이유: 실물 머티리얼 경로가 CJK("materials/models/太空球/…")를 포함 — 바이트별
 /// UnicodeScalar(Latin-1) 해석은 mojibake 가 되어 太空球 pkg 엔트리 조회가 실패한다.
-func readCString(_ bytes: [UInt8], at: Int) -> (value: String, next: Int)? {
-    guard at >= 0 else { return nil }
+func readCString(_ bytes: [UInt8], at: Int, maxLength: Int? = nil) -> (value: String, next: Int)? {
+    guard at >= 0, at < bytes.count, maxLength.map({ $0 >= 0 }) ?? true else { return nil }
+    let last = at + min(maxLength ?? (bytes.count - at - 1), bytes.count - at - 1)
     var e = at
-    while e < bytes.count, bytes[e] != 0 { e += 1 }
-    guard e < bytes.count else { return nil }
+    while e < last, bytes[e] != 0 { e += 1 }
+    guard bytes[e] == 0 else { return nil }
     return (String(decoding: bytes[at..<e], as: UTF8.self), e + 1)
 }

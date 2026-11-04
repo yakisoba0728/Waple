@@ -90,7 +90,7 @@ final class PlaylistWiringTests: XCTestCase {
                       "후보 선택·실패 건너뛰기는 드라이버 안이다 — 여기서 다시 정하지 마라")
         XCTAssertTrue(code.contains("playlistDriver.hasPendingAdvance"),
                       "pending 동안 다음 틱이 새 변환 세대를 시작하면 앞 요청을 계속 취소한다")
-        XCTAssertTrue(code.contains("isPaused: pauseGate.isPaused"),
+        XCTAssertTrue(code.contains("policyPausedScreenKeys.contains(key)"),
                       "정지 축이 상수로 굳으면 updateonpause 관문이 죽는다")
         XCTAssertFalse(code.contains("PlaylistScheduling.shuffleNext"),
                        "직전 1개만 회피하던 종전 셔플로 되돌아갔다 — 소진형 셔플백이 그 자리다")

@@ -192,6 +192,48 @@ final class SceneAudioPlayerTests: XCTestCase {
         player.teardown()
     }
 
+    @MainActor func testPausedCompletionDefersTheNextTrackUntilResume() throws {
+        try skipUnlessAudioOutputCanPlay()
+        let pkg = ScenePackage.assemble([(name: "sounds/a.wav", data: Self.silentWAV(seconds: 5)),
+                                         (name: "sounds/b.wav", data: Self.silentWAV(seconds: 5))])
+        for mode in ["loop", "single"] {
+            let playlist = Playlist(entries: ["sounds/a.wav", "sounds/b.wav"], mode: mode, package: pkg,
+                                    authorVolume: 1, settingVolume: 0, minTime: 0, maxTime: 0)
+            defer { playlist.stop() }
+            XCTAssertTrue(playlist.startFirstPlayable())
+            let first = try XCTUnwrap(playlist.playerForTesting)
+            playlist.pause()
+            playlist.audioPlayerDidFinishPlaying(first, successfully: true)
+
+            XCTAssertTrue(playlist.playerForTesting === first)
+            XCTAssertEqual(playlist.indexForTesting, 0)
+            XCTAssertTrue(playlist.pausedForTesting)
+            XCTAssertFalse(playlist.isPlaying)
+
+            playlist.resume()
+            XCTAssertEqual(playlist.indexForTesting, 1)
+            XCTAssertFalse(playlist.playerForTesting === first)
+            XCTAssertTrue(playlist.isPlaying)
+        }
+    }
+
+    @MainActor func testStopDiscardsNextTrackDeferredByPausedCompletion() throws {
+        try skipUnlessAudioOutputCanPlay()
+        let pkg = ScenePackage.assemble([(name: "sounds/a.wav", data: Self.silentWAV(seconds: 5)),
+                                         (name: "sounds/b.wav", data: Self.silentWAV(seconds: 5))])
+        let playlist = Playlist(entries: ["sounds/a.wav", "sounds/b.wav"], mode: "single", package: pkg,
+                                authorVolume: 1, settingVolume: 0, minTime: 0, maxTime: 0)
+        defer { playlist.stop() }
+        XCTAssertTrue(playlist.startFirstPlayable())
+        let first = try XCTUnwrap(playlist.playerForTesting)
+        playlist.pause()
+        playlist.audioPlayerDidFinishPlaying(first, successfully: true)
+        playlist.stop()
+        playlist.resume()
+        XCTAssertFalse(playlist.hasPlayer)
+        XCTAssertFalse(playlist.isPlaying)
+    }
+
     /// 첫 엔트리 pkg 누락/디코드 실패 시 다음 후보로 폴백해 재생.
     func testStartFallsBackToNextPlayableEntry() throws {
         try skipUnlessAudioOutputCanPlay()

@@ -95,6 +95,8 @@ jobs:
             scripts.dev.tests.test_workflow_contracts \
             scripts.dev.tests.test_ci_status \
             scripts.dev.tests.test_linux_core_tests_safety \
+            scripts.dev.tests.test_audit_tool_safety \
+            scripts.dev.tests.test_audit_validation_tools \
             scripts.dev.tests.test_waple_saver_lifecycle
 
       # 신뢰 경계 밖(.pkg / scene.json / project.json) 숫자의 정수 좁힘이 가드를 건너뛰면 실패한다.

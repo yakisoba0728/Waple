@@ -156,4 +156,48 @@ final class LibraryApplyBranchTests: XCTestCase {
             XCTAssertEqual(LibraryStore(baseDirectory: dir).selectedId, old.id)
         }
     }
+
+    func testRemovingPendingCandidateCancelsApplyAndRejectsLateSuccess() throws {
+        let dir = tempDir()
+        let store = LibraryStore(baseDirectory: dir)
+        let old = try store.importFolder(makeWallpaperFolder(id: "old-\(UUID().uuidString)"))
+        let next = try store.importFolder(makeWallpaperFolder(id: "next-\(UUID().uuidString)"))
+        let vm = makeVM(store: store, dir: dir)
+        store.select(old.id)
+        vm.selectedId = old.id
+        var finishPending: ((WallpaperApplyResolution) -> Void)?
+        var cancellationCount = 0
+        var observed: WallpaperApplyResolution?
+        vm.onApply = { _, finish in finishPending = finish; return .pending }
+        vm.onCancelPendingApply = { cancellationCount += 1 }
+
+        XCTAssertEqual(vm.apply(next) { observed = $0 }, .pending)
+        vm.remove(next)
+        finishPending?(.applied)
+
+        XCTAssertEqual(cancellationCount, 1)
+        XCTAssertEqual(observed, .cancelled)
+        XCTAssertFalse(vm.entries.contains { $0.id == next.id })
+        XCTAssertEqual(vm.selectedId, old.id)
+        XCTAssertEqual(LibraryStore(baseDirectory: dir).selectedId, old.id)
+    }
+
+    func testRemovingUnrelatedEntryDoesNotCancelPendingApply() throws {
+        let dir = tempDir()
+        let store = LibraryStore(baseDirectory: dir)
+        let next = try store.importFolder(makeWallpaperFolder(id: "next-\(UUID().uuidString)"))
+        let unrelated = try store.importFolder(makeWallpaperFolder(id: "unrelated-\(UUID().uuidString)"))
+        let vm = makeVM(store: store, dir: dir)
+        var finishPending: ((WallpaperApplyResolution) -> Void)?
+        var cancellationCount = 0
+        vm.onApply = { _, finish in finishPending = finish; return .pending }
+        vm.onCancelPendingApply = { cancellationCount += 1 }
+
+        XCTAssertEqual(vm.apply(next), .pending)
+        vm.remove(unrelated)
+        finishPending?(.applied)
+
+        XCTAssertEqual(cancellationCount, 0)
+        XCTAssertEqual(vm.selectedId, next.id)
+    }
 }

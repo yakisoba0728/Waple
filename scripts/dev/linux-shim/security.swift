@@ -7,6 +7,7 @@
 // 주입이 타입체크를 통과한다:
 //     delete: (CFDictionary) -> OSStatus = SecItemDelete
 //     add:    (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = SecItemAdd
+//     update: (CFDictionary, CFDictionary) -> OSStatus = SecItemUpdate
 //
 // `CFString`/`CFDictionary`/`CFTypeRef` 는 이 리포의 CF 대역이 사는 `CoreGraphics` 심에서 온다
 // (그 파일 머리말 참조 — 애플에서는 Foundation 이 CoreFoundation 을 재수출한다).
@@ -53,6 +54,10 @@ public func SecItemCopyMatching(_ query: CFDictionary,
 ///                        _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus`
 public func SecItemAdd(_ attributes: CFDictionary,
                        _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus { errSecSuccess }
+
+/// 실제: `func SecItemUpdate(_ query: CFDictionary, _ attributesToUpdate: CFDictionary) -> OSStatus`
+public func SecItemUpdate(_ query: CFDictionary,
+                          _ attributesToUpdate: CFDictionary) -> OSStatus { errSecSuccess }
 
 /// 실제: `func SecItemDelete(_ query: CFDictionary) -> OSStatus`
 public func SecItemDelete(_ query: CFDictionary) -> OSStatus { errSecSuccess }

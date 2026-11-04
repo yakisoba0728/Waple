@@ -2,6 +2,7 @@ import Combine
 import XCTest
 @testable import Waple
 import WapleLibrary
+import WapleCore
 
 /// 비디오/상위 폴더 임포트 결함 수정(F582, F583) 회귀 모음 — 각 테스트는 개별 F주석을 참조한다.
 final class VideoImportFixRegressionTests: XCTestCase {
@@ -30,6 +31,23 @@ final class VideoImportFixRegressionTests: XCTestCase {
         let importsDir = dir.appendingPathComponent("imports", isDirectory: true)
         let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: importsDir.path)) ?? []
         XCTAssertTrue(leftovers.isEmpty, "F583: 실패 시 만든 폴더를 정리해야 한다 — \(leftovers)")
+    }
+
+    func testPrepareCopiesSymlinkTargetBytesIntoManagedFolder() throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = dir.appendingPathComponent("source.mp4")
+        let bytes = Data([0, 1, 2, 3])
+        try bytes.write(to: source)
+        let link = dir.appendingPathComponent("link.mp4")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: source)
+
+        let prepared = try XCTUnwrap(VideoImport.prepare(from: link, baseDirectory: dir))
+        let copied = prepared.appendingPathComponent("link.mp4")
+        XCTAssertNotNil(WallpaperPathSecurity.containedFileURL("link.mp4", root: prepared))
+        XCTAssertFalse(try copied.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true)
+        try FileManager.default.removeItem(at: source)
+        XCTAssertEqual(try Data(contentsOf: copied), bytes)
     }
 
     /// prepare 성공 후 스토어 등록(importFolder)이 실패하면 준비 폴더를 정리하고 onNotify 를 태운다.

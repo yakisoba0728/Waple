@@ -36,8 +36,11 @@ final class PuppetBlendRealSceneTests: XCTestCase {
         let pkgPath = corpusBase() + "/2955378002/scene.pkg"
         guard FileManager.default.fileExists(atPath: pkgPath) else { throw XCTSkip("corpus 없음 — skip(CI 안전)") }
         let pkg = try ScenePackage.parse(try Data(contentsOf: URL(fileURLWithPath: pkgPath)))
-        guard let mdl = pkg.data(for: "models/rennee_puppet.mdl"), let model = PuppetModel.parse(mdl),
-              model.bones.count > 0, model.animations.count >= 2 else { throw XCTSkip("rennee 퍼펫 로드 실패 — skip") }
+        let mdl = try XCTUnwrap(pkg.data(for: "models/rennee_puppet.mdl"))
+        let model = try XCTUnwrap(PuppetModel.parse(mdl))
+        XCTAssertGreaterThan(model.bones.count, 0)
+        XCTAssertGreaterThanOrEqual(model.animations.count, 2)
+        guard !model.bones.isEmpty, model.animations.count >= 2 else { return }
 
         let i1 = PuppetPose.clipIndex(model: model, name: "Animation 1", fallback: 0)
         let i2 = PuppetPose.clipIndex(model: model, name: "Animation 2", fallback: 1)

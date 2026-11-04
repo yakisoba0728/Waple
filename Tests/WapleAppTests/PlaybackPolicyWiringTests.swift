@@ -57,9 +57,10 @@ final class PlaybackPolicyWiringTests: XCTestCase {
     private func body(of declaration: String, in source: String) throws -> String {
         let start = try XCTUnwrap(source.range(of: declaration),
                                   "선언을 못 찾았다: \(declaration) — 시그니처가 바뀌었으면 이 오라클도 같이 고쳐라")
+        let open = try XCTUnwrap(source[start.lowerBound...].firstIndex(of: "{"))
         var depth = 1
         var out = ""
-        for ch in source[start.upperBound...] {
+        for ch in source[source.index(after: open)...] {
             if ch == "{" { depth += 1 }
             if ch == "}" { depth -= 1; if depth == 0 { break } }
             out.append(ch)
@@ -84,8 +85,10 @@ final class PlaybackPolicyWiringTests: XCTestCase {
     /// 오디오 축이 **뺄셈을 거쳐** 채워진다. stage 2 는 여기를 리터럴 `false` 로 두었고,
     /// 그 상태에서는 사용자가 `playbackaudio` 를 켜도 아무 일도 일어나지 않는다.
     func testAudioAxisIsFedThroughTheSelfSubtraction() throws {
-        let code = stripComments(try body(of: "private func applyPlaybackPolicy() {",
-                                          in: try appDelegateSource()))
+        let source = try appDelegateSource()
+        let application = stripComments(try body(of: "private func applyPlaybackPolicy() {", in: source))
+        XCTAssertTrue(application.contains("playbackDecisions(for: rendererProjects)"))
+        let code = stripComments(try body(of: "private func playbackDecisions(for projects:", in: source))
         XCTAssertFalse(code.contains("audioPlaying: false"),
                        "오디오 축이 다시 리터럴 false 로 굳었다 — 축이 통째로 죽는다")
         XCTAssertTrue(code.contains("SystemAudioObserver.isOtherAppPlaying("),
@@ -173,8 +176,10 @@ final class PlaybackPolicyWiringTests: XCTestCase {
     /// 인스턴스화되지 않으므로(파일 머리말), 배선을 되돌리는 회귀 — 예: `monitorIndex: 0` 으로
     /// 굳히기 — 는 실측으로 WapleAppTests 461개를 통째로 통과한다. 그래서 소스 스캔이다.
     func testMonitorIndexComesFromTheSameScreenArrayAsTheMasks() throws {
-        let code = stripComments(try body(of: "private func applyPlaybackPolicy() {",
-                                          in: try appDelegateSource()))
+        let source = try appDelegateSource()
+        let application = stripComments(try body(of: "private func applyPlaybackPolicy() {", in: source))
+        XCTAssertTrue(application.contains("playbackDecisions(for: rendererProjects)"))
+        let code = stripComments(try body(of: "private func playbackDecisions(for projects:", in: source))
         XCTAssertTrue(code.contains("screenFrames: screens.map"),
                       "마스크의 비트 자리를 정하는 배열이 바뀌었다 — 이 오라클의 전제가 사라졌다")
         XCTAssertTrue(code.contains("DesktopWindow.screenKey(for:"),

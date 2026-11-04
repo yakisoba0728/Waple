@@ -15,6 +15,7 @@ import sys
 
 BUNDLE = re.compile(r"^Test Suite '([^']+\.xctest)' (?:passed|failed) at ")
 EXECUTED = re.compile(r"^\s*Executed (\d+) tests?(?:,|$)")
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 def bundle_counts(text: str) -> list[tuple[str, int]]:
@@ -37,13 +38,32 @@ def bundle_counts(text: str) -> list[tuple[str, int]]:
     return counts
 
 
+def check_complete(text: str, counts: list[tuple[str, int]], root: pathlib.Path) -> bool:
+    """물리 번들 수 대신 CI 하한과 타깃의 실제 실행으로 완주를 확인한다."""
+    ci = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    floor = re.search(r'"\$\{EXECUTED:-0\}"\s*-lt\s+(\d+)', ci)
+    manifest = (root / "Package.swift").read_text(encoding="utf-8")
+    targets = set(re.findall(r'\.testTarget\(\s*name:\s*"([A-Za-z0-9_]+)"', manifest))
+    ran = set(re.findall(r"Test Case '-\[([A-Za-z0-9_]+)\.\w+ \w+\]' (?:passed|failed)", text))
+    ran |= set(re.findall(r"Test Case '([A-Za-z0-9_]+)\.\w+\.\w+' (?:passed|failed)", text))
+    failures = re.findall(r"^\s*Executed \d+ tests?, with (?:\d+ tests? skipped and )?([1-9]\d*) failures?", text, re.M)
+    if (not floor or not targets or targets - ran or failures
+            or sum(count for _, count in counts) < int(floor.group(1))):
+        print(f"[xctest-census] 완주 검증 실패 — 실행 하한 {floor.group(1) if floor else '없음'}, "
+              f"미실행 타깃 {sorted(targets - ran)}, 실패 요약 {len(failures)}개", file=sys.stderr)
+        return False
+    return True
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print(f"usage: {argv[0]} TEST-OUTPUT.log|-", file=sys.stderr)
+    check = len(argv) > 1 and argv[1] == "--check"
+    args = argv[2:] if check else argv[1:]
+    if len(args) != 1:
+        print(f"usage: {argv[0]} [--check] TEST-OUTPUT.log|-", file=sys.stderr)
         return 2
     try:
-        text = (sys.stdin.read() if argv[1] == "-" else
-                pathlib.Path(argv[1]).read_text(encoding="utf-8", errors="replace"))
+        text = (sys.stdin.read() if args[0] == "-" else
+                pathlib.Path(args[0]).read_text(encoding="utf-8", errors="replace"))
     except OSError as error:
         print(f"[xctest-census] 로그를 읽지 못했다: {error}", file=sys.stderr)
         return 2
@@ -51,6 +71,13 @@ def main(argv: list[str]) -> int:
     if not counts:
         print("[xctest-census] `*.xctest` 번들 완료 요약을 하나도 찾지 못했다", file=sys.stderr)
         return 1
+    if check:
+        try:
+            if not check_complete(text, counts, ROOT):
+                return 1
+        except OSError as error:
+            print(f"[xctest-census] 검증 기준을 읽지 못했다: {error}", file=sys.stderr)
+            return 2
     print(sum(count for _, count in counts))
     return 0
 

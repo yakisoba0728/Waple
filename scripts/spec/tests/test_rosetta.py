@@ -13,7 +13,12 @@ verify_rosetta.py 를 다시 쓰면서 API 가 셋 바뀌었는데 테스트가 
 (test_rejects_unconfirmed_version 이 겨냥하던 MDLV0023 은 이제
 정식 지원 버전이다) 그건 실제로 미확정인 버전으로 겨냥을 옮겼다.
 """
+import contextlib
+import io
 import os
+from pathlib import Path
+import tempfile
+from unittest import mock
 import struct
 import sys
 import unittest
@@ -248,6 +253,34 @@ class TestUvFlip(unittest.TestCase):
         self.assertTrue(bad)
         self.assertIn("불일치", label)
 
+
+
+class TestMainComparisonGate(unittest.TestCase):
+    def run_pairs(self, *, skipped=0, mismatched=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            models = root / "projects/defaultprojects/example/models"
+            models.mkdir(parents=True)
+            for i in range(R.MIN_PAIRS):
+                (models / f"m{i}.obj").write_text("v 0 0 0\nvt 0 0\n")
+                data = (b"MDLV9999" if i < skipped else
+                        make_mdl_v4([(1.0 if mismatched else 0.0, 0.0, 0.0)], [(0.0, 0.0)]))
+                (models / f"m{i}.mdl").write_bytes(data)
+            with mock.patch.object(R, "WE", str(root)), contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                return R.main()
+
+    def test_all_unsupported_pairs_are_not_a_success(self):
+        self.assertEqual(self.run_pairs(skipped=R.MIN_PAIRS), 2)
+
+    def test_skips_cannot_reduce_actual_comparisons_below_the_floor(self):
+        self.assertEqual(self.run_pairs(skipped=1), 2)
+
+    def test_sixteen_real_comparisons_pass(self):
+        self.assertEqual(self.run_pairs(), 0)
+
+    def test_geometry_mismatch_remains_a_failure(self):
+        self.assertEqual(self.run_pairs(mismatched=True), 1)
 
 if __name__ == "__main__":
     unittest.main()

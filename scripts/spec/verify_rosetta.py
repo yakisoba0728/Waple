@@ -467,7 +467,12 @@ def main():
     print(f"\n대조 {checked} / 스킵 {skipped} / 불일치 {failed}")
     if skipped:
         print("스킵 사유는 레이아웃 미확정이다 — 억지로 읽어 '통과' 를 만들지 않는다.")
-    return 1 if failed else 0
+    if failed:
+        return 1
+    if checked < MIN_PAIRS:
+        print(f"[검증 불가] 실제 대조 {checked}쌍 — 기대 하한 {MIN_PAIRS} 미만", file=sys.stderr)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

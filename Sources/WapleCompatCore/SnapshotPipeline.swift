@@ -1,6 +1,11 @@
 import Foundation
 import AppKit
 import CoreGraphics
+#if os(Linux)
+import Glibc
+#else
+import Darwin
+#endif
 import WapleCore
 import WapleRender
 import WapleSnapshot
@@ -284,18 +289,42 @@ public enum SnapshotPipeline {
         return selfCheckPassExitCode(failures: failures, empties: empties)
     }
 
+    static func prepareCaptureDestination(outDir: URL, label: String) throws -> URL {
+        guard WallpaperPathSecurity.normalizedPathComponent(label) == label else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        let destination = outDir.appendingPathComponent(label, isDirectory: true)
+        // 같은 label의 재실행·동시 실행은 기존 정상 기준선을 건드리기 전에 거부한다.
+        guard mkdir(destination.path, 0o755) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO,
+                             userInfo: [NSFilePathErrorKey: destination.path])
+        }
+        return destination
+    }
+
     public static func runCapture(root: String, outDir: URL, label: String?) -> Int32 {
         let start = Date()
         let sha = gitSHA()
         let lbl = label ?? sha
-        let dst = outDir.appendingPathComponent(lbl, isDirectory: true)
+        let dst: URL
+        do { dst = try prepareCaptureDestination(outDir: outDir, label: lbl) }
+        catch {
+            fputs("[snap] capture destination unavailable (choose a new --label): \(error)\n", stderr)
+            return 2
+        }
         let thumbs = dst.appendingPathComponent("thumbs", isDirectory: true)
         // F148: PID 로 스코프 — 동시 두 프로세스가 같은 고정 경로에 쓰면 서로의 캡처를 덮어써 매니페스트
         // 해시/썸네일 불일치나 쓰기 도중 읽기로 손상된 PNG "empty" 오분류가 날 수 있었다.
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_snap_cap_\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
         let fm = FileManager.default
-        try? fm.createDirectory(at: thumbs, withIntermediateDirectories: true)
-        try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        do {
+            try fm.createDirectory(at: thumbs, withIntermediateDirectories: true)
+            try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        } catch {
+            fputs("[snap] capture directory creation failed: \(error)\n", stderr)
+            return 2
+        }
 
         let restore = pinRenderSettings(root: root)
         defer { restore() }

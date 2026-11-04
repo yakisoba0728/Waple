@@ -330,9 +330,6 @@ enum Scene3DLighting {
     /// (spot `spotCookie = -dot(normalize(lightDelta), 축)`, directional `L = -forward`).
     /// 이 정정은 **열 인덱스 하나**뿐이다.
     ///
-    /// **2D 포워드 레인(`SceneLight3D.forwardLightAxis`, WapleCore)은 아직 col2 다** — 그 파일은
-    /// 이 레인 소유가 아니라 여기서 함께 고치지 못했다. 두 레인이 어긋나 있다는 사실을 여기 적어
-    /// 둔다(`SceneRenderer3D` 의 볼류메트릭 스팟 축도 그 함수를 쓴다).
     /// spot 섀도우는 스코프 밖(코퍼스 spot 전원 castshadow:false) → castShadow 는 point/directional 만 존중.
     /// ltube: origin=단점A / `controlpoint`=단점B(부모-로컬 동일 공간, 위 originB 필드 주석의 반증 참조),
     /// 무섀도우(WE 정본 — 스니펫 0x14048c9e0 의 shadowFactor 인자가 리터럴 1.0).
@@ -359,31 +356,10 @@ enum Scene3DLighting {
                 guard light.radius.isFinite, light.radius > PointShadowMath.minimumRadius else { continue }
             }
 
-            // 라이트 자체 회전 포함 로컬행렬(scale=1: 위치·방향에 스케일 오염 방지) → 부모 체인 합성.
-            // col3=위치, **col0=forward**(V1 패커 `glm::column(M, 0)` — 위 방향 규약 절 참조).
-            // point 위치는 회전 무관(T·R·S 의 col3 = origin)이라 무회귀.
-            let localMatrix = Scene3DMath.modelMatrix(
-                origin: SIMD3(light.origin.x, light.origin.y, light.origin.z),
-                angles: SIMD3(light.angles.x, light.angles.y, light.angles.z),
-                scale: SIMD3(1, 1, 1))
-            // 부모 행렬을 분리 보관 — tube 단점 B(originb)는 origin 과 같은 부모-로컬 공간 점이라
-            // 라이트 자체 회전(R)이 아니라 부모 체인만으로 월드화한다(WE g_LTube_OriginA/B 는
-            // 동일 공간의 두 단점 — generic3.frag:110 PointSegmentDelta 소비). 무parent = 항등(비트동일).
-            let parentMatrix: simd_float4x4
-            if let parent = light.parent {
-                guard let transform = Scene3DMath.worldMatrix(id: parent, nodes: nodes),
-                      transform.visible else { continue }
-                parentMatrix = transform.matrix
-            } else {
-                parentMatrix = matrix_identity_float4x4
-            }
-            let worldMatrix = parentMatrix * localMatrix
-            let position = SIMD3(worldMatrix.columns.3.x, worldMatrix.columns.3.y, worldMatrix.columns.3.z)
-            let forward = normalizedOr(
-                SIMD3(worldMatrix.columns.0.x, worldMatrix.columns.0.y, worldMatrix.columns.0.z),
-                SIMD3(1, 0, 0))
-            guard position.x.isFinite, position.y.isFinite, position.z.isFinite,
-                  forward.x.isFinite, forward.y.isFinite, forward.z.isFinite else { continue }
+            guard let transform = worldTransform(for: light, nodes: nodes) else { continue }
+            let position = transform.position
+            let forward = transform.forward
+            let parentMatrix = transform.parentMatrix
 
             // lightconfig 슬롯 소비. WE 패커도 **가시성 판정 뒤**(0x1401910d6 `IsVisible` → 0x1401910f2
             // 타입 분기 → 종별 `test/je`)에 카운터를 깎으므로 이 자리가 맞다. 미저작 씬은 항상 true.
@@ -466,6 +442,44 @@ enum Scene3DLighting {
     /// `(cosAngle+1)/2` 반구 그라디언트로 접는다(축상 1 · 수직 0.5 · 후방 0 — 전방향 통과가 아니다).
     static func spotConeCosines(inner: Float, outer: Float) -> (inner: Float, outer: Float) {
         SceneLight3D.forwardSpotConeCosines(inner: inner, outer: outer)
+    }
+
+    /// PBR·볼류메트릭은 같은 부모 가시성·월드 변환·forward 축을 소비한다.
+    static func worldTransform(for light: SceneLight3D, nodes: [Int: Scene3DMath.Node])
+        -> (position: SIMD3<Float>, forward: SIMD3<Float>, parentMatrix: simd_float4x4)? {
+        guard light.origin.x.isFinite, light.origin.y.isFinite, light.origin.z.isFinite,
+              light.angles.x.isFinite, light.angles.y.isFinite, light.angles.z.isFinite else { return nil }
+        // scale=1 로 라이트 자체 크기 오염을 막고 col0(+X)를 forward로 쓴다(V1 패커 glm::column(M, 0)).
+        let localMatrix = Scene3DMath.modelMatrix(
+            origin: SIMD3(light.origin.x, light.origin.y, light.origin.z),
+            angles: SIMD3(light.angles.x, light.angles.y, light.angles.z), scale: SIMD3(repeating: 1))
+        // tube 단점 B는 origin과 같은 부모-로컬 공간 — 자체 회전이 아니라 부모 체인만 적용(generic3.frag PointSegmentDelta).
+        let parentMatrix: simd_float4x4
+        if let parent = light.parent {
+            guard let transform = Scene3DMath.worldMatrix(id: parent, nodes: nodes), transform.visible else { return nil }
+            parentMatrix = transform.matrix
+        } else {
+            parentMatrix = matrix_identity_float4x4
+        }
+        let matrix = parentMatrix * localMatrix
+        let position = SIMD3(matrix.columns.3.x, matrix.columns.3.y, matrix.columns.3.z)
+        let forward = normalizedOr(SIMD3(matrix.columns.0.x, matrix.columns.0.y, matrix.columns.0.z), SIMD3(1, 0, 0))
+        guard position.x.isFinite, position.y.isFinite, position.z.isFinite,
+              forward.x.isFinite, forward.y.isFinite, forward.z.isFinite else { return nil }
+        return (position, forward, parentMatrix)
+    }
+
+    static func volumetricParameters(for light: SceneLight3D, nodes: [Int: Scene3DMath.Node]) -> VolumetricLightParameters? {
+        guard light.castVolumetrics, let transform = worldTransform(for: light, nodes: nodes) else { return nil }
+        let cone = SceneLight3D.forwardSpotConeCosines(inner: light.innerCone, outer: light.outerCone)
+        return VolumetricLightParameters(color: SIMD3(light.color.x, light.color.y, light.color.z),
+                                        position: transform.position, direction: transform.forward,
+                                        density: light.density, exponent: light.volumetricsExponent,
+                                        intensity: light.intensity, innerCone: cone.inner,
+                                        outerCone: cone.outer,
+                                        // 실물은 radius×0.99(0x140198760)를 셰이더에 넣고 반경 구로 레이마치 구간을 제한한다.
+                                        // 배선 전 생성자 기본 1.0(0x140190494) 때문에 헐이 보이지 않던 경계다.
+                                        radius: light.radius)
     }
 
     /// 영벡터/비유한 방어 정규화(셰이더 normalizedOr 과 동일 시맨틱).

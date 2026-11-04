@@ -10,7 +10,9 @@ public enum VideoFallbackHTML {
     /// 심으면서 함께 닫히지 않았다). 기본값 1 = 등속이라 무회귀다.
     public static func html(forVideoFile name: String, volume: Float = 0, rate: Float = 1,
                             fitMode: FitMode = .fill) -> String {
-        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        // URL이 HTML 속성에 들어가므로 '&' 엔티티와 query/fragment 구분자도 경로 바이트로 보존한다.
+        let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "&?#"))
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: allowed) ?? name
         let clamped = max(0, min(1, volume))
         let mutedAttr = clamped > 0 ? "" : " muted"
         // <video> 에 volume 속성은 없으므로 스크립트로 프로퍼티 설정.

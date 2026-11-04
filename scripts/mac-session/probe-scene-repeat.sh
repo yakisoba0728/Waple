@@ -22,11 +22,12 @@ cd "$REPO" || exit 1
 echo "빌드(release)…"
 swift build -c release 2>&1 | tail -2 || exit 1
 echo "HEAD=$(git rev-parse --short HEAD) · 씬 $ID · $N 회(별도 프로세스)"
-mkdir -p "$OUT"
+mkdir -p "$OUT" || exit 2
+OUT=$(mktemp -d "$OUT/run.XXXXXX") || exit 2
+echo "이번 실행 출력: $OUT"
 for i in $(seq 1 "$N"); do
-    rm -rf "$OUT/run$i"
     launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$ROOT/backgrounds" WAPLE_BASE_ASSETS="$ROOT/assets" \
-        "$BIN" --capture "$OUT" --label "run$i" "$ROOT/backgrounds/$ID" >/dev/null 2>&1
+        "$BIN" --capture "$OUT" --label "run$i" "$ROOT/backgrounds/$ID" >/dev/null 2>&1 || exit $?
 done
 
 python3 - "$OUT" "$N" "$ID" <<'PY'

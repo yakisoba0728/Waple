@@ -106,6 +106,9 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     /// 아직 영속하지 않고, AppDelegate의 실제 교체 성공 콜백을 받은 이 타입이 commit한다.
     /// 완료 콜백은 반환값이 `.pending`일 때만 나중에 정확히 한 번 호출한다.
     var onApply: ((URL, @escaping (WallpaperApplyResolution) -> Void) -> WallpaperApplyDisposition)?
+    var onCancelPendingApply: (() -> Void)?
+    private var pendingApplyEntryId: String?
+    private var applyGeneration: UInt64 = 0
 
     /// 사용자에게 보여줄 메시지를 AppDelegate 로 전달한다.
     ///
@@ -248,6 +251,11 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     /// 라이브러리에서 제거(파일 보존) + 전 스토어 orphan 정리. 적용 중 배경은 계속 재생된다
     /// (렌더러는 폴더를 직접 들고 있음) — Now Playing 표시는 '적용된 배경 없음'으로 떨어진다.
     func remove(_ entry: LibraryEntry) {
+        if pendingApplyEntryId == entry.id {
+            applyGeneration &+= 1
+            pendingApplyEntryId = nil
+            onCancelPendingApply?()
+        }
         let hadAssignment = monitors.all.values.contains(entry.id)
         // F070: 전역 선택이었는지는 할당과 무관하게 판정한다 — 할당이 병존하면 onAssignmentsChanged
         // 경유 applyCurrentSelection 이 스테일 currentFolderURL 을 재적용해 제거된 배경을 되살리므로,
@@ -451,10 +459,20 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         }
         // 성공이 확인된 뒤에만 선택을 영속·강조한다. pending 시에도 기존 선택을 유지해
         // 변환 실패가 새 선택으로 보이는 상태를 만들지 않는다.
+        applyGeneration &+= 1
+        let generation = applyGeneration
+        pendingApplyEntryId = entry.id
         let disposition = onApply?(folder) { [weak self] resolution in
-            if resolution == .applied { self?.commitAppliedSelection(entryId: entry.id) }
+            guard let self, self.applyGeneration == generation,
+                  self.entries.contains(where: { $0.id == entry.id }) else {
+                completion(.cancelled)
+                return
+            }
+            self.pendingApplyEntryId = nil
+            if resolution == .applied { self.commitAppliedSelection(entryId: entry.id) }
             completion(resolution)
         } ?? .failed
+        if disposition != .pending, applyGeneration == generation { pendingApplyEntryId = nil }
         guard disposition != .failed else {
             onNotify?(String(format: NSLocalizedString("‘%@’을(를) 적용하지 못했습니다.",
                                                       comment: "적용 실패 — 마운트 거부"),
@@ -466,6 +484,7 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     }
 
     private func commitAppliedSelection(entryId: String) {
+        guard entries.contains(where: { $0.id == entryId }) else { return }
         store.select(entryId)
         selectedId = entryId
     }

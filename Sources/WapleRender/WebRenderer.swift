@@ -86,6 +86,10 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     private static let maxBridgeStringBytes = 1024
     /// 진행 중인 재귀 열거 수. 메인 큐에서만 읽고 쓴다(브리지 메시지·didFinish·완료 콜백 전부 메인).
     private var inFlightDirectoryWalks = 0
+    var directoryWalksInFlightForTesting: Int { inFlightDirectoryWalks }
+    private var documentGeneration: UInt64 = 0
+    private var pendingFetchAll = false
+    var directoryWalker: @Sendable (URL) -> [URL] = { WebRenderer.regularFiles(in: $0) }
 
     public init(mode: Mode) {
         self.mode = mode
@@ -494,7 +498,7 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     // 여전히 성립하는 메서드는 셀렉터가 틀리면 컴파일 에러가 나므로(요구사항 셀렉터와 불일치) 오타는
     // 조용히 지나가지 않는다. **이 어노테이션을 지우려면 위 두 테스트를 반드시 돌려라.**
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard Self.isAllowedTopFrameURL(webView.url) else { return }
+        guard webView === self.webView, Self.isAllowedTopFrameURL(webView.url) else { return }
         synchronizeEffectivePause(forceJavaScript: isEffectivelyPaused)
         // 문서가 교체되면 JS 월드가 통째로 사라진다 — `__wapleMuted` 도 `MutationObserver` 도
         // 같이 없어지므로 여기서 다시 심는다(`synchronizeEffectivePause` 가 정지 상태를 다시
@@ -519,7 +523,9 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     /// (2) 프래그먼트/pushState 같은 동일 문서 납비게이션은 JS 월드가 유지되며 didCommit 이
     /// 발생하지 않는다(리셋하면 살아 있는 문서의 등록이 고립된다).
     public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        guard Self.isAllowedTopFrameURL(webView.url) else { return }
+        guard webView === self.webView, Self.isAllowedTopFrameURL(webView.url) else { return }
+        documentGeneration &+= 1
+        pendingFetchAll = false
         // 소비자가 있을 때만 동기화 — 미등록 문서(초기 로드 등)에서의 무조건 동기화는
         // 프로바이더에 불필요한 stop 을 추가할 뿐 아무 효과도 없다.
         let hadConsumers = hasAudioListener || mediaPoller != nil
@@ -644,11 +650,12 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
                 // 메인 홉 하나만큼 늘려 deinit/teardown 시점을 바꾸는 **동작 변경**이다.
                 // inFlightDirectoryWalks 정합: 두 형태 모두 self 가 살아 있을 때만 감소하고,
                 // 죽었으면 카운터를 가진 객체 자체가 사라지므로 관측 차이가 없다.
+                let generation = documentGeneration
+                let walk = directoryWalker
                 DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                    let path = self?.randomFilePath(in: directoryURL) ?? ""
+                    let path = walk(directoryURL).randomElement()?.resolvingSymlinksInPath().path ?? ""
                     DispatchQueue.main.async { [weak self] in
-                        guard let self else { return }
-                        self.inFlightDirectoryWalks -= 1
+                        guard let self, self.finishDirectoryWalk(generation: generation) else { return }
                         self.deliverRandomFileResponse(requestID: requestID, propertyName: name,
                                                        filePath: path)
                     }
@@ -700,7 +707,7 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
 
         if type == "file" {
             guard let fileURL = resourceURL(for: property, rawPath: path, projectRoot: root),
-                  isRegularFile(fileURL, containedIn: path.hasPrefix("/") ? nil : root) else { return nil }
+                  Self.isRegularFile(fileURL, containedIn: path.hasPrefix("/") ? nil : root) else { return nil }
             return .file(fileURL.resolvingSymlinksInPath().path)
         }
 
@@ -723,28 +730,39 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
         guard !targets.isEmpty else { return }
         // F840: didFinish 마다 자동 실행되므로 페이지가 location.reload 로 반복 유발할 수 있다 —
         // randomFile 과 같은 인-플라이트 상한을 공유한다(초과 시 이번 didFinish 분은 건너뛴다).
-        guard inFlightDirectoryWalks < Self.maxInFlightDirectoryWalks else { return }
+        guard inFlightDirectoryWalks < Self.maxInFlightDirectoryWalks else {
+            pendingFetchAll = true
+            return
+        }
+        pendingFetchAll = false
         inFlightDirectoryWalks += 1
         // F573: 재귀 열거+stat 은 파일 수만큼 I/O — 메인 프리즈 방지를 위해 백그라운드에서 해석 후
-        // 메인으로 복귀해 전달(teardown 후면 webView 가 nil 이라 evaluateJavaScript 가 no-op).
+        // 메인으로 복귀해 전달하되, 작업이 시작된 문서 세대가 바뀌었으면 결과를 버린다.
         // 캡처는 불변 스냅샷으로 넘긴다 — @Sendable 클로저가 가변 var 를 참조하면 Swift 6 에선 에러다.
         // 값 타입 배열이라 복사는 참조 하나(의미 변화 없음).
         let snapshot = targets
+        let generation = documentGeneration
+        let walk = directoryWalker
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let resolved: [(String, [String])] = snapshot.map { target in
-                let files = self?.regularFiles(in: target.directoryURL)
-                    .map { $0.resolvingSymlinksInPath().path } ?? []
+                let files = walk(target.directoryURL).map { $0.resolvingSymlinksInPath().path }
                 return (target.key, files)
             }
             // 위 randomFile 경로와 같은 이유로 안쪽에서 재캡처한다(근거는 그 주석 참조).
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.inFlightDirectoryWalks -= 1
+                guard let self, self.finishDirectoryWalk(generation: generation) else { return }
                 for (key, files) in resolved {
                     self.deliverDirectoryFilesAddedOrChanged(propertyName: key, files: files)
                 }
             }
         }
+    }
+
+    private func finishDirectoryWalk(generation: UInt64) -> Bool {
+        inFlightDirectoryWalks -= 1
+        // 이전 문서의 실제 작업도 상한에 포함하고, 자리가 나면 대기 중인 새 문서 fetchall을 실행한다.
+        if pendingFetchAll { deliverFetchAllDirectories() }
+        return generation == documentGeneration
     }
 
     private func fetchAllDirectoryURL(for property: WallpaperProperty) -> URL? {
@@ -757,16 +775,8 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
         return directoryURL
     }
 
-    /// nonisolated: F573 계약대로 **백그라운드 큐에서 호출된다**. 이 클래스는 WKNavigationDelegate
-    /// 등 @MainActor 프로토콜 적합으로 멤버 전체가 메인 액터로 추론되는데, 이 셋은 인스턴스 상태를
-    /// 하나도 읽지 않고 FileManager 만 만지므로 격리에서 명시적으로 빼낸다(= 진단이 가리키던
-    /// "메인 액터 메서드를 백그라운드에서 호출" 이 실제로 안전하다는 근거를 코드에 적는 것).
-    nonisolated private func randomFilePath(in directoryURL: URL) -> String? {
-        regularFiles(in: directoryURL).randomElement()?.resolvingSymlinksInPath().path
-    }
-
-    /// F573: 재귀 열거+파일별 stat — 메인 스레드 동기 호출 금지(백그라운드 큐 전용).
-    nonisolated private func regularFiles(in directoryURL: URL) -> [URL] {
+    /// F573: 인스턴스 상태 없는 재귀 열거+stat — 백그라운드 큐에서 실행한다.
+    nonisolated private static func regularFiles(in directoryURL: URL) -> [URL] {
         let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]
         guard let enumerator = FileManager.default.enumerator(
             at: directoryURL,
@@ -811,7 +821,7 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     }
 
     /// nonisolated: regularFiles(백그라운드)가 엔트리마다 호출한다 — 인스턴스 상태 무접근(위 주석 참조).
-    nonisolated private func isRegularFile(_ url: URL, containedIn root: URL?) -> Bool {
+    nonisolated private static func isRegularFile(_ url: URL, containedIn root: URL?) -> Bool {
         var isDirectory = ObjCBool(false)
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
               !isDirectory.boolValue else { return false }
@@ -929,6 +939,8 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     }
 
     public func teardown() {
+        documentGeneration &+= 1
+        pendingFetchAll = false
         if let o = occlusionObserver { NotificationCenter.default.removeObserver(o) }
         occlusionObserver = nil
         if let m = mouseMonitor { NSEvent.removeMonitor(m) }

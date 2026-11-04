@@ -7,30 +7,32 @@ import AVFoundation
 /// 필요해졌다. 그 타입들은 원래부터 "상태가 메인 큐 한정"(파일 머리말)이었고 이제 타입이 그걸 말한다.
 @MainActor
 final class VideoSettingsTests: XCTestCase {
+    private let id = "audit-video-settings-\(UUID().uuidString)"
     override func tearDown() {
-        VideoSettings.reset(id: "vtest1")
+        VideoSettings.reset(id: id)
         super.tearDown()
     }
 
     func testDefaultsAndPersistence() {
-        XCTAssertEqual(VideoSettings.volume(id: "vtest1"), 0, "기본 음소거(보수적)")
-        XCTAssertEqual(VideoSettings.rate(id: "vtest1"), 1, "기본 1배속")
-        VideoSettings.setVolume(0.75, id: "vtest1")
-        VideoSettings.setRate(1.5, id: "vtest1")
-        XCTAssertEqual(VideoSettings.volume(id: "vtest1"), 0.75)
-        XCTAssertEqual(VideoSettings.rate(id: "vtest1"), 1.5)
-        XCTAssertEqual(VideoSettings.volume(id: "other"), 0, "배경별 독립")
+        XCTAssertEqual(VideoSettings.volume(id: id), 0, "기본 음소거(보수적)")
+        XCTAssertEqual(VideoSettings.rate(id: id), 1, "기본 1배속")
+        VideoSettings.setVolume(0.75, id: id)
+        VideoSettings.setRate(1.5, id: id)
+        XCTAssertEqual(VideoSettings.volume(id: id), 0.75)
+        XCTAssertEqual(VideoSettings.rate(id: id), 1.5)
+        XCTAssertEqual(VideoSettings.volume(id: id + "-other"), 0, "배경별 독립")
     }
 
     /// mount 시 설정이 player 에 반영돼야 한다(volume/muted/defaultRate).
     func testRendererAppliesSettings() throws {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_vset", isDirectory: true)
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_vset_\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
         let mp4 = dir.appendingPathComponent("t.mp4")
         try makeTinyMP4(at: mp4)
-        VideoSettings.setVolume(0.5, id: "vtest1")
-        VideoSettings.setRate(2.0, id: "vtest1")
-        let project = WallpaperProject(id: "vtest1", type: .video, fileName: "t.mp4", previewName: nil,
+        VideoSettings.setVolume(0.5, id: id)
+        VideoSettings.setRate(2.0, id: id)
+        let project = WallpaperProject(id: id, type: .video, fileName: "t.mp4", previewName: nil,
                                        title: "t", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
         let r = VideoRenderer()
         try r.mount(in: NSView(frame: .zero), project: project)

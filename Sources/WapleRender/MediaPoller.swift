@@ -19,16 +19,23 @@ public final class MediaPoller: @unchecked Sendable {
     private let provider: NowPlayingProvider
     private var timer: Timer?
     var isRunningForTesting: Bool { timer != nil }
+    var hasPendingPollForTesting: Bool {
+        pollLock.lock()
+        defer { pollLock.unlock() }
+        return pollInFlight
+    }
     private var last: NowPlayingInfo?
     private var lastTrackKey: String?
     private let pollLock = NSLock()
     private var pollInFlight = false
+    private var generation: UInt64 = 0
 
     public init(provider: NowPlayingProvider) { self.provider = provider }
     deinit { stop() }
 
     public func start() {
         guard timer == nil else { return }
+        generation &+= 1
         // `.common` 런루프 모드 — `scheduledTimer` 는 `.default` 에만 등록돼 메뉴 트래킹·라이브
         // 리사이즈 중 멈춘다. `AppDelegate.swift:701,756` 이 이미 이 규약을 쓰고 :755 주석이
         // 이유를 적어 뒀는데 이 자리로 전파되지 않았다.
@@ -41,6 +48,7 @@ public final class MediaPoller: @unchecked Sendable {
     }
 
     public func stop() {
+        generation &+= 1
         timer?.invalidate()
         timer = nil
     }
@@ -55,13 +63,13 @@ public final class MediaPoller: @unchecked Sendable {
         pollLock.unlock()
 
         let prevKey = lastTrackKey
+        let pollGeneration = generation
         // AppleScript 는 블로킹 — 백그라운드에서 fetch(+아트워크) 후 메인에서 배달.
         DispatchQueue.global(qos: .utility).async { [weak self] in
             // 여기서 강참조로 승격한다. 종전엔 weak 캡처를 **메인 홉 클로저가 다시 참조**했는데,
             // weak 캡처는 가변 저장소라 그 재참조가 Swift 6 에서 에러다(진단 :57 "captured var 'self'").
-            // 승격 후 캡처되는 것은 불변 let 이라 진단이 사라진다. 의미 변화: 폴러가 fetch 완료까지
-            // 살아 있게 되지만, stop() 이 타이머를 이미 껐고 배달 콜백은 teardown 후 webView 가 nil 이라
-            // no-op 다(WebRenderer.startMediaPolling 의 weak self 클로저) — 동작은 종전과 같다.
+            // 승격 후 캡처되는 것은 불변 let 이라 진단이 사라진다. 완료 배달은 아래 세대 검사로
+            // stop/재시작 이전 결과를 버린다 — 같은 WKWebView의 새 문서는 nil이 아니기 때문이다.
             guard let self else { return }
             let info = self.provider.fetch() ?? NowPlayingInfo(state: .stopped)
             let key = "\(info.title)|\(info.artist)|\(info.album)"
@@ -73,8 +81,13 @@ public final class MediaPoller: @unchecked Sendable {
                 artwork = nil
             }
             DispatchQueue.main.async {
-                self.deliver(info, artwork: artwork, trackKey: key)
                 self.finishPoll()
+                guard self.timer != nil else { return }
+                guard self.generation == pollGeneration else {
+                    self.poll() // 재시작의 첫 폴이 이전 fetch에 막혔다면 새 세대로 즉시 조회한다.
+                    return
+                }
+                self.deliver(info, artwork: artwork, trackKey: key)
             }
         }
     }

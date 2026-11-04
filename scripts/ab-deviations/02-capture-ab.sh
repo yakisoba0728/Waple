@@ -2,7 +2,7 @@
 # Waple A/B — 이탈 3건 제거 후 B 캡처
 #
 # A 쪽은 이미 리포에 있다: spec/golden/snapshot/baseline-81098bb/
-# 여기서는 패치를 적용해 B 를 뜨고, 끝나면 무조건 되돌린다.
+# 별도 임시 worktree 에 패치를 적용해 B 를 뜬다. 원래 작업 트리는 건드리지 않는다.
 
 set -uo pipefail
 
@@ -10,11 +10,13 @@ REPO="${WAPLE_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 ROOT="${WAPLE_DEV_ROOT:-$HOME/Downloads/wallpaper_dev}"
 OUT="${WAPLE_AB_OUT:-$HOME/Downloads/waple-ab}"
 
-export WAPLE_REAL_PKGS="$ROOT/backgrounds"
-export WAPLE_BASE_ASSETS="$ROOT/assets"
-
 hr() { printf '%s\n' "----------------------------------------------------------------"; }
 cd "$REPO" || { echo "리포 없음: $REPO"; exit 1; }
+REPO="$(pwd -P)"
+case "$ROOT" in /*) ;; *) ROOT="$REPO/$ROOT" ;; esac
+case "$OUT" in /*) ;; *) OUT="$REPO/$OUT" ;; esac
+export WAPLE_REAL_PKGS="$ROOT/backgrounds"
+export WAPLE_BASE_ASSETS="$ROOT/assets"
 
 if [ -n "$(git status --porcelain)" ]; then
     echo "!! 작업 트리가 더럽다. 패치를 적용할 수 없다."
@@ -22,14 +24,20 @@ if [ -n "$(git status --porcelain)" ]; then
     exit 1
 fi
 
-# 무슨 일이 있어도 원복한다 — 리포를 더럽힌 채 끝내지 않는다.
+# 원래 작업 트리의 실행 중 편집을 지우지 않도록, 소유한 worktree 만 정리한다.
+TMP="$(mktemp -d)" || exit 1
+WORKTREE="$TMP/tree"
 cleanup() {
-    hr; echo "패치 되돌리는 중"; hr
-    git checkout -- Sources/ 2>/dev/null
-    git status --short
-    echo "(위가 비어야 정상)"
+    if [ -d "$WORKTREE" ]; then
+        git -C "$REPO" worktree remove --force "$WORKTREE" || echo "!! 임시 worktree 등록 정리 실패: $WORKTREE" >&2
+    fi
+    rm -rf "$TMP"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+git worktree add --detach "$WORKTREE" HEAD || exit 1
+cd "$WORKTREE" || exit 1
 
 hr; echo "1. 이탈 제거 패치 적용"; hr
 
@@ -102,7 +110,7 @@ print("\n패치 4파일 적용 완료")
 PYEOF
 
 if [ $? -ne 0 ]; then
-    echo "패치 실패 — 중단한다(원복은 trap 이 처리)"
+    echo "패치 실패 — 중단한다(임시 worktree 는 trap 이 정리)"
     exit 1
 fi
 

@@ -13,8 +13,21 @@ REPO="${WAPLE_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 ROOT="${WAPLE_DEV_ROOT:-$HOME/Downloads/wallpaper_dev}"
 BIN="$REPO/.build/release/WapleCompat"
 SID="${WAPLE_PROBE_SCENE:-3302695207}"   # 번역 이펙트 + 포인터 반응 보유 씬
-OUT="${WAPLE_VERIFY_OUT:-$HOME/Downloads/waple-pointer}"
-TMP="$(mktemp -d)"
+OUT_ROOT="${WAPLE_VERIFY_OUT:-$HOME/Downloads/waple-pointer}"
+mkdir -p "$OUT_ROOT" || exit 1
+OUT="$(mktemp -d "$OUT_ROOT/pointer.XXXXXX")" || exit 1
+TMP="$(mktemp -d)" || exit 1
+echo "캡처 출력: $OUT"
+ORIG=""; OX=""; OY=""
+cleanup() {
+    if [ -n "$OX" ] && [ -n "$OY" ] && [ -x "$TMP/cursor" ]; then
+        "$TMP/cursor" "$OX" "$OY" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$TMP"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 cat > "$TMP/cursor.swift" <<'SWIFT'
 import CoreGraphics
@@ -28,25 +41,42 @@ if let loc = CGEvent(source: nil)?.location { print("\(loc.x) \(loc.y)") }
 SWIFT
 swiftc -O "$TMP/cursor.swift" -o "$TMP/cursor" || { echo "!! cursor 헬퍼 빌드 실패"; exit 1; }
 
-rm -rf "$OUT"; mkdir -p "$OUT"
 cap() {
-    launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$ROOT/backgrounds" WAPLE_BASE_ASSETS="$ROOT/assets" \
-        "$BIN" --capture "$OUT" --label "$1" "$ROOT/backgrounds/$SID" >/dev/null 2>&1
-    python3 -c "import json;print(json.load(open('$OUT/$1/manifest.json'))['entries'][0]['hash'])"
+    if ! launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$ROOT/backgrounds" WAPLE_BASE_ASSETS="$ROOT/assets" \
+        "$BIN" --capture "$OUT" --label "$1" "$ROOT/backgrounds/$SID" >/dev/null 2>&1; then
+        echo "!! 캡처 실패: $1" >&2
+        return 1
+    fi
+    python3 - "$OUT/$1/manifest.json" <<'PY'
+import json, re, sys
+try:
+    with open(sys.argv[1]) as source:
+        entries = json.load(source)["entries"]
+    digest = entries[0]["hash"]
+    if len(entries) != 1 or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-fA-F]{1,16}", digest):
+        raise ValueError("단일 씬의 FNV-1a 64비트 hex 해시가 필요하다")
+except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+    print(f"!! 캡처 매니페스트가 유효하지 않다: {error}", file=sys.stderr)
+    sys.exit(1)
+print(digest)
+PY
 }
 
-ORIG="$($TMP/cursor)"
+ORIG="$("$TMP/cursor")" || exit 1
 OX="${ORIG%% *}"; OY="${ORIG##* }"
+[ -n "$OX" ] && [ -n "$OY" ] && [ "$ORIG" != "$OX" ] || { echo "!! 원래 커서 위치를 읽지 못했다" >&2; exit 1; }
 echo "원래 커서 위치: $OX $OY"
 
-H0="$(cap orig)"
-"$TMP/cursor" 10 10 >/dev/null;     H1="$(cap p_10_10)"
-"$TMP/cursor" 1400 800 >/dev/null;  H2="$(cap p_1400_800)"
-"$TMP/cursor" 10 10 >/dev/null;     H3="$(cap p_10_10_again)"
-"$TMP/cursor" "$OX" "$OY" >/dev/null
-NOW="$($TMP/cursor)"
-H4="$(cap restored)"
-rm -rf "$TMP"
+H0="$(cap orig)" || exit 1
+"$TMP/cursor" 10 10 >/dev/null || exit 1
+H1="$(cap p_10_10)" || exit 1
+"$TMP/cursor" 1400 800 >/dev/null || exit 1
+H2="$(cap p_1400_800)" || exit 1
+"$TMP/cursor" 10 10 >/dev/null || exit 1
+H3="$(cap p_10_10_again)" || exit 1
+"$TMP/cursor" "$OX" "$OY" >/dev/null || exit 1
+NOW="$("$TMP/cursor")" || exit 1
+H4="$(cap restored)" || exit 1
 
 echo
 echo "  현위치        $H0"

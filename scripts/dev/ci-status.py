@@ -210,7 +210,7 @@ def test_tally(repo, job_id):
 # 둘 다 **기계적으로는 초록**이었다. `until python3 scripts/dev/ci-status.py; do …; done` 이
 # 그 자리에서 성공으로 빠져나온다 — 사람이 화면을 읽을 때만 보이는 경고는 게이트가 아니다.
 HIDDEN = {"test_failures": 0, "ci_missing_for_head": False, "no_runs": False,
-          "inspected_test_jobs": set()}
+          "inspected_test_jobs": set(), "unverified_test_jobs": set()}
 
 
 def inspect_hidden_test_failures(repo, run_id):
@@ -225,10 +225,12 @@ def inspect_hidden_test_failures(repo, run_id):
                 or "release" not in j.get("name", "").lower()
                 or j.get("id") in HIDDEN["inspected_test_jobs"]):
             continue
-        HIDDEN["inspected_test_jobs"].add(j.get("id"))
         tally = test_tally(repo, j["id"])
-        if not tally:
+        if tally is None:
+            HIDDEN["unverified_test_jobs"].add(j["id"])
             continue
+        HIDDEN["unverified_test_jobs"].discard(j["id"])
+        HIDDEN["inspected_test_jobs"].add(j["id"])
         _, _, failures = tally
         if failures:
             HIDDEN["test_failures"] += failures
@@ -243,9 +245,10 @@ def show_jobs(repo, run_id, tests=False):
         c = j.get("conclusion") or j["status"]
         line = "  [%s] %s   job=%s" % (MARK.get(c, c), j["name"], j["id"])
         if tests and j["status"] == "completed":
-            HIDDEN["inspected_test_jobs"].add(j["id"])
             t = test_tally(repo, j["id"])
-            if t:
+            if t is not None:
+                HIDDEN["unverified_test_jobs"].discard(j["id"])
+                HIDDEN["inspected_test_jobs"].add(j["id"])
                 executed, skipped, failures = t
                 note = "실행 %d · 스킵 %d · 실패 %d" % (executed, skipped, failures)
                 if failures:
@@ -253,6 +256,8 @@ def show_jobs(repo, run_id, tests=False):
                 if failures and c == "success":
                     note += "  ← 잡은 success 인데 테스트는 실패(continue-on-error)"
                 line += "\n       %s" % note
+            elif c == "success" and "release" in j["name"].lower():
+                HIDDEN["unverified_test_jobs"].add(j["id"])
         print(line)
         for s in j.get("steps", []):
             sc = s.get("conclusion") or s["status"]
@@ -377,6 +382,10 @@ def main():
         print("\n[ci-status] 잡 결론은 success 인데 테스트 실패 %d건 — continue-on-error 가 가린 것이다"
               % HIDDEN["test_failures"])
         return 1
+    if HIDDEN["unverified_test_jobs"]:
+        print("\n[ci-status] release 테스트 로그를 확인하지 못했다 — 검증 미확정: %s"
+              % sorted(HIDDEN["unverified_test_jobs"]))
+        return 2
     return 0
 
 

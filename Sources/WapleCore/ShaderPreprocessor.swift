@@ -229,6 +229,14 @@ public enum ShaderPreprocessor {
                 macroDefs[i].toLine = line
             }
         }
+        func clearDefinition(_ name: String, at line: Int) {
+            d.removeValue(forKey: name)
+            textDefines.removeValue(forKey: name)
+            funcMacros.removeValue(forKey: name)
+            flagDefines.remove(name)
+            suspectDefines.remove(name)
+            closePrev(name, at: line)
+        }
         var out: [String] = []
         // 스택: (이 분기 출력중?, 이 #if 체인에서 이미 참 분기를 만났나?, 부모가 활성인가)
         struct Frame { var active: Bool; var taken: Bool; var parentActive: Bool }
@@ -421,12 +429,7 @@ public enum ShaderPreprocessor {
             } else if t.hasPrefix("#undef ") {
                 if emitting() {
                     let name = token(after: "#undef", t)
-                    d.removeValue(forKey: name)
-                    textDefines.removeValue(forKey: name)
-                    funcMacros.removeValue(forKey: name)
-                    flagDefines.remove(name)
-                    suspectDefines.remove(name)
-                    closePrev(name, at: out.count)
+                    clearDefinition(name, at: out.count)
                 }
             } else if t.hasPrefix("#define "), emitting() {
                 let decl = String(t.dropFirst(8))
@@ -446,8 +449,8 @@ public enum ShaderPreprocessor {
                         if let c = bodyRaw.range(of: "/*") { bodyRaw = String(bodyRaw[..<c.lowerBound]) }
                         let body = bodyRaw.trimmingCharacters(in: .whitespaces)
                         if !body.isEmpty {
+                            clearDefinition(name, at: out.count)
                             funcMacros[name] = (params, body)
-                            closePrev(name, at: out.count)
                             macroDefs.append(MacroDef(name: name, value: nil, fn: (params, body), fromLine: out.count))
                         }
                     }
@@ -458,6 +461,7 @@ public enum ShaderPreprocessor {
                     if let c = raw.range(of: "//") { raw = String(raw[..<c.lowerBound]) }
                     if let c = raw.range(of: "/*") { raw = String(raw[..<c.lowerBound]) }
                     let value = raw.trimmingCharacters(in: .whitespaces)
+                    clearDefinition(name, at: out.count)
                     if value.isEmpty {
                         d[name] = 1  // 값 없는 #define NAME → #ifdef 용, 본문 치환은 안 함(빈 치환은 위험)
                         flagDefines.insert(name)
@@ -483,7 +487,6 @@ public enum ShaderPreprocessor {
                             suspectDefines.insert(name)
                         }
                         textDefines[name] = value
-                        closePrev(name, at: out.count)
                         macroDefs.append(MacroDef(name: name, value: value, fn: nil, fromLine: out.count))
                     }
                 }
@@ -764,11 +767,82 @@ enum ExprEval {
     /// (`% & | ^ ~ << >>`·16진/접미 리터럴은 **더 이상 거부가 아니라 평가**된다 — 실물과 같게.)
     static func evalChecked(_ expr: String, defines: [String: Int], definedNames: Set<String>? = nil,
                             suspect: Set<String> = [], textDefines: [String: String] = [:],
-                            macroDepth: Int = 0) -> Int? {
+                            macroDepth: Int = 0, expansionBudget: Int = 65_536) -> Int? {
         let lexed = tokenize(expr)
         guard !lexed.unsupported else { return nil }
-        let toks = lexed.tokens
         let knownNames = definedNames ?? Set(defines.keys)
+        var remainingBudget = max(0, expansionBudget)
+        guard let toks = expandTokens(lexed.tokens, defines: defines, knownNames: knownNames,
+                                     suspect: suspect, textDefines: textDefines, depth: macroDepth,
+                                     remainingBudget: &remainingBudget) else { return nil }
+        return evaluateTokens(toks, defines: defines, knownNames: knownNames, suspect: suspect)
+    }
+
+    // G5 — **실물은 `#if` 식 안에서도 매크로를 확장한다.** 확장은 파서가 아니라 **렉서**가 한다:
+    // 식별자를 매크로맵에서 찾으면(0x140166c39-0x140166cb1) 본문 포인터를 스택에 밀고
+    // (0x140166cc1-0x140166db7 `inc dword [rbx+0x40]`) 그 자리에서 **재렉싱**하며, 본문이
+    // 끝나면 팝한다(0x140166ada-0x140166af7 `dec`). 깊이 캡은 **0x63 = 99**
+    // (0x140166cb7 `cmp dword [rbx+0x40], 0x63; jge` → 넘으면 그냥 식별자 토큰(2)).
+    // 그래서 `#define A B` + `#define B 1` 에서 `#if A` 가 실물은 **참**이다.
+    // 종전 Waple 은 정수 값 맵(`d`)만 봐서 이런 이름을 전부 **0** 으로 읽었다.
+    // 별도 scalar로 평가하는 후속 근사도 저작하지 않은 괄호를 더하므로, 이제 토큰을 같은 스트림에 넣는다.
+    // 본문이 식으로 안 읽히면 **0**(실물도 미지 식별자를 0 으로 보고 잔여 토큰은 버린다).
+    // 동봉·설치본 자산에서 `#if` 가 비-정수 object-like 매크로를 참조하는 경우는 **0건**(실측)
+    // 이라 도달은 워크샵 셰이더뿐이다.
+    private static func expandTokens(_ tokens: [String], defines: [String: Int], knownNames: Set<String>,
+                                     suspect: Set<String>, textDefines: [String: String], depth: Int,
+                                     remainingBudget: inout Int,
+                                     expanding: Set<String> = []) -> [String]? {
+        let maxTokens = 65_536
+        // 비식 본문이 매번 0으로 접혀도 방문 횟수는 지수적으로 늘 수 있어 재귀 전체가 예산을 공유한다.
+        guard tokens.count <= remainingBudget, tokens.count <= maxTokens else { return nil }
+        remainingBudget -= tokens.count
+        var result: [String] = []
+        var index = 0
+        while index < tokens.count {
+            let token = tokens[index]
+            index += 1
+            if token == "defined" {
+                result.append(token)
+                if index < tokens.count, tokens[index] == "(" {
+                    result.append("(")
+                    index += 1
+                }
+                if index < tokens.count {
+                    result.append(tokens[index])   // defined의 이름은 매크로 확장 대상이 아니다.
+                    index += 1
+                }
+                guard result.count <= maxTokens else { return nil }
+                continue
+            }
+            var replacement = [token]
+            if let body = textDefines[token], depth < 99, !expanding.contains(token) {
+                let lexed = tokenize(body)
+                if lexed.unsupported {
+                    if suspect.contains(token) { return nil }
+                    replacement = ["0"]
+                } else {
+                    guard let expanded = expandTokens(lexed.tokens, defines: defines, knownNames: knownNames,
+                                                      suspect: suspect, textDefines: textDefines, depth: depth + 1,
+                                                      remainingBudget: &remainingBudget,
+                                                      expanding: expanding.union([token])) else { return nil }
+                    if evaluateTokens(expanded, defines: defines, knownNames: knownNames, suspect: suspect) != nil {
+                        replacement = expanded
+                    } else {
+                        // 기존 규약: vec3(...) 같은 비식 매크로는 0, 잘못된 수치 define는 거부한다.
+                        if suspect.contains(token) { return nil }
+                        replacement = ["0"]
+                    }
+                }
+            }
+            guard replacement.count <= maxTokens - result.count else { return nil }
+            result.append(contentsOf: replacement)
+        }
+        return result
+    }
+
+    private static func evaluateTokens(_ toks: [String], defines: [String: Int], knownNames: Set<String>,
+                                       suspect: Set<String>) -> Int? {
         var pos = 0
         var failed = false   // suspect define 참조 — 값은 내지만 결과는 nil 로 거부
         // 중첩 깊이(괄호 `(`·단항 `!`/`-`/`~` 재귀 공용) — 악성 중첩 입력(`#if ((((…))))`)의 스택
@@ -798,25 +872,8 @@ enum ExprEval {
                 return knownNames.contains(next() ?? "") ? 1 : 0
             }
             if let n = Int(t) { return n }
-            if suspect.contains(t) { failed = true; return 0 }  // `#define X 1.5` 류 — 10진 평가 불가
+            if suspect.contains(t) { failed = true; return 0 }  // `#define X 1e5` 류 — 지원 수치 문법 밖
             if let v = defines[t] { return v }
-            // G5 — **실물은 `#if` 식 안에서도 매크로를 확장한다.** 확장은 파서가 아니라 **렉서**가 한다:
-            // 식별자를 매크로맵에서 찾으면(0x140166c39-0x140166cb1) 본문 포인터를 스택에 밀고
-            // (0x140166cc1-0x140166db7 `inc dword [rbx+0x40]`) 그 자리에서 **재렉싱**하며, 본문이
-            // 끝나면 팝한다(0x140166ada-0x140166af7 `dec`). 깊이 캡은 **0x63 = 99**
-            // (0x140166cb7 `cmp dword [rbx+0x40], 0x63; jge` → 넘으면 그냥 식별자 토큰(2)).
-            // 그래서 `#define A B` + `#define B 1` 에서 `#if A` 가 실물은 **참**이다.
-            // 종전 Waple 은 정수 값 맵(`d`)만 봐서 이런 이름을 전부 **0** 으로 읽었다.
-            // 여기서 본문을 재귀 평가해 같은 결말로 맞춘다. 본문이 식으로 안 읽히면 **0**
-            // (실물도 미지 식별자를 0 으로 보고 잔여 토큰은 그냥 버린다 — 거부가 아니다).
-            // 동봉·설치본 자산에서 `#if` 가 비-정수 object-like 매크로를 참조하는 경우는 **0건**(실측)
-            // 이라 도달은 워크샵 셰이더뿐이다.
-            if let body = textDefines[t], macroDepth < 99 {
-                var inner = textDefines
-                inner.removeValue(forKey: t)   // 자기 참조(`#define A A`) 무한재귀 차단
-                return evalChecked(body, defines: defines, definedNames: knownNames,
-                                   suspect: suspect, textDefines: inner, macroDepth: macroDepth + 1) ?? 0
-            }
             return 0
         }
         // 산술은 랩핑(&*, &+, &-) + 나눗셈 트랩 가드 — #if 는 분기 결정만 하면 되므로 근사면 충분하고,

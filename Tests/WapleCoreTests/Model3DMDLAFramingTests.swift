@@ -116,6 +116,19 @@ final class Model3DMDLAFramingTests: XCTestCase {
 
     // MARK: - 1. 본 레코드는 `u32 trackFlags | u32 trackBytes | 트랙` 이다
 
+    func testMaximumLengthAnimationNameSurvivesUnterminatedResyncTail() throws {
+        let name = String(repeating: "a", count: 96)
+        let data = makeMDL(bones: [("RootNode", -1)], clips: [
+            Clip(id: 17, name: name, mode: "single", frameCount: 1,
+                 tracks: [(0, [key(x: 4)])], tail: [UInt8](repeating: 0x41, count: 65_536))
+        ])
+        let model = try XCTUnwrap(Model3D.parse(data))
+        XCTAssertEqual(model.animations.count, 1)
+        let animation = try XCTUnwrap(model.animations.first)
+        XCTAssertEqual(animation.name, name)
+        XCTAssertEqual(animation.tracks.first?.first?.position.x, 4)
+    }
+
     /// 엔진은 본마다 첫 u32 를 **플래그**로(`0x140263aa7` `mov r15d, [rsi]`), 둘째 u32 를
     /// **트랙 바이트 수**로(`0x140263acb` `mov ecx, [rsi]`) 읽고 그만큼 커서를 민다
     /// (`0x140263afe` `add rsi, rdx`). 종전 Waple 은 클립 헤더가 `… | u32 본수 | u32 0` 이라고

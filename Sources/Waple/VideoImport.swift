@@ -17,6 +17,9 @@ enum VideoImport {
     static func prepare(from videoURL: URL,
                         baseDirectory: URL = LibraryStore.defaultBaseDirectory()) -> URL? {
         let fm = FileManager.default
+        let source = videoURL.resolvingSymlinksInPath()
+        guard videoURL.isFileURL,
+              (try? source.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { return nil }
         let name = videoURL.deletingPathExtension().lastPathComponent
         let importsDir = baseDirectory.appendingPathComponent("imports", isDirectory: true)
         // 폴더명 충돌 시 -2, -3 … 회피 — 기존 가져오기를 말없이 덮어쓰지 않는다(P-D2).
@@ -31,7 +34,7 @@ enum VideoImport {
         let fileName = videoURL.lastPathComponent
         let dest = folder.appendingPathComponent(fileName)
         try? fm.removeItem(at: dest)
-        guard (try? fm.copyItem(at: videoURL, to: dest)) != nil else {
+        guard (try? fm.copyItem(at: source, to: dest)) != nil else {
             try? fm.removeItem(at: folder)
             return nil
         }

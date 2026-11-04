@@ -228,6 +228,9 @@ struct WapleCompatCLI {
                                    pass (parse-only, WAPLE_VIS_INHERIT=0/on diff — no --capture).
           --profile <outDir>      Perf-profile a single scene (requires --only <sceneID>).
           --capture <outDir>      Capture pixel snapshots of the corpus + write a manifest.
+                                   Existing <outDir>/<label> is refused (exit 2); use a new label
+                                   or output root for every attempt, including failed retries.
+                                   Failed attempts may leave diagnostic output; check exit status.
           --compare <baselineDir> Capture + diff current build against a --capture baseline.
           --decode-ogg <file>     Decode one .ogg (Vorbis) to raw float32 PCM on stdout (dev harness).
           --deep                  Deep compat scan: real parse/decode/translate/compile over the
@@ -240,6 +243,7 @@ struct WapleCompatCLI {
           --only <id>             Restrict to one scene ID (--deep and --profile only; ignored
                                    elsewhere with a warning).
           --label <name>          --capture: baseline folder name (default: short git SHA).
+                                   Must be one directory component; existing labels are never replaced.
           --remount               --profile: also measure a second (warm) in-process mount.
           --frame-res <WxH>       --profile: capture resolution (default 1920x1080).
           --naive                 --decode-ogg: use the naive (non-fast-IMDCT) decode path.
