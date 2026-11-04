@@ -8,6 +8,12 @@ import WaplePolicy
 
 /// 멀티모니터 배경 매핑: 화면별로 마운트할 프로젝트를 결정한다.
 enum MonitorMapping {
+    /// The primary automatic screen follows the committed global selection. A
+    /// persisted secondary selection must not override it after restart/promotion.
+    static func playlistOverride(screenKey: String, primaryScreenKey: String?, overrides: [String: String]) -> String? {
+        screenKey == primaryScreenKey ? nil : overrides[screenKey]
+    }
+
     /// 화면에 할당된 배경 폴더. 할당이 없거나 그 엔트리 폴더가 해석되지 않으면 nil(= 전역 선택 사용).
     static func assignedFolder(
         screenKey: String,
@@ -138,6 +144,30 @@ enum VideoSettingsTarget {
             out.append(id)
         }
         return out
+    }
+}
+
+enum UserShortcutDispatch {
+    @discardableResult
+    static func open(name: String, isCurrent: Bool, bindings: () -> [String: URL],
+                     opener: (URL) -> Bool) -> Bool {
+        guard isCurrent, let target = bindings()[name] else { return false }
+        return opener(target)
+    }
+}
+
+/// A nil frame is a completed capture, not a pending request. Duplicate callbacks
+/// cannot complete a batch twice or let one screen consume another screen's slot.
+struct RendererCaptureBatch<Image> {
+    private var pending: Set<String>
+    private var images: [String: Image] = [:]
+
+    init(screenKeys: [String]) { pending = Set(screenKeys) }
+
+    mutating func record(screenKey: String, image: Image?) -> [String: Image]? {
+        guard pending.remove(screenKey) != nil else { return nil }
+        images[screenKey] = image
+        return pending.isEmpty ? images : nil
     }
 }
 
@@ -580,7 +610,7 @@ enum PropertyControl {
         switch type.lowercased() {
         case "bool", "checkbox":
             return .toggle
-        case "slider":
+        case "slider", "volume":
             return .slider
         case "combo":
             return .picker

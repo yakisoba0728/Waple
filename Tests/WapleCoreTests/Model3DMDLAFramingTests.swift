@@ -63,7 +63,7 @@ final class Model3DMDLAFramingTests: XCTestCase {
 
     /// MDLV0023(스키닝 단일 삼각형) + MDLS0004(본 N개) + MDLA0006(클립 목록).
     private func makeMDL(bones: [(name: String, parent: Int32)], clips: [Clip],
-                         magic: String = "MDLA0006") -> Data {
+                         magic: String = "MDLA0006", skeletonTail: Data? = nil) -> Data {
         var d = Data("MDLV0023".utf8)
         u8(0, &d)
         u32(0x0000_000f, &d); u32(1, &d); u32(1, &d)        // formatFlag, skinCount, meshCount
@@ -91,6 +91,7 @@ final class Model3DMDLAFramingTests: XCTestCase {
             for v: Float in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] { f32(v, &d) }
             u8(0, &d)                                        // props(빈 cstring)
         }
+        if let skeletonTail { d.append(skeletonTail) }
 
         guard !clips.isEmpty else { return d }
         d.append(Data(magic.utf8)); u8(0, &d)
@@ -113,6 +114,72 @@ final class Model3DMDLAFramingTests: XCTestCase {
     }
 
     private func key(x: Float, rz: Float = 0) -> [Float] { [x, 0, 0, 0, 0, rz, 1, 1, 1] }
+
+    func testStructuralTailUsesSkeletonTagAndConstraintCounts() throws {
+        var skeleton = Data([1, 0])                           // T1 tags=1 (u16)
+        cstr("tag", &skeleton); u32(0, &skeleton); u32(0, &skeleton)
+        for f: Float in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] { f32(f, &skeleton) }
+        u8(0, &skeleton)                                      // T2
+        u32(1, &skeleton); u32(0, &skeleton)                   // T3 count, bone
+        f32(0, &skeleton); f32(0, &skeleton); u32(0, &skeleton) // a,b,flags
+        skeleton.append(contentsOf: [0, 0, 0, 0, 0, 0, 0])   // T4a/T4b counts, T5/T6/T7 gates
+        var tail = Data()
+        u32(0, &tail); u32(36, &tail)                          // one secondary TRS track per T1 tag
+        for f in key(x: 9) { f32(f, &tail) }
+        u32(0, &tail); u32(4, &tail); f32(11, &tail)          // one scalar track per T3 constraint
+        u32(0, &tail)                                         // events
+        let model = try XCTUnwrap(Model3D.parse(makeMDL(bones: [("root", -1)], clips: [
+            Clip(id: 11, name: "a", mode: "loop", frameCount: 0, tracks: [(0, [key(x: 1)])], tail: [UInt8](tail)),
+            Clip(id: 12, name: "b", mode: "single", frameCount: 0, tracks: [(0, [key(x: 2)])], tail: [UInt8](tail))
+        ], magic: "MDLA0002", skeletonTail: skeleton)))
+        XCTAssertEqual(model.skeletonTail?.tags.count, 1)
+        XCTAssertEqual(model.skeletonTail?.constraints.count, 1)
+        XCTAssertEqual(model.animations.map(\.id), [11, 12])
+        XCTAssertEqual(model.animations.last?.tracks.first?.first?.position.x, 2)
+    }
+
+    func testLongVariableTailAndOpaqueEventsReachNextUnrestrictedHeader() throws {
+        var tail = Data()
+        u32(32, &tail)                                        // v3 independent scalar tracks (>256B total)
+        for _ in 0..<32 { u32(0, &tail); u32(8, &tail); f32(1, &tail); f32(2, &tail) }
+        u8(1, &tail)                                          // v3 per-bone scalar tracks
+        u32(0, &tail); u32(8, &tail); f32(3, &tail); f32(4, &tail)
+        u8(1, &tail); u32(1, &tail); f32(0.5, &tail)          // v4 mesh mask and scalar
+        tail.append(contentsOf: [1, 0, 0, 0])                 // u16 subtrackCount=1, u16 index=0
+        u32(8, &tail); f32(5, &tail); f32(6, &tail)
+        for _ in 0..<6 { f32(0, &tail) }                      // v5 bounds
+        u8(1, &tail); u32(0, &tail); u32(8, &tail)           // v6 bone scalar track
+        f32(7, &tail); f32(8, &tail)
+        tail.append(contentsOf: [0, 0])                      // flags&1: u16 + four u32, exactly18B
+        for _ in 0..<4 { u32(0, &tail) }
+        u32(2, &tail)
+        f32(0.25, &tail)
+        let payload = "{\"name\":\"marker\",\"frame\":15,\"note\":\"" + String(repeating: "x", count: 600) + "\"}"
+        cstr(payload, &tail)
+        f32(0.5, &tail); cstr("opaque event payload", &tail)
+        let longName = String(repeating: "a", count: 120)
+        let model = try XCTUnwrap(Model3D.parse(makeMDL(bones: [("root", -1)], clips: [
+            Clip(id: 21, name: "first", mode: "loop", frameCount: 1, flags: 1,
+                 tracks: [(0, [key(x: 1), key(x: 2)])], tail: [UInt8](tail)),
+            Clip(id: 22, name: longName, mode: "unknown-mode-means-loop", fps: 360, frameCount: 0,
+                 tracks: [(0, [key(x: 3)])])
+        ])))
+        XCTAssertEqual(model.animations.map(\.id), [21, 22])
+        XCTAssertEqual(model.animations.last?.name, longName)
+        XCTAssertEqual(model.animations.first?.events, [AnimationMarker(name: "marker", frame: 7.5)],
+                       "The binary timestamp controls scheduling even when the opaque JSON frame disagrees")
+        XCTAssertEqual(model.animations.first?.rawEvents, [ModelAnimationEvent(time: 0.25, payload: payload),
+                                                          ModelAnimationEvent(time: 0.5, payload: "opaque event payload")])
+    }
+
+    func testClipWithoutBonesKeepsItsEventTimeline() throws {
+        let model = try XCTUnwrap(Model3D.parse(makeMDL(bones: [], clips: [
+            Clip(id: 51, name: "morph-only", mode: "loop", frameCount: 0, tracks: [],
+                 tail: tailWithEvents([(0.5, "event")]))
+        ])))
+        XCTAssertEqual(model.animations.first?.id, 51)
+        XCTAssertEqual(model.animations.first?.events, [AnimationMarker(name: "event", frame: 15)])
+    }
 
     // MARK: - 1. 본 레코드는 `u32 trackFlags | u32 trackBytes | 트랙` 이다
 

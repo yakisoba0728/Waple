@@ -520,9 +520,10 @@ enum ImportPanel {
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.allowedContentTypes = [.folder, .zip, .movie]
+            + VideoImport.extensions.sorted().compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = false
         // AppKit 경로는 자동 해석이 없다 — 감싸지 않으면 영어 시스템에서도 한국어로 뜬다.
-        panel.message = NSLocalizedString("Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요.",
+        panel.message = NSLocalizedString("Wallpaper Engine 폴더·상위 폴더·.zip·동영상을 선택하세요.",
                                           comment: "가져오기 패널 안내")
         guard panel.runModal() == .OK, let url = panel.url else { return false }
         viewModel.routeImport(url)

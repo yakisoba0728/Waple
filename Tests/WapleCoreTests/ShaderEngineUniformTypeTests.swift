@@ -68,8 +68,8 @@ final class ShaderEngineUniformTypeTests: XCTestCase {
         // **치환 자리를 값으로** 잠근다. 전역 `contains("float3x3(1.0)")` 로는 못 잠근다 —
         // 프리앰블의 `we_inverse(float3x3)` 가 특이행렬 폴백으로 `return float3x3(1.0);` 를
         // 무조건 싣기 때문이다(그건 이 계약과 무관한 상수).
-        XCTAssertTrue(t.msl.contains("(float4x4(1.0) * float4(vin.a_Position, 1.0))"),
-                      "mat4 선언의 치환이 종전과 달라졌다:\n\(t.msl)")
+        XCTAssertEqual(t.engineParams.first { $0.name == "g_ModelMatrix" }?.type, .mat4)
+        XCTAssertTrue(t.msl.contains("reinterpret_cast<constant float4x4*>"), t.msl)
         XCTAssertFalse(t.msl.contains("float3x3(1.0) * float4"), t.msl)
     }
 

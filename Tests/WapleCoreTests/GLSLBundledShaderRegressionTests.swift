@@ -89,12 +89,18 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
             for (k, n) in ShaderPreprocessor.parseComboDefaults(f) where defaults[k] == nil { defaults[k] = n }
             // 샘플러 어노테이션 콤보는 "슬롯이 묶였으면 1" 이 렌더러 규약(SceneRendererResources :1608-1610).
             for (_, name) in GLSLTranslator.samplerCombos(f) where defaults[name] == nil { defaults[name] = 1 }
+            // SKINNING permutations need a real palette extent, supplied per mesh by the renderer.
+            // A one-bone synthetic fixture exercises the language without accepting an undefined extent as0.
+            defaults["BONECOUNT"] = 1
+            // puppettexturechannels gets this array extent from its runtime material, not a [COMBO] default.
+            // Supply one real vec4 row for the synthetic translation fixture; production still rejects a missing extent.
+            defaults["BLENDROWCOUNT"] = 1
             let inlined = inlineIncludes(v, include: include) + "\n" + inlineIncludes(f, include: include)
             var knobs = Set(defaults.keys)
             for cond in matches(Self.ifDirectiveRe, in: inlined) { knobs.formUnion(matches(Self.capsRe, in: cond)) }
             // 엔진이 항상 시딩하는 것(ShaderPreprocessor :30-46)은 노브가 아니다 — 뒤집으면
             // WE 가 절대 만들지 않는 조합을 검사하게 된다.
-            knobs.subtract(["HLSL", "HLSL_SM40", "HLSL_SM30", "SHADERVERSION", "PLATFORM_ANDROID"])
+            knobs.subtract(["HLSL", "HLSL_SM40", "HLSL_SM30", "SHADERVERSION", "PLATFORM_ANDROID", "BONECOUNT", "BLENDROWCOUNT"])
             out.append(Pair(id: id, vert: v, frag: f, comboDefaults: defaults,
                             knobs: knobs.sorted(), inlined: inlined, include: include))
         }
@@ -155,10 +161,9 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
         ("GLSL #include 잔재", "^[ \t]*#[ \t]*include[ \t]*\""),
         ("GLSL 전용 함수",
          "(?<![A-Za-z0-9_])(?:inversesqrt|dFdx|dFdy|lessThan|greaterThan|notEqual|matrixCompMult|outerProduct|texture2D|textureLod|texelFetch|textureSize)\\s*\\("),
-        ("엔진 주입 함수", "(?<![A-Za-z0-9_])PerformLighting_V1\\s*\\("),
         // 번역기가 **모델하지 않는** 엔진 심볼 — 방출물에 이름 그대로 남는다. 새로 하나가 새면
         // 여기 집합이 커지므로 바로 걸린다(아래 knownGaps 근거 참조).
-        ("모델 밖 엔진 심볼", "(?<![A-Za-z0-9_])(?:g_MorphOffsets|g_Texture(?:[89]|1[0-9])Resolution)(?![A-Za-z0-9_])"),
+        ("모델 밖 엔진 심볼", "(?<![A-Za-z0-9_])(?:g_Texture1[0-9]Resolution)(?![A-Za-z0-9_])"),
         ("M_PI 매크로", "(?<![A-Za-z0-9_])M_PI(?![A-Za-z0-9_])"),
     ]
 
@@ -500,6 +505,19 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
         XCTAssertEqual(failed, [], "선언된 콤보 기본값에서 번역이 nil 을 냈다")
     }
 
+    func testPuppetBlendMapRequiresTheRuntimeRowExtent() throws {
+        guard let root = Self.assetsRoot() else { throw XCTSkip("WAPLE_WE_ASSETS 미지정") }
+        let pair = try XCTUnwrap(Self.collectPairs(root: root).first { $0.id == "shaders/puppettexturechannels" })
+        var combos = pair.comboDefaults
+        combos.removeValue(forKey: "BLENDROWCOUNT")
+        XCTAssertNil(GLSLTranslator.translate(vertex: pair.vert, fragment: pair.frag, combos: combos, include: pair.include),
+                     "An unknown runtime array length must not become a fabricated scalar or one-element array")
+        combos["BLENDROWCOUNT"] = 2
+        let translated = try XCTUnwrap(GLSLTranslator.translate(vertex: pair.vert, fragment: pair.frag,
+                                                                combos: combos, include: pair.include))
+        XCTAssertEqual(translated.materialParams.first { $0.glslName == "g_BlendMap" }?.arrayCount, 2)
+    }
+
     /// 선언 기본값 구성에서 방출 MSL 에 남은 방언 토큰. **아무것도 남으면 안 된다** —
     /// 아래 `knownGaps` 는 근거가 적힌 예외뿐이고, 새 항목을 추가하려면 근거도 같이 적어야 한다.
     func testNoUntranslatedTokensAtDeclaredCombos() throws {
@@ -607,12 +625,7 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
                            "\(p.id)[\(r.name)=\(r.value)]: Vary/VIn 멤버 타입이 MSL 금지 종류다")
         }
         XCTAssertEqual(nilFailed, [], "열거된 콤보 값에서 번역이 nil 을 냈다")
-        // `엔진 주입 함수`(PerformLighting_V1)는 foliage4 의 선언 기본값이 `LIGHTING=1` 이라
-        // 이 스윕에서도 그대로 남는다 — 위 `knownGaps` 와 같은 근거의 같은 갭이다.
-        XCTAssertEqual(Set(found.keys), ["엔진 주입 함수"],
-                       "값 스윕에서 새 미번역 토큰이 나왔다: \(found.mapValues { $0.sorted() })")
-        XCTAssertEqual(found["엔진 주입 함수"]?.allSatisfy { $0.hasPrefix("shaders/foliage4[") }, true,
-                       "엔진 주입 함수 잔존처가 바뀌었다: \(found["엔진 주입 함수"]?.sorted() ?? [])")
+        XCTAssertEqual(found, [:], "값 스윕에서 새 미번역 토큰이 나왔다: \(found.mapValues { $0.sorted() })")
     }
 
     /// **CRLF 인클루드 인라인 못박기.** 동봉 셰이더는 전건 CRLF 인데, Swift 의 `"\r\n"` 은 단일
@@ -742,68 +755,13 @@ final class GLSLBundledShaderRegressionTests: XCTestCase {
 
     // MARK: - 남은 갭(근거 필수)
 
-    /// **`PerformLighting_V1` 은 소스에 정의가 없다.** 동봉 자산·WE 설치본 어디에도 없고,
-    /// wallpaper64.exe 원본 파일오프셋 `0x48ae75` 에 본문 템플릿이 문자열로 박혀 있다:
-    /// `vec3 PerformLighting_V1(vec3 worldPos, vec3 color, vec3 normal, vec3 viewVector,`
-    /// `vec3 specularTint, vec3 ambient, float roughness, float metallic)` — 그 앞뒤로
-    /// `uniform vec4 g_LPoint_Origin[` 등 라이트 배열 선언과 `const uint i =` 언롤 조각이 붙어 있다.
-    /// 즉 WE 는 씬의 라이트 개수를 보고 **컴파일 시점에 본문을 합성해 주입**한다.
-    /// Waple 의 3D 라이팅은 이 경로를 재현하지 않고 `WapleRender/Mesh3DShaders.swift` 손-포팅이
-    /// 전담하므로(번역 실패 → 폴백), 여기서는 "실패하되 조용하지 않게" 를 못 박는다.
-    ///
-    /// **[2026-08-21 확정] 주입에는 게이트가 있다.** 생성기(`0x140169140`-`0x14016b0d4`)는
-    /// (a) 요청 이름이 `LightingV1` 이고 (b) 매크로맵에 `LIGHTING` 이 있고 (c) 그 값이 0 이 아닐
-    /// 때만 문자열을 만든다(`0x1401691eb` · `0x14016920c` · `0x14016922a`). 셋 중 하나라도 아니면
-    /// **빈 문자열을 돌려주고 지시문 줄만 공백으로 덮는다**(`0x14016bc63`). 그래서 아래 두 집합이
-    /// 갈린다 — 선언 기본값이 `LIGHTING=1` 인 넷만 기본 구성에서 보이고, `LIGHTING=0` 인 넷은
-    /// allOn 스윕에서만 나타난다. `LIGHTING=0` 구성에서는 **우리도 실물과 똑같이 아무것도 안 한다**
-    /// (`ShaderPreprocessor` 의 `#require` 분기가 줄만 소비).
-    ///
-    /// **이 집합은 양방향 못박기다.** 여기 이름이 사라지면(= 호출부가 조용히 없어져 라이팅 빠진
-    /// 그림이 컴파일에 성공하면) 아래 `XCTAssertEqual(ids, …)` 가 먼저 터진다. 짝인 명시 단정은
-    /// `ShaderPreprocessorRequireTests.testLightingCallSiteSurvivesSoTheFailureStaysLoud`.
-    ///
-    /// **왜 "전처리 거부"(preprocessStrict nil)를 고르지 않았나.** 그 선택지도 검토했다
-    /// (거부하면 `LIGHTING != 0` 구성 12개가 번역 실패가 된다). 관측 결과가 **똑같기** 때문에
-    /// 안 했다 — 거부해도, 지금처럼 미정의 호출로 MSL 컴파일이 실패해도 결말은 폴백 + 로그다.
-    /// 반면 비용은 크다: 이 클래스의 "동봉 전건 번역 성공" 불변식
-    /// (`testEveryBundledShaderPairTranslatesAtDeclaredCombos`)이 선언 기본값에서 4건 깨져
-    /// 예외 목록이 필요해지고, 아래 두 `knownGaps` 집합(= 이 갭을 표현하는 기존 도구)이
-    /// 통째로 무의미해진다. 강한 불변식을 약화시켜 이미 표현된 사실을 다시 말할 이유가 없다.
-    ///
-    /// **모델 밖 엔진 심볼** 둘도 같은 성격이다:
-    /// - `g_TextureNResolution` 의 **N ≥ 8**: `EngineU.texRes` 가 `float4[8]` 고정이라 치환 대상이
-    ///   없다(`GLSLTranslator.engineReplacement` 의 `(0..<8).contains(n)` 가드 — 그 자리에
-    ///   "미치환(컴파일 실패→폴백)" 이라고 이미 적혀 있다). 동봉 실물은 `shaders/chroma4.frag:76`
-    ///   한 건뿐이다. 슬롯 상한을 올리려면 `WapleRender` 의 유니폼 빌더까지 같이 바꿔야 한다.
-    /// - `uniform uint g_MorphOffsets[12]`(`shaders/generic4.vert:50` 외 — `shaders/base/model_vertex_v1.h`
-    ///   경유로 3D 모델 계열 vert 전반, 아래 스윕 집합이 정확한 목록이다): 모프 타깃 오프셋
-    ///   테이블이다. `GLSLType.from("uint")` 가 nil 이라 선언이 파스에서 탈락한다. 짝인
-    ///   `uniform float g_MorphWeights[12]` 는 파스되지만 배열이 스칼라 머티리얼 슬롯으로 접히므로
-    ///   어차피 모프는 성립하지 않는다 — Waple 은 모프 타깃을 어느 경로에서도 모델하지 않는다.
-    ///   **부분 지원은 조용히 틀린 그림이라 일부러 안 한다**(폴터가 정답).
-    static let knownGaps: [String: [String]] = [
-        // 선언 콤보 기본값에서 도달하는 4건 — 나머지 4건은 기본값이 `LIGHTING=0` 이라 호출부가
-        // `#if` 로 잘려 나간다(아래 스윕 집합에서 드러난다).
-        "엔진 주입 함수": ["shaders/chroma4", "shaders/foliage4", "shaders/fur4", "shaders/generic4"],
-        // 기본값에서는 `g_Texture8Resolution`(chroma4) 하나뿐 — 모프 경로는 `MORPHING=0` 이라 잠겨 있다.
-        "모델 밖 엔진 심볼": ["shaders/chroma4"],
-    ]
+    /// The source linter has no remaining known exceptions after typed uniform data and LightingV1.
+    /// GPU compilation/value tests are still required: removing a residual token alone does not prove a feed.
+    // LightingV1, typed morph arrays and texture metadata0..9 now have explicit bindings.
+    // The lint continues to reject metadata for slots outside the engine contract.
+    static let knownGaps: [String: [String]] = [:]
+    static let knownGapsSweep: [String: [String]] = [:]
 
-    /// 콤보 극단값(전부 1 / 전부 0)까지 포함한 잔존 집합 — 기본값에서 안 보이던 것들이 더 붙는다.
-    /// **이 차이 자체가 스윕이 필요한 이유의 증거다**: 기본값만 봤다면 엔진 주입 함수는 절반을,
-    /// 모프 심볼은 열 중 열을 못 봤다.
-    static let knownGapsSweep: [String: [String]] = [
-        "엔진 주입 함수": knownGaps["엔진 주입 함수"]! + [
-            "effects/fluidsimulation/shaders/effects/fluidsimulation_combine",
-            "shaders/genericimage4", "shaders/genericparticle", "shaders/genericropeparticle",
-        ],
-        "모델 밖 엔진 심볼": knownGaps["모델 밖 엔진 심볼"]! + [
-            "shaders/clippingmaskimage4", "shaders/foliage4", "shaders/fur4", "shaders/generic3",
-            "shaders/generic4", "shaders/genericimage3", "shaders/genericimage4",
-            "shaders/shadowcaster", "shaders/shadowcasterfoliage4", "shaders/shadowcasterfur4",
-        ],
-    ]
 }
 
 /// 위 전건 스윕이 **찾아낸** 방언 구문들의 구현 오라클(입력 GLSL → 기대 MSL 조각).

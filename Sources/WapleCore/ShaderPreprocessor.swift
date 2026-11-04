@@ -10,7 +10,7 @@ import Foundation
 /// `elif`(0x14016c00b) `require`(0x14016c0ec) `undef`(0x14016c201).
 /// `#version`/`#extension`/`#pragma`/`#error`/`#line` 은 **지시문이 아니다** — 실물은 인식하지
 /// 못해 본문에 그대로 남긴다(0x14016c1f8 → 0x14016bbb0 의 "미지의 지시문" 경로).
-/// 이 파일은 그 9종을 전부 다룬다(`#require` 는 소비만 — 아래 분기의 [미해결] 참조).
+/// 이 파일은 그 9종을 전부 다룬다(`#require LightingV1` 는 검증된 라이트 배열과 본문을 생성한다).
 public enum ShaderPreprocessor {
     /// 실물이 지시문으로 **인식하는 이름 9종**(디스패처 0x14016b0e0-0x14016c3f8 · 줄 인식 정규식
     /// `^\s*#\s*([a-z]+)\b\s*(.*)` — 원본 파일오프셋 0x48be48 부근의 키워드 풀과 일치).
@@ -93,7 +93,29 @@ public enum ShaderPreprocessor {
         }
         // 인라인된 헤더의 [COMBO] 기본값도 반영
         for (name, def) in parseComboDefaults(included) where defines[name] == nil { defines[name] = def }
-        return evaluateConditionals(spliceDefineContinuations(included), defines: defines)
+        guard let uncommented = removingBlockComments(included) else { return nil }
+        return evaluateConditionals(spliceDefineContinuations(uncommented), defines: defines)
+    }
+
+    /// Comments separate tokens; deleting them outright would join `A/*...*/B` into a different name.
+    private static func removingBlockComments(_ source: String) -> String? {
+        let chars = Array(source)
+        var result = "", i = 0
+        var block = false, line = false, quoted = false, escaped = false
+        while i < chars.count {
+            let c = chars[i], next = i + 1 < chars.count ? chars[i + 1] : "\0"
+            if block {
+                if c == "*", next == "/" { result += "  "; i += 2; block = false; continue }
+                result.append(c == "\n" ? "\n" : " "); i += 1; continue
+            }
+            if c == "\n" { line = false }
+            if !line, !quoted, c == "/", next == "*" { block = true; result += "  "; i += 2; continue }
+            if !quoted, c == "/", next == "/" { line = true }
+            if !line, c == "\"", !escaped { quoted.toggle() }
+            if quoted, c == "\\", !escaped { escaped = true } else { escaped = false }
+            result.append(c); i += 1
+        }
+        return block ? nil : result
     }
 
     /// 번역 메모이즈 키 전용: `#include` 무조건 재귀 인라인 + CRLF 정규화만 수행(조건부 평가·매크로 확장 제외).
@@ -253,16 +275,10 @@ public enum ShaderPreprocessor {
             var t = line.trimmingCharacters(in: .whitespaces)
             // 지시문 줄 트레일링 주석 제거 — `#if C_TYPE == 4 // 설명` 이 식 평가를 깨면
             // 관용 유지로 모든 분기가 방출된다(실물 frame_builder 의 offset 재정의 원인).
-            // `/* */` 도 절단 — 잔존 시 ExprEval 이 `/`·`*` 를 연산자로 토큰화해 오평가(`#if AUDIO /* mic */`).
-            // **[2026-08-21 정정] 실물은 절단이 아니라 "건너뛰고 계속" 이다.** `#if` 식 렉서
-            // (0x140166a90-0x1401670ba)가 `/` 를 보면 `//` 는 줄 끝까지(0x140166b10-0x140166b26),
-            // `/* */` 는 닫는 자리까지(0x140166b28-0x140166b74) 삼키고 **그 뒤부터 다시 렉싱한다.**
-            // 즉 `#if A /* x */ == 1` 을 실물은 `A == 1` 로 보고 우리는 `A` 로 본다 — 값이 갈릴 수 있다.
-            // `//` 는 어차피 줄 끝이라 결과가 같다. 동봉·설치본 자산에서 지시문 줄에 `/*` 가 오는
-            // 경우는 **0건**(실측)이라 지금은 도달 없음. 고치려면 절단이 아니라 "구간 삭제" 여야 한다.
+            // Block comments were replaced with whitespace before this pass; tokens after them remain live.
+            // WE lexer skips the comment and resumes (0x140166b28–0x140166b74).
             if t.hasPrefix("#") {
                 if let c = t.range(of: "//") { t = String(t[..<c.lowerBound]).trimmingCharacters(in: .whitespaces) }
-                if let c = t.range(of: "/*") { t = String(t[..<c.lowerBound]).trimmingCharacters(in: .whitespaces) }
                 // G4 — `# if COND` 처럼 `#` 와 키워드 사이에 공백이 있어도 실물은 **지시문으로 읽는다**:
                 // 줄 인식 정규식이 `^\s*#\s*([a-z]+)\b\s*(.*)`(원본 파일오프셋 0x48be48, 그 직후에
                 // SHADERVERSION/69/ifndef/ifdef/define/elif/if/endif/else/undef/require 문자열이 이어진다).
@@ -401,29 +417,12 @@ public enum ShaderPreprocessor {
                 //    genericropeparticle.frag:56 의 depth 1 — 둘 다 Waple 은 네이티브 레인이라 무해).
                 //    여기서도 `emitting()` 을 보지 않고 무조건 소비해 같은 형태를 유지한다.
                 //
-                // Waple 이 하는 것: **줄을 소비만 한다.** 주입은 하지 않는다 — 근거는 아래 [미해결].
-                // 종전에는 마지막 `else if emitting()` 로 떨어져 줄이 본문에 남았다. 그 잔재가 MSL 을
-                // 깨지는 않았다(GLSLTranslator 는 파스된 선언·함수만 조립해 방출한다 — :2059 — 인식
-                // 못 한 최상위 줄은 어디에도 안 실린다. 실측: 동봉 239쌍 × 3구성에서 `#require` 방출 0건).
-                // 그래도 소비로 바꾸는 이유는 셋이다: (a) 실물과 형태가 같아지고, (b) 번역기 조립부가
-                // 관대해서 우연히 안 새던 것을 명시 계약으로 바꾸며, (c) 아래 회귀 린트의
-                // `require` 패턴이 "잠복" 이 아니라 "여기서 소비된다" 는 뜻이 된다.
-                //
-                // **[미해결] `LIGHTING != 0` 일 때의 주입은 구현하지 않았다.** 주입하려면 라이트 배열
-                // 유니폼(`g_LPoint_*`/`g_LSpot_*`/`g_LTube_*`/`g_LDirectional_*`/`g_LFeature_*`)을
-                // 렌더러가 씬 라이트로 채워야 하는데 그 바인딩은 GLSL 레인에 없다(WapleRender 의
-                // 유니폼 빌더 소관 — 이 파일 밖). `LIGHTS_*` 매크로도 시딩되지 않아 지금 주입하면
-                // 길이 0 배열 + `return CAST3(0.0)` = **조용히 검은 라이팅**이 된다("오역보다 폴터" 위반).
-                // 그래서 소비만 하고, 실물이 주입했을 자리에서는 경고를 남긴다 → 호출부 참조가
-                // 미정의로 남아 MSL 컴파일이 실패하고 이펙트가 폴백한다(= 지금과 같은 결말, 다만 시끄럽게).
-                // 판정: **소비만으로 조용히 틀린 그림이 되지는 않는다.** `LIGHTING == 0`(동봉 GLSL 레인
-                // 도달 유일건 fluidsimulation_combine 의 기본값)에서는 실물도 주입하지 않으므로 소비가
-                // 정확히 일치하고, `LIGHTING != 0` 에서는 `PerformLighting_V1` 호출부가 남아 컴파일이
-                // 확정 실패한다(조용한 오답이 아니라 폴백).
+                // The renderer seeds counts and binds the same parallel arrays through ShaderEngineParam.
+                // Invalid counts refuse preprocessing instead of emitting zero-length or mismatched arrays.
                 let requested = token(after: "#require", t)
-                if requested == "LightingV1", let lighting = d["LIGHTING"], lighting != 0 {
-                    WapleLog.warn("[Waple] GLSL #require LightingV1 (LIGHTING=\(lighting)): "
-                                  + "PerformLighting_V1 주입 미구현 — 소비만 한다(호출부는 미정의로 남는다)")
+                if requested == "LightingV1" {
+                    guard let snippet = ShaderLightingV1.source(defines: d) else { return nil }
+                    if !snippet.isEmpty { out.append(contentsOf: snippet.components(separatedBy: "\n")) }
                 }
                 // 주입 여부와 무관하게 줄은 삼킨다(실물 0x14016bc63 의 공백 memset 과 같은 결말).
             } else if t.hasPrefix("#undef ") {
@@ -855,38 +854,43 @@ enum ExprEval {
         func parsePrimary() -> Int {
             depth += 1
             defer { depth -= 1 }
-            guard depth <= maxDepth else { return 0 }   // 캡 초과 — 그레이스풀 0(미정의 취급), 크래시 대신
-            guard let t = next() else { return 0 }
-            if t == "(" { let v = parseOr(); if peek() == ")" { pos += 1 }; return v }
+            guard depth <= maxDepth else { failed = true; return 0 }
+            guard let t = next() else { failed = true; return 0 }
+            if t == "(" {
+                let v = parseOr()
+                if peek() == ")" { pos += 1 } else { failed = true }
+                return v
+            }
             if t == "!" { return parsePrimary() == 0 ? 1 : 0 }
             if t == "~" { return wide(~w32(parsePrimary())) }   // 실물 `not eax`(0x140167e04)
-            if t == "-" { return 0 &- parsePrimary() }  // 랩핑 — defines 에 Int.min 이 실릴 수 있음
+            if t == "-" { return wide(0 &- w32(parsePrimary())) }  // 랩핑 — defines 에 Int.min 이 실릴 수 있음
             if t == "+" { return parsePrimary() }       // 실물 0x140167c29: 단항 `+` 는 그냥 통과
             if t == "defined" {
-                if peek() == "(" {
-                    pos += 1
-                    let name = next() ?? ""
-                    if peek() == ")" { pos += 1 }
-                    return knownNames.contains(name) ? 1 : 0
+                let parenthesized = peek() == "("
+                if parenthesized { pos += 1 }
+                guard let name = next(), name.first.map({ $0.isLetter || $0 == "_" }) == true,
+                      name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) else { failed = true; return 0 }
+                if parenthesized {
+                    if peek() == ")" { pos += 1 } else { failed = true }
                 }
-                return knownNames.contains(next() ?? "") ? 1 : 0
+                return knownNames.contains(name) ? 1 : 0
             }
-            if let n = Int(t) { return n }
+            if let n = Int(t) { return wide(w32(n)) }
             if suspect.contains(t) { failed = true; return 0 }  // `#define X 1e5` 류 — 지원 수치 문법 밖
-            if let v = defines[t] { return v }
+            if let v = defines[t] { return wide(w32(v)) }
+            if t.first.map({ $0.isLetter || $0 == "_" }) != true { failed = true }
             return 0
         }
-        // 산술은 랩핑(&*, &+, &-) + 나눗셈 트랩 가드 — #if 는 분기 결정만 하면 되므로 근사면 충분하고,
-        // 악성 리터럴(`#if 9223372036854775807+1`)의 오버플로 트랩(크래시) 방지가 우선.
+        // Match signed32 arithmetic while guarding division by zero and MIN/-1 against host traps.
         func parseMul() -> Int {
             var v = parsePrimary()
             while let op = peek(), op == "*" || op == "/" || op == "%" {
                 pos += 1; let r = parsePrimary()
                 switch op {
-                case "*": v = v &* r
+                case "*": v = wide(w32(v) &* w32(r))
                 // 실물 0x140167bcc/0x140167bdc: 제수 0 이면 idiv 를 아예 안 돌고 결과 0.
-                case "/": v = r == 0 ? 0 : (v == Int.min && r == -1 ? 0 : v / r)
-                default:  v = r == 0 ? 0 : (v == Int.min && r == -1 ? 0 : v % r)
+                case "/": v = r == 0 ? 0 : (v == wide(Int32.min) && r == -1 ? wide(Int32.min) : v / r)
+                default:  v = r == 0 ? 0 : (v == wide(Int32.min) && r == -1 ? 0 : v % r)
                 }
             }
             return v
@@ -894,7 +898,7 @@ enum ExprEval {
         func parseAdd() -> Int {
             var v = parseMul()
             while let op = peek(), op == "+" || op == "-" {
-                pos += 1; let r = parseMul(); v = op == "+" ? v &+ r : v &- r
+                pos += 1; let r = parseMul(); v = wide(op == "+" ? w32(v) &+ w32(r) : w32(v) &- w32(r))
             }
             return v
         }

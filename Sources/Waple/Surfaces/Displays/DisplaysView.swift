@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import WapleLibrary
+import WapleRender
 
 // 다이어그램/레일 썸네일(감사 V06)은 종전 이 파일의 DisplaysThumbView 였다. 2026-08-17 개편에서
 // 같은 F500 패턴의 그리드 쪽 복제와 함께 DesignSystem/Components/PreviewThumbnail 로 합쳤다 —
@@ -94,7 +95,30 @@ struct DisplaysView: View {
             .background(ColorRole.well)
             Divider()
             statusRow.padding(.horizontal, Space.panelInset).padding(.top, Space.md)
-            assignmentRail
+            if let key = selectedScreenKey {
+                Picker("화면 재생목록", selection: Binding(
+                    get: { viewModel.playlist.assignedPlaylistId(forScreen: key) ?? "" },
+                    set: { id in
+                        viewModel.playlist.assignPlaylist(id.isEmpty ? nil : id, toScreen: key)
+                        viewModel.objectWillChange.send()
+                        viewModel.onPlaylistChanged?()
+                    })) {
+                    Text("전체 재생목록 따르기").tag("")
+                    ForEach(viewModel.playlist.savedPlaylists, id: \.id) { Text($0.name).tag($0.id) }
+                }
+                .padding(.horizontal, Space.panelInset)
+                .disabled(viewModel.assignedEntry(forScreen: key) != nil || GlobalPlaybackSettings.monitorLayout != .perMonitor)
+                Toggle("이 화면에서 동영상 소리 재생", isOn: Binding(
+                    get: { VideoSettings.audioOutputEnabled(screenID: key) },
+                    set: { enabled in
+                        VideoSettings.setAudioOutputEnabled(enabled, screenID: key)
+                        viewModel.objectWillChange.send()
+                        viewModel.onVideoSettingsChanged?()
+                    }))
+                    .padding(.horizontal, Space.panelInset)
+                    .disabled(!VideoSettings.audioOutputEnabled())
+            }
+            assignmentRail.disabled(GlobalPlaybackSettings.monitorLayout != .perMonitor)
         }
         .frame(minWidth: Metrics.displaysMin.width,
                idealWidth: Self.idealWidth,
@@ -197,7 +221,7 @@ struct DisplaysView: View {
                     .font(Typography.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("할당 해제") { viewModel.clearAssignment(forScreen: key) }
-                    .disabled(viewModel.assignedEntry(forScreen: key) == nil)
+                    .disabled(viewModel.assignedEntry(forScreen: key) == nil || GlobalPlaybackSettings.monitorLayout != .perMonitor)
             } else {
                 Text("모니터를 선택하세요").foregroundStyle(.secondary)
                 Spacer()

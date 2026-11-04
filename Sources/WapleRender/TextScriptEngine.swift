@@ -112,6 +112,13 @@ public final class SceneScriptContext {
     public weak var soundTransport: SceneAudioPlayer?
     /// F810: 씬 스크립트 localStorage 디스크 저장소. nil(기본) = 종전 인메모리 전용(헤드리스/테스트 무회귀).
     public let localStorageStore: ScriptLocalStorage?
+    public var onOpenUserShortcut: ((String) -> Void)?
+    private var boundUserShortcutNames: Set<String> = []
+
+    public func installBoundUserShortcuts(_ names: Set<String>) {
+        boundUserShortcutNames = Set(names.filter { !$0.isEmpty && $0.utf8.count <= 1024 })
+    }
+
     /// E1(⑤): thisScene.createLayer 무해 스텁 경고 — 레이어 이름별 1회만(매 프레임 재호출 스팸 방지).
     ///
     /// F840-sweep: 이름은 **JS 인자**라 신뢰 경계 밖이다. `createLayer(String(Math.random()))` 를
@@ -133,11 +140,17 @@ public final class SceneScriptContext {
         }
         // F810: 스토리지 브리지는 shims 평가보다 먼저 — localStorage IIFE 가 평가 시점에 스냅샷으로 시드한다.
         if let store = localStorageStore { installStorageBridge(ctx, store: store) }
-        ctx.evaluateScript(TextScriptEngine.shims)
+        SceneScriptRuntime.bootstrap(ctx)
         if let ms = TextScriptEngine.captureDateEpochMillis { ctx.evaluateScript(TextScriptEngine.dateOverrideJS(ms)) }
         if let seed = TextScriptEngine.captureRandomSeed { ctx.evaluateScript(TextScriptEngine.randomOverrideJS(seed)) }
         ctx.evaluateScript("__setCanvasSize(\(TextScriptEngine.jsNumber(width)), \(TextScriptEngine.jsNumber(height)));")
         if TextScriptEngine.isScreensaver { ctx.evaluateScript("__setScreensaver(true);") }  // 기본 false = 미주입 = 무변화
+        let openShortcut: @convention(block) (String) -> Bool = { [weak self] name in
+            guard let self, self.boundUserShortcutNames.contains(name), let handler = self.onOpenUserShortcut else { return false }
+            handler(name)
+            return true
+        }
+        ctx.setObject(openShortcut, forKeyedSubscript: "__wapleOpenUserShortcut" as NSString)
         installSoundBridge(ctx)
         installWarnBridge(ctx)
         if !layers.isEmpty {
@@ -154,11 +167,12 @@ public final class SceneScriptContext {
     /// __wapleStorageSnapshot 으로 시드하고, set/delete/clear 마다 디스크 스토어와 동기화한다.
     /// 블록이 store 를 강참조하지만 store 는 컨텍스트를 참조하지 않아 순환 없음.
     private func installStorageBridge(_ ctx: JSContext, store: ScriptLocalStorage) {
-        let snapshot: @convention(block) () -> String = { store.snapshotJSON() }
-        let set: @convention(block) (String, String) -> Void = { k, v in store.set(key: k, json: v) }
-        let del: @convention(block) (String) -> Void = { k in store.delete(key: k) }
-        let clear: @convention(block) () -> Void = { store.clear() }
-        ctx.setObject(snapshot, forKeyedSubscript: "__wapleStorageSnapshot" as NSString)
+        let location: (String) -> ScriptLocalStorage.Location = { $0 == "global" ? .global : .screen }
+        let get: @convention(block) (String, String) -> String = { k, scope in store.get(key: k, location: location(scope)) ?? "" }
+        let set: @convention(block) (String, String, String) -> Void = { k, v, scope in store.set(key: k, json: v, location: location(scope)) }
+        let del: @convention(block) (String, String) -> Void = { k, scope in store.delete(key: k, location: location(scope)) }
+        let clear: @convention(block) (String) -> Void = { scope in store.clear(location: location(scope)) }
+        ctx.setObject(get, forKeyedSubscript: "__wapleStorageGet" as NSString)
         ctx.setObject(set, forKeyedSubscript: "__wapleStorageSet" as NSString)
         ctx.setObject(del, forKeyedSubscript: "__wapleStorageDelete" as NSString)
         ctx.setObject(clear, forKeyedSubscript: "__wapleStorageClear" as NSString)
@@ -295,160 +309,218 @@ public final class SceneScriptContext {
     }
 }
 
-/// F810(S-7 잔여): 씬 스크립트 localStorage 디스크 영속 — F701 의 인메모리 저장소를 앱 재시작·리마운트
-/// 간에도 복원(miDragable 계열 드래그 위치 등). 저장 위치는 기존 스토어 관례(LibraryStore·변환 캐시와
-/// 같은 ~/Library/Application Support/Waple 하위)의 script-storage/<씬 id>.json — 본문은
-/// {키: JSON 인코딩 값 문자열} 딕셔너리(값은 JS 측이 JSON.stringify 한 문자열로 왕복, 복원 시 parse).
-/// 저장 시점: 값 변경 디바운스(기본 0.75s) + flush()(마운트 해제 경로)의 최소 설계. 쓰기 실패는 로그만
-/// (저장 불가가 렌더를 죽이지 않음). WE 의 location 네임스페이스 분리(global/screen)는 의미 미확정 —
-/// F701 과 동일하게 단일 네임스페이스로 무시(추측 구현 안 함).
-/// @unchecked Sendable: 이 타입은 **자기 상태를 스스로 직렬화한다** — `values` 는 모든 접근이
-/// `lock` 구간 안이고(set/delete/clear/snapshotJSON/flush 전부), `pendingSave` 는 직렬 큐
-/// `saveQueue` 안에서만 읽고 쓴다(scheduleSave 의 async 블록 하나가 유일한 접근점),
-/// 나머지(fileURL/debounce/lock/saveQueue)는 let 이다. 컴파일러가 볼 수 없는 이 두 규율이
-/// 근거이고, 그래서 `checked` 가 아니라 `unchecked` 다. 규율을 깨는 변경(값에 직접 접근하는
-/// 새 메서드, pendingSave 를 큐 밖에서 만지는 코드)을 넣으려면 이 표기부터 다시 검토할 것.
-/// (2026-08-19) `totalBytes`·`warnedOverflow` 도 같은 `lock` 이 지킨다 — 규율은 그대로다.
+/// SceneScript storage, shared globally per wallpaper or isolated per display.
+/// A single lifecycle lock covers registry changes and atomic writes: removal cannot race a late flush.
 public final class ScriptLocalStorage: @unchecked Sendable {
-    /// 기본 저장 루트(~/Library/Application Support/Waple/script-storage).
+    public enum Location: String { case screen, global }
+
     public static func defaultBaseDirectory() -> URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return appSupport.appendingPathComponent("Waple/script-storage", isDirectory: true)
     }
 
-    /// 브리지 입력 상한. 형제 `WebRenderer.maxBridgeStringBytes`(F840, :70)가 이미 하는 일을
-    /// 이쪽 브리지만 하지 않고 있었다 — 수정의 전파 누락이다.
-    ///
-    /// 씬 스크립트는 워크샵 콘텐츠라 신뢰 경계 밖이고, `flush()` 가 디바운스마다 **전체 딕셔너리**를
-    /// `script-storage/<sceneId>.json` 에 재기록한다. 상한이 없으면 메모리와 디스크가 함께 자라고
-    /// **teardown 후에도 파일이 남아** 영구 누적이 된다. 원격 반출 경로는 없다 — 로컬 자원 소진이다.
-    private static let maxKeyBytes = 1024            // WebRenderer 형제와 동수
-    private static let maxValueBytes = 64 * 1024     // 값은 JSON 직렬화본이라 키보다 넉넉히
+    private static let maxKeyBytes = 1024
+    private static let maxValueBytes = 64 * 1024
     private static let maxEntries = 512
     private static let maxTotalBytes = 4 * 1024 * 1024
+    private static let lifecycleLock = NSRecursiveLock()
+    nonisolated(unsafe) private static var states: [String: WeakState] = [:]
 
-    private let fileURL: URL
-    private var values: [String: String] = [:]
-    /// `values` 안 문자열의 UTF-8 바이트 합. 매 set 마다 전수 합산하면 스크립트가 프레임마다
-    /// 부를 때 O(n) 이 되므로 증분으로 유지한다(lock 이 지킨다).
-    private var totalBytes = 0
-    /// 상한 경고는 씬당 한 번만 — 매 프레임 거절당하는 스크립트가 로그를 채우는 것도
-    /// 같은 종류의 자원 소진이다.
-    private var warnedOverflow = false
-    private let lock = NSLock()
-    private let saveQueue = DispatchQueue(label: "waple.script-localstorage", qos: .utility)
-    private var pendingSave: DispatchWorkItem?
-    private let debounce: TimeInterval
+    private final class WeakState {
+        weak var value: State?
+        init(_ value: State) { self.value = value }
+    }
 
-    /// sceneId = 배경 프로젝트 id(워크숍 id 등). 파일명 안전 문자(영숫자 . - _) 외는 '_' 치환.
-    /// baseDirectory/debounce 는 테스트 주입용(nil/기본 = Application Support 경로·0.75s).
-    public init(sceneId: String, baseDirectory: URL? = nil, debounce: TimeInterval = 0.75) {
-        let safe = String(sceneId.map { ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_") ? $0 : "_" })
-        self.fileURL = (baseDirectory ?? Self.defaultBaseDirectory())
-            .appendingPathComponent((safe.isEmpty ? "scene" : safe) + ".json")
-        self.debounce = debounce
-        if let data = try? Data(contentsOf: fileURL),
-           let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: String] {
-            // 디스크 파일도 신뢰 경계 밖이다 — 직전 실행의 스크립트가 쓴 것이다. 로드에도 같은
-            // 상한을 걸지 않으면 한 번 커진 파일이 영원히 남아 상한이 무의미해진다.
-            // 키 정렬 순회로 어떤 항목이 살아남는지 결정적으로 만든다.
-            for key in dict.keys.sorted() {
-                guard let v = dict[key],
-                      key.utf8.count <= Self.maxKeyBytes, v.utf8.count <= Self.maxValueBytes,
-                      values.count < Self.maxEntries,
-                      totalBytes + v.utf8.count <= Self.maxTotalBytes else { continue }
-                values[key] = v
-                totalBytes += v.utf8.count
+    private final class State: @unchecked Sendable {
+        let fileURL: URL
+        let namespace: String
+        var values: [String: String] = [:]
+        var totalBytes = 0
+        var warnedOverflow = false
+        var invalidated = false
+        var pendingSave: DispatchWorkItem?
+        init(fileURL: URL, namespace: String) {
+            self.fileURL = fileURL
+            self.namespace = namespace
+            // Files left by older versions are untrusted too. Bound bytes before allocating JSON.
+            guard let size = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  size <= ScriptLocalStorage.maxTotalBytes * 2,
+                  let data = try? Data(contentsOf: fileURL),
+                  let dictionary = (try? JSONSerialization.jsonObject(with: data)) as? [String: String] else { return }
+            for key in dictionary.keys.sorted() {
+                guard let value = dictionary[key], key.utf8.count <= ScriptLocalStorage.maxKeyBytes,
+                      value.utf8.count <= ScriptLocalStorage.maxValueBytes,
+                      values.count < ScriptLocalStorage.maxEntries,
+                      totalBytes + value.utf8.count <= ScriptLocalStorage.maxTotalBytes else { continue }
+                values[key] = value
+                totalBytes += value.utf8.count
             }
         }
     }
 
+    private let namespace: String
+    private let defaultURL: URL
+    private let scopeDirectory: URL
+    private let debounce: TimeInterval
+    private let saveQueue = DispatchQueue(label: "waple.script-localstorage", qos: .utility)
+    private var ownedStates: [Location: State] = [:]
+    private var invalidated = false
+
+    private static func safeName(_ sceneId: String) -> String {
+        let safe = String(sceneId.map { ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_") ? $0 : "_" })
+        return safe.isEmpty ? "scene" : safe
+    }
+
+    /// A nil display ID preserves the legacy screen filename. Apps pass a stable display identity.
+    public init(sceneId: String, screenId: String? = nil, baseDirectory: URL? = nil, debounce: TimeInterval = 0.75) {
+        let base = (baseDirectory ?? Self.defaultBaseDirectory()).standardizedFileURL
+        let safe = Self.safeName(sceneId)
+        self.namespace = base.appendingPathComponent(safe + ".json").path
+        self.scopeDirectory = base.appendingPathComponent(safe + ".scopes", isDirectory: true)
+        if let screenId {
+            let encoded = screenId.utf8.map { String(format: "%02x", $0) }.joined()
+            self.defaultURL = scopeDirectory.appendingPathComponent("screen-" + (encoded.isEmpty ? "default" : encoded) + ".json")
+        } else {
+            self.defaultURL = base.appendingPathComponent(safe + ".json")
+        }
+        self.debounce = debounce.isFinite ? max(0, debounce) : 0.75
+        Self.lifecycleLock.lock()
+        // Migrate the previous per-wallpaper screen value once; other displays get independent copies.
+        let legacy = base.appendingPathComponent(safe + ".json")
+        if screenId != nil, !FileManager.default.fileExists(atPath: defaultURL.path),
+           FileManager.default.fileExists(atPath: legacy.path) {
+            do {
+                try FileManager.default.createDirectory(at: scopeDirectory, withIntermediateDirectories: true)
+                try FileManager.default.copyItem(at: legacy, to: defaultURL)
+            } catch { WapleLog.warn("[Waple] script localStorage migration failed: \(error)") }
+        }
+        _ = state(.screen); _ = state(.global)
+        Self.lifecycleLock.unlock()
+    }
+
     deinit { flush() }
 
-    /// JS 시드용 스냅샷(전체 딕셔너리 JSON 문자열). 직렬화 불가 시 "{}".
-    public func snapshotJSON() -> String {
-        lock.lock(); let dict = values; lock.unlock()
-        guard JSONSerialization.isValidJSONObject(dict),
-              let data = try? JSONSerialization.data(withJSONObject: dict),
-              let s = String(data: data, encoding: .utf8) else { return "{}" }
-        return s
+    private func state(_ location: Location) -> State {
+        if let state = ownedStates[location] { return state }
+        let url = location == .screen ? defaultURL : scopeDirectory.appendingPathComponent("global.json")
+        let state: State
+        if let existing = Self.states[url.path]?.value, !existing.invalidated {
+            state = existing
+        } else {
+            state = State(fileURL: url, namespace: namespace)
+            Self.states = Self.states.filter { $0.value.value != nil }
+            Self.states[url.path] = WeakState(state)
+        }
+        if invalidated { state.invalidated = true }
+        ownedStates[location] = state
+        return state
     }
 
-    /// 상한을 넘으면 **조용히 거절**한다(예외도 JS 오류도 아니다 — 실물 localStorage 의
-    /// QuotaExceeded 와 달리 스크립트를 멈추면 배경화면이 통째로 죽는다).
-    public func set(key: String, json: String) {
-        guard key.utf8.count <= Self.maxKeyBytes else {
-            return rejectOnce("키 \(key.utf8.count)B > \(Self.maxKeyBytes)B")
-        }
-        guard json.utf8.count <= Self.maxValueBytes else {
-            return rejectOnce("값 \(json.utf8.count)B > \(Self.maxValueBytes)B")
-        }
-        lock.lock()
-        let previous = values[key]
+    public func snapshotJSON(location: Location = .screen) -> String {
+        Self.lifecycleLock.lock(); defer { Self.lifecycleLock.unlock() }
+        let state = state(location)
+        guard !state.invalidated,
+              let data = try? JSONSerialization.data(withJSONObject: state.values, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else { return "{}" }
+        return text
+    }
+
+    public func get(key: String, location: Location = .screen) -> String? {
+        Self.lifecycleLock.lock(); defer { Self.lifecycleLock.unlock() }
+        let state = state(location)
+        return state.invalidated ? nil : state.values[key]
+    }
+
+    public func set(key: String, json: String, location: Location = .screen) {
+        Self.lifecycleLock.lock(); defer { Self.lifecycleLock.unlock() }
+        let state = state(location)
+        guard !state.invalidated else { return }
+        let previous = state.values[key]
         let delta = json.utf8.count - (previous?.utf8.count ?? 0)
-        if previous == nil, values.count >= Self.maxEntries {
-            lock.unlock()
-            return rejectOnce("항목 수 상한 \(Self.maxEntries) 도달")
+        guard key.utf8.count <= Self.maxKeyBytes, json.utf8.count <= Self.maxValueBytes,
+              previous != nil || state.values.count < Self.maxEntries,
+              state.totalBytes + delta <= Self.maxTotalBytes else {
+            if !state.warnedOverflow {
+                state.warnedOverflow = true
+                WapleLog.warn("[Waple] script localStorage quota exceeded (" + state.fileURL.lastPathComponent + ")")
+            }
+            return
         }
-        if totalBytes + delta > Self.maxTotalBytes {
-            lock.unlock()
-            return rejectOnce("총량 상한 \(Self.maxTotalBytes)B 초과")
-        }
-        totalBytes += delta
-        values[key] = json
-        lock.unlock()
-        scheduleSave()
+        state.values[key] = json
+        state.totalBytes += delta
+        scheduleSave(state)
     }
 
-    public func delete(key: String) {
-        lock.lock()
-        if let removed = values.removeValue(forKey: key) { totalBytes -= removed.utf8.count }
-        lock.unlock()
-        scheduleSave()
+    public func delete(key: String, location: Location = .screen) {
+        Self.lifecycleLock.lock(); defer { Self.lifecycleLock.unlock() }
+        let state = state(location)
+        guard !state.invalidated else { return }
+        if let removed = state.values.removeValue(forKey: key) { state.totalBytes -= removed.utf8.count }
+        scheduleSave(state)
     }
 
-    public func clear() {
-        lock.lock(); values.removeAll(); totalBytes = 0; lock.unlock()
-        scheduleSave()
+    public func clear(location: Location = .screen) {
+        Self.lifecycleLock.lock(); defer { Self.lifecycleLock.unlock() }
+        let state = state(location)
+        guard !state.invalidated else { return }
+        state.values.removeAll(); state.totalBytes = 0
+        scheduleSave(state)
     }
 
-    /// 테스트·진단용 현재 사용량(항목 수, UTF-8 바이트 합).
     public var usage: (entries: Int, bytes: Int) {
-        lock.lock(); defer { lock.unlock() }
-        return (values.count, totalBytes)
+        Self.lifecycleLock.lock(); defer { Self.lifecycleLock.unlock() }
+        let state = state(.screen)
+        return (state.values.count, state.totalBytes)
     }
 
-    /// lock 을 잡지 않은 상태에서만 부른다(위 세 경로 모두 unlock 뒤에 호출한다).
-    private func rejectOnce(_ reason: String) {
-        lock.lock()
-        let first = !warnedOverflow
-        warnedOverflow = true
-        lock.unlock()
-        guard first else { return }
-        NSLog("%@", "[Waple] script localStorage 상한 초과로 거절: \(reason) "
-                  + "(\(fileURL.lastPathComponent), 이후 동일 경고 생략)")
+    private func scheduleSave(_ state: State) {
+        state.pendingSave?.cancel()
+        let item = DispatchWorkItem { [weak self, weak state] in
+            guard let self, let state else { return }
+            Self.lifecycleLock.lock(); defer { Self.lifecycleLock.unlock() }
+            self.write(state)
+        }
+        state.pendingSave = item
+        saveQueue.asyncAfter(deadline: .now() + debounce, execute: item)
     }
 
-    private func scheduleSave() {
-        saveQueue.async { [weak self] in
-            guard let self else { return }
-            self.pendingSave?.cancel()
-            let item = DispatchWorkItem { [weak self] in self?.flush() }
-            self.pendingSave = item
-            self.saveQueue.asyncAfter(deadline: .now() + self.debounce, execute: item)
+    private func write(_ state: State) {
+        guard !invalidated, !state.invalidated else { return }
+        do {
+            try FileManager.default.createDirectory(at: state.fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let data = try JSONSerialization.data(withJSONObject: state.values, options: [.sortedKeys])
+            try data.write(to: state.fileURL, options: [.atomic])
+        } catch {
+            WapleLog.warn("[Waple] script localStorage save failed at \(state.fileURL.path): \(error)")
         }
     }
 
-    /// 즉시 동기 저장(마운트 해제/teardown·deinit·테스트). 디바운스 대기분을 흡수하는 최종 기록.
     public func flush() {
-        lock.lock(); let dict = values; lock.unlock()
-        do {
-            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
-            try data.write(to: fileURL, options: [.atomic])
-        } catch {
-            NSLog("%@", "[Waple] script localStorage save failed at \(fileURL.path): \(error)")
+        Self.lifecycleLock.lock(); defer { Self.lifecycleLock.unlock() }
+        for state in ownedStates.values { state.pendingSave?.cancel(); write(state) }
+    }
+
+    /// Retired stores stay retired even if script callbacks or teardown run after library removal.
+    public func invalidate() {
+        Self.lifecycleLock.lock(); defer { Self.lifecycleLock.unlock() }
+        invalidated = true
+        for state in ownedStates.values { state.invalidated = true; state.pendingSave?.cancel() }
+    }
+
+    public static func remove(sceneId: String, baseDirectory: URL? = nil) throws {
+        lifecycleLock.lock(); defer { lifecycleLock.unlock() }
+        let base = (baseDirectory ?? defaultBaseDirectory()).standardizedFileURL
+        let safe = safeName(sceneId)
+        let legacy = base.appendingPathComponent(safe + ".json")
+        let scopes = base.appendingPathComponent(safe + ".scopes", isDirectory: true)
+        for wrapper in states.values {
+            guard let state = wrapper.value, state.namespace == legacy.path else { continue }
+            state.invalidated = true; state.pendingSave?.cancel()
+        }
+        // Invalidated states remain reachable by retired stores, but a remount gets fresh state.
+        states = states.filter { $0.value.value != nil && $0.value.value?.namespace != legacy.path }
+        for url in [legacy, scopes] where FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
         }
     }
 }
@@ -645,6 +717,7 @@ public final class TextScriptEngine {
     public enum ScriptOwner {
         /// 레이어/텍스트 프로퍼티에 바인딩 — WE 에서도 thisObject === thisLayer(종전 동작 그대로).
         case layer
+        case scene
         /// 이펙트(`objects[].effects[].<prop>`)에 바인딩 — IEffect. materials[i] = i 번째 패스의
         /// authored 상수(씨앗). 이펙트 visible 스크립트는 패스 셰이더 번역보다 먼저 로드되므로
         /// 셰이더 기본값은 씨앗에 없다 — 통째 대입(실물이 쓰는 형태)은 정확하고, 미씨앗 상수를
@@ -659,6 +732,8 @@ public final class TextScriptEngine {
         switch owner {
         case .layer:
             return "thisLayer"
+        case .scene:
+            return "thisScene"
         case .effect(let materials):
             return "__wapleEffectObject([" + materials.map(materialSeedJSON).joined(separator: ",") + "])"
         case .material(let constants):
@@ -684,7 +759,7 @@ public final class TextScriptEngine {
             NSLog("%@", "[Waple] text script exception: \(ex?.toString() ?? "?")")
             hadException = true
         }
-        ctx.evaluateScript(Self.shims)
+        SceneScriptRuntime.bootstrap(ctx)
         if let ms = Self.captureDateEpochMillis { ctx.evaluateScript(Self.dateOverrideJS(ms)) }
         if let seed = Self.captureRandomSeed { ctx.evaluateScript(Self.randomOverrideJS(seed)) }
         if Self.isScreensaver { ctx.evaluateScript("__setScreensaver(true);") }  // 기본 false = 미주입 = 무변화
@@ -804,6 +879,13 @@ public final class TextScriptEngine {
         return v.toBool()
     }
 
+    public var layerRuntimeSlot: Int? {
+        guard let value = thisLayerValue?.objectForKeyedSubscript("__wapleSlot"), value.isNumber else { return nil }
+        let number = value.toDouble()
+        guard number.isFinite, number >= 0, number < 4096 else { return nil }
+        return safeInt(number)
+    }
+
     /// G-C4-01: 스크립트가 `thisObject` 에 남긴 셰이더 상수 쓰기(로드 top-level + applyUserProperties
     /// + init 까지의 결과). 원소 인덱스 = `IEffect.getMaterial(i)` 의 i(= effect.json raw 패스 인덱스);
     /// thisObject 가 머티리얼 하나면 원소 1개짜리 배열이다.
@@ -882,6 +964,11 @@ public final class TextScriptEngine {
         }
     }
 
+    public func callHook(_ name: String) {
+        guard let function = hookFns[name] else { return }
+        _ = withExceptionCapture("\(name) hook exception") { _ in function.call(withArguments: []) }
+    }
+
     /// Deliver the mount's effective WallpaperProperty JSON once. The gate is set before JSON evaluation/call,
     /// so malformed JSON or a throwing script is logged and never retried automatically.
     /// engine.userProperties(코퍼스 17씬)는 훅 유무와 무관하게 항상 채운다 — noopProxy 폴백은 truthy 라
@@ -912,6 +999,7 @@ public final class TextScriptEngine {
                     // 종전엔 type 을 통째로 무시해 색 프로퍼티가 문자열("0.07 0.12 0.18")로 갔고,
                     // `changedUserProperties.mycolor.multiply(2)` 가 TypeError 로 훅 전체를 죽였다.
                     // 도달이 크다: WE 기본 배경들의 유저 프로퍼티 타입 분포에서 color 가 52.5% 로 최다다.
+                    if (e.type === 'usershortcut') { r[k] = {isbound: !!e.isbound, commandtype: e.commandtype, file: e.file}; continue; }
                     if (e.type === 'color') { r[k] = new Vec3(String(e.value)); continue; }
                     r[k] = e.value;
                 }
@@ -941,6 +1029,13 @@ public final class TextScriptEngine {
         }
     }
 
+    private func callUpdate(_ function: JSValue, arguments: [Any]) -> JSValue? {
+        let previous = context.objectForKeyedSubscript("__wapleInScriptUpdate")?.toBool() ?? false
+        context.setObject(true, forKeyedSubscript: "__wapleInScriptUpdate" as NSString)
+        defer { context.setObject(previous, forKeyedSubscript: "__wapleInScriptUpdate" as NSString) }
+        return function.call(withArguments: arguments)
+    }
+
     /// update(current) 호출 → 새 텍스트. 예외/비문자열 → nil.
     public func evaluate(current: String) -> String? {
         return withExceptionCapture("text script update exception") { failed -> String? in
@@ -949,7 +1044,7 @@ public final class TextScriptEngine {
             if let updateFn {
                 // F712: init 반환(수정값)이 있으면 첫 update 의 current 로 공급(WE init→update 계약).
                 let arg: Any = initValue ?? current
-                guard let out = updateFn.call(withArguments: [arg]), !failed(), out.isString else { return nil }
+                guard let out = callUpdate(updateFn, arguments: [arg]), !failed(), out.isString else { return nil }
                 return out.toString()
             }
             // F712: init-only 텍스트 스크립트 — init 반환 문자열을 프로퍼티값으로 적용, 없으면 nil(현상 유지).
@@ -966,7 +1061,7 @@ public final class TextScriptEngine {
             let out: JSValue?
             if let updateFn {
                 let arg: Any = initValue ?? current
-                guard let o = updateFn.call(withArguments: [arg]), !failed() else { return nil }
+                guard let o = callUpdate(updateFn, arguments: [arg]), !failed() else { return nil }
                 out = o
             } else {
                 out = initValue ?? initReturnValue   // F712: init-only — init 반환을 프로퍼티값으로
@@ -999,7 +1094,7 @@ public final class TextScriptEngine {
             let result: [Float]?
             if let updateFn {
                 let updateArg: Any = initValue ?? arg   // F712: init 수정값을 첫 update 의 current 로
-                guard let out = updateFn.call(withArguments: [updateArg]), !failed() else { return nil }
+                guard let out = callUpdate(updateFn, arguments: [updateArg]), !failed() else { return nil }
                 result = Self.floatArray(from: out)
             } else {
                 // F712(S-38): update 없는 init-only 프로퍼티 스크립트(실물 3367988661 드래그 패밀리의
@@ -1133,7 +1228,8 @@ public final class TextScriptEngine {
     /// 문을 no-op 프록시 바인딩으로 치환한다. 동적 `import(...)`/`import.meta`, 문자열 리터럴 속 'export'/'import',
     /// 멤버 접근 `x.export`/프로퍼티 키 `{export:..}` 는 불간섭. (JSC 는 스크립트 평가에서 ES 모듈 미지원 —
     /// 실물 난독화 텍스트 스크립트가 한 줄에 mid-line export 를 흩뿌려 줄 단위 스트리퍼로는 로드 실패했다.)
-    static func stripModuleSyntax(_ src: String) -> String {
+    static func stripModuleSyntax(_ src: String, moduleExports: Bool = false) -> String {
+        var exportedBindings: [(String, String)] = []
         let chars = Array(src)
         let n = chars.count
         var out: [Character] = []
@@ -1238,6 +1334,17 @@ public final class TextScriptEngine {
                         i = neutralizeImport(chars, j, n, emit: emitAll); continue
                     }
                     // export
+                    if moduleExports, ac != "{" && ac != "*" && !matchWord(after, Array("default")) {
+                        var declaration = after
+                        if matchWord(declaration, Array("async")) { declaration = nextNonWS(declaration + 5) }
+                        for keyword in ["function", "class", "let", "const", "var"] where matchWord(declaration, Array(keyword)) {
+                            let start = nextNonWS(declaration + keyword.count)
+                            var end = start
+                            while end < n && isIdent(chars[end]) { end += 1 }
+                            if end > start { let name = String(chars[start..<end]); exportedBindings.append((name, name)) }
+                            break
+                        }
+                    }
                     if matchWord(after, Array("default")) {
                         // F474: `export default function update(...)` 를 `var __default = function update...`
                         // 로 바꾸면 기명 함수식의 이름은 스코프에 바인딩되지 않아 update 훅 수집이 무음
@@ -1248,9 +1355,15 @@ public final class TextScriptEngine {
                         if matchWord(nd, Array("function")) {
                             let nf = nextNonWS(nd + "function".count)
                             if nf < n, isIdent(chars[nf]), !chars[nf].isNumber {
+                                if moduleExports {
+                                    var end = nf
+                                    while end < n && isIdent(chars[end]) { end += 1 }
+                                    exportedBindings.append(("default", String(chars[nf..<end])))
+                                }
                                 i = d; continue
                             }
                         }
+                        if moduleExports { exportedBindings.append(("default", "__default")) }
                         emitAll(Array("var __default =")); i = d; continue
                     }
                     if ac == "{" {
@@ -1268,6 +1381,15 @@ public final class TextScriptEngine {
                             m += 1
                         }
                         if let close {
+                            if moduleExports {
+                                let members = String(chars[(after + 1)..<close]).split(separator: ",")
+                                for member in members {
+                                    let parts = member.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+                                    if let name = parts.first {
+                                        exportedBindings.append((parts.count == 3 && parts[1] == "as" ? parts[2] : name, name))
+                                    }
+                                }
+                            }
                             var e = close + 1
                             var f = e
                             while f < n && chars[f].isWhitespace { f += 1 }
@@ -1312,7 +1434,14 @@ public final class TextScriptEngine {
             if c == "\n" || c == "\r" { sawLineBreak = true }   // ASI 라인터미네이터(F472)
             emit(c); i += 1
         }
-        return String(out)
+        var result = String(out)
+        if moduleExports {
+            for (name, expression) in exportedBindings {
+                result += "\nObject.defineProperty(exports," + javascriptStringLiteral(name)
+                    + ",{enumerable:true,get:function(){return " + expression + ";}});"
+            }
+        }
+        return result
     }
 
     /// 실용 안전 검사 — 자명한 무한 루프/초대형 소스를 로드 전에 거른다(거부 시 정적 텍스트 폴백).
@@ -1324,7 +1453,7 @@ public final class TextScriptEngine {
     /// 경우만 거르는 최선 노력이며 `while (f(x))` 류 계산 조건의 정교한 무한 루프는 여전히 통과한다 —
     /// 제3자 스크립트의 악의적/버그성 행 유발은 수용 리스크로 남는다(정상 스크립트 오탐보다 행
     /// 방지를 우선하는 기존 방향 유지).
-    private static func passesPracticalSafetyChecks(_ script: String) -> Bool {
+    static func passesPracticalSafetyChecks(_ script: String) -> Bool {
         guard script.count <= maxScriptCharacters else {
             NSLog("%@", "[Waple] text script rejected: source too large (\(script.count) chars)")
             return false
@@ -1562,51 +1691,45 @@ public final class TextScriptEngine {
         let quote = chars[m]
         var s = m + 1
         while s < n { if chars[s] == "\\", s + 1 < n { s += 2; continue }; let end = chars[s] == quote; s += 1; if end { break } }
+        let module = String(chars[(m + 1)..<max(m + 1, s - 1)])
         // 선택 세미콜론.
         var e = s
         while e < n && chars[e].isWhitespace && chars[e] != "\n" { e += 1 }
         if e < n && chars[e] == ";" { s = e + 1 }
-        emit(Array(importBindings(clause: clause)))
+        emit(Array(importBindings(clause: clause, module: module)))
         return s
     }
 
     /// import clause → no-op 프록시 var 선언 코드. 빈 clause(side-effect) → "".
     /// `* as X` / `{a, b as c}` / `default` / `default, {..}`(콤보) 지원. WEColor/WEMath/WEVector 는 실심 바인딩.
-    private static func importBindings(clause: String) -> String {
+    private static func importBindings(clause: String, module: String) -> String {
         let clause = clause.trimmingCharacters(in: .whitespaces)
-        guard !clause.isEmpty else { return "" }
-        func decl(_ name: String) -> String {
-            switch name {
-            case "WEColor": return "var WEColor = __WEColor;"
-            case "WEMath": return "var WEMath = __WEMath;"
-            case "WEVector": return "var WEVector = __WEVector;"   // F706(S-42)
-            default: return "var \(name) = __noopProxy();"
-            }
+        let namespace = "__wapleImport(" + javascriptStringLiteral(module) + ")"
+        guard !clause.isEmpty else { return namespace + ";" }
+        func declaration(_ name: String, member: String? = nil) -> String {
+            let name = name.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { return "" }
+            let expression = member.map { namespace + "[" + javascriptStringLiteral($0) + "]" } ?? namespace
+            return "var \(name) = \(expression);"
         }
         if clause.hasPrefix("*") {
-            // minified `import*as e from"m"` 대응(감사 W-B5): as 주변 공백을 강제하지 않는다.
-            // 단 `as` 직후는 공백 경계여야 함(아니면 `asdf` 같은 한 식별자 — 비합법 clause).
             let rest = String(clause.dropFirst()).trimmingCharacters(in: .whitespaces)
             guard rest.hasPrefix("as"), let boundary = rest.dropFirst(2).first, boundary.isWhitespace else { return "" }
-            let name = String(rest.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-            return name.isEmpty ? "" : decl(name)
+            return declaration(String(rest.dropFirst(2)))
         }
         if clause.hasPrefix("{") {
             let inner = clause.trimmingCharacters(in: CharacterSet(charactersIn: "{} "))
-            let names = inner.split(separator: ",").compactMap { piece -> String? in
-                let p = piece.trimmingCharacters(in: .whitespaces)
-                if let asIdx = p.range(of: " as ") { return String(p[asIdx.upperBound...]).trimmingCharacters(in: .whitespaces) }
-                return p.isEmpty ? nil : p
-            }
-            return names.map(decl).joined(separator: " ")
+            return inner.split(separator: ",").map { piece in
+                let parts = piece.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+                guard let member = parts.first else { return "" }
+                return declaration(parts.count == 3 && parts[1] == "as" ? parts[2] : member, member: member)
+            }.joined(separator: " ")
         }
-        // default(+ 콤보): `default, {named}` / `default, * as ns`.
         if let comma = clause.firstIndex(of: ",") {
-            let def = String(clause[..<comma]).trimmingCharacters(in: .whitespaces)
-            let rest = importBindings(clause: String(clause[clause.index(after: comma)...]))
-            return ([def.isEmpty ? nil : decl(def), rest.isEmpty ? nil : rest].compactMap { $0 }).joined(separator: " ")
+            return declaration(String(clause[..<comma]), member: "default") + " "
+                + importBindings(clause: String(clause[clause.index(after: comma)...]), module: module)
         }
-        return decl(clause)
+        return declaration(clause, member: "default")
     }
 
     private static func javascriptStringLiteral(_ s: String) -> String {
@@ -2827,64 +2950,43 @@ public final class TextScriptEngine {
     // 있으면 스냅샷으로 시드하고 set/delete/clear 마다 동기화(디바운스 기록은 네이티브 ScriptLocalStorage).
     // 브리지 부재(단독 컨텍스트/헤드리스)는 종전 인메모리 폴터(무회귀). subscribe 통지원은 여전히 부재(no-op).
     var localStorage = (function() {
-        var store = {};
-        if (typeof __wapleStorageSnapshot === 'function') {
-            try {
-                var snap = JSON.parse(__wapleStorageSnapshot() || '{}');
-                for (var sk in snap) {
-                    if (Object.prototype.hasOwnProperty.call(snap, sk)) {
-                        try { store[sk] = JSON.parse(snap[sk]); } catch (ignore) {}
-                    }
-                }
-            } catch (ignore) {}
+        var stores = { screen: Object.create(null), global: Object.create(null) };
+        function scope(location) { return location === 'global' ? 'global' : 'screen'; }
+        function get(key, location) {
+            var k = String(key), s = scope(location);
+            if (typeof __wapleStorageGet === 'function') {
+                var encoded = __wapleStorageGet(k, s);
+                if (!encoded) { return undefined; }
+                try { return JSON.parse(encoded); } catch (ignore) { return undefined; }
+            }
+            return stores[s][k];
         }
-        function __persist(k) {
-            if (typeof __wapleStorageSet !== 'function') { return; }
-            var j;
-            try { j = JSON.stringify(store[k]); } catch (e) { return; }   // 순환참조 등 직렬화 불가는 영속 스킵
-            if (typeof j === 'string') { __wapleStorageSet(k, j); }        // undefined/함수는 미영속(get 계약 불변)
-        }
-        // BO(2026-08-21): set(k, undefined) 이 여기로 꼬리호출한다(아래 set 주석) — `this` 에 기대지
-        // 않도록 지역 함수로 뽑는다(`var s = localStorage.set; s('k')` 형태에서도 같게 동작해야 한다).
-        function __erase(k) {
-            var had = Object.prototype.hasOwnProperty.call(store, k);
-            delete store[k];
-            if (typeof __wapleStorageDelete === 'function') { __wapleStorageDelete(k); }
+        function erase(key, location) {
+            var k = String(key), s = scope(location);
+            var had = get(k, s) !== undefined;
+            delete stores[s][k];
+            if (typeof __wapleStorageDelete === 'function') { __wapleStorageDelete(k, s); }
             return had;
         }
         return {
-            LOCATION_GLOBAL: 'global',
-            LOCATION_SCREEN: 'screen',
-            get: function(key, location) {
-                var k = String(key);
-                return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : undefined;
-            },
-            // BO(2026-08-21) — 실물 `LocalStorageSet` 콜백 `0x181658680` 은 **값이 undefined 면
-            // delete 로 꼬리호출한다**:
-            //   `0x18165876c  mov rdx,[r15]`(= args[1], 인자 1개면 `[isolate+0x368]`=undefined)
-            //   `0x181658781  mov r10d, 0x83` / `0x181658787  cmp word [rax+rcx+7], r10w`  ← Oddball 타입
-            //   `0x18165878f  mov eax,[rdx+0x17]` / `sar eax,1` / `cmp eax,4`               ← Oddball kind 4
-            //   `0x18165879c  call 0x181658f70`                                             ← = localStorage.delete
-            // (V8 Oddball kind: 0 false · 1 true · 2 the_hole · 3 null · **4 undefined**.)
-            // 종전 심은 `store[k] = undefined` 라 in-memory get 은 우연히 같은 값을 냈지만
-            // `__persist` 가 `JSON.stringify(undefined) === undefined` 로 **영속을 건너뛰어**
-            // 디스크의 옛 값이 살아남았다 — 앱 재시작이면 지운 값이 되살아난다.
+            LOCATION_GLOBAL: 'global', LOCATION_SCREEN: 'screen',
+            get: get,
             set: function(key, value, location) {
-                var k = String(key);
-                if (value === undefined) { __erase(k); return; }
-                store[k] = value;
-                __persist(k);
+                var k = String(key), s = scope(location);
+                // Measured LocalStorageSet delegates undefined to delete, including persistent data.
+                if (value === undefined) { erase(k, s); return; }
+                var encoded;
+                try { encoded = JSON.stringify(value); } catch (ignore) { return; }
+                if (typeof encoded !== 'string') { return; }
+                if (typeof __wapleStorageSet === 'function') { __wapleStorageSet(k, encoded, s); }
+                else { stores[s][k] = JSON.parse(encoded); }
             },
-            // d.ts:2371 `delete(key, location?): Boolean`. 실물 `0x181658f70` 의 반환은
-            // `0x1816590bc  call [rax+0xd8]`(호스트 bool) → `neg al` / `sbb rcx,rcx` →
-            // `mov rcx,[rax + rcx*8 + 0x388]` — rcx=0 이면 +0x388(false), rcx=-1 이면 +0x380(true).
-            // 종전 심은 undefined 를 돌려줬다.
-            delete: function(key, location) { return __erase(String(key)); },
+            delete: erase,
             clear: function(location) {
-                store = {};
-                if (typeof __wapleStorageClear === 'function') { __wapleStorageClear(); }
+                var s = scope(location); stores[s] = Object.create(null);
+                if (typeof __wapleStorageClear === 'function') { __wapleStorageClear(s); }
             },
-            subscribe: function(key, cb) { return function() {}; }   // 통지원 부재 — no-op 안전 폴터
+            subscribe: function() { return function() {}; }
         };
     })();
     // F713(S-31): input 폴터 실심 — 종전 __noopProxy() 는 truthy 라 실물 가드(`if (input.cursorWorldPosition)`)

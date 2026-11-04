@@ -341,6 +341,8 @@ final class HDRBloomTests: XCTestCase {
         XCTAssertEqual(renderer.hdrBloomPyramidLevels, 6, "피라미드 levels = 저작 bloomhdriterations")
         // 단일레벨 폴백용 hdrBloomParameters.strength 는 종전 규약(×max(1,iterations)×strengthScale) 유지 — 무회귀.
         XCTAssertEqual(renderer.hdrBloomParameters.strength, 1.4 * 6 * HDRBloomPass.strengthScale, accuracy: 1e-4)
+        XCTAssertEqual(renderer.effectiveHDRFallbackParameters.strength, 0.7, accuracy: 1e-4,
+                       "actual single-level extraction uses raw authored 1.4 divided by its N=1 normalization")
     }
 
     private func hdrPostReference(device: MTLDevice) throws -> [UInt8] {

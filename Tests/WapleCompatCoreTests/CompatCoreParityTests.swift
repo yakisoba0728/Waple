@@ -412,13 +412,9 @@ final class CompatCoreParityTests: XCTestCase {
         XCTAssertFalse(DeepScan.run(rootPath: withProject.path, only: "typo").projectsFound)
     }
 
-    // MARK: - ⑥ 스냅샷 파이프라인의 씬 열거 — 언팩 폴백
+    // MARK: - ⑥ Mixed packed/unpacked scene selection
 
-    /// 종전 규칙은 `scene.pkg`/`gifscene.pkg` **파일 존재**뿐이라 언팩 코퍼스에서 0개였다.
-    /// WE 2.8.42 설치본 씬 **188/188**, 동봉 WEAssets **170/170** 이 전부 언팩이다.
-    /// 폴백은 **pkg 가 0개일 때만** 돈다 — pkg 코퍼스의 결과를 바꾸지 않기 위해서다
-    /// (그 결과가 곧 256×144 골든 매니페스트의 엔트리 집합이다).
-    func testSceneFoldersFallsBackToProjectJSONOnlyWhenNoPackageExists() {
+    func testSceneFoldersIncludesPackedAndUnpackedProjects() {
         // 전건 언팩 — 종전 0개, 지금은 열거된다.
         let unpacked = makeRoot("Unpacked")
         writeProject(sub(unpacked, "backgrounds/s1"),
@@ -430,14 +426,14 @@ final class CompatCoreParityTests: XCTestCase {
         writeProject(sub(unpacked, "backgrounds/v1"), #"{"type":"video","file":"a.mp4"}"#)
         XCTAssertEqual(names(SnapshotPipeline.sceneFolders(root: unpacked.path)), ["s1", "s2"])
 
-        // pkg 가 하나라도 있으면 **종전 동작 그대로** — 언팩 형제는 안 들어온다.
+        // Both project layouts remain visible in a mixed corpus.
         let mixed = makeRoot("Mixed")
         let packed = sub(mixed, "backgrounds/packed")
         writeProject(packed, #"{"type":"scene","file":"scene.json"}"#, extra: ["scene.pkg": "PKG"])
         writeProject(sub(mixed, "backgrounds/loose"),
                      #"{"type":"scene","file":"scene.json"}"#, extra: ["scene.json": "{}"])
-        XCTAssertEqual(names(SnapshotPipeline.sceneFolders(root: mixed.path)), ["packed"],
-                       "pkg 코퍼스의 캡처 집합은 바뀌면 안 된다 — 골든 매니페스트가 그 집합이다")
+        XCTAssertEqual(names(SnapshotPipeline.sceneFolders(root: mixed.path)), ["loose", "packed"],
+                       "mixed corpora must retain both declared scene projects")
 
         // 단일 씬 폴더 직접 지정(pkg) 도 종전대로.
         XCTAssertEqual(names(SnapshotPipeline.sceneFolders(root: packed.path)), [packed.lastPathComponent])

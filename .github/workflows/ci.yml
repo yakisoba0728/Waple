@@ -212,6 +212,10 @@ jobs:
             Sources/WapleSaver/WapleSaverView.m \
             -o "$OUT"
 
+      - name: Screensaver lifecycle regressions
+        if: matrix.configuration == 'debug'
+        run: python3 -m unittest scripts.dev.tests.test_waple_saver_native
+
       # release 테스트는 **보고 전용**이다. 위 verify-plan-b12 실측대로 두 구성은 픽셀이
       # 갈리므로, release 실패가 곧 회귀는 아니다. 그런데도 돌리는 이유는 release 에서만
       # 나는 최적화 의존 결함(부동소수 재결합, 경계 조건)이 실제로 있기 때문이다.

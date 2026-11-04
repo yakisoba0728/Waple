@@ -72,6 +72,17 @@ public enum SceneRenderSettings {
         set { defaults.set(newValue.rawValue, forKey: key) }
     }
 
+    public static var colorGrading: SceneColorGradingSettings {
+        get {
+            guard let data = defaults.data(forKey: "waple.colorGrading"),
+                  let settings = try? JSONDecoder().decode(SceneColorGradingSettings.self, from: data) else { return .init() }
+            return settings
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) { defaults.set(data, forKey: "waple.colorGrading") }
+        }
+    }
+
     /// UserDefaults.integer(forKey:) 는 키 미설정 시 0 을 반환 — SceneFPSCap(rawValue: 0) 이 nil 이라
     /// .fps30(기존 하드코딩) 으로 자연 폴백한다.
     public static var maxFPS: SceneFPSCap {

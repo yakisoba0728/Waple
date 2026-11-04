@@ -149,6 +149,13 @@ public struct PlaylistScreenScheduler {
         introShowing = false
     }
 
+    /// Restore an already mounted selection without discarding the persisted clock.
+    public mutating func restoreSelection(index: Int?) {
+        currentIndex = index
+        cursor = PlaylistSortedCursor(cursor: index.map { $0 + 1 } ?? 0)
+        introShowing = false
+    }
+
     /// `beginfirst` 첫 걸기(0x140067ebe–0x140067edc). 커서를 0 으로 되돌리고 첫 항목을 걸며,
     /// `playintro` 값을 인트로 래치에 그대로 심는다.
     ///
@@ -232,6 +239,8 @@ public struct PlaylistRuntime {
     public private(set) var activeScreens: [String] = []
 
     private var screens: [String: PlaylistScreenScheduler] = [:]
+    private var screenSettings: [String: PlaylistSettings] = [:]
+    private var screenItems: [String: [PlaylistItem]] = [:]
     private let seedBase: UInt64
 
     public init(settings: PlaylistSettings = PlaylistSettings(),
@@ -247,7 +256,17 @@ public struct PlaylistRuntime {
     public mutating func apply(settings newSettings: PlaylistSettings, items newItems: [PlaylistItem]) {
         settings = newSettings.normalized()
         items = newItems
+        screenSettings.removeAll()
+        screenItems.removeAll()
     }
+
+    public mutating func apply(settings: PlaylistSettings, items: [PlaylistItem], screenKey: String) {
+        screenSettings[screenKey] = settings.normalized()
+        screenItems[screenKey] = items
+    }
+
+    public func settings(for screenKey: String) -> PlaylistSettings { screenSettings[screenKey] ?? settings }
+    public func items(for screenKey: String) -> [PlaylistItem] { screenItems[screenKey] ?? items }
 
     /// 붙어 있는 화면 목록을 맞춘다. **사라진 화면의 상태는 지우지 않는다** —
     /// 모니터를 뺐다 끼우면 경과시간·커서가 이어져야 한다(WE 도 모니터 **이름**을 키로
@@ -291,7 +310,7 @@ public struct PlaylistRuntime {
     /// 한 화면의 다음 후보. 확정은 `commit` 이다.
     public mutating func nextCandidate(screenKey: String, now: PlaylistClockReading) -> Int? {
         guard var s = screens[screenKey] else { return nil }
-        let index = s.nextCandidate(settings: settings, items: items, now: now)
+        let index = s.nextCandidate(settings: settings(for: screenKey), items: items(for: screenKey), now: now)
         screens[screenKey] = s
         return index
     }
@@ -306,6 +325,12 @@ public struct PlaylistRuntime {
         guard var s = screens[screenKey] else { return }
         s.adopt(index: index)
         screens[screenKey] = s
+    }
+
+    public mutating func restoreSelection(index: Int?, screenKey: String) {
+        guard var screen = screens[screenKey] else { return }
+        screen.restoreSelection(index: index)
+        screens[screenKey] = screen
     }
 
     /// 전 화면의 타이머 틱. 전진할 화면만 돌려준다(순서는 `activeScreens` 순서).
@@ -331,8 +356,8 @@ public struct PlaylistRuntime {
             let wants = s.tick(deltaSeconds: deltaSeconds,
                                isPaused: isPaused(key),
                                currentIsVideo: isVideo(key),
-                               settings: settings,
-                               items: items,
+                               settings: settings(for: key),
+                               items: items(for: key),
                                now: now)
             screens[key] = s
             if wants { out.append(key) }
@@ -342,7 +367,7 @@ public struct PlaylistRuntime {
 
     /// 한 화면의 동영상이 끝났다 — 전진해야 하는가.
     public func shouldAdvanceOnVideoEnd(screenKey: String) -> Bool {
-        screens[screenKey]?.shouldAdvanceOnVideoEnd(settings: settings, items: items) ?? false
+        screens[screenKey]?.shouldAdvanceOnVideoEnd(settings: settings(for: screenKey), items: items(for: screenKey)) ?? false
     }
 
     /// `beginfirst` — 앱이 뜨자마자 첫 항목을 건다. 확정까지 여기서 한다(후보가 언제나 0 이라
@@ -353,10 +378,17 @@ public struct PlaylistRuntime {
         var out: [String] = []
         for key in activeScreens {
             guard var s = screens[key] else { continue }
-            if s.begin(settings: settings, items: items) { out.append(key) }
+            if s.begin(settings: settings(for: key), items: items(for: key)) { out.append(key) }
             screens[key] = s
         }
         return out
+    }
+
+    /// Commit startup only after the app's possibly asynchronous mount succeeds.
+    public mutating func commitBeginning(screenKey: String) {
+        guard var screen = screens[screenKey] else { return }
+        screen.begin(settings: settings(for: screenKey), items: items(for: screenKey))
+        screens[screenKey] = screen
     }
 
     /// 그 화면에 지금 걸린 항목의 인덱스.

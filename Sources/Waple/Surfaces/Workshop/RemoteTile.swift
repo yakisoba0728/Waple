@@ -79,6 +79,7 @@ struct RemoteTileView: View {
     let steamcmdAvailable: Bool
     var onDownload: () -> Void
     var onApply: () -> Void
+    var onCancel: () -> Void = {}
     @State private var hovered = false
     @FocusState private var focused: Bool
 
@@ -93,6 +94,11 @@ struct RemoteTileView: View {
             HStack(spacing: Space.xxs) {
                 Spacer(minLength: Space.xxs)
                 control
+                if isDownloading {
+                    Button(action: onCancel) { Label("다운로드 취소", systemImage: "xmark.circle") }
+                        .labelStyle(.iconOnly).buttonStyle(.borderless)
+                        .help("다운로드 취소")
+                }
             }
             .padding(.horizontal, Space.captionInset)
         }
@@ -114,6 +120,9 @@ struct RemoteTileView: View {
         // 아니라 기본 액션이라, 그 자리를 따로 채우지 않으면 아래 버튼이 combine 에 흡수된 뒤
         // 눌러 볼 방법이 사라진다.
         .accessibilityAction { primaryAction?() }
+        .accessibilityActions {
+            if isDownloading { Button("다운로드 취소", action: onCancel) }
+        }
     }
 
     /// ## 폭을 이미지가 아니라 컨테이너가 정하게 한다 (2026-08-17 캡처로 발견)
@@ -138,6 +147,11 @@ struct RemoteTileView: View {
             .tileRing(TileRing.tile(selected: false, focused: hovered || focused))
             .overlay(alignment: .topLeading) { subscriptionsBadge }
             .overlay(alignment: .topTrailing) { ratingBadge }
+            .overlay(alignment: .bottomLeading) {
+                if download?.phase == .done {
+                    MetricBadge(symbol: "checkmark.circle.fill", value: Text("설치됨"), label: Text("설치됨"))
+                }
+            }
     }
 
     /// 스팀 투표 점수(0~1)를 별 5점 환산 표시 — 표시만, 투표 액션 없음(스펙 기능 매핑).
@@ -197,6 +211,13 @@ struct RemoteTileView: View {
     }
 
     /// 지금 어떤 상태인가. 아직 손대지 않은 항목은 nil — 빈 값을 넣으면 빈 칸이 읽힌다.
+    private var isDownloading: Bool {
+        switch download?.phase {
+        case .downloading, .verifying, .committing, .importing: return true
+        default: return false
+        }
+    }
+
     private var statusValue: Text? {
         switch download?.phase {
         case nil: return nil
@@ -206,6 +227,7 @@ struct RemoteTileView: View {
         case .importing: return Text("가져오는 중")
         case .done: return Text("라이브러리에 추가됨")
         case .failed: return Text("다운로드 실패")
+        case .cancelled: return Text("다운로드 취소됨")
         }
     }
 
@@ -214,7 +236,7 @@ struct RemoteTileView: View {
     /// 진행 중에는 nil 이라 포커스도 받지 않는다(누를 것이 없는 자리에 탭이 멈추지 않게).
     private var primaryAction: (() -> Void)? {
         switch download?.phase {
-        case nil, .failed: return steamcmdAvailable ? onDownload : nil
+        case nil, .failed, .cancelled: return steamcmdAvailable ? onDownload : nil
         case .done: return onApply
         default: return nil
         }
@@ -248,7 +270,7 @@ struct RemoteTileView: View {
         case .done:
             Button("적용", action: onApply)
                 .buttonStyle(.borderedProminent).controlSize(.small)
-        case .failed:
+        case .failed, .cancelled:
             Button("다시 시도", action: onDownload)
                 .buttonStyle(.bordered).controlSize(.small)
         }

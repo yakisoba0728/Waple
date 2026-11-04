@@ -235,18 +235,24 @@ final class TextEngineTests: XCTestCase {
                        "옵션 true → 관측 true")
     }
 
-    /// ES import 구문(실물 다수) → 바인딩을 no-op 프록시로 치환해 로드가 죽지 않아야 한다.
+    /// Namespace/default/named imports execute the installed module contents.
     func testImportStatementsNeutralized() throws {
+        let scene = try XCTUnwrap(SceneScriptContext())
+        scene.installModules([
+            "scripts/utils.js": "export function doThing() { shared.calls = (shared.calls || 0) + 1; }",
+            "scripts/helper.js": "export default function helper(value) { return '-' + value; }",
+            "scripts/ab.js": "export const a = 2; export const b = 3;"
+        ])
         let script = """
         'use strict';
         import * as utils from './utils.js';
         import helper from './helper.js';
         import { a, b } from './ab.js';
-        export function update(value) { utils.doThing(); return 'ran' + a; }
+        export function update(value) { utils.doThing(); return 'ran' + helper(a + b) + shared.calls; }
         """
-        let engine = try XCTUnwrap(TextScriptEngine(script: script), "import 가 로드를 막으면 안 됨")
-        // utils.doThing() 은 no-op 프록시로 통과; 'ran' + proxy → 문자열화
-        XCTAssertNotNil(engine.evaluate(current: ""))
+        let engine = try XCTUnwrap(TextScriptEngine(script: script, scene: scene), "import 가 로드를 막으면 안 됨")
+        XCTAssertEqual(engine.evaluate(current: ""), "ran-51")
+        XCTAssertEqual(engine.evaluate(current: ""), "ran-52", "모듈 함수의 사이드이펙트도 실행돼야 함")
     }
 
     /// 깨진 스크립트/update 부재 → nil (텍스트 비움, graceful).
@@ -338,10 +344,14 @@ final class TextEngineTests: XCTestCase {
     }
 
     /// 감사 W-B5 회귀: minified `import*as e from"m"` (as 주변 공백 없음)도 네임스페이스 바인딩을 만든다.
-    func testMinifiedNamespaceImportKeepsBinding() {
-        let out = TextScriptEngine.stripModuleSyntax("import*as e from\"m\";e.x();")
-        XCTAssertTrue(out.contains("var e = __noopProxy();"), "바인딩 소실: \(out)")
+    func testMinifiedNamespaceImportKeepsBinding() throws {
+        let scene = try XCTUnwrap(SceneScriptContext())
+        scene.installModules(["m": "export function x() { return 'minified'; }"])
+        let script = "import*as e from\"m\";var result=e.x();export function update(v){return result;}"
+        let out = TextScriptEngine.stripModuleSyntax(script)
         XCTAssertTrue(out.contains("e.x();"), out)
+        let engine = try XCTUnwrap(TextScriptEngine(script: script, scene: scene), "네임스페이스 바인딩 소실: \(out)")
+        XCTAssertEqual(engine.evaluate(current: ""), "minified")
     }
 
     // ── 씬 스크립트 실데이터 주입(canvasSize/setTimeout/audio — 감사 O5/백로그) ────────

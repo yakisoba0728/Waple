@@ -14,26 +14,46 @@ import WapleLibrary
 /// | `shuffle` | `order = random` / `sorted` | 셔플 켜짐이 곧 WE 의 소진형 셔플백이다 |
 /// | `intervalMinutes` | `delay`(분) | WE 는 실수 분(하한 0.01)이고 우리는 정수 분(하한 1)이라 **우리가 더 좁다** |
 ///
-/// 아직 대응이 없는 WE 키(`videosequence`·`beginfirst`·`playintro`·`updateonpause`·
-/// `transition*`)는 **전부 끈 값**으로 둔다. 순수층은 그 키들을 전부 모델링하고 있고
-/// (`Tests/WapleCoreTests/PlaylistRuntimeTests.swift` 가 잠근다) 여기서 켜지지 않는 이유는
-/// 하나뿐이다 — **저장 스키마와 UI 가 아직 없다.** 켜는 것은 그 둘이 생기는 라운드의 일이다.
+/// The legacy Bool/int overload below keeps its original disabled options for
+/// compatibility. The production configuration overload consumes saved options.
 enum PlaylistSettingsBridge {
+
+    static func shouldSchedule(configuration: PlaylistConfiguration) -> Bool {
+        configuration.enabled && !configuration.ids.isEmpty && configuration.mode != .never
+            && (configuration.ids.count > 1 || configuration.beginFirst
+                || configuration.mode == .daytime || configuration.mode == .dayOfWeek)
+    }
+
+    static func settings(configuration: PlaylistConfiguration) -> PlaylistSettings {
+        PlaylistSettings(delayMinutes: Float(configuration.delayMinutes),
+            order: configuration.shuffle ? .random : .sorted,
+            mode: configuration.enabled ? configuration.mode : .never,
+            videoSequence: configuration.videoSequence, updateOnPause: configuration.updateOnPause,
+            beginFirst: configuration.beginFirst, playIntro: configuration.playIntro,
+            transitionConfigValue: configuration.transitionConfigValue,
+            transitionTimeMillis: configuration.transitionTimeMillis,
+            transitionPool: configuration.transitionPool)
+    }
+
+    static func items(configuration: PlaylistConfiguration) -> [PlaylistItem] {
+        configuration.ids.enumerated().map { index, id in
+            PlaylistItem(file: id, daytimeEnd: configuration.daytimeEnds[id]
+                ?? Float(index + 1) / Float(max(configuration.ids.count, 1)))
+        }
+    }
 
     static func settings(enabled: Bool, intervalMinutes: Int, shuffle: Bool) -> PlaylistSettings {
         PlaylistSettings(
             delayMinutes: Float(max(intervalMinutes, 1)),
             order: shuffle ? .random : .sorted,
             mode: enabled ? .timer : .never,
-            // 동영상 종료 전진은 아직 통지 경로가 없다(§8.2 갭 #6) — 켜면 타이머가 동영상에서
-            // 보류만 하고 아무도 받지 않아 **동영상 배경이 영원히 안 넘어간다**. 끈 채로 둔다.
+            // Legacy callers did not opt into completed-video sequencing.
             videoSequence: false,
             // 종전 `PlaylistScheduling.shouldAdvanceNow(isPaused:)` 와 같은 값 — 정지 중엔 멈춘다.
             updateOnPause: false,
             beginFirst: false,
             playIntro: false,
-            // 전환 **렌더러가 없다.** `-1`(= 전환 안 함)이 지금 화면에서 실제로 일어나는 일이다.
-            // 여기에 다른 값을 적으면 코드가 렌더링을 약속하는 것처럼 읽힌다.
+            // Legacy callers keep their previous hard-cut behavior.
             transitionConfigValue: PlaylistTransitionKind.noTransition.weConfigValue
         )
     }
@@ -73,6 +93,7 @@ final class PlaylistDriver {
         let entryId: String
         let now: Date
         let remainingAttempts: Int
+        let beginning: Bool
         let apply: CandidateApply
         let completion: (PlaylistAdvanceResolution) -> Void
     }
@@ -86,6 +107,10 @@ final class PlaylistDriver {
     private let calendar: Calendar
     /// 재생목록 순서대로의 라이브러리 엔트리 id. `runtime.items` 의 인덱스와 1:1 이다.
     private var entryIds: [String] = []
+    private var screenEntryIds: [String: [String]] = [:]
+    private var lastScreenSelections: [String: String] = [:]
+    private var begunScreens = Set<String>()
+    private var lastConfigurationIds: [String: String] = [:]
     private var lastTick: Date?
     private var lastPersist: Date?
     /// 마지막으로 본 전역 선택. 우리가 건 것도 다음 sync 에서 여기 들어오므로, 값이 어긋난
@@ -120,6 +145,7 @@ final class PlaylistDriver {
               screenKeys: [String],
               currentEntryId: String?) {
         entryIds = ids
+        screenEntryIds.removeAll()
         runtime.apply(settings: PlaylistSettingsBridge.settings(enabled: enabled,
                                                                intervalMinutes: intervalMinutes,
                                                                shuffle: shuffle),
@@ -132,6 +158,53 @@ final class PlaylistDriver {
         }
         lastGlobalEntryId = currentEntryId
         hasSynced = true
+    }
+
+    /// Rich per-screen settings retain the old Bool/int API for existing callers.
+    func sync(settingsByScreen: [String: PlaylistSettings], itemsByScreen: [String: [PlaylistItem]],
+              screenKeys: [String], currentEntryIds: [String: String], configurationIds: [String: String] = [:]) {
+        if runtime.activeScreens != screenKeys { runtime.setActiveScreens(screenKeys) }
+        for key in screenKeys {
+            let settings = settingsByScreen[key] ?? PlaylistSettings(mode: .never)
+            let items = itemsByScreen[key] ?? []
+            let oldItems = screenEntryIds[key]
+            let changedConfiguration = lastConfigurationIds[key] != nil
+                && lastConfigurationIds[key] != configurationIds[key]
+            runtime.apply(settings: settings, items: items, screenKey: key)
+            screenEntryIds[key] = items.map(\.file)
+            if changedConfiguration || (oldItems != nil && oldItems != screenEntryIds[key]) { begunScreens.remove(key) }
+            let current = currentEntryIds[key]
+            let index = current.flatMap { screenEntryIds[key]?.firstIndex(of: $0) }
+            if oldItems == nil {
+                runtime.restoreSelection(index: index, screenKey: key)
+            } else if changedConfiguration || current != lastScreenSelections[key] {
+                runtime.adopt(index: index, screenKey: key)
+                runtime.restoreSelection(index: index, screenKey: key)
+            }
+        }
+        lastScreenSelections = currentEntryIds
+        lastConfigurationIds = configurationIds
+    }
+
+    private func ids(for screenKey: String) -> [String] { screenEntryIds[screenKey] ?? entryIds }
+
+    func shouldAdvanceOnVideoEnd(screenKey: String) -> Bool {
+        runtime.shouldAdvanceOnVideoEnd(screenKey: screenKey)
+    }
+
+    func needsBeginning(screenKey: String) -> Bool {
+        !begunScreens.contains(screenKey) && runtime.settings(for: screenKey).beginFirst
+            && !ids(for: screenKey).isEmpty
+    }
+
+    @discardableResult
+    func requestBeginning(screenKey: String, now: Date, apply: @escaping CandidateApply,
+                          completion: @escaping (PlaylistAdvanceResolution) -> Void = { _ in }) -> WallpaperApplyDisposition {
+        guard pendingAdvance == nil else { return .pending }
+        guard needsBeginning(screenKey: screenKey) else { return .failed }
+        begunScreens.insert(screenKey)
+        return continueAdvance(screenKey: screenKey, now: now, remainingAttempts: ids(for: screenKey).count,
+                               beginning: true, apply: apply, completion: completion)
     }
 
     /// 틱 한 번. **아직 아무것도 걸지 않는다** — 전진하고 싶은 화면 키만 돌려준다.
@@ -170,7 +243,7 @@ final class PlaylistDriver {
     ) -> WallpaperApplyDisposition {
         guard pendingAdvance == nil else { return .pending }
         return continueAdvance(screenKey: screenKey, now: now,
-                               remainingAttempts: entryIds.count,
+                               remainingAttempts: ids(for: screenKey).count,
                                apply: apply, completion: completion)
     }
 
@@ -180,6 +253,7 @@ final class PlaylistDriver {
         screenKey: String,
         now: Date,
         remainingAttempts: Int,
+        beginning: Bool = false,
         apply: @escaping CandidateApply,
         completion: @escaping (PlaylistAdvanceResolution) -> Void
     ) -> WallpaperApplyDisposition {
@@ -188,17 +262,19 @@ final class PlaylistDriver {
             return .failed
         }
         let reading = PlaylistClockReading(date: now, calendar: calendar)
-        guard let index = runtime.nextCandidate(screenKey: screenKey, now: reading),
-              entryIds.indices.contains(index) else {
+        let entries = ids(for: screenKey)
+        guard let index = beginning ? 0 : runtime.nextCandidate(screenKey: screenKey, now: reading),
+              entries.indices.contains(index) else {
             completion(.exhausted(screenKey: screenKey))
             return .failed
         }
-        let id = entryIds[index]
+        let id = entries[index]
         nextPendingToken &+= 1
         let token = nextPendingToken
         pendingAdvance = PendingAdvance(token: token, screenKey: screenKey, index: index,
                                         entryId: id, now: now,
                                         remainingAttempts: remainingAttempts - 1,
+                                        beginning: beginning,
                                         apply: apply, completion: completion)
 
         let disposition = apply(id) { [weak self] resolution in
@@ -210,7 +286,8 @@ final class PlaylistDriver {
         case .applied:
             guard pendingAdvance?.token == token else { return .applied }
             pendingAdvance = nil
-            runtime.commit(index: index, screenKey: screenKey)
+            if beginning { runtime.commitBeginning(screenKey: screenKey) }
+            else { runtime.commit(index: index, screenKey: screenKey) }
             persist(now: now)
             completion(.applied(screenKey: screenKey, entryId: id))
             return .applied
@@ -230,12 +307,14 @@ final class PlaylistDriver {
         case .applied:
             // 목록이 pending 동안 편집됐다면 같은 index가 다른 항목을 뜻할 수 있다. 렌더러는
             // 이미 성공했더라도 그 잘못된 index를 재생목록 상태로 확정하지 않는다.
-            guard entryIds.indices.contains(pending.index),
-                  entryIds[pending.index] == pending.entryId else {
+            let entries = ids(for: pending.screenKey)
+            guard entries.indices.contains(pending.index),
+                  entries[pending.index] == pending.entryId else {
                 pending.completion(.cancelled(screenKey: pending.screenKey))
                 return
             }
-            runtime.commit(index: pending.index, screenKey: pending.screenKey)
+            if pending.beginning { runtime.commitBeginning(screenKey: pending.screenKey) }
+            else { runtime.commit(index: pending.index, screenKey: pending.screenKey) }
             persist(now: pending.now)
             pending.completion(.applied(screenKey: pending.screenKey,
                                         entryId: pending.entryId))
@@ -250,7 +329,7 @@ final class PlaylistDriver {
 
     /// 사용자가 그 화면의 배경을 직접 바꿨다. 전진이 아니므로 시계만 되돌린다.
     func adopt(entryId: String?, screenKey: String) {
-        runtime.adopt(index: entryId.flatMap { entryIds.firstIndex(of: $0) }, screenKey: screenKey)
+        runtime.adopt(index: entryId.flatMap { ids(for: screenKey).firstIndex(of: $0) }, screenKey: screenKey)
     }
 
     /// 화면별 경과시간(초) — 진단·테스트용.

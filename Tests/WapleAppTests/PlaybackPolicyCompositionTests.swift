@@ -142,9 +142,8 @@ final class PlaybackPolicyCompositionTests: XCTestCase {
     }
 
     /// 축소는 **결론**이지 미결이 아니다 — 상수와 동작이 같은 말을 하는지 본다.
-    func testStopIsDeliberatelyReducedToPause() {
-        XCTAssertTrue(RenderPauseComposition.stopIsReducedToPause,
-                      "축소를 걷으려면 stopIsReducedToPause 블록의 실기 수치 둘을 먼저 재라")
+    func testStopReleasesResourcesAndAlsoFreezesTheClock() {
+        XCTAssertFalse(RenderPauseComposition.stopIsReducedToPause)
         let d = RenderPauseComposition.decide(globallyPaused: false,
                                               verdict: verdict(stop: true), monitorIndex: 0)
         XCTAssertTrue(d.paused, "축소되는 동안에도 화면은 반드시 멈춘다 — 무회귀 바닥")

@@ -67,9 +67,11 @@ final class ShaderPreprocessorTests: XCTestCase {
         XCTAssertEqual(ExprEval.eval("9223372036854775807 * 2", defines: [:]), -2)          // (−1) &* 2
         XCTAssertEqual(ExprEval.eval("0 - 9223372036854775807 - 2", defines: [:]), -1)      // 0 &− (−1) &− 2
         XCTAssertEqual(ExprEval.eval("1 / 0", defines: [:]), 0)                             // 0 나눗셈 가드(기존)
-        // defines 로 들어오는 값은 여전히 64비트다(리터럴 렉싱을 안 거친다) — 아래 두 가드가 그 증인.
-        XCTAssertEqual(ExprEval.eval("A / -1", defines: ["A": Int.min]), 0)                 // Int.min / -1 가드
-        XCTAssertEqual(ExprEval.eval("-A", defines: ["A": Int.min]), Int.min)               // 단항 랩
+        // Defines and literals both enter the confirmed signed32 evaluator; Int.min truncates to0.
+        XCTAssertEqual(ExprEval.eval("A / -1", defines: ["A": Int.min]), 0)
+        XCTAssertEqual(ExprEval.eval("-A", defines: ["A": Int.min]), 0)
+        XCTAssertEqual(ExprEval.eval("A / -1", defines: ["A": Int(Int32.min)]), Int(Int32.min))
+        XCTAssertEqual(ExprEval.eval("-A", defines: ["A": Int(Int32.min)]), Int(Int32.min))
     }
 
     // T-B2: 지시문 줄의 트레일링 블록 주석이 ExprEval 에 `/`·`*` 로 새면 오평가된다.

@@ -245,9 +245,10 @@ final class ParticleExtendedKeysTests: XCTestCase {
         // 그래서 여기서 확인하는 것은 "WE 어휘 밖 문자열은 열거에 없다" 까지다.
         // **[미해결]** — 센티넬(=오퍼레이터 무동작)의 재현은 동봉 도달 0건이라 미뤄 뒀다.
         // 근거 전문: `docs/re/remap-operation.md` §3.2 · §5.2 · §6.
-        XCTAssertEqual(spec("square", "triangle")?.operation, .multiply,
-                       "종전 열거가 지어냈던 square 는 미지 문자열 → 부재 기본 multiply")
-        XCTAssertEqual(spec("average", "triangle")?.operation, .multiply, "average 도 마찬가지")
+        // [2026-11-05 해결] 위 미해결 기록은 역사다. 명시적 미지 토큰은 원본 센티넬처럼
+        // 오퍼레이터를 생성하지 않으며, 키 부재만 주입 기본 multiply 를 사용한다.
+        XCTAssertNil(spec("square", "triangle"), "square 센티넬은 전체 오퍼레이터 무동작")
+        XCTAssertNil(spec("average", "triangle"), "average 센티넬도 전체 오퍼레이터 무동작")
     }
 
     func testRemapValueParse_legacyOutputsStayLegacyWithoutExtKeys() {

@@ -6,7 +6,7 @@ import WapleLibrary
 
 /// 원시 mp4/mov 파일을 최소 project.json 배경으로 감싸 가져올 수 있게 준비한다(작업 5, OWE 계보).
 enum VideoImport {
-    static let extensions: Set<String> = ["mp4", "mov", "m4v"]
+    static let extensions: Set<String> = ["mp4", "mov", "m4v", "webm", "mkv", "avi"]
 
     static func isVideoFile(_ url: URL) -> Bool {
         extensions.contains(url.pathExtension.lowercased())
@@ -18,7 +18,7 @@ enum VideoImport {
                         baseDirectory: URL = LibraryStore.defaultBaseDirectory()) -> URL? {
         let fm = FileManager.default
         let source = videoURL.resolvingSymlinksInPath()
-        guard videoURL.isFileURL,
+        guard videoURL.isFileURL, isVideoFile(videoURL),
               (try? source.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { return nil }
         let name = videoURL.deletingPathExtension().lastPathComponent
         let importsDir = baseDirectory.appendingPathComponent("imports", isDirectory: true)

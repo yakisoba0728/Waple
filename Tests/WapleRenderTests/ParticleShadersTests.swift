@@ -53,10 +53,12 @@ final class ParticleShadersTests: XCTestCase {
     /// 하나라도 빠지면 그 경로만 크로스페이드가 사라져 화면이 갈린다.
     func testAllParticleFragmentsCrossfadeTheAlbedo() {
         let src = ParticleShaders.source
-        XCTAssertTrue(src.contains("float4 t = mix(tex.sample(s, in.uv), tex.sample(s, in.uv2), in.blend);"),
-                      "pf_main/pf3d_fog 가 두 프레임을 mix 해야 한다")
-        XCTAssertTrue(src.contains("float4 t = mix(albedoTex.sample(s, in.uv), albedoTex.sample(s, in.uv2), in.blend);"),
-                      "pf_refract 도 pv_main 을 공유하므로 같이 섞어야 한다")
+        XCTAssertEqual(src.components(separatedBy: "float4 t = mix(tex.sample(s, in.uv), nextTex.sample(s, in.uv2), in.blend);").count - 1, 2,
+                       "pf_main and pf3d_fog both mix the current page with the next page")
+        XCTAssertTrue(src.contains("float4 t = mix(albedoTex.sample(s, in.uv), nextTex.sample(s, in.uv2), in.blend);"),
+                      "pf_refract also crossfades its albedo across pages")
+        XCTAssertEqual(src.components(separatedBy: "texture2d<float> nextTex [[texture(3)]]").count - 1, 3,
+                       "all three fragments declare the secondary albedo page at the shared slot")
         // 노멀맵은 **안** 섞는다 — WE 는 g_Texture1 을 v_TexCoord.xy 한 곳에서만 뜬다.
         XCTAssertTrue(src.contains("float4 nraw = normalTex.sample(s, in.uv);"))
         XCTAssertFalse(src.contains("normalTex.sample(s, in.uv2)"))

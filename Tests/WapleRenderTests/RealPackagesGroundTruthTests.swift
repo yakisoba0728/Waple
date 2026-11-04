@@ -15,7 +15,7 @@ struct StoppedNowPlayingProvider: NowPlayingProvider {
 }
 
 final class RealPackagesGroundTruthTests: XCTestCase {
-    func testMountAndCaptureAllRealScenes() throws {
+    @MainActor func testMountAndCaptureAllRealScenes() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
             ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
@@ -24,28 +24,15 @@ final class RealPackagesGroundTruthTests: XCTestCase {
         let outDir = URL(fileURLWithPath: "/tmp/waple_gt")
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
-        // S4①(2026-07-27): SnapshotPipeline.pinRenderSettings(WapleCompat --capture 경로)와 달리 이 GT
-        // 하네스는 여태 JS Date 를 핀하지 않았다 — engine.timeOfDay/hours 조건부 스크립트를 가진 씬은
-        // 테스트를 실행하는 실 벽시계(및 그 순간의 시스템 TZ)에 따라 luma 가 흔들려 luma_baseline.json
-        // 드리프트 경고가 "씬은 시간 함수"라는 오분류로 흡수되고 있었다(아래 주석 "하드 fail 은 오탐 위험"
-        // 참고 — 실은 우리 하네스가 벽시계를 핀 안 한 게 원인의 일부). SnapshotPipeline.captureEpochMillis 와
-        // 동일 상수로 핀(값은 WapleCompat 의존 없이 리터럴 중복 — TextEngineTests 등 기존 관례와 동형).
-        let oldEpoch = TextScriptEngine.captureDateEpochMillis
-        TextScriptEngine.captureDateEpochMillis = 1_704_110_400_000   // 2024-01-01 12:00:00 UTC
-        defer { TextScriptEngine.captureDateEpochMillis = oldEpoch }
-
-        // 같은 계통의 두 번째 미핀 입력: **마우스 커서**. mount 가 마우스 모니터를 켜면 그 순간의
-        // 실제 커서 위치가 g_PointerPosition 으로 들어가 캡처 픽셀에 구워진다(스냅샷 파이프라인에서
-        // 세션마다 29종이 달랐던 근본원인 — spec/golden/nondeterminism.json → oracle.nondet.rootCause).
-        // SnapshotPipeline.capturePointerUV 와 동일한 중앙 고정(리터럴 중복은 위 epoch 과 동형 관례).
-        //
-        // [2026-08-26] ~~프로세스 전역 `SceneRenderer.capturePointerUV` 를 여기서 한 번 핀하고
-        // defer 로 복원한다.~~ → **핀이 인스턴스 프로퍼티가 됐다**(SceneRenderer 클래스 선언의
-        // [2026-08-26 정정] 문단). 그래서 위 epoch/base-assets 처럼 루프 밖에서 한 번 거는 것이
-        // 아니라, 아래 루프가 씬마다 만드는 렌더러에 **각각** 대입한다. 핀 값·핀 시점(mount 전)은
-        // 종전 그대로라 이 하네스의 캡처 픽셀은 불변이다.
-        let capturePointerUV = SIMD2<Float>(0.5, 0.5)
-
+        let oldDefaults = SceneRenderSettings.defaults
+        let suite = "waple.gt.conditions.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        SceneRenderSettings.defaults = defaults
+        defer {
+            SceneRenderSettings.defaults = oldDefaults
+            defaults.removePersistentDomain(forName: suite)
+        }
+        // The canonical renderer helper pins Date/RNG/fit/pointer/audio exactly like --capture.
         // WE base-assets(공유 텍스처 + common_*.h)가 있으면 연결 — common.h 헬퍼 의존 효과까지 실측.
         // env WAPLE_BASE_ASSETS 우선, 기본 ~/Downloads/wallpaper_dev/assets. 테스트 후 원복.
         let assetsPath = ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"]
@@ -68,15 +55,8 @@ final class RealPackagesGroundTruthTests: XCTestCase {
             NSLog("%@", "[WapleGT] ===== scene \(id) =====")
             do {
                 let project = try ProjectJSONParser.parse(folderURL: folder)
-                let r = SceneRenderer()
-                // 미디어 씬(media*Changed 소비)이 실제 AppleScript 폴링을 돌리지 않게 스텁 주입(결정적 + TCC 무).
-                r.nowPlayingProvider = StoppedNowPlayingProvider()
-                r.capturePointerUV = capturePointerUV   // 위 [2026-08-26] 문단 — 씬마다 새 인스턴스라 여기서 건다.
-                try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 360)), project: project)
+                let urls = try OffscreenCapture.scene(project: project, toDir: outDir)
                 mounted += 1
-                // t=6.0: 인트로 페이드(검정 커버 알파 애니 — 실물 3577990983 류)가 끝난 정상상태 캡처.
-                // t=0.5 는 다수 씬이 페이드 중이라 preview 파리티가 계통적으로 저평가된다(2026-07-06 실증).
-                let urls = r.captureFrames(width: 640, height: 360, times: [6.0], toDir: outDir)
                 if let u = urls.first {
                     let dst = outDir.appendingPathComponent("\(id).png")
                     try? FileManager.default.removeItem(at: dst)
@@ -87,7 +67,6 @@ final class RealPackagesGroundTruthTests: XCTestCase {
                     missingCapture.append(id)
                     NSLog("%@", "[WapleGT] capture MISSING \(id)")
                 }
-                r.teardown()
             } catch {
                 failed.append("\(id): \(error)")
                 NSLog("%@", "[WapleGT] mount FAILED \(id): \(error)")

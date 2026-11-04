@@ -347,7 +347,7 @@ public enum PuppetPose {
 
     /// F442: 퇴화(영스케일) 행렬의 .inverse 는 NaN/Inf 를 만들어 스킨 행렬 전체로 번진다(Metal 은 NaN
     /// 정점을 크래시 없이 쓰레기 렌더로 처리). 행렬식이 0/비유한이면 항등으로 폴백(묵스킨에 준함).
-    static func safeInverse(_ m: simd_float4x4) -> simd_float4x4 {
+    public static func safeInverse(_ m: simd_float4x4) -> simd_float4x4 {
         let d = m.determinant
         guard d.isFinite, abs(d) > 1e-12 else { return matrix_identity_float4x4 }
         return m.inverse

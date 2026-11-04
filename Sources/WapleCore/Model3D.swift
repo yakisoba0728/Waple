@@ -30,22 +30,25 @@ import simd
 ///     본×boneCount: u32 trackFlags(0x140263aa7) | u32 trackBytes(0x140263acb) |
 ///                   키×36B(pos 3f, 오일러각 3f 라디안, 스케일 3f — 0x140263afe 가 커서를 민다)
 ///     꼬리(버전 게이트 블록들 — 전부 클립마다 돈다. 최소 바이트는 게이트가 전부 0 일 때):
-///       v≥2   2차 채널 트랙 배열. 개수는 파일이 아니라 **스켈레톤 쪽 배열 길이**를 128 로 나눈 값
-///             (0x140263ce7 `sar rdi, 7`). 원소마다 u32 flags | u32 size | size바이트    … 최소 0B
+///       v≥2   2차 TRS 트랙 배열. 개수는 **SkeletonTail.tags.count(T1)** 다
+///             (0x140263ce7 `sar rdi, 7`, T1 heap stride128). u32 flags | u32 size | size바이트 … 최소 0B
 ///       항상  스칼라 f32 트랙 배열. 개수도 스켈레톤 필드 `[r15+0x28]`(0x140263e7b) —
 ///             그 필드는 **MDLS 꼬리 T3 의 레코드 수**다(0x14026285f 가 u32 로 읽고 0x14026286e 가
 ///             스켈레톤 +0x28 에 저장한다 = Waple 의 `SkeletonTail.constraints.count`).
 ///             원소마다 u32 | u32 size | size바이트                                      … 최소 0B
 ///       v≥3   ① **u32 count**(0x14026468d) + count×(u32 | u32 size | size바이트)
 ///             ② u8 gate(0x140264838), ≠0 이면 본 수만큼 같은 레코드                    … 최소 5B
-///       v≥4   u8 gate(0x140264a1e), ≠0 이면 32B 레코드 배열                            … 최소 1B
+///       v≥4   u8 gate(0x140264a1e), ≠0 이면 meshCount×(u32 mask |
+///             mask&1: f32 | u16 count | count×(u16 index | u32 size | size바이트))       … 최소 1B
 ///       v≥5   f32 6개 — 게이트 없이 무조건 24바이트(0x140264d23 부터 여섯 번)          … 24B
-///       v≥6   u8 gate(0x140264e27), ≠0 이면 본 수만큼 8B 원소                          … 최소 1B
-///       flags&1 이면 0xC0바이트 레코드 하나(0x140264fc9 → 0x140264fdb)                  … 최소 0B
+///       v≥6   u8 gate(0x140264e27), ≠0 이면 본 수×(u32 flags | u32 size | size바이트)   … 최소 1B
+///       flags&1 이면 u16 + u32×4 =18B(0x140264fc9 → 0x140264fdb)                     … 최소 0B
 ///       항상  **u32 이벤트수**(0x14026536d) + 수×(f32 초 0x1402653bd | cstring JSON 0x1402653e0)
 ///                                                                                       … 최소 4B
 ///     → 그 다음이 곧 다음 클립의 `u64 id` 다(클립 루프 뒤끝 0x14026556b `jl 0x1402639d0`).
 ///   즉 **MDLA0006 의 최소 꼬리는 4+1+1+24+1+4 = 35바이트**다.
+///   [2026-11-05 correction] Previous32B/8B/0xC0 labels described heap records/allocations,
+///   not serialized bytes. ModelAnimationTail follows the actual reads (sourceC1996..3050).
 ///   2D MDLA0001 과의 diff: **레코드 구조는 같다**(PuppetModel.swift 참조). 버전이 1 이라
 ///     v≥2..v≥6 게이트 블록이 전부 꺼져 있어 꼬리가 이벤트 블록뿐이다.
 ///     link_adult 는 animCount=8 인데 실제 4개 → count 불신, 리싱크로 종료 판정.
@@ -207,6 +210,10 @@ public struct Model3D: Equatable {
         /// **모집단은 `.mdl` 파일 451개**다(합 451). 바로 위 `969/986` 은 **메시** 모집단이라
         /// 서로 다른 수를 센다 — 같은 struct 주석 안에서 두 모집단이 섞이지 않게 명시해 둔다.
         public var materials: [String] = []
+        /// Exact source bytes/format for shader attributes beyond the stock Vertex view.
+        /// An inferred fallback stride has no authoritative descriptor, so both stay nil there.
+        public var sourceVertexData: Data? = nil
+        public var sourceFormat: UInt32? = nil
         /// v≥21 메시 트레일러(게이트A/B 블롭 + v≥23 모프 레코드). 전부 0 인 트레일러(= 종전
         /// '6바이트 구분자')는 nil — 데이터가 있을 때만 채운다. 파스·보존, 렌더 소비는 범위 밖.
         public var trailer: MeshTrailer? = nil
@@ -305,6 +312,7 @@ public struct Model3D: Equatable {
         /// > 클립 i 에 **클립 i+1 의 id** 를 붙이고 있었다(마지막 클립에는 클립 0 의 id 를 붙였다).
         /// > 게이트가 하나라도 0 이 아니거나 이벤트 마커가 하나라도 있으면 그 자리는 id 가 아니다.
         public var id: Int? = nil
+        public var rawEvents: [ModelAnimationEvent] = []
     }
 
     /// 부착점(MDAT0001 섹션) — 씬 오브젝트의 `attachment` 키가 **이름으로** 참조하는 본-슬롯.
@@ -517,6 +525,41 @@ public struct Model3D: Equatable {
         (0x0040_0000, 16, .skip),         // idx24 a_TexCoordVec4C5 float4 TEXCOORD5
         (0x0000_8000, 16, .skip),         // idx25 a_Color          float4 COLOR0(항상 맨 뒤 — 미독)
     ]
+
+    public struct VertexAttribute: Equatable, Sendable {
+        public let name: String
+        public let offset: Int
+        public let components: Int
+        public let isInteger: Bool
+    }
+
+    public struct VertexAttributeLayout: Equatable, Sendable {
+        public let stride: Int
+        public let attributes: [VertexAttribute]
+    }
+
+    /// Names are the26 original .rdata descriptors, in table order (not ascending mask order).
+    private static let vertexAttributeNames = [
+        "a_Position", "a_PositionVec4", "a_PositionC1", "a_Normal", "a_Tangent4",
+        "a_BlendIndices", "a_BlendWeights", "a_TexCoord", "a_TexCoordVec3", "a_TexCoordVec4",
+        "a_TexCoordC1", "a_TexCoordVec3C1", "a_TexCoordVec4C1",
+        "a_TexCoordC2", "a_TexCoordVec3C2", "a_TexCoordVec4C2",
+        "a_TexCoordC3", "a_TexCoordVec3C3", "a_TexCoordVec4C3",
+        "a_TexCoordC4", "a_TexCoordVec3C4", "a_TexCoordVec4C4",
+        "a_TexCoordC5", "a_TexCoordVec3C5", "a_TexCoordVec4C5", "a_Color"
+    ]
+
+    public static func vertexAttributeLayout(for flag: UInt32) -> VertexAttributeLayout? {
+        guard let layout = vertexLayout(for: flag) else { return nil }
+        var offset = 0
+        var attributes: [VertexAttribute] = []
+        for (index, entry) in vertexLayoutTable.enumerated() where flag & entry.bit != 0 {
+            attributes.append(VertexAttribute(name: vertexAttributeNames[index], offset: offset,
+                                               components: entry.size / 4, isInteger: index == 5))
+            offset += entry.size
+        }
+        return VertexAttributeLayout(stride: layout.stride, attributes: attributes)
+    }
 
     /// 테이블이 덮는 비트 합집합 — 위 26엔트리를 OR 하면 **정확히 하위 26비트**(0x03FF_FFFF)다.
     /// 나머지 상위 6비트는 엔진 누산 루프가 아예 보지 않으므로(`0x140261b25 cmp rax, 0x1a` — 26엔트리를
@@ -794,7 +837,9 @@ public struct Model3D: Equatable {
             meshes.append(Mesh(material: material,
                                boundsMin: SIMD3(minx, miny, minz), boundsMax: SIMD3(maxx, maxy, maxz),
                                skinned: skinFieldsFit, vertices: vertices, indices: indices,
-                               materials: materialList))
+                               materials: materialList,
+                               sourceVertexData: layout.map { _ in Data(bytes[(q + 4)..<(q + 4 + vSize)]) },
+                               sourceFormat: layout.map { _ in formatFlag }))
 
             // 메시 트레일러(v≥21) — 엔진 정본 게이트 구조 정식 파스(디컴파일 FUN_140261880:1214-1457 +
             // 어셈블리 0x140261b6b-0x140262013; 실물 418파일 전수 착지 검증 2026-07-28):
@@ -895,7 +940,10 @@ public struct Model3D: Equatable {
         if hasSections, let ai = findMagic("MDLA000", in: bytes, from: o),
            ai + 8 <= bytes.count, (0x31...0x39).contains(bytes[ai + 7]) {
             model.hasAnimation = true
-            model.animations = parseAnimations(bytes: bytes, at: ai, boneCount: model.bones.count)
+            model.animations = parseAnimations(bytes: bytes, at: ai, boneCount: model.bones.count,
+                                                tagCount: model.skeletonTail?.tags.count ?? 0,
+                                                constraintCount: model.skeletonTail?.constraints.count ?? 0,
+                                                meshCount: model.meshes.count)
         }
 
         return model
@@ -932,28 +980,36 @@ public struct Model3D: Equatable {
 
     private static let animModes: Set<String> = ["loop", "single", "mirror", "clamp"]
 
-    /// MDLA0003..0006 애니 파스(리싱크 기반). 헤더 animCount 는 link_adult 반례로 불신 —
+    /// MDLA0003..0006 애니 파스. 구조적으로 읽은 꼬리 끝에서 다음 클립 u64/name 으로 전진한다.
+    /// [과거 회복 경로] 아래 리싱크는 잘못된 꼬리를 가진 옛 자산의 관용 폴백에만 남긴다.
+    /// 헤더 animCount 는 link_adult 반례로 불신 —
     /// 각 클립 뒤 가변 꼬리(버전 게이트 블록 + 이벤트 블록, 최소 35B)를 다음 유효 헤더
     /// 리싱크(≤256B)로 스킵하고, 헤더 검증(모드∈집합, fps∈(0,240], 본수==skeleton)으로 종료를
     /// 판정한다. 꼬리 길이를 계산하지 않고 리싱크하는 이유는 두 트랙 배열의 **개수가 파일이 아니라
     /// 스켈레톤 객체**에서 오기 때문이다(파일만 보고는 못 센다 — 파일 머리 주석의 꼬리 표 참조).
-    private static func parseAnimations(bytes: [UInt8], at magicOff: Int, boneCount: Int) -> [Model3D.Animation] {
-        guard boneCount > 0 else { return [] }
+    private static func parseAnimations(bytes: [UInt8], at magicOff: Int, boneCount: Int,
+                                         tagCount: Int, constraintCount: Int, meshCount: Int) -> [Model3D.Animation] {
         func u32(_ o: Int) -> UInt32? { readU32LE(bytes, at: o) }
         func f32(_ o: Int) -> Float? { u32(o).map { Float(bitPattern: $0) } }
+        let sectionEnd = u32(magicOff + 9).map(Int.init) ?? bytes.count
+        let limit = sectionEnd > magicOff && sectionEnd <= bytes.count ? sectionEnd : bytes.count
+        let version = Int(bytes[magicOff + 7] - UInt8(ascii: "0"))
         // 애니 헤더 시도: 성공 시 (이름,모드,fps,길이,본수,본트랙시작오프셋).
         // 모드 빈 문자열 = **디렉토리 레코드**(실측 link/talon: 본클립 뒤에 짧은 이름("Glance"/"Sleep")
         // + 빈 모드 + flags(0x401) 레코드 — 트랙 포맷은 동일, 씬 노출 애니 단위로 이벤트 마커를 보유).
-        func tryHeader(_ p: Int) -> (name: String, mode: String, fps: Float, length: Int, bc: Int, off: Int)? {
-            guard let (name, p2) = readCString(bytes, at: p, maxLength: 96), !name.isEmpty,
-                  name.utf8.count <= 96 else { return nil }
-            guard let (mode, p3) = readCString(bytes, at: p2, maxLength: 16),
-                  animModes.contains(mode) || mode.isEmpty else { return nil }
-            guard let fps = f32(p3), fps > 0, fps <= 240 else { return nil }
+        func tryHeader(_ p: Int, probe: Bool = true) -> (name: String, mode: String, fps: Float, length: Int, flags: UInt32, bc: Int, off: Int)? {
+            guard p >= 0, p < limit,
+                  let (name, p2) = readCString(bytes, at: p, maxLength: min(probe ? 96 : limit - p - 1, limit - p - 1)),
+                  !probe || !name.isEmpty else { return nil }
+            guard p2 < limit, let (mode, p3) = readCString(bytes, at: p2, maxLength: min(probe ? 16 : limit - p2 - 1, limit - p2 - 1)),
+                  !probe || animModes.contains(mode) || mode.isEmpty else { return nil }
+            guard p3 <= limit - 16, let fps = f32(p3), fps.isFinite, fps >= 0,
+                  !probe || (fps > 0 && fps <= 240) else { return nil }
             // p3: f32 fps | u32 frameCount | u32 flags | u32 boneCount — 넷이고, 그 다음이 곧
             // 본 0 의 trackFlags 다(0x140263a1b/0x140263a2d/0x140263a3d/0x140263a4d).
-            guard let length = u32(p3 + 4), let bc = u32(p3 + 12), Int(bc) == boneCount else { return nil }
-            return (name, mode, fps, Int(length), Int(bc), p3 + 16)
+            guard let length = u32(p3 + 4), let flags = u32(p3 + 8),
+                  let bc = u32(p3 + 12), Int(bc) == boneCount else { return nil }
+            return (name, mode, fps, Int(length), flags, Int(bc), p3 + 16)
         }
         // 섹션 헤더: magic(8) | u8 0 | u32 nextOff | u32 animCount. 그 다음은 곧 **클립 0 의 u64 id** 다
         // — 종전 주석의 `u32 baseId | u32 0` 이 그 u64 의 두 절반이었다.
@@ -963,7 +1019,8 @@ public struct Model3D: Equatable {
         var idAt: Int? = o + 8
         o += 16                   // u32 nextOff | u32 animCount | u64 id
         var anims: [Model3D.Animation] = []
-        while let h = tryHeader(o) {
+        var exactBoundary = true
+        while let h = tryHeader(o, probe: !exactBoundary) {
             // C③: 이 클립의 id = 레코드 선두 u64. Int 범위를 넘으면 nil(이름 휴리스틱 폴백 유지).
             let clipId: Int? = idAt.flatMap { p in
                 guard let lo = u32(p), let hi = u32(p + 4) else { return nil }
@@ -978,7 +1035,7 @@ public struct Model3D: Equatable {
                 // trackFlags 는 **크기가 아니라 플래그**다 — 비트0 은 엔진에서 클립 flags 에
                 // 0x80000000 을 세우는 데만 쓰이고(0x140263c9d) 키 해석을 바꾸지 않으므로 버린다.
                 guard u32(o) != nil, let tsRaw = u32(o + 4), tsRaw % 36 == 0,
-                      o + 8 + Int(tsRaw) <= bytes.count else { ok = false; break }
+                      o + 8 + Int(tsRaw) <= limit else { ok = false; break }
                 o += 8
                 let ts = Int(tsRaw)
                 var keys: [Key] = []
@@ -996,20 +1053,30 @@ public struct Model3D: Equatable {
                 tracks.append(keys)
             }
             guard ok, tracks.count == h.bc else { break }
+            let tail = ModelAnimationTail.parse(bytes, at: o, limit: limit, version: version, flags: h.flags,
+                                                boneCount: boneCount, tagCount: tagCount,
+                                                constraintCount: constraintCount, meshCount: meshCount)
             // 리싱크: 가변 꼬리를 건너뛰고 다음 유효 헤더로(≤256B). 없으면 종료.
             var next: Int? = nil
-            var d = 0
-            while d <= 256 {
-                if tryHeader(o + d) != nil { next = o + d; break }
-                d += 1
+            var nextIsExact = false
+            if let tail, tail.end <= limit - 8, tryHeader(tail.end + 8, probe: false) != nil {
+                next = tail.end + 8
+                nextIsExact = true
+            } else if tail == nil {
+                // Preserve tolerant recovery for old malformed assets; valid tails never scan payload bytes.
+                var d = 0
+                while d <= 256 {
+                    if tryHeader(o + d) != nil { next = o + d; break }
+                    d += 1
+                }
             }
             // 이벤트 마커는 이 클립 꼬리(트랙 끝 o ~ 다음 헤더) 안의 JSON cstring — 엔진 쪽 정식
             // 레이아웃은 `u32 이벤트수(0x14026536d) | 수×(f32 초 0x1402653bd | cstring 0x1402653e0)`
             // 이지만 그 블록 **앞**의 두 트랙 배열 개수가 파일에 없어(스켈레톤 객체에서 온다) 시작
             // 오프셋을 계산할 수 없다 → 패턴 스캔으로 집는다(선행 f32 초 값은 JSON frame 과 중복이라
             // 무시). 마지막 클립은 섹션 끝까지 최대 512B.
-            let events = Self.trailerEvents(bytes: bytes, from: o, to: next ?? min(o + 512, bytes.count))
-            if h.mode.isEmpty {
+            let events = tail?.markers(fps: h.fps) ?? Self.trailerEvents(bytes: bytes, from: o, to: next ?? min(o + 512, limit))
+            if h.mode.isEmpty && !exactBoundary {
                 // 디렉토리 레코드: 렌더 클립 목록엔 미포함(포즈/클립 선택 무회귀) — 이벤트만
                 // 이름 매칭 본클립("Glance" ⊂ "Link Adult_arm|glance_bone")에 병합(실측: fps/len 동일).
                 if !events.isEmpty {
@@ -1024,6 +1091,7 @@ public struct Model3D: Equatable {
                 var anim = Animation(name: h.name, mode: h.mode, fps: h.fps, lengthFrames: h.length, tracks: tracks)
                 anim.events = events
                 anim.id = clipId
+                anim.rawEvents = tail?.events ?? []
                 anims.append(anim)
             }
             guard let n = next else { break }
@@ -1031,6 +1099,7 @@ public struct Model3D: Equatable {
             // 찾았다면 그 자리는 클립 경계가 아니므로 id 를 짓지 않는다(그릇된 값 대신 nil).
             idAt = (n - 8 >= o) ? n - 8 : nil
             o = n
+            exactBoundary = nextIsExact
         }
         return anims
     }

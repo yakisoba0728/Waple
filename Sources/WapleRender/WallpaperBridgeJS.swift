@@ -81,7 +81,7 @@ enum WallpaperBridgeJS {
           isWallpaper: function () { return true; }
         };
       });
-      defineBridge('wallpaperOnVideoEnded', function () {});
+      defineBridge('wallpaperOnVideoEnded', function () { post({ type: 'videoEnded' }); });
       defineBridge('wallpaperRequestTakeScreenshotResponse', function () {});
       // WE 의 `___STAHP` 스크립트(주입 원문 @0x119ca0, 5936바이트)가 여는 공용 훅.
       // WE 자신이 플러그인 로드 통지를 이 위에 얹고(`bin/webwallpaper64.exe` 0x14001f568 의
@@ -299,6 +299,7 @@ enum WallpaperBridgeJS {
       defineBridge('__wapleDirectoryFilesAddedOrChanged', function (name, files) {
         var event = { name: String(name), files: Array.isArray(files) ? files : [] };
         pendingDirectoryAdds.push(event);
+        if (pendingDirectoryAdds.length > 128) { pendingDirectoryAdds.shift(); }
         flushDirectoryAdds();
         forEachChild(function (child) {
           try {
@@ -311,6 +312,7 @@ enum WallpaperBridgeJS {
       defineBridge('__wapleDirectoryFilesRemoved', function (name, files) {
         var event = { name: String(name), files: Array.isArray(files) ? files : [] };
         pendingDirectoryRemoves.push(event);
+        if (pendingDirectoryRemoves.length > 128) { pendingDirectoryRemoves.shift(); }
         flushDirectoryRemoves();
         forEachChild(function (child) {
           try {
@@ -329,21 +331,24 @@ enum WallpaperBridgeJS {
       // 마우스 전달(WE 동작): 네이티브가 좌표를 밀어주면 DOM mousemove 로 재게시.
       // 조작 창 입력 프록시: 실이벤트를 받는 별도 창이 좌표·키를 넘겨주면 합성 DOM 이벤트로 재게시.
       // (데스크탑 창 자체는 아이콘 보호를 위해 실이벤트를 받지 않는다.)
-      defineBridge('__wapleEvent', function (kind, x, y, a, b) {
+      defineBridge('__wapleEvent', function (kind, x, y, a, b, options) {
         try {
+          options = options || {};
           var t = document.elementFromPoint(x, y) || document;
+          var modifiers = {shiftKey:!!options.shiftKey, ctrlKey:!!options.ctrlKey, altKey:!!options.altKey, metaKey:!!options.metaKey};
           var o = { clientX: x, clientY: y, screenX: x, screenY: y,
-                    bubbles: true, cancelable: true, view: window, button: 0, buttons: (kind === 'mousemove' && a === 1) ? 1 : (kind === 'mousedown' ? 1 : 0) };
+                    bubbles: true, cancelable: true, view: window, button: options.button === undefined ? 0 : options.button, buttons: options.buttons === undefined ? ((kind === 'mousemove' && a === 1) ? 1 : (kind === 'mousedown' ? 1 : 0)) : options.buttons, detail:options.detail || 0 };
+          Object.assign(o, modifiers);
           if (kind === 'wheel') {
-            t.dispatchEvent(new WheelEvent('wheel', { clientX: x, clientY: y, deltaX: a || 0, deltaY: b || 0, bubbles: true, cancelable: true, view: window }));
+            t.dispatchEvent(new WheelEvent('wheel', Object.assign({}, o, {deltaX:a || 0,deltaY:b || 0,deltaMode:0})));
           } else if (kind === 'keydown' || kind === 'keyup') {
-            var ko = { key: a, code: b || a, bubbles: true, cancelable: true, view: window };
+            var ko = Object.assign({},modifiers,{key:a,code:b || a,repeat:!!options.repeat,location:options.location || 0,bubbles:true,cancelable:true,view:window});
             // activeElement 발 이벤트는 bubbles:true 로 document 까지 버블 — document 재발화를 겹치면
             // 리스너가 2회 수신한다(감사 W-B2). 1회만 발화.
             (document.activeElement || document).dispatchEvent(new KeyboardEvent(kind, ko));
           } else {
             t.dispatchEvent(new MouseEvent(kind, o));
-            if (kind === 'mouseup') { t.dispatchEvent(new MouseEvent('click', o)); }
+            if (kind === 'mouseup') { t.dispatchEvent(new MouseEvent(o.button === 2 ? 'contextmenu' : o.button === 1 ? 'auxclick' : 'click', o)); }
           }
         } catch (e) {}
       });

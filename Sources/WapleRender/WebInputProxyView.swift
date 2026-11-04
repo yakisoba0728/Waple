@@ -9,6 +9,8 @@ final class WebInputProxyView: NSView {
     private var timer: Timer?
     private var lastImage: NSImage?
     private var dragging = false
+    private var pressedButtons = 0
+    private var pressedModifiers: Set<UInt16> = []
     private var lastMoveForward: CFAbsoluteTime = 0
 
     init(target: WKWebView) {
@@ -113,44 +115,79 @@ final class WebInputProxyView: NSView {
                 min(Int((1 - ny) * webSize.height), max(Int(webSize.height) - 1, 0)))
     }
 
-    private func send(_ kind: String, _ p: (x: Int, y: Int), a: String = "0", b: String = "0") {
-        target?.evaluateJavaScript("window.__wapleEvent('\(kind)', \(p.x), \(p.y), \(a), \(b));")
+    private func eventOptions(_ event: NSEvent, button: Int = 0) -> String {
+        let flags = event.modifierFlags
+        let isKeyboard = event.type == .keyDown || event.type == .keyUp || event.type == .flagsChanged
+        let code = isKeyboard ? Self.domCode(forNativeKeyCode: event.keyCode) : ""
+        let leftModifiers = ["ShiftLeft", "ControlLeft", "AltLeft", "MetaLeft"]
+        let rightModifiers = ["ShiftRight", "ControlRight", "AltRight", "MetaRight"]
+        let location = code.hasPrefix("Numpad") ? 3 : leftModifiers.contains(code) ? 1 : rightModifiers.contains(code) ? 2 : 0
+        let values: [String: Any] = ["shiftKey": flags.contains(.shift), "ctrlKey": flags.contains(.control),
+            "altKey": flags.contains(.option), "metaKey": flags.contains(.command),
+            "repeat": event.type == .keyDown && event.isARepeat, "location": location,
+            "button": button, "buttons": pressedButtons,
+            "detail": event.type == .leftMouseDown || event.type == .leftMouseUp || event.type == .rightMouseDown || event.type == .rightMouseUp ? event.clickCount : 0]
+        guard let data = try? JSONSerialization.data(withJSONObject: values), let json = String(data: data, encoding: .utf8) else { return "{}" }
+        return json
+    }
+
+    private func send(_ kind: String, _ p: (x: Int, y: Int), a: String = "0", b: String = "0", event: NSEvent? = nil, button: Int = 0) {
+        let options = event.map { eventOptions($0, button: button) } ?? "{}"
+        target?.evaluateJavaScript("window.__wapleEvent('\(kind)', \(p.x), \(p.y), \(a), \(b), \(options));")
+    }
+
+    private func mouseButton(_ event: NSEvent) -> (button: Int, mask: Int) {
+        switch event.buttonNumber {
+        case 0: return (0, 1)
+        case 1: return (2, 2)
+        case 2: return (1, 4)
+        default: return (min(4, event.buttonNumber), 1 << min(4, event.buttonNumber))
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard let p = webPoint(from: convert(event.locationInWindow, from: nil)) else { return }
+        guard let point = webPoint(from: convert(event.locationInWindow, from: nil)) else { return }
+        let button = mouseButton(event)
+        pressedButtons |= button.mask
         dragging = true
-        send("mousedown", p)
+        send("mousedown", point, event: event, button: button.button)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let p = webPoint(from: convert(event.locationInWindow, from: nil)) else { return }
+        guard let point = webPoint(from: convert(event.locationInWindow, from: nil), clampToFit: dragging) else { return }
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastMoveForward > 1.0 / 60.0 else { return }
         lastMoveForward = now
-        send("mousemove", p, a: "1")
+        send("mousemove", point, a: "1", event: event, button: mouseButton(event).button)
     }
 
     override func mouseUp(with event: NSEvent) {
         let wasDragging = dragging
-        dragging = false
-        // 드래그 릴리즈는 fit 밖이어도 클램프 좌표로 반드시 전달 — 미전송 시 웹이 buttons=1(드래그 중)로
-        // 고착된다(감사 W-B3). 드래그가 아니었으면 종전대로 fit 안에서만.
-        guard let p = webPoint(from: convert(event.locationInWindow, from: nil), clampToFit: wasDragging) else { return }
-        send("mouseup", p)
+        let button = mouseButton(event)
+        pressedButtons &= ~button.mask
+        dragging = pressedButtons != 0
+        guard let point = webPoint(from: convert(event.locationInWindow, from: nil), clampToFit: wasDragging) else { return }
+        send("mouseup", point, event: event, button: button.button)
     }
+
+    override func rightMouseDown(with event: NSEvent) { mouseDown(with: event) }
+    override func rightMouseDragged(with event: NSEvent) { mouseDragged(with: event) }
+    override func rightMouseUp(with event: NSEvent) { mouseUp(with: event) }
+    override func otherMouseDown(with event: NSEvent) { mouseDown(with: event) }
+    override func otherMouseDragged(with event: NSEvent) { mouseDragged(with: event) }
+    override func otherMouseUp(with event: NSEvent) { mouseUp(with: event) }
 
     override func mouseMoved(with event: NSEvent) {
         guard let p = webPoint(from: convert(event.locationInWindow, from: nil)) else { return }
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastMoveForward > 1.0 / 30.0 else { return }
         lastMoveForward = now
-        send("mousemove", p)
+        send("mousemove", p, event: event)
     }
 
     override func scrollWheel(with event: NSEvent) {
         guard let p = webPoint(from: convert(event.locationInWindow, from: nil)) else { return }
-        send("wheel", p, a: "\(Int(event.scrollingDeltaX))", b: "\(Int(-event.scrollingDeltaY))")
+        send("wheel", p, a: "\(event.scrollingDeltaX)", b: "\(-event.scrollingDeltaY)", event: event)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -162,11 +199,31 @@ final class WebInputProxyView: NSView {
     }
 
     private func forwardKey(_ kind: String, _ event: NSEvent) {
-        guard let chars = event.charactersIgnoringModifiers, !chars.isEmpty else { return }
+        let characters = event.modifierFlags.contains(.control) ? event.charactersIgnoringModifiers : event.characters
+        guard let chars = characters, !chars.isEmpty else { return }
         let key = jsKey(chars, keyCode: event.keyCode)
         let escaped = jsEscape(key)
         let code = jsEscape(Self.domCode(forNativeKeyCode: event.keyCode))
-        target?.evaluateJavaScript("window.__wapleEvent('\(kind)', 0, 0, '\(escaped)', '\(code)');")
+        target?.evaluateJavaScript("window.__wapleEvent('\(kind)', 0, 0, '\(escaped)', '\(code)', \(eventOptions(event)));")
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        let code = Self.domCode(forNativeKeyCode: event.keyCode)
+        let key: String
+        switch event.keyCode {
+        case 54, 55: key = "Meta"
+        case 56, 60: key = "Shift"
+        case 58, 61: key = "Alt"
+        case 59, 62: key = "Control"
+        case 57: key = "CapsLock"
+        default: return
+        }
+        let down: Bool
+        if event.keyCode == 57 { down = event.modifierFlags.contains(.capsLock) }
+        else { down = !pressedModifiers.contains(event.keyCode) }
+        if down { pressedModifiers.insert(event.keyCode) } else { pressedModifiers.remove(event.keyCode) }
+        let kind = down ? "keydown" : "keyup"
+        target?.evaluateJavaScript("window.__wapleEvent('\(kind)',0,0,'\(key)','\(code)',\(eventOptions(event)));")
     }
 
     /// JS 문자열 리터럴 이스케이프 — 테스트 가능하게 분리(webPoint 와 동일 규약).

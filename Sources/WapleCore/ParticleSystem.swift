@@ -2136,7 +2136,7 @@ public struct ParticleSystemDef: Equatable {
     ///      각각 값 태그 5(bool)를 검사한다(`cmp byte [rdi+8], 5` @0x1401a97df 계열).
     ///      파티클 이니셜라이저 바인더 어디에도 이 문자열 `lea` 가 없다.
     /// 착지 자리는 `WapleCore/PropertyAnimation.swift` 의 options 파스이고 **이 파일 밖**이다.
-    private static func parseInitializers(_ jsonArray: [Any])
+    private static func parseInitializers(_ jsonArray: [Any], orthographic: Bool)
         -> (inits: [Initializer], mapSeqAxis: Vec3?, mapSeqArcAmount: Float?,
             mapSeqBetween: [MapSequenceBetweenSpec], mapSeqAround: [MapSequenceAroundSpec]) {
         var inits: [Initializer] = []
@@ -2165,7 +2165,7 @@ public struct ParticleSystemDef: Equatable {
                 //   max: `test sil,sil` → ortho **50.0**(0x1404928cc) / 원근 1.0(0x140492704) @0x1401b9f6a
                 // 종전 1/1 은 "중립값" 추정이었다 — 어느 분기에도 없는 값이다. 동봉 287 인스턴스가
                 // 전건 min·max 를 명시하므로 관측 회귀는 0이고, 키를 뺀 씬에서만 갈린다.
-                inits.append(.sizeRandom(min: injected(i, "min", 5), max: injected(i, "max", 50),
+                inits.append(.sizeRandom(min: injected(i, "min", orthographic ? 5 : 0.001), max: injected(i, "max", orthographic ? 50 : 1),
                                          exponent: pexponent(i["exponent"]) ?? 1))
             case "colorrandom":
             // colorrandom 주입기 0x1401ba110: min = "0 0 0"(0x1401ba16e), max = "255 255 255"
@@ -2193,8 +2193,8 @@ public struct ParticleSystemDef: Equatable {
                 //   max: ortho **"32 32 0"**(0x14048f680) / 원근 "1 1 1"(0x14048f4ec)   @0x1401bac93
                 // 종전 (0,0,0)/(0,0,0) 은 어느 분기에도 없는 값이라 "속도 없음" 을 만들었다.
                 // 동봉 120 인스턴스가 전건 min·max 를 명시하므로 관측 회귀는 0이다.
-                inits.append(.velocityRandom(min: injectedVec3(i, "min", Vec3(x: -32, y: -32, z: 0)),
-                                             max: injectedVec3(i, "max", Vec3(x: 32, y: 32, z: 0)),
+                inits.append(.velocityRandom(min: injectedVec3(i, "min", orthographic ? Vec3(x: -32, y: -32, z: 0) : Vec3(x: -1, y: -1, z: -1)),
+                                             max: injectedVec3(i, "max", orthographic ? Vec3(x: 32, y: 32, z: 0) : Vec3(x: 1, y: 1, z: 1)),
                                              exponent: pexponent(i["exponent"]) ?? 1))
             case "rotationrandom":
                 // **min/max 는 파티클 디스패처의 초기화자 쪽 유일한 태그 게이트다**
@@ -2236,8 +2236,8 @@ public struct ParticleSystemDef: Equatable {
                 // speedmin/speedmax 는 **직교투영 플래그 의존**(아래 `injected` 주석 참조):
                 // ortho 100/250(0x1401bb056·0x1401bb12a), 원근 0.5/1.0(0x1401bb060·0x1401bb134).
                 // 어느 분기든 0 이 아니다 — 종전 0 은 난류 초기속도를 통째로 껐다.
-                inits.append(.turbulentVelocityRandom(speedMin: injected(i, "speedmin", 100),   // 0x1401bb07b
-                                                      speedMax: injected(i, "speedmax", 250),  // 0x1401bb14d
+                inits.append(.turbulentVelocityRandom(speedMin: injected(i, "speedmin", orthographic ? 100 : 0.5),   // 0x1401bb07b
+                                                      speedMax: injected(i, "speedmax", orthographic ? 250 : 1),  // 0x1401bb14d
                                                       scale: injected(i, "scale", 1),          // 0x1401bb338 (플래그 무관)
                                                       offset: injected(i, "offset", 0)))       // 0x1401bb34a (플래그 무관)
             case "colorlist":
@@ -2336,7 +2336,7 @@ public struct ParticleSystemDef: Equatable {
                 let octaves32 = UInt32(bitPattern: Int32(truncatingIfNeeded: rawOctaves))
                 let octaves = octaves32 >= 8 ? 8 : Int(max(1, octaves32))
                 inits.append(.positionOffsetRandom(
-                    directions: pvec3(i["directions"]) ?? Vec3(x: 1, y: 1, z: 0),   // 주입 기본(직교 분기)
+                    directions: pvec3(i["directions"]) ?? (orthographic ? Vec3(x: 1, y: 1, z: 0) : Vec3(x: 1, y: 1, z: 1)),   // 주입 기본(직교 분기)
                     sign: pvec3(i["sign"]) ?? Vec3(x: 0, y: 0, z: 0),               // 주입 기본 "0 0 0"
                     scale: pfloat(i["scale"]) ?? 0,        // asFloat(null) = 0 (0x1400862ad)
                     distance: pfloat(i["distance"]) ?? 0,
@@ -2399,7 +2399,7 @@ public struct ParticleSystemDef: Equatable {
         ParticleControlPointLimits.clampIndex(cp)
     }
 
-    private static func parseOperators(_ jsonArray: [Any]) -> (ops: [ParticleOperator],
+    private static func parseOperators(_ jsonArray: [Any], orthographic: Bool) -> (ops: [ParticleOperator],
                                                                attractCPIds: [(op: Int, cp: Int)],
                                                                vortexAudio: [AudioProcessing?],
                                                                blends: [BlendWindow],
@@ -2498,9 +2498,9 @@ public struct ParticleSystemDef: Equatable {
                 // 그 bit10 은 JSON `flags` 가 아니라 **C++ 오브젝트 플래그**다(아래 `injected` 주석).
                 // 동봉 두 트리 scene.json 355개 중 347개(97.7%)가 세운다.
                 ops.append(.oscillatePosition(frequencyMin: fmin, frequencyMax: injected(o, "frequencymax", 5),
-                                              scaleMin: smin, scaleMax: injected(o, "scalemax", 10),   // 0x1401bd8b5 (원근 0.5)
+                                              scaleMin: smin, scaleMax: injected(o, "scalemax", orthographic ? 10 : 0.5),   // 0x1401bd8b5 (원근 0.5)
                                               phaseMin: injected(o, "phasemin", 0), phaseMax: injected(o, "phasemax", 2 * .pi),
-                                              mask: injectedVec3(o, "mask", Vec3(x: 1, y: 1, z: 0))))
+                                              mask: injectedVec3(o, "mask", orthographic ? Vec3(x: 1, y: 1, z: 0) : Vec3(x: 1, y: 1, z: 1))))
             case "controlpointattract":
                 // **[2026-08-20] 대상은 항상 컨트롤포인트다.** 런타임 핸들러(0x14024172d)는
                 // `[r14+0xb4]`(cp 인덱스)로 `[sys+0x400]` 배열에서 CP 를 꺼내 그 위치만 쓴다
@@ -2517,8 +2517,8 @@ public struct ParticleSystemDef: Equatable {
                 // 이라 음수도 7 로 간다. `cpid < 8` 로 통과시키던 종전 규약과 다르다.
                 attractCPIds.append((op: ops.count, cp: clampControlPoint(pint(o["controlpoint"]) ?? 0)))
                 ops.append(.controlPointAttract(
-                    scale: injected(o, "scale", 512),          // 0x140492934 (원근 20.0 @0x14049288c)
-                    threshold: injected(o, "threshold", 512),  // 0x140492934 (원근 5.0 @0x140492858)
+                    scale: injected(o, "scale", orthographic ? 512 : 20),          // 0x140492934 (원근 20.0 @0x14049288c)
+                    threshold: injected(o, "threshold", orthographic ? 512 : 5),  // 0x140492934 (원근 5.0 @0x140492858)
                     // 위 주석 참조 — 아래 CP 재베이크가 항상 덮어쓴다. `offset` 은 런타임에서
                     // 위치로 쓰이지 않으므로 여기서도 읽지 않는다.
                     target: Vec3(x: 0, y: 0, z: 0),
@@ -2526,9 +2526,9 @@ public struct ParticleSystemDef: Equatable {
                     flags: pint(o["flags"]) ?? 2))   // 0x1401be245 — 주입 기본 2
             case "boids":
                 ops.append(.boids(
-                    separationThreshold: injected(o, "separationthreshold", 20),  // 0x1401bf726 (원근 0.02)
-                    neighborThreshold: injected(o, "neighborthreshold", 50),      // 0x1401bf7f5 (원근 0.2)
-                    maxSpeed: injected(o, "maxspeed", 500),                       // 0x1401bf8c4 (원근 1.0)
+                    separationThreshold: injected(o, "separationthreshold", orthographic ? 20 : 0.02),  // 0x1401bf726 (원근 0.02)
+                    neighborThreshold: injected(o, "neighborthreshold", orthographic ? 50 : 0.2),      // 0x1401bf7f5 (원근 0.2)
+                    maxSpeed: injected(o, "maxspeed", orthographic ? 500 : 1),                       // 0x1401bf8c4 (원근 1.0)
                     separationFactor: injected(o, "separationfactor", 15),        // f64 @0x140492818, 플래그 무관
                     alignmentFactor: injected(o, "alignmentfactor", 1),           // 0x1401bf9fd
                     cohesionFactor: injected(o, "cohesionfactor", 2),             // 0x1401bfa14
@@ -2539,7 +2539,7 @@ public struct ParticleSystemDef: Equatable {
                 // 드롭돼 있었으므로 CP0 바인딩에 회귀 위험이 없다.
                 attractCPIds.append((op: ops.count, cp: clampControlPoint(pint(o["controlpoint"]) ?? 0)))
                 ops.append(.maintainDistanceToControlPoint(
-                    distance: injected(o, "distance", 200),          // 0x1401be2bc (원근 1.0 @0x1401be2c6)
+                    distance: injected(o, "distance", orthographic ? 200 : 1),          // 0x1401be2bc (원근 1.0 @0x1401be2c6)
                     variableStrength: injected(o, "variablestrength", 0),  // 0x1401be4d9, 플래그 무관
                     target: Vec3(x: 0, y: 0, z: 0)))                 // 아래 CP 재베이크에서 채운다
             case "vortex":
@@ -2559,9 +2559,9 @@ public struct ParticleSystemDef: Equatable {
                 ops.append(.vortex(axis: pvec3(o["axis"]) ?? Vec3(x: 0, y: 0, z: 1),   // "0 0 1", 플래그 무관
                                    // 아래 셋만 ortho/원근 조건부다(`test sil` → 0x14010daa0 이 읽는
                                    // `[scene+0x118]` bit10 = general.orthogonalprojection).
-                                   distanceInner: injected(o, "distanceinner", 500),   // 0x1401bf0e3 (원근 1.0)
-                                   distanceOuter: injected(o, "distanceouter", 650),   // 0x1401bf1ad (원근 2.0)
-                                   speedInner: injected(o, "speedinner", 2500),        // 0x1401bf22e (원근 1.0)
+                                   distanceInner: injected(o, "distanceinner", orthographic ? 500 : 1),   // 0x1401bf0e3 (원근 1.0)
+                                   distanceOuter: injected(o, "distanceouter", orthographic ? 650 : 2),   // 0x1401bf1ad (원근 2.0)
+                                   speedInner: injected(o, "speedinner", orthographic ? 2500 : 1),        // 0x1401bf22e (원근 1.0)
                                    speedOuter: injected(o, "speedouter", 0),           // 0x1401bf24f xorps, 플래그 무관
                                    offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0),  // "0 0 0", 플래그 무관
                                    // `centerforce` 는 v1 의 키가 **아니다** — "centerforce"@0x14048f9f8
@@ -2605,14 +2605,14 @@ public struct ParticleSystemDef: Equatable {
                 // **상수는 실측이지만 링의 힘 수식은 여전히 추정이다** — VortexRing 주석 참조.
                 let v2Flags = pint(o["flags"]) ?? 0
                 let v2Ring: VortexRing? = (v2Flags & 4) == 0 ? nil : VortexRing(
-                    radius: injected(o, "ringradius", 300),             // 0x1401bf637 (원근 1.0)
-                    pullDistance: injected(o, "ringpulldistance", 50),  // 0x1401bf644 (원근 0.25)
-                    pullForce: injected(o, "ringpullforce", 10),        // 0x1401bf65e (원근 0.05)
-                    width: injected(o, "ringwidth", 50))                // xmm6 @0x1401bf6b5 (원근 0.2)
+                    radius: injected(o, "ringradius", orthographic ? 300 : 1),             // 0x1401bf637 (원근 1.0)
+                    pullDistance: injected(o, "ringpulldistance", orthographic ? 50 : 0.25),  // 0x1401bf644 (원근 0.25)
+                    pullForce: injected(o, "ringpullforce", orthographic ? 10 : 0.05),        // 0x1401bf65e (원근 0.05)
+                    width: injected(o, "ringwidth", orthographic ? 50 : 0.2))                // xmm6 @0x1401bf6b5 (원근 0.2)
                 ops.append(.vortex(axis: pvec3(o["axis"]) ?? Vec3(x: 0, y: 0, z: 1),  // "0 0 1", 플래그 무관
-                                   distanceInner: injected(o, "distanceinner", 500),  // 0x1401bf3df (원근 1.0)
-                                   distanceOuter: injected(o, "distanceouter", 650),  // 0x1401bf4a4 (원근 2.0)
-                                   speedInner: injected(o, "speedinner", 2500),       // 0x1401bf56e (원근 1.0)
+                                   distanceInner: injected(o, "distanceinner", orthographic ? 500 : 1),  // 0x1401bf3df (원근 1.0)
+                                   distanceOuter: injected(o, "distanceouter", orthographic ? 650 : 2),  // 0x1401bf4a4 (원근 2.0)
+                                   speedInner: injected(o, "speedinner", orthographic ? 2500 : 1),       // 0x1401bf56e (원근 1.0)
                                    speedOuter: injected(o, "speedouter", 0),          // 0x1401bf5e0 xorps, 플래그 무관
                                    offset: Vec3(x: 0, y: 0, z: 0),                    // WE 는 읽지 않는다(위 참조)
                                    // vortex_v2 **만** centerforce 를 심는다(0x1401bf5ff, 플래그 무관 1.0).
@@ -2638,11 +2638,11 @@ public struct ParticleSystemDef: Equatable {
                 // scale 0.01 은 우연히 맞았다(ortho 분기). timescale 0 은 **양쪽 분기 어디에도 없다**:
                 // ortho 20.0(0x1401bebb1) · 원근 1.0(xmm7 @0x1401beba5). 정적장이 아니라 시간에 따라
                 // 흐르는 장이다. mask 도 ortho 는 (1,1,0) — 2D 씬에서 z 를 잠근다.
-                ops.append(.turbulence(speedMin: injected(o, "speedmin", 500),      // 0x1401bed85 (원근 1.0)
-                                       speedMax: injected(o, "speedmax", 1000),     // 0x1401bee64 (원근 5.0)
-                                       scale: injected(o, "scale", 0.01),           // 0x1401becc5 (원근 0.5)
-                                       timeScale: injected(o, "timescale", 20),     // 0x1401bebd4 (원근 1.0)
-                                       mask: injectedVec3(o, "mask", Vec3(x: 1, y: 1, z: 0)), // 0x1401bec98 (원근 "1 1 1")
+                ops.append(.turbulence(speedMin: injected(o, "speedmin", orthographic ? 500 : 1),      // 0x1401bed85 (원근 1.0)
+                                       speedMax: injected(o, "speedmax", orthographic ? 1000 : 5),     // 0x1401bee64 (원근 5.0)
+                                       scale: injected(o, "scale", orthographic ? 0.01 : 0.5),           // 0x1401becc5 (원근 0.5)
+                                       timeScale: injected(o, "timescale", orthographic ? 20 : 1),     // 0x1401bebd4 (원근 1.0)
+                                       mask: injectedVec3(o, "mask", orthographic ? Vec3(x: 1, y: 1, z: 0) : Vec3(x: 1, y: 1, z: 1)), // 0x1401bec98 (원근 "1 1 1")
                                        phaseMin: injected(o, "phasemin", 0),        // 0x1401beec5 (플래그 무관)
                                        phaseMax: injected(o, "phasemax", 0)))       // 0x1401beeed (플래그 무관)
             case "oscillatesize":
@@ -2663,6 +2663,10 @@ public struct ParticleSystemDef: Equatable {
                                         startValue: pfloat(o["startvalue"]) ?? 1,
                                         endValue: pfloat(o["endvalue"]) ?? 0))
             case "remapvalue":
+                // Original operation mapper returns sentinel5 for an unknown token; its VM arm is a no-op.
+                if let token = o["operation"] as? String, RemapOperation(rawValue: token.lowercased()) == nil {
+                    break
+                }
                 let fbm = (o["transformfunction"] as? String) == "fbmnoise"
                 // 부재 기본 2.0 — 주입기 0x1401bfbb0(게이트 `stricmp`@0x1401ce667 'remapvalue'
                 // → 호출부 0x1401ce6a0), 실수 주입기 호출 @0x1401bfff3. 플래그 무관.
@@ -2736,10 +2740,10 @@ public struct ParticleSystemDef: Equatable {
                         // 부재 기본은 0 이 아니라 **1.0** 이다(0x1401c2c26 movabs / 0x1401c2cd3).
                         blendOutStart: pfloat(o["blendoutstart"]) ?? 1,
                         blendOutEnd: pfloat(o["blendoutend"]) ?? 1,
-                        inputCP0: pint(o["inputcontrolpoint0"]) ?? 0,
-                        inputCP1: pint(o["inputcontrolpoint1"]) ?? 1,
-                        outputCP0: pint(o["outputcontrolpoint0"]) ?? 0,
-                        outputCP1: pint(o["outputcontrolpoint1"]) ?? 1,
+                        inputCP0: clampControlPoint(pint(o["inputcontrolpoint0"]) ?? 0),
+                        inputCP1: clampControlPoint(pint(o["inputcontrolpoint1"]) ?? 1),
+                        outputCP0: clampControlPoint(pint(o["outputcontrolpoint0"]) ?? 0),
+                        outputCP1: clampControlPoint(pint(o["outputcontrolpoint1"]) ?? 1),
                         // 주입기 0x1401bfbb0: 부재 시 min=int 0(0x1401bfc8c) · max=int 1(0x1401bfd76).
                         // 리더는 outputrange* 와 같은 vec3-또는-스칼라(0x1401ce836 / 0x1401ce98c).
                         inMin: injectedVec3OrScalar(o, "inputrangemin", Vec3(x: 0, y: 0, z: 0)),
@@ -2761,7 +2765,7 @@ public struct ParticleSystemDef: Equatable {
                 // (0x14022a530) 로 `s = 1 + w·(s₀−1)` 를 만든다. 오퍼레이터 공통 블렌딩은 G-C2-03 의
                 // 몫이라 여기선 무가중(w≡1) 적용이다 — 드롭보다 원본에 가깝고, G-C2-03 이 들어오면
                 // 이 자리만 가중치를 곱하면 된다.
-                ops.append(.capVelocity(maxSpeed: injected(o, "maxspeed", 100)))
+                ops.append(.capVelocity(maxSpeed: injected(o, "maxspeed", orthographic ? 100 : 1)))
             case "reducemovementnearcontrolpoint":
                 // G-C2-01. 동봉 9인스턴스(오퍼레이터 미구현 중 최다)로 도달이 가장 크다.
                 // controlpoint 는 주입기 0x1401be834–0x1401be87f 가 **정수 0 을 심으므로**
@@ -2816,7 +2820,7 @@ public struct ParticleSystemDef: Equatable {
     /// 파스 **중** 적용해야 하는 이유: controlpointattract 의 target 이 CP 로 베이크되므로(아래 attractCPIds
     /// 재바인딩) CP 오버라이드는 베이크 전에 반영돼야 한다 — 사후 def 복제는 이 지점에 못 미친다.
     public static func parse(_ json: [String: Any], material: ParticleMaterial?,
-                             instanceOverride: ParticleInstanceOverride? = nil,
+                             orthographic: Bool = true, instanceOverride: ParticleInstanceOverride? = nil,
                              resolveChild: ((String) -> ParticleSystemDef?)? = nil) -> ParticleSystemDef {
         var emitters: [Emitter] = []
         // emitters 와 병렬(같은 case 에서 함께 append) — 오디오반응 rate 변조에 이미터별 파라미터 공급.
@@ -2902,7 +2906,7 @@ public struct ParticleSystemDef: Equatable {
                     // distancemax 는 직교투영 플래그 의존: ortho **256**(0x1401b9454), 원근 1.0
                     // (0x1401b945e). 주입기 0x1401b9100, 게이트 `stricmp`@0x1401c5c7c 'sphererandom'
                     // → 호출부 0x1401c5cb2. 도달 2/542 로 작지만 0 은 어느 분기도 아니다.
-                    distanceMax: injected(e, "distancemax", 256),  // 0x1401b9470
+                    distanceMax: injected(e, "distancemax", orthographic ? 256 : 1),  // 0x1401b9470
                     rate: injected(e, "rate", 10),   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 위 주석 참조.
                     burst: pint(e["instantaneous"]) ?? 0,
                     sign: pvec3(e["sign"]) ?? Vec3(x: 0, y: 0, z: 0)))
@@ -2929,7 +2933,7 @@ public struct ParticleSystemDef: Equatable {
                     // z=0 인 것도 직교 서사와 맞는다(turbulence 의 mask "1 1 0" 과 같은 이유).
                     // 51건 중 4건이 생략한다.
                     // (`layerimage` 주입기 0x1401b9930 에는 distancemax 가 **없으므로** 그쪽은 안 건드린다.)
-                    distanceMax: injectedVec3OrScalar(e, "distancemax", Vec3(x: 256, y: 256, z: 0)),
+                    distanceMax: injectedVec3OrScalar(e, "distancemax", orthographic ? Vec3(x: 256, y: 256, z: 0) : Vec3(x: 1, y: 1, z: 1)),
                     rate: injected(e, "rate", 10),   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 위 주석 참조.
                     burst: pint(e["instantaneous"]) ?? 0))
                 emitterAudio.append(AudioProcessing.parse(e))
@@ -2969,7 +2973,7 @@ public struct ParticleSystemDef: Equatable {
         }
 
         var (inits, mapSeqAxis, mapSeqArcAmount, mapSeqBetween, mapSeqAround)
-            = Self.parseInitializers(json["initializer"] as? [Any] ?? [])
+            = Self.parseInitializers(json["initializer"] as? [Any] ?? [], orthographic: orthographic)
 
         // 인스턴스 오버라이드(배수) 적용 — 이미터 rate/버스트, 이니셜라이저 min/max.
         // 배수 대상 이니셜라이저가 프리셋에 없으면 주입(스폰 기본 1 × 배수 = 배수 자체; m==1 은 무의미라
@@ -3033,7 +3037,7 @@ public struct ParticleSystemDef: Equatable {
         }
 
         var (ops, attractCPIds, vortexAudio, operatorBlends, collisionOps) =
-            Self.parseOperators(json["operator"] as? [Any] ?? [])
+            Self.parseOperators(json["operator"] as? [Any] ?? [], orthographic: orthographic)
 
         // **[2026-08-20] `renderer` 키 부재는 "미지원" 이 아니라 sprite 다.** 파서가
         // `isArray`(0x1400888a0)에 실패하면 그 자리에서 오브젝트(태그 7)를 만들어
@@ -3204,6 +3208,17 @@ public struct ParticleSystemDef: Equatable {
             // 둘 다 uint 주입기(0x1401d8280)로 기본 0 — 부재는 "값 없음" 이 아니라 0 이다.
             controlPointFlags[slot] = pint(cp["flags"]) ?? 0
             controlPointParent[slot] = pint(cp["parentcontrolpoint"]) ?? 0
+        }
+        // Remap ownership is established before instance overrides (0x1401d086c / initializer0x1401cafce).
+        for op in ops {
+            guard case let .remapValueEx(spec) = op, spec.outputChannel == .controlPoint else { continue }
+            controlPointFlags[clampControlPoint(spec.outputCP0)] |= ParticleControlPointFlag.remapOutput
+        }
+        for case let initializer as [String: Any] in (json["initializer"] as? [Any] ?? []) {
+            guard initializer["name"] as? String == "remapinitialvalue",
+                  (initializer["output"] as? String)?.lowercased() == "controlpoint" else { continue }
+            let slot = clampControlPoint(pint(initializer["outputcontrolpoint0"]) ?? 0)
+            controlPointFlags[slot] |= ParticleControlPointFlag.remapOutput
         }
         // 인스턴스 CP 오버라이드(절대 대체)는 attract target 재베이크 **전에** — 재베이크 후면 attract 가
         // 프리셋 CP 를 계속 본다(실측: CP 오버라이드 51오브젝트 중 22가 attract 보유).

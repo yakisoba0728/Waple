@@ -38,15 +38,15 @@ final class Render3DSceneFixRegressionTests: XCTestCase {
         XCTAssertEqual(resolved.map { $0.position.x }, [0, 1, 2, 3, 4, 0])
     }
 
-    /// 캡 초과분은 여전히 잘린다(9번째부터) — 무제한 확장 아님.
-    func testF660NinthLightStillDrops() {
-        let lights = (0..<10).map { light(id: $0, type: "lpoint", origin: SIMD3(Float($0), 0, 0)) }
+    /// The65th light exceeds the current complete64-slot budget and must still be dropped.
+    func testF660SixtyFifthLightStillDrops() {
+        let lights = (0..<66).map { light(id: $0, type: "lpoint", origin: SIMD3(Float($0), 0, 0)) }
         let resolved = Scene3DLighting.resolveLights(lights, nodes: [:])
         XCTAssertEqual(resolved.count, Scene3DLighting.maximumLights)
-        XCTAssertEqual(Scene3DLighting.maximumLights, 8)
+        XCTAssertEqual(Scene3DLighting.maximumLights, 64)
         let packed = Scene3DLighting.packLights(resolved)
         XCTAssertEqual(packed.count, Scene3DLighting.maximumLights)
-        XCTAssertEqual(packed.map { $0.positionExponent.x }, [0, 1, 2, 3, 4, 5, 6, 7])
+        XCTAssertEqual(packed.map { $0.positionExponent.x }, (0..<64).map(Float.init))
     }
 
     // MARK: - F661 (S-47): directional 섀도우 최소 근사
@@ -110,11 +110,12 @@ final class Render3DSceneFixRegressionTests: XCTestCase {
             forward: SIMD3(0, -1, 0), minBound: .zero, maxBound: .zero))
     }
 
-    /// 셰이더 계약 잠금: directional 분기가 directionalShadowVisibility 를 곱하고 루프 상한이 8.
+    /// CPU and GPU share the64-light budget; directional visibility must still participate.
     func testF661F660ShaderSourceContract() {
         let source = Mesh3DShaders.source
         XCTAssertTrue(source.contains("directionalShadowVisibility"))
-        XCTAssertTrue(source.contains("clamp(int(frame.meta.x + 0.5), 0, 8)"))
+        XCTAssertEqual(Scene3DLighting.maximumLights, 64)
+        XCTAssertTrue(source.contains("clamp(int(frame.meta.x + 0.5), 0, 64)"))
     }
 
     // MARK: - F662 (S-45): scene fog 파스 + 머티리얼 FOG 콤보

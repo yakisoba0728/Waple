@@ -31,7 +31,7 @@ public struct DecodedAudio: Equatable {
 }
 
 /// 순수 Swift Ogg/Vorbis I 디코더(외부 의존성 0). Vorbis I, floor1, residue 0/1/2, 모노/스테레오+.
-/// 미지원(floor0 등)은 VorbisError 로 명확히 스킵. 알고리즘 근거: Vorbis I 명세 + stb_vorbis(퍼블릭 도메인).
+/// 손상/미지원 구성은 VorbisError 로 명확히 스킵. 알고리즘 근거: Vorbis I 명세 + stb_vorbis(퍼블릭 도메인).
 public enum OggVorbisDecoder {
     /// F840: finalGranule과 패킷수×블록 크기는 모두 파일 제어값이다. 종전에는 10MB Ogg도
     /// 채널당 약 10GB를 선예약할 수 있어 절대 상한을 뒀다. 그 상한도 채널마다 적용하면
@@ -59,6 +59,20 @@ public enum OggVorbisDecoder {
 }
 
 // MARK: - 설정 구조
+
+private struct Floor0Config {
+    let order: Int
+    let rate: Int
+    let barkMapSize: Int
+    let amplitudeBits: Int
+    let amplitudeOffset: Int
+    let books: [Int]
+}
+
+private struct Floor0Packet {
+    let amplitude: Double
+    let coefficients: [Double]
+}
 
 private struct Floor1Config {
     var partitions = 0
@@ -110,7 +124,8 @@ private final class VorbisStream {
 
     private var codebooks: [VorbisCodebook] = []
     private var floorTypes: [Int] = []
-    private var floors: [Floor1Config] = []
+    private var floors: [Floor1Config?] = []
+    private var floor0s: [Floor0Config?] = []
     private var residues: [ResidueConfig] = []
     private var mappings: [MappingConfig] = []
     private var modes: [ModeConfig] = []
@@ -184,8 +199,8 @@ private final class VorbisStream {
         for _ in 0..<floorCount {
             let type = Int(r.read(16))
             floorTypes.append(type)
-            if type == 1 { floors.append(try parseFloor1(&r)) }
-            else if type == 0 { throw VorbisError.unsupported("floor0 (LSP) — 코퍼스 미사용, 스킵") }
+            if type == 1 { floors.append(try parseFloor1(&r)); floor0s.append(nil) }
+            else if type == 0 { floor0s.append(try parseFloor0(&r)); floors.append(nil) }
             else { throw VorbisError.corrupt("floor type \(type)") }
         }
 
@@ -210,6 +225,26 @@ private final class VorbisStream {
         }
         guard r.readBit() == 1 else { throw VorbisError.corrupt("setup framing bit") }
         if r.endOfPacket { throw VorbisError.corrupt("EOP in setup") }
+    }
+
+    /// Xiph Vorbis I §6.2.1; each index must reference a VQ-capable codebook.
+    private func parseFloor0(_ r: inout VorbisBitReader) throws -> Floor0Config {
+        let order = Int(clamping: r.read(8)), rate = Int(clamping: r.read(16)), mapSize = Int(clamping: r.read(16))
+        let amplitudeBits = Int(clamping: r.read(6)), amplitudeOffset = Int(clamping: r.read(8))
+        let bookCount = Int(clamping: r.read(4)) + 1
+        var books: [Int] = []
+        for _ in 0..<bookCount {
+            let book = Int(clamping: r.read(8))
+            guard book < codebooks.count, codebooks[book].lookupType > 0 else {
+                throw VorbisError.corrupt("floor0 requires a valid VQ codebook")
+            }
+            books.append(book)
+        }
+        guard !r.endOfPacket, order > 0, rate > 0, mapSize > 0 else {
+            throw VorbisError.corrupt("invalid floor0 setup")
+        }
+        return Floor0Config(order: order, rate: rate, barkMapSize: mapSize,
+                            amplitudeBits: amplitudeBits, amplitudeOffset: amplitudeOffset, books: books)
     }
 
     private func parseFloor1(_ r: inout VorbisBitReader) throws -> Floor1Config {
@@ -367,14 +402,20 @@ private final class VorbisStream {
             var chBuf = [[Float]](repeating: [Float](repeating: 0, count: n2), count: channels)
             var zeroChannel = [Bool](repeating: false, count: channels)
             var finalYs = [[Int]?](repeating: nil, count: channels)
+            var floor0Packets = [Floor0Packet?](repeating: nil, count: channels)
 
             // FLOOR
             var floorEOP = false
             for ch in 0..<channels {
                 let floorIdx = map.submapFloor[map.mux[ch]]
-                let (used, fy, eop) = decodeFloor1(floors[floorIndexToConfig(floorIdx)], &r)
-                if eop { floorEOP = true; break }
-                if used { finalYs[ch] = fy } else { zeroChannel[ch] = true }
+                if let config = floor0s[floorIdx] {
+                    floor0Packets[ch] = decodeFloor0(config, &r)
+                    zeroChannel[ch] = floor0Packets[ch] == nil
+                } else if let config = floors[floorIdx] {
+                    let (used, fy, eop) = decodeFloor1(config, &r)
+                    if eop { floorEOP = true; break }
+                    if used { finalYs[ch] = fy } else { zeroChannel[ch] = true }
+                }
             }
             // EOP 는 해당 패킷만 폐기(참조 구현 동작) — break 는 손상 패킷 1개로 이후 트랙 전부 절단.
             if floorEOP { continue }
@@ -415,9 +456,14 @@ private final class VorbisStream {
             for ch in 0..<channels {
                 if reallyZero[ch] {
                     chBuf[ch] = [Float](repeating: 0, count: n2)
-                } else if let fy = finalYs[ch] {
+                } else {
                     let floorIdx = map.submapFloor[map.mux[ch]]
-                    let curve = renderFloor1(floors[floorIndexToConfig(floorIdx)], fy, n2)
+                    let curve: [Float]
+                    if let packet = floor0Packets[ch], let config = floor0s[floorIdx] {
+                        curve = try renderFloor0(config, packet, n2)
+                    } else if let fy = finalYs[ch], let config = floors[floorIdx] {
+                        curve = renderFloor1(config, fy, n2)
+                    } else { curve = [Float](repeating: 0, count: n2) }
                     for j in 0..<n2 { chBuf[ch][j] *= curve[j] }
                 }
                 timeBuf[ch] = imdct(chBuf[ch], n: n)
@@ -462,10 +508,6 @@ private final class VorbisStream {
         return DecodedAudio(samples: interleaved, channels: channels, sampleRate: sampleRate)
     }
 
-    /// floorIdx(글로벌 floor 번호) → floors 배열 인덱스. 코퍼스는 전부 floor1 이라 동일하지만,
-    /// floor 목록에 floor0 이 섞이면 parse 단계에서 이미 throw(unsupported)했으므로 여기 도달 시 1:1.
-    private func floorIndexToConfig(_ idx: Int) -> Int { idx }
-
     private func windowBounds(n: Int, blockflag: Bool, prev: Bool, next: Bool) -> (Int, Int, Int, Int) {
         let center = n / 2
         let ls: Int, le: Int, rs: Int, re: Int
@@ -475,6 +517,68 @@ private final class VorbisStream {
     }
 
     // MARK: floor1 디코드/합성
+
+    /// §6.2.2: EOP/zero amplitude/reserved book means unused channel, not a trapping read.
+    private func decodeFloor0(_ f: Floor0Config, _ r: inout VorbisBitReader) -> Floor0Packet? {
+        // amplitude_bits has a6-bit field and can exceed this reader's32-bit read width.
+        let low = Double(r.read(min(f.amplitudeBits, 32)))
+        let high = f.amplitudeBits > 32 ? Double(r.read(f.amplitudeBits - 32)) : 0
+        let raw = low + high * 4_294_967_296
+        guard !r.endOfPacket, raw > 0 else { return nil }
+        let bookNumber = Int(clamping: r.read(ilog(f.books.count)))
+        guard !r.endOfPacket, bookNumber < f.books.count else { return nil }
+        let book = codebooks[f.books[bookNumber]]
+        var coefficients: [Double] = []
+        coefficients.reserveCapacity(f.order) // order is8-bit, independent of VQ dimension
+        var last: Double = 0
+        while coefficients.count < f.order {
+            guard let entry = book.decodeScalar(&r) else { return nil }
+            let base = book.vectorBase(entry)
+            let count = min(book.dimensions, f.order - coefficients.count)
+            for i in 0..<count {
+                let value = Double(book.vqFlat[base + i]) + last
+                guard value.isFinite else { return nil }
+                coefficients.append(value)
+            }
+            last = coefficients.last ?? 0
+        }
+        let amplitude = raw / (pow(2, Double(f.amplitudeBits)) - 1) * Double(f.amplitudeOffset)
+        return Floor0Packet(amplitude: amplitude, coefficients: coefficients)
+    }
+
+    /// §6.2.3 LSP envelope on the Bark axis, including odd/even polynomial factors.
+    /// Primary: https://xiph.org/vorbis/doc/Vorbis_I_spec.html#x1-990006.2.3
+    private func renderFloor0(_ f: Floor0Config, _ packet: Floor0Packet, _ n: Int) throws -> [Float] {
+        func bark(_ x: Double) -> Double {
+            13.1 * atan(0.00074 * x) + 2.24 * atan(0.0000000185 * x * x) + 0.0001 * x
+        }
+        let scale = Double(f.barkMapSize) / bark(Double(f.rate) / 2)
+        let lsp = packet.coefficients.map { 2 * cos($0) }
+        var curve = [Float](repeating: 0, count: n)
+        for i in 0..<n {
+            let mapped = min(Double(f.barkMapSize - 1), floor(bark(Double(f.rate) * Double(i) / (2 * Double(n))) * scale))
+            let w = 2 * cos(Double.pi * mapped / Double(f.barkMapSize))
+            var p = 0.5, q = 0.5
+            var j = 1
+            while j < f.order {
+                q *= w - lsp[j - 1]
+                p *= w - lsp[j]
+                j += 2
+            }
+            if j == f.order {
+                q *= w - lsp[j - 1]
+                p *= p * (4 - w * w)
+                q *= q
+            } else {
+                p *= p * (2 - w)
+                q *= q * (2 + w)
+            }
+            let value = Float(exp(0.11512925 * (packet.amplitude / sqrt(p + q) - Double(f.amplitudeOffset))))
+            guard value.isFinite else { throw VorbisError.corrupt("non-finite floor0 curve") }
+            curve[i] = value
+        }
+        return curve
+    }
 
     private func decodeFloor1(_ f: Floor1Config, _ r: inout VorbisBitReader) -> (used: Bool, finalY: [Int], eop: Bool) {
         // F562: nonzero 비트 판독 자체가 EOP(런트/빈 패킷)면 채널 미사용이 아니라 패킷 폐기로 보고한다 —

@@ -48,6 +48,7 @@ extension SceneRenderer {
         var customShader: CustomMeshShader? = nil
         /// H1 스키닝: 커스텀 셰이더 메시용 CPU 프리스킨 8f 정점 링(스톡 GPU 본 스키닝 대신 rigid 계약).
         var customSkinRing: DynamicVertexBuffer? = nil
+        var customVertexBuffer: MTLBuffer? = nil
         /// CPU 프리스킨 입력 소스 — Model3D.meshes 인덱스(커스텀+스키닝 메시만 ≥0).
         var modelMeshIndex: Int = -1
         /// M3: PBR 노멀맵/마스크 텍스처 — nil = 미사용.
@@ -67,6 +68,7 @@ extension SceneRenderer {
         var reflectivity: Float = 1.0
         /// WE g_Brightness 저작값(HDR 씬에서만 발화 — encode3D 가 sceneIsHDR 로 게이트한다).
         var brightness: Float = 1
+        var vertexFloats: Int = 8
     }
     /// P⑥: 3D 커스텀 메시 셰이더 파이프라인 + 바인드 플랜(2D CustomLayerShader 와 동형 — 번역 셰이더는
     /// buffer(1)에 EngineU(336B, engineUniform() 이 단일 정본)를 기대하지, MeshUniform(256B)이 아니다).
@@ -77,6 +79,10 @@ extension SceneRenderer {
         let texRes: [SIMD4<Float>]                    // 8 slots; slot 0 = albedo
         let texWrap: [Float]                          // 8 × 1=clamp / 0=repeat
         let texFilter: [Float]                        // 8 × 1=nearest / 0=linear
+        var materialParams: [MaterialParam] = []
+        var engineParams: [ShaderEngineParam] = []
+        var vertexTextureSlots: [Int] = []
+        var usesSourceVertices = false
     }
     /// MSL `MeshU`와 레이아웃 일치(3×float4x4 + 5×float4 = 272B).
     struct MeshUniform {
@@ -112,13 +118,18 @@ extension SceneRenderer {
     /// id 로 부모 체인 합성(Scene3DMath.worldMatrix). 모델 오브젝트는 MeshRenderable 이 동일 id 로 지오메트리 참조.
     final class Node3D {
         let id: Int
-        let parent: Int?
-        let baseOrigin, baseAngles, baseScale: SIMD3<Float>
-        let baseVisible: Bool
+        var parent: Int?
+        var baseOrigin, baseAngles, baseScale: SIMD3<Float>
+        var baseVisible: Bool
         let order: Int
         var scripts: [Script3D] = []
         var scriptLayerIndex: Int?
         var scriptLayerName = ""
+        var propertyAnimations: [String: PropertyAnimation] = [:]
+        var scriptProperties: [String: String] = [:]
+        var attachment: String?
+        var baseTint = SIMD4<Float>(repeating: 1)
+        var tint = SIMD4<Float>(repeating: 1)
         // per-frame 현재값(스크립트 없으면 base 고정)
         var origin, angles, scale: SIMD3<Float>
         var visible: Bool
@@ -129,7 +140,18 @@ extension SceneRenderer {
         }
         /// 변환은 매 프레임 base 에서 재계산(스크립트가 일부 성분만 덮어써도 결정적), visible 은 이전값을 이어 평가.
         func evaluateScripts(time: Float) {
-            var o = baseOrigin, a = baseAngles, s = baseScale
+            func animated(_ key: String, _ base: SIMD3<Float>) -> SIMD3<Float> {
+                guard let animation = propertyAnimations[key] else { return base }
+                var value = base
+                for component in 0..<3 { value[component] = animation.value(component: component, atTime: time, base: base[component]) }
+                return value
+            }
+            var o = animated("origin", baseOrigin), a = animated("angles", baseAngles), s = animated("scale", baseScale)
+            let color = animated("color", SIMD3(baseTint.x, baseTint.y, baseTint.z))
+            tint = SIMD4(color, propertyAnimations["alpha"]?.value(component: 0, atTime: time, base: baseTint.w) ?? baseTint.w)
+            if let animation = propertyAnimations["visible"] {
+                visible = animation.value(component: 0, atTime: time, base: baseVisible ? 1 : 0) >= 0.5
+            }
             for sc in scripts {
                 sc.engine.setRuntime(Double(time))
                 switch sc.key {
@@ -138,6 +160,8 @@ extension SceneRenderer {
                 case "angles": if let v = sc.engine.evaluateAnglesVec(currentRadians: [a.x, a.y, a.z]), v.count >= 3 { a = SIMD3(v[0], v[1], v[2]) }
                 case "scale":  if let v = sc.engine.evaluateVec(current: [s.x, s.y, s.z]), v.count >= 3 { s = SIMD3(v[0], v[1], v[2]) }
                 case "visible": visible = sc.engine.evaluateBool(current: visible) ?? visible
+                case "color": if let value = sc.engine.evaluateVec(current: [tint.x, tint.y, tint.z]), value.count >= 3 { tint = SIMD4(value[0], value[1], value[2], tint.w) }
+                case "alpha": if let value = sc.engine.evaluateVec(current: [tint.w])?.first { tint.w = value }
                 default: break
                 }
             }
@@ -157,41 +181,58 @@ extension SceneRenderer {
         let animRate: Float
         let boneRing: DynamicVertexBuffer?   // 3슬롯 링: skin=world×bindWorld⁻¹, 프레임마다 다음 슬롯에 적재(경합 회피)
         let castShadow: Bool
+        var animationState: ModelAnimationState? = nil
     }
 
     /// 3D 씬의 2D 이미지 레이어를 카메라-페이싱 쿼드로(빌보드). 로컬 변환 + 부모 계층 + per-frame 스크립트.
     final class Billboard3D {
+        final class TextState {
+            let definition: SceneTextLayer
+            let fontData: Data?
+            let controllerIndex: Int?
+            var content: String
+            var color: SIMD3<Float>
+            var hasContent: Bool
+            init(definition: SceneTextLayer, fontData: Data?, controllerIndex: Int?,
+                 content: String, color: SIMD3<Float>, hasContent: Bool) {
+                self.definition = definition; self.fontData = fontData; self.controllerIndex = controllerIndex
+                self.content = content; self.color = color; self.hasContent = hasContent
+            }
+        }
         /// F811: JS `thisScene.layers` descriptor 인덱스(image는 doc.layers, text는 그 뒤 uid).
         /// 빌보드 배열은 로드 실패 레이어를 걸러 인덱스가 어긋나므로 디스크립터 정합 키를 별도 보관한다.
         let layerIndex: Int
         /// E1(⑦): scene.json objects[] id(SceneLayer.id) — encode3D 의 nmap 룩업 키. 0 = 미지정(다른
         /// 오브젝트가 이 빌보드를 parent 로 참조할 수 없음, 무회귀).
         let id: Int
-        let texture: MTLTexture
-        let size: SIMD2<Float>           // 씬 픽셀 크기(월드 반경 = size×scale×부모스케일)
+        var texture: MTLTexture
+        var size: SIMD2<Float>           // 씬 픽셀 크기(월드 반경 = size×scale×부모스케일)
         /// 포인터 광선 상자 크기. 텍스트는 draw raster와 달리 활성 padding이 양쪽에 붙고,
         /// 이미지는 nil/default로 draw size와 같다.
-        let interactionSize: SIMD2<Float>
-        let parent: Int?
+        var interactionSize: SIMD2<Float>
+        var parent: Int?
         let order: Int
         let additive: Bool               // 머티리얼 blending=additive → 가산 파이프라인(플레어/글로우)
         let isSolid: Bool                 // 포인터 광선 순회 bit13 — false면 표시돼도 히트 대상 아님
         let depthTest: Bool
         let depthWrite: Bool
-        let effects: [EffectGPU]
-        let texWidth: Int
-        let texHeight: Int
+        var effects: [EffectGPU]
+        var texWidth: Int
+        var texHeight: Int
         let isFrameBuffer: Bool
-        let baseOrigin: SIMD3<Float>
-        let baseScale: SIMD2<Float>
-        let baseAngleZ: Float
-        let baseTint: SIMD4<Float>
-        let baseVisible: Bool
+        var baseOrigin: SIMD3<Float>
+        var baseScale: SIMD2<Float>
+        var baseAngleZ: Float
+        var baseTint: SIMD4<Float>
+        var baseVisible: Bool
         let lighting: Bool
         let roughness: Float
         let metallic: Float
         let specularTint: SIMD3<Float>
         var scripts: [Script3D] = []
+        var textState: TextState?
+        var propertyAnimations: [String: PropertyAnimation] = [:]
+        var foggy = true
         /// per-frame 정점 재사용(3슬롯 링 — 레이어/파티클/본과 동일 패턴, 매프레임 makeBuffer 방지).
         let scratchQuad = DynamicVertexBuffer()
         // per-frame
@@ -222,6 +263,17 @@ extension SceneRenderer {
         }
         func evaluateScripts(time: Float) {
             var o = baseOrigin, s = baseScale, a = baseAngleZ, t = baseTint
+            for (key, animation) in propertyAnimations {
+                switch key {
+                case "origin": for c in 0..<3 { o[c] = animation.value(component: c, atTime: time, base: o[c]) }
+                case "scale": for c in 0..<2 { s[c] = animation.value(component: c, atTime: time, base: s[c]) }
+                case "angles": a = animation.value(component: 2, atTime: time, base: a)
+                case "color": for c in 0..<3 { t[c] = animation.value(component: c, atTime: time, base: t[c]) }
+                case "alpha": t.w = animation.value(component: 0, atTime: time, base: t.w)
+                case "visible": visible = animation.value(component: 0, atTime: time, base: baseVisible ? 1 : 0) >= 0.5
+                default: break
+                }
+            }
             for sc in scripts {
                 sc.engine.setRuntime(Double(time))
                 switch sc.key {
@@ -240,6 +292,107 @@ extension SceneRenderer {
     }
 
     // ── 3D 씬(메시) 경로 ─────────────────────────────────────────────────────────
+
+    /// One vertex ABI for model parsing, rigid/custom shading and GPU skinning.
+    static func packed3DVertices(_ vertices: [Model3D.Vertex], boneCount: Int) -> [Float] {
+        let skinned = boneCount > 0
+        let maximumBone = UInt32(exactly: max(0, boneCount - 1)) ?? 0
+        var packed: [Float] = []
+        packed.reserveCapacity(vertices.count * (skinned ? 22 : 14))
+        for vertex in vertices {
+            packed += [vertex.position.x, vertex.position.y, vertex.position.z,
+                       vertex.normal.x, vertex.normal.y, vertex.normal.z,
+                       vertex.tangent.x, vertex.tangent.y, vertex.tangent.z, vertex.tangent.w,
+                       vertex.uv.x, vertex.uv.y, vertex.uv1.x, vertex.uv1.y]
+            if skinned {
+                packed += (0..<4).map { Float(bitPattern: min(vertex.boneIndices[$0], maximumBone)) }
+                packed += [vertex.weights.x, vertex.weights.y, vertex.weights.z, vertex.weights.w]
+            }
+        }
+        return packed
+    }
+
+    func make3DMesh(_ mesh: Model3D.Mesh, package: ScenePackage, device: MTLDevice,
+                    boneCount: Int = 0, modelMeshIndex: Int = 0,
+                    compositeImageTextures: [Int: String] = [:]) -> GPU3DMesh? {
+        guard !mesh.vertices.isEmpty, !mesh.indices.isEmpty else { return nil }
+        // 스키닝 메시(v3): pos3+normal3+uv2+boneIdx4+weight4(16f) — GPU 정점 스키닝(mv_skin).
+        // 정적 메시: pos3+normal3+uv2(8f). 본 인덱스는 boneCount-1 로 clamp(셰이더 OOB 방지).
+        let skinned = mesh.skinned && boneCount > 0
+        let packed = Self.packed3DVertices(mesh.vertices, boneCount: skinned ? boneCount : 0)
+        guard let vbuf = device.makeBuffer(bytes: packed, length: MemoryLayout<Float>.stride * packed.count),
+              let ibuf = mesh.indices.withUnsafeBytes({ device.makeBuffer(bytes: $0.baseAddress!, length: $0.count) }),
+              let mat = loadMesh3DMaterial(mesh.material, package: package, device: device,
+                                           compositeImageTextures: compositeImageTextures)
+        else { return nil }
+        // F661: 로컬 AABB(정점 min/max) — directional 오소 섀도우의 씬 바운드 피팅 입력.
+        // MDL 헤더 AABB(V0017+)와 동치이나 V0016 은 헤더에 없어 정점에서 일괄 산출한다.
+        var bMin = SIMD3<Float>(repeating: Float.greatestFiniteMagnitude)
+        var bMax = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
+        for v in mesh.vertices {
+            bMin = simd_min(bMin, v.position)
+            bMax = simd_max(bMax, v.position)
+        }
+        var gpuMesh = GPU3DMesh(vbuf: vbuf, ibuf: ibuf, indexCount: mesh.indices.count,
+                                texture: mat.texture, tint: mat.tint,
+                                roughness: mat.roughness, metallic: mat.metallic,
+                                specularTint: mat.specularTint, alphaCutoff: mat.alphaCutoff,
+                                shadowEligible: mat.shadowEligible, unlit: mat.unlit,
+                                cullBack: mat.cullBack, additive: mat.additive,
+                                depthTest: mat.depthTest, depthWrite: mat.depthWrite, skinned: skinned,
+                                rimLighting: mat.rimLighting, shadingGradient: mat.shadingGradient,
+                                rimAmount: mat.rimAmount, rimExponent: mat.rimExponent,
+                                gradientTexture: mat.gradientTexture, foggy: mat.foggy,
+                                boundsMin: bMin, boundsMax: bMax)
+        gpuMesh.brightness = mat.brightness
+        gpuMesh.vertexFloats = skinned ? 22 : 14
+        // H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 빌드(실패 시 nil → Mesh3DShaders 폴터).
+        // 스키닝 메시는 CPU 프리스킨(8f, prepare3DCustomSkinBuffers)으로 rigid 입력 계약을 맞춘다.
+        if mat.customShader != nil {
+            gpuMesh.customShader = buildCustomMeshShader(mat, package: package, device: device,
+                sourceFormat: mesh.sourceFormat, sourceIsSkinned: skinned, boneCount: boneCount)
+            if gpuMesh.customShader?.usesSourceVertices == true, let raw = mesh.sourceVertexData {
+                gpuMesh.customVertexBuffer = raw.withUnsafeBytes {
+                    guard let base = $0.baseAddress else { return nil }
+                    return device.makeBuffer(bytes: base, length: $0.count)
+                }
+                if gpuMesh.customVertexBuffer == nil { gpuMesh.customShader = nil }
+            }
+            if skinned && gpuMesh.customShader != nil && gpuMesh.customShader?.usesSourceVertices != true {
+                gpuMesh.customSkinRing = DynamicVertexBuffer()
+                gpuMesh.modelMeshIndex = modelMeshIndex
+            }
+        }
+        // M3: PBR 노멀맵/마스크 텍스처 로드. normalTextureFormat 은 mf_normal 의 DecompressNormal
+        // 포맷 분기(resolveNormalMapFormat). 디코드 실패 시 종전과 동일하게 resolveTexture 의 흰
+        // 1×1 폴백으로 되돌아가(파이프라인 선택 :1383 무회귀), 그 경우 포맷 코드는 무의미(기본 0).
+        if let normalName = mat.normalTextureName {
+            if let n = resolveNormalMapFormat(normalName, package: package, device: device) {
+                gpuMesh.normalTexture = n.texture
+                gpuMesh.normalTextureFormat = n.formatCode
+            } else {
+                gpuMesh.normalTexture = resolveTexture(normalName, package: package, device: device)
+            }
+        }
+        if let maskName = mat.maskTextureName {
+            gpuMesh.maskTexture = resolveTexture(maskName, package: package, device: device)
+        }
+        // H4: REFRACT — 노멀맵(textures[1])을 resolveRefractNormal 로 로드(rg88 언팩 플래그 동반).
+        // 콤보 꺼짐/노멀맵 부재/로드 실패 시 refract 미적용 → 기존 파이프라인 폴터(무크래시).
+        if mat.refract, let normalName = mat.normalTextureName,
+           let n = resolveRefractNormal(normalName, package: package, device: device) {
+            gpuMesh.refract = true
+            gpuMesh.refractAmount = mat.refractAmount
+            gpuMesh.refractNormal = n.texture
+            gpuMesh.refractRG88 = n.rg88
+        }
+        // M6(⑥): REFLECTION — 노멀맵/텍스처 로드 불요(기하 노멀만 사용), 콤보 플래그만으로 게이트.
+        if mat.reflection {
+            gpuMesh.reflection = true
+            gpuMesh.reflectivity = mat.reflectivity
+        }
+        return gpuMesh
+    }
 
     /// F662: 패키지 scene.json 의 general 딕셔너리에서 scene fog 를 읽는다(SceneDocument 미파스 필드).
     /// scene.json 부재/파스 실패/general 부재 시 fog 비활성(기본값) — 어떤 입력에도 throw 없음.
@@ -267,7 +420,12 @@ extension SceneRenderer {
         scene3DSkylight = SIMD3(doc.skylightColor.x, doc.skylightColor.y, doc.skylightColor.z)
         // F662(S-45): scene fog(general.fogdistance*/fogheight*) — SceneDocument 미파스 필드라
         // 패키지 scene.json 을 여기서 직독(Scene3DFog.parse). 읽기 실패/필드 부재 시 .disabled(fog 없음).
-        scene3DFog = Self.parseScene3DFog(package: package)  // F745: 정식 저장 프로퍼티(F662 주석 참조)
+        let general = package.data(for: "scene.json").flatMap(AssetJSON.dictionary)?["general"] as? [String: Any] ?? [:]
+        let resolvedGeneral = SceneDocument.resolvingUserBindings(general, userProps: scene3DUserValues) as? [String: Any] ?? general
+        scene3DFog = Scene3DFog.parse(general: resolvedGeneral)
+        scene3DEnvironment = Scene3DEnvironmentRuntime(general: resolvedGeneral) { source in
+            self.makeScriptEngine(source, owner: .scene)
+        }
         meshPipelineOver = mesh3DPipeline(lib: lib, vertex: "mv_main", additive: false, device: device)
         meshPipelineAdditive = mesh3DPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
         meshPipelineSkin = mesh3DPipeline(lib: lib, vertex: "mv_skin", additive: false, device: device)
@@ -293,7 +451,7 @@ extension SceneRenderer {
 
         // 카메라 프로퍼티 스크립트(eye/center/up/fov) 로드 — per-frame 재평가로 카메라 애니(젤다 fov 등).
         for key in ["eye", "center", "up", "fov"] {
-            guard let src = doc.cameraScripts[key], let e = makeScriptEngine(src) else { continue }
+            guard let src = doc.cameraScripts[key], let e = makeScriptEngine(src, owner: .scene) else { continue }
             cameraScripts.append(Script3D(key: key, engine: e))
         }
 
@@ -318,86 +476,10 @@ extension SceneRenderer {
             var meshes: [GPU3DMesh] = []
             var anySkinned = false
             for (modelMeshIdx, mesh) in model.meshes.enumerated() {
-                guard !mesh.vertices.isEmpty, !mesh.indices.isEmpty else { continue }
-                // 스키닝 메시(v3): pos3+normal3+uv2+boneIdx4+weight4(16f) — GPU 정점 스키닝(mv_skin).
-                // 정적 메시: pos3+normal3+uv2(8f). 본 인덱스는 boneCount-1 로 clamp(셰이더 OOB 방지).
-                let skinned = mesh.skinned && boneCount > 0
-                var packed = [Float]()
-                packed.reserveCapacity(mesh.vertices.count * (skinned ? 16 : 8))
-                for v in mesh.vertices {
-                    packed.append(contentsOf: [v.position.x, v.position.y, v.position.z,
-                                               v.normal.x, v.normal.y, v.normal.z,
-                                               v.uv.x, v.uv.y])
-                    if skinned {
-                        let mx = UInt32(max(0, boneCount - 1))
-                        packed.append(contentsOf: [Float(min(v.boneIndices.x, mx)), Float(min(v.boneIndices.y, mx)),
-                                                   Float(min(v.boneIndices.z, mx)), Float(min(v.boneIndices.w, mx)),
-                                                   v.weights.x, v.weights.y, v.weights.z, v.weights.w])
-                    }
-                }
-                guard let vbuf = device.makeBuffer(bytes: packed, length: MemoryLayout<Float>.stride * packed.count),
-                      let ibuf = mesh.indices.withUnsafeBytes({ device.makeBuffer(bytes: $0.baseAddress!, length: $0.count) }),
-                      let mat = loadMesh3DMaterial(mesh.material, package: package, device: device,
-                                                   compositeImageTextures: compositeImageTextures)
-                else { continue }
-                if skinned { anySkinned = true }
-                // F661: 로컬 AABB(정점 min/max) — directional 오소 섀도우의 씬 바운드 피팅 입력.
-                // MDL 헤더 AABB(V0017+)와 동치이나 V0016 은 헤더에 없어 정점에서 일괄 산출한다.
-                var bMin = SIMD3<Float>(repeating: Float.greatestFiniteMagnitude)
-                var bMax = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
-                for v in mesh.vertices {
-                    bMin = simd_min(bMin, v.position)
-                    bMax = simd_max(bMax, v.position)
-                }
-                var gpuMesh = GPU3DMesh(vbuf: vbuf, ibuf: ibuf, indexCount: mesh.indices.count,
-                                        texture: mat.texture, tint: mat.tint,
-                                        roughness: mat.roughness, metallic: mat.metallic,
-                                        specularTint: mat.specularTint, alphaCutoff: mat.alphaCutoff,
-                                        shadowEligible: mat.shadowEligible, unlit: mat.unlit,
-                                        cullBack: mat.cullBack, additive: mat.additive,
-                                        depthTest: mat.depthTest, depthWrite: mat.depthWrite, skinned: skinned,
-                                        rimLighting: mat.rimLighting, shadingGradient: mat.shadingGradient,
-                                        rimAmount: mat.rimAmount, rimExponent: mat.rimExponent,
-                                        gradientTexture: mat.gradientTexture, foggy: mat.foggy,
-                                        boundsMin: bMin, boundsMax: bMax)
-                gpuMesh.brightness = mat.brightness
-                // H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 빌드(실패 시 nil → Mesh3DShaders 폴터).
-                // 스키닝 메시는 CPU 프리스킨(8f, prepare3DCustomSkinBuffers)으로 rigid 입력 계약을 맞춘다.
-                if mat.customShader != nil {
-                    gpuMesh.customShader = buildCustomMeshShader(mat, package: package, device: device)
-                    if skinned && gpuMesh.customShader != nil {
-                        gpuMesh.customSkinRing = DynamicVertexBuffer()
-                        gpuMesh.modelMeshIndex = modelMeshIdx
-                    }
-                }
-                // M3: PBR 노멀맵/마스크 텍스처 로드. normalTextureFormat 은 mf_normal 의 DecompressNormal
-                // 포맷 분기(resolveNormalMapFormat). 디코드 실패 시 종전과 동일하게 resolveTexture 의 흰
-                // 1×1 폴백으로 되돌아가(파이프라인 선택 :1383 무회귀), 그 경우 포맷 코드는 무의미(기본 0).
-                if let normalName = mat.normalTextureName {
-                    if let n = resolveNormalMapFormat(normalName, package: package, device: device) {
-                        gpuMesh.normalTexture = n.texture
-                        gpuMesh.normalTextureFormat = n.formatCode
-                    } else {
-                        gpuMesh.normalTexture = resolveTexture(normalName, package: package, device: device)
-                    }
-                }
-                if let maskName = mat.maskTextureName {
-                    gpuMesh.maskTexture = resolveTexture(maskName, package: package, device: device)
-                }
-                // H4: REFRACT — 노멀맵(textures[1])을 resolveRefractNormal 로 로드(rg88 언팩 플래그 동반).
-                // 콤보 꺼짐/노멀맵 부재/로드 실패 시 refract 미적용 → 기존 파이프라인 폴터(무크래시).
-                if mat.refract, let normalName = mat.normalTextureName,
-                   let n = resolveRefractNormal(normalName, package: package, device: device) {
-                    gpuMesh.refract = true
-                    gpuMesh.refractAmount = mat.refractAmount
-                    gpuMesh.refractNormal = n.texture
-                    gpuMesh.refractRG88 = n.rg88
-                }
-                // M6(⑥): REFLECTION — 노멀맵/텍스처 로드 불요(기하 노멀만 사용), 콤보 플래그만으로 게이트.
-                if mat.reflection {
-                    gpuMesh.reflection = true
-                    gpuMesh.reflectivity = mat.reflectivity
-                }
+                guard let gpuMesh = make3DMesh(mesh, package: package, device: device,
+                                                boneCount: boneCount, modelMeshIndex: modelMeshIdx,
+                                                compositeImageTextures: compositeImageTextures) else { continue }
+                if gpuMesh.skinned { anySkinned = true }
                 meshes.append(gpuMesh)
             }
             guard !meshes.isEmpty else { skipped += 1; continue }
@@ -418,10 +500,12 @@ extension SceneRenderer {
                                                    clipId: obj.animation?.clipId)
                     : -1
             }
-            meshRenderables.append(MeshRenderable(id: obj.id, meshes: meshes, order: obj.order, name: obj.name,
+            var renderable = MeshRenderable(id: obj.id, meshes: meshes, order: obj.order, name: obj.name,
                                                   model: keepModel, animIndex: animIndex,
                                                   animRate: obj.animation?.rate ?? 1, boneRing: boneRing,
-                                                  castShadow: obj.castShadow))
+                                                  castShadow: obj.castShadow)
+            if !model.bones.isEmpty { renderable.animationState = make3DAnimationState(model: model, object: obj) }
+            meshRenderables.append(renderable)
             loaded += 1
         }
 
@@ -455,27 +539,11 @@ extension SceneRenderer {
             }
             let effW = layer.isFrameBuffer ? Int(max(1, projW)) : texW
             let effH = layer.isFrameBuffer ? Int(max(1, projH)) : texH
-            var effects: [EffectGPU] = []
-            // W4b-③: 2D buildEffectChain(SceneRendererResources.swift:173-176)과 동일한 WAPLE_EFFECT_SKIP
-            // 파리티 게이트 — 종전엔 3D 빌보드(프레임버퍼 후처리 포함) 경로에 이 진단 스위치가 없어
-            // 3D 씬의 전화면 흑화(3706286085: water_caustics+cursorripple) 이분에 pkg 물리 패치가
-            // 필요했다(감사 evidence). 2D 와 동형 이름 필터만 — 판정 로직은 무변경.
-            let skipNames3D = Set((ProcessInfo.processInfo.environment["WAPLE_EFFECT_SKIP"] ?? "")
-                .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
-            for eff in layer.effects where !skipNames3D.contains(eff.name) {
-                // F733(S-5 잔여): compositeImageTextures 전달 — 2D 경로(F720, SceneRendererResources:235)와
-                // 동형. 생략 시 기본 인자 [:] 로 `_rt_imageLayerComposite_<id>` 슬롯이 베이스 텍스처 치환 없이
-                // 흰색 1×1 폴터로 바인드돼 blend/clipping_mask 계열 콘텐츠가 소실된다.
-                if let translated = buildTranslatedEffect(eff, package: package, device: device,
-                                                          texW: effW, texH: effH,
-                                                          compositeImageTextures: compositeImageTextures) {
-                    effects.append(translated)
-                } else if let handPort = buildHandPortEffect(eff, package: package, device: device) {
-                    effects.append(handPort)
-                } else {
-                    NSLog("%@", "[Waple] 3D billboard effect skipped: \(eff.name)")
-                }
-            }
+            // Shared builder owns effect visibility, IEffect material writes and diagnostic skip gates.
+            let effects = buildEffectChain(layer.effects, package: package, device: device,
+                                           texW: effW, texH: effH,
+                                           compositeImageTextures: compositeImageTextures,
+                                           baseNoInterp: resolveTextureNoInterpolation(layer.textureEntryName, package: package))
             if !effects.isEmpty { hasEffects = true }
             let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
                                     layer.color.z * layer.brightness, layer.alpha)
@@ -516,6 +584,8 @@ extension SceneRenderer {
                                  metallic: layer.metallic,
                                  specularTint: SIMD3(layer.specularTint.x, layer.specularTint.y, layer.specularTint.z),
                                  layerIndex: bbLayerIndex, id: layer.id)
+            bb.propertyAnimations = layer.animations
+            bb.foggy = layer.foggy
             attachScripts(bb, sources: layer.propertyScripts,
                           layerName: layer.name.isEmpty ? nil : layer.name,
                           currentLayerIndex: bbLayerIndex,
@@ -545,8 +615,8 @@ extension SceneRenderer {
             }
         }
         // 카메라 스크립트 또는 활성 애니(스키닝) 가 있으면 연속 렌더 필요.
-        let hasSkinAnim = meshRenderables.contains { $0.animIndex >= 0 }
-        has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim || !text3DControllers.isEmpty
+        let hasSkinAnim = meshRenderables.contains { $0.animIndex >= 0 || $0.animationState?.layers.isEmpty == false }
+        has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim || !text3DControllers.isEmpty || scene3DEnvironment?.isDynamic == true
 
         // F309: mount 직후 1회 프라이밍 패스. encode3D 는 매 프레임 text3DControllers(:717-722 상당)를
         // eval3DOrder 보다 항상 먼저 평가한다 — 순서를 뒤집으면(eval3DOrder→text) 이번엔 text(배열
@@ -570,59 +640,43 @@ extension SceneRenderer {
         // 래스터(TextRasterizer, 2D buildTexts 와 동일 경로) → Billboard3D 로 배선한다. 콘텐츠는 위 프라이밍이
         // 이미 확정한 text3DControllers[*].last(스크립트 없으면 t.text 그대로)로 1회만 래스터(동적 재래스터는
         // 후속 과제 — 위치/스케일/가시성은 attachScripts 로 매프레임 애니, 텍스트 '내용' 갱신만 유보).
-        // W-①: alpha/color 프로퍼티 스크립트는 의도적으로 미부착(origin/scale/angles/visible 만) — 실측
-        // 3509243656 의 "RST문자" UI 패널이 dd/yp/num 공유 상태로 얽힌 페이드 인/아웃 체인(여러 오브젝트가
-        // 같은 shared 변수를 주고받는 복합 상태머신)이라, 지금까지 미실행이던 text alpha 스크립트를 새로
-        // 돌리면 무관 이미지 빌보드(예: "RST界面背景备用" id=449, 32×32 세계단위 검은 배경 패널)가 엉뚱한
-        // 타이밍에 불투명해져 화면을 가리고, 셀프체크 이중평가에서 비결정 스냅샷까지 발생했다(측정: frac
-        // 0.0176~0.025, 재현 가능). 위치/크기/회전/가시성(이 항목의 핵심 — "world placement" 배선)은 이
-        // 상태머신과 무관해 안전하게 부착. alpha/color 페이드 애니는 후속 과제(BACKLOG).
+        // Content controllers are evaluated once in the frame prepass. Rasterization consumes their
+        // cached result, so text/layout/color changes never execute a stateful script a second time.
         var textBBLoaded = 0, textBBSkipped = 0
         for (uid, t) in doc.texts.enumerated() where !orthoHybrid {
             let content = controllerOf[uid].map { text3DControllers[$0].last } ?? t.text
-            guard let r = TextRasterizer.render(text: content, fontData: quietAssetData(t.font, package: package),
-                                                systemFontName: (t.font.hasPrefix("systemfont_") || t.font.isEmpty) ? t.font : nil,
-                                                pointSize: t.pointSize, maxWidth: t.maxWidth, maxRows: t.maxRows,
-                                                ellipsis: t.overflowEllipsis, justify: t.justify, align: t.horizontalAlign),
-                  let mtl = makeTexture(r.rgba, r.width, r.height, device) else { textBBSkipped += 1; continue }
+            let fontData = quietAssetData(t.font, package: package)
+            let color = SIMD3(t.color.x, t.color.y, t.color.z)
+            let raster = Self.rasterize3DText(t, content: content, color: color, fontData: fontData)
+            let width = raster?.width ?? 1, height = raster?.height ?? 1
+            guard let mtl = makeTexture(raster?.rgba ?? Data([0, 0, 0, 0]), width, height, device) else {
+                textBBSkipped += 1; continue
+            }
             // W-①: depthWrite 는 항상 false — 텍스트 쿼드는 알파 배경이 대부분(글리프만 불투명)인데 depthWrite
             // true 면 사각형 전체가 뎁스를 채워 그 뒤에 그려질 콘텐츠(장면 순서상 더 늦은 order)를 사각형
             // 형태로 가려버린다(실측: 3509243656 id=2054 — 투명 배경 영역이 불투명 검은 사각형으로 보임).
             // depthTest 는 유지(다른 메시/빌보드에 정상적으로 가려지는 건 맞는 동작).
-            let textInteractionSize = PointerHit.textHitSize(
-                inkBox: SIMD2(Float(r.width), Float(r.height)),
-                padding: SIMD2(t.padding.x, t.padding.y),
-                paddingActive: PointerHit.textPaddingActive(
-                    hasEffects: !t.effects.isEmpty,
-                    opaqueBackground: t.opaqueBackground,
-                    colorBlendMode: t.colorBlendMode))
-            let bb = Billboard3D(texture: mtl, size: SIMD2(Float(r.width), Float(r.height)),
-                                 interactionSize: textInteractionSize,
+            let rasterSize = raster.map { Self.text3DInkSize(hitSize: $0.hitSize, definition: t) } ?? .zero
+            let textEffects = buildEffectChain(t.effects, package: package, device: device,
+                                               texW: width, texH: height,
+                                               compositeImageTextures: compositeImageTextures)
+            let bb = Billboard3D(texture: mtl, size: rasterSize, interactionSize: raster?.hitSize ?? .zero,
                                  parent: t.parent, order: t.order, additive: false, isSolid: t.isSolid,
-                                 depthTest: true, depthWrite: false,
-                                 effects: [], texWidth: r.width, texHeight: r.height, isFrameBuffer: false,
+                                 depthTest: t.depthTest, depthWrite: false,
+                                 effects: textEffects, texWidth: width, texHeight: height, isFrameBuffer: false,
                                  origin: SIMD3(t.origin.x, t.origin.y, t.originZ), scale: SIMD2(t.scale.x, t.scale.y),
                                  angleZ: t.angleZ, tint: SIMD4(t.color.x, t.color.y, t.color.z, t.alpha),
                                  visible: t.initialVisible, lighting: false, roughness: 1, metallic: 0,
                                  specularTint: SIMD3(1, 1, 1), layerIndex: doc.layers.count + uid, id: t.id)
-            attachScripts(bb,
-                          sources: t.propertyScripts.filter { ["origin", "scale", "angles", "visible"].contains($0.key) },
+            bb.foggy = t.foggy
+            bb.textState = Billboard3D.TextState(definition: t, fontData: fontData,
+                                                controllerIndex: controllerOf[uid], content: content,
+                                                color: color, hasContent: raster != nil)
+            attachScripts(bb, sources: t.propertyScripts,
                           layerName: t.name.isEmpty ? nil : t.name,
                           currentLayerIndex: doc.layers.count + uid,
                           scriptProps: t.propertyScriptProps)
-            // alpha/color update는 3D 텍스트의 알려진 시각 정책상 계속 미평가한다(위 W-① 주석).
-            // 하지만 그 프로퍼티 스크립트가 export한 커서 훅까지 인스턴스 생성 전에 버리면 native의
-            // "바인드 프로퍼티와 무관하게 소유 객체로 배달" 계약을 깨뜨린다. 커서 훅이 실제로 있는
-            // 소스만 hook 전용 엔진으로 만들고 bb.scripts에는 넣지 않는다.
-            let cursorHooks = ["cursorClick", "cursorDown", "cursorUp", "cursorMove",
-                               "cursorEnter", "cursorLeave"]
-            for key in ["alpha", "color"] {
-                guard let src = t.propertyScripts[key], cursorHooks.contains(where: src.contains) else { continue }
-                _ = makeScriptEngine(src,
-                                     layerName: t.name.isEmpty ? nil : t.name,
-                                     currentLayerIndex: doc.layers.count + uid,
-                                     scriptPropsJSON: t.propertyScriptProps[key])
-            }
+            if !textEffects.isEmpty { hasEffects = true }
             billboards.append(bb)
             // billboardDefs 는 의도적으로 미추가(SceneLayer internal init — 타 모듈 WapleRender 에서 생성 불가,
             // text 오브젝트엔 대응 SceneLayer 도 없음). SceneRenderer.swift:443 의 이벤트 마커 결속 루프가
@@ -636,7 +690,7 @@ extension SceneRenderer {
             // encode3D 의 매프레임 evaluate3DScripts 가 그때부터 정상 평가 — 프라이밍 1회만 미적용, 무해
             // — F309 프라이밍 목적은 mesh/node 가 text 콘텐츠발 shared 를 초회부터 보는 것뿐).
             rebuild3DDrawOrders()
-            has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim || !text3DControllers.isEmpty
+            has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim || !text3DControllers.isEmpty || scene3DEnvironment?.isDynamic == true
             NSLog("%@", "[Waple] 3D scene text: \(textBBLoaded) billboards (\(textBBSkipped) skipped)")
         }
 
@@ -652,6 +706,8 @@ extension SceneRenderer {
                               angles: SIMD3(g.angles.x, g.angles.y, g.angles.z),
                               scale: SIMD3(g.scale.x, g.scale.y, g.scale.z),
                               visible: g.visible, order: g.order)
+            node.propertyAnimations = g.propertyAnimations
+            node.scriptProperties = g.propertyScriptProps
             entries.append((node, g.propertyScripts))
         }
         for model in doc.objects3D {
@@ -659,8 +715,13 @@ extension SceneRenderer {
                               origin: SIMD3(model.origin.x, model.origin.y, model.origin.z),
                               angles: SIMD3(model.angles.x, model.angles.y, model.angles.z),
                               scale: SIMD3(model.scale.x, model.scale.y, model.scale.z),
-                              visible: true, order: model.order)
+                              visible: model.initialVisible, order: model.order)
             node.scriptLayerName = model.name
+            node.baseTint = SIMD4(model.color.x, model.color.y, model.color.z, model.alpha)
+            node.tint = node.baseTint
+            node.propertyAnimations = model.propertyAnimations
+            node.scriptProperties = model.propertyScriptProps
+            node.attachment = model.attachment
             entries.append((node, model.propertyScripts))
         }
         // top-level 스크립트가 부모·형제를 읽기 전에 모든 소유자 identity를 등록한다.
@@ -673,15 +734,74 @@ extension SceneRenderer {
     }
 
     private func scriptLayerDescriptor(_ node: Node3D) -> SceneScriptLayerDescriptor {
-        SceneScriptLayerDescriptor(name: node.scriptLayerName, visible: node.visible,
+        var descriptor = SceneScriptLayerDescriptor(name: node.scriptLayerName, visible: node.visible, alpha: node.tint.w,
                                    origin: node.origin, scale: node.scale, angles: node.angles,
                                    id: node.id, parentId: node.parent)
+        descriptor.color = SIMD3(node.tint.x, node.tint.y, node.tint.z)
+        return descriptor
+    }
+
+    private static func rasterize3DText(_ text: SceneTextLayer, content: String,
+                                        color: SIMD3<Float>, fontData: Data?) -> TextRasterizer.Raster? {
+        TextRasterizer.render(text: content, fontData: fontData,
+                              systemFontName: (text.font.hasPrefix("systemfont_") || text.font.isEmpty) ? text.font : nil,
+                              pointSize: text.pointSize, maxWidth: text.maxWidth, maxRows: text.maxRows,
+                              ellipsis: text.overflowEllipsis, justify: text.justify, align: text.horizontalAlign,
+                              style: .init(layer: text), tint: color)
+    }
+
+    /// Keep the glyph extent separate from the styled bitmap and the native padded hit box.
+    private static func text3DInkSize(hitSize: SIMD2<Float>, definition: SceneTextLayer) -> SIMD2<Float> {
+        let padding = PointerHit.textHitSize(inkBox: .zero,
+            padding: SIMD2(definition.padding.x, definition.padding.y),
+            paddingActive: PointerHit.textPaddingActive(hasEffects: !definition.effects.isEmpty,
+                opaqueBackground: definition.opaqueBackground, colorBlendMode: definition.colorBlendMode))
+        return simd_max(.zero, hitSize - padding)
+    }
+
+    /// Reuses the already evaluated controller value; it must never call update/init itself.
+    func refresh3DTextTextures(device: MTLDevice) {
+        for bb in billboards {
+            guard let state = bb.textState else { continue }
+            let content = state.controllerIndex.flatMap { index in
+                text3DControllers.indices.contains(index) ? text3DControllers[index].last : nil
+            } ?? state.content
+            let color = SIMD3(bb.tint.x, bb.tint.y, bb.tint.z)
+            guard content != state.content || color != state.color else { continue }
+            guard let raster = Self.rasterize3DText(state.definition, content: content,
+                                                    color: color, fontData: state.fontData) else {
+                state.content = content; state.color = color; state.hasContent = false
+                bb.size = .zero; bb.interactionSize = .zero
+                publish3DTextDescriptor(bb, content: content, color: color)
+                continue
+            }
+            guard let texture = makeTexture(raster.rgba, raster.width, raster.height, device) else { continue }
+            bb.texture = texture; bb.size = Self.text3DInkSize(hitSize: raster.hitSize, definition: state.definition)
+            bb.interactionSize = raster.hitSize
+            bb.texWidth = raster.width; bb.texHeight = raster.height
+            // Effect FBOs are sized from the current destination at encode time. Keep their
+            // existing engines/unique stores when content changes instead of rerunning top-level JS.
+            state.content = content; state.color = color; state.hasContent = true
+            publish3DTextDescriptor(bb, content: content, color: color)
+        }
+    }
+
+    private func publish3DTextDescriptor(_ bb: Billboard3D, content: String, color: SIMD3<Float>) {
+        guard sceneScriptBaseDescriptors.indices.contains(bb.layerIndex) else { return }
+        sceneScriptBaseDescriptors[bb.layerIndex].text = content
+        sceneScriptBaseDescriptors[bb.layerIndex].size = bb.interactionSize
+        sceneScriptBaseDescriptors[bb.layerIndex].color = color
+        var descriptor = sceneScriptBaseDescriptors[bb.layerIndex]
+        descriptor.visible = bb.visible; descriptor.alpha = bb.tint.w
+        descriptor.origin = bb.origin; descriptor.scale = SIMD3(bb.scale.x, bb.scale.y, 1)
+        descriptor.angles = SIMD3(0, 0, bb.angleZ)
+        sceneScript?.updateSceneLayers([descriptor], startingAt: bb.layerIndex)
     }
 
     func rebuild3DDrawOrders() {
         var evalItems: [(order: Int, bb: Bool, idx: Int)] = []
-        for (i, n) in nodes3D.enumerated() where !n.scripts.isEmpty { evalItems.append((n.order, false, i)) }
-        for (i, b) in billboards.enumerated() where !b.scripts.isEmpty { evalItems.append((b.order, true, i)) }
+        for (i, n) in nodes3D.enumerated() where !n.scripts.isEmpty || !n.propertyAnimations.isEmpty { evalItems.append((n.order, false, i)) }
+        for (i, b) in billboards.enumerated() where !b.scripts.isEmpty || !b.propertyAnimations.isEmpty { evalItems.append((b.order, true, i)) }
         // 안정 정렬(order, 삽입순) — authored 순서와 동률의 상대순서를 보존한다.
         eval3DOrder = evalItems.enumerated().sorted { ($0.1.order, $0.0) < ($1.1.order, $1.0) }.map { $0.1 }
         var drawItems: [(order: Int, bb: Bool, idx: Int)] = []
@@ -694,6 +814,7 @@ extension SceneRenderer {
     /// 프라이밍 호출과 encode3D 의 매 프레임 호출이 이 구현을 공유한다(F309 — 두 호출부가 갈라지면 프라이밍이
     /// 실호출과 다른 걸 평가해 무의미해진다).
     func evaluate3DScripts(time: Float) {
+        publish3DRuntimeSnapshots()
         for i in text3DControllers.indices {
             text3DControllers[i].engine.setRuntime(Double(time))
             if let s = text3DControllers[i].engine.evaluate(current: text3DControllers[i].last) {
@@ -719,6 +840,11 @@ extension SceneRenderer {
         if let firstIndex = nodes3D.first?.scriptLayerIndex {
             sceneScript?.updateSceneLayers(nodes3D.map(scriptLayerDescriptor), startingAt: firstIndex)
         }
+        for renderable in meshRenderables { renderable.animationState?.evaluate(time: time) }
+        if let environment = scene3DEnvironment { scene3DFog = environment.evaluate(time: time) }
+        consumeSceneRuntimeCommands()
+        if let device { refresh3DTextTextures(device: device) }
+        publish3DRuntimeSnapshots()
     }
 
     /// 카메라 프로퍼티 스크립트를 정확히 한 번 평가하고 exact world-space shake까지 얹는다.
@@ -826,9 +952,10 @@ extension SceneRenderer {
 
     /// 노드/빌보드에 프로퍼티 스크립트 엔진 부착(씬 공유 컨텍스트 — top-level 사이드이펙트가 로드 시점에 실행).
     func attachScripts(_ n: Node3D, sources: [String: String]) {
-        for key in ["visible", "origin", "angles", "scale"] {
+        for key in ["visible", "origin", "angles", "scale", "color", "alpha"] {
             guard let src = sources[key],
-                  let e = makeScriptEngine(src, currentLayerIndex: n.scriptLayerIndex) else { continue }
+                  let e = makeScriptEngine(src, currentLayerIndex: n.scriptLayerIndex,
+                                           scriptPropsJSON: n.scriptProperties[key]) else { continue }
             n.scripts.append(Script3D(key: key, engine: e))
         }
     }
@@ -1237,7 +1364,9 @@ extension SceneRenderer {
     /// G①: env 게이트 + 화이트리스트(위 builtinMeshShaderWhitelist) 통과 시에만 베이스 팩 자체도 소스로
     /// 허용(quietAssetData — pkg 우선은 그대로, 없을 때만 베이스 폴백). 게이트 OFF/화이트리스트 밖은
     /// 종전과 100% 동일(packageData, pkg 전용) — 기본 경로 비트동일 보장.
-    func buildCustomMeshShader(_ mat: Mesh3DMaterialInfo, package: ScenePackage, device: MTLDevice) -> CustomMeshShader? {
+    func buildCustomMeshShader(_ mat: Mesh3DMaterialInfo, package: ScenePackage, device: MTLDevice,
+                               sourceFormat: UInt32? = nil, sourceIsSkinned: Bool = false,
+                               boneCount: Int = 0) -> CustomMeshShader? {
         guard let shaderName = mat.customShader else { return nil }
         let include: (String) -> String? = { header in
             for cand in ["shaders/\(header)", header] {
@@ -1257,6 +1386,13 @@ extension SceneRenderer {
             return nil
         }
         var combos = mat.customCombos
+        let sourceLayout = sourceFormat.flatMap(Model3D.vertexAttributeLayout)
+        combos["SKINNING"] = sourceLayout != nil && sourceIsSkinned ? 1 : 0
+        combos["BONECOUNT"] = max(1, boneCount)
+        combos["HDR"] = sceneIsHDR ? 1 : 0
+        let lightPlan = Scene3DLighting.shaderLightValues(Scene3DLighting.resolveLights(scene3DLights,
+            nodes: make3DNodeMap(), config: scene3DLightConfig))
+        for (key, value) in lightPlan.combos { combos[key] = value }
         for (slot, comboName) in GLSLTranslator.samplerCombos(frag) where combos[comboName] == nil {
             let bound = slot < mat.customTextures.count && mat.customTextures[slot] != nil
             if bound { combos[comboName] = 1 }
@@ -1278,24 +1414,41 @@ extension SceneRenderer {
         pd.vertexFunction = lib.makeFunction(name: "ev_main")
         pd.fragmentFunction = lib.makeFunction(name: "ef_main")
         let vd = MTLVertexDescriptor()
-        // 메시 정점 레이아웃 pos3+normal3+uv2(8f = 32B): a_Position=float3@0, a_TexCoord=float2@24.
-        // (H1 Phase 2 초기의 stride 20/uv@12 는 2D 쿼드 레이아웃 잘못 옮긴 값 — 8f 메시와 불일치하는
-        //  잠재 결함. 스키닝 메시도 CPU 프리스킨 후 동일 8f 라 같은 디스크립터를 쓴다.)
-        // P⑥: bufferIndex 4(0 아님) — 번역 셰이더는 머티리얼 상수가 1개라도 있으면 `p [[buffer(0)]]`
-        // 를 선언(GLSLTranslator.swift:1628)하므로 stage_in 정점 버퍼를 0에 두면 슬롯이 충돌한다
-        // (2D 커스텀 레이어 경로가 이미 회피하는 것과 동일 계약 — translatedLayerPipeline 참조).
-        vd.attributes[0].format = .float3; vd.attributes[0].offset = 0; vd.attributes[0].bufferIndex = 4
-        vd.attributes[1].format = .float2; vd.attributes[1].offset = 24; vd.attributes[1].bufferIndex = 4
-        // [2026-08-21] `a_Normal`(attribute 2) — 번역기가 **실제로 실었을 때만** 꽂는다
-        // (`docs/re/shader-uniforms.md` §7.6/§7.7). 새 버퍼가 필요 없다: 메시 정점이 이미
-        // `pos3+normal3+uv2`(8f) 라 법선이 **오프셋 12** 에 있다.
-        // **무조건 꽂으면 안 된다** — 셰이더가 안 실은 attribute 를 디스크립터에만 넣는 것은
-        // Metal 이 무시하지만, 반대(번역기가 싣고 디스크립터가 빠짐)는 파이프라인 생성 실패다.
-        // 두 쪽이 같은 조건을 봐야 한다: 조건의 단일 출처가 `t.vertexAttributes` 다.
-        if t.vertexAttributes.contains("a_Normal") {
-            vd.attributes[2].format = .float3; vd.attributes[2].offset = 12; vd.attributes[2].bufferIndex = 4
+        if let layout = sourceLayout {
+            for name in t.vertexAttributes {
+                guard let shaderAttribute = GLSLTranslator.vertexAttributeWhitelist.first(where: { $0.name == name }) else { return nil }
+                let attribute = layout.attributes.first(where: { $0.name == name })
+                    ?? (name == "a_Position" ? layout.attributes.first(where: { $0.name == "a_PositionVec4" }) : nil)
+                    ?? (name == "a_TexCoord" ? layout.attributes.first(where: { $0.name == "a_TexCoordVec4" }) : nil)
+                    ?? (name == "a_TexCoordVec4" ? layout.attributes.first(where: { $0.name == "a_TexCoord" }) : nil)
+                guard let attribute else {
+                    WapleLog.warn("[Waple] mesh source has no required vertex channel: \(name)")
+                    return nil
+                }
+                let count = name == "a_Position" ? min(3, attribute.components)
+                    : name == "a_TexCoord" ? min(2, attribute.components) : attribute.components
+                let formats: [MTLVertexFormat] = attribute.isInteger
+                    ? [.uint, .uint2, .uint3, .uint4] : [.float, .float2, .float3, .float4]
+                guard (1...4).contains(count) else { return nil }
+                vd.attributes[shaderAttribute.slot].format = formats[count - 1]
+                vd.attributes[shaderAttribute.slot].offset = attribute.offset
+                vd.attributes[shaderAttribute.slot].bufferIndex = 4
+            }
+            vd.layouts[4].stride = layout.stride
+        } else {
+            let supported = Set(["a_Position", "a_TexCoord", "a_TexCoordVec4", "a_Normal", "a_Tangent4"])
+            guard t.vertexAttributes.allSatisfy(supported.contains) else { return nil }
+            vd.attributes[0].format = .float3; vd.attributes[0].offset = 0; vd.attributes[0].bufferIndex = 4
+            vd.attributes[1].format = t.vertexAttributes.contains("a_TexCoordVec4") ? .float4 : .float2
+            vd.attributes[1].offset = 40; vd.attributes[1].bufferIndex = 4
+            if t.vertexAttributes.contains("a_Normal") {
+                vd.attributes[2].format = .float3; vd.attributes[2].offset = 12; vd.attributes[2].bufferIndex = 4
+            }
+            if t.vertexAttributes.contains("a_Tangent4") {
+                vd.attributes[3].format = .float4; vd.attributes[3].offset = 24; vd.attributes[3].bufferIndex = 4
+            }
+            vd.layouts[4].stride = 56
         }
-        vd.layouts[4].stride = 32
         pd.vertexDescriptor = vd
         pd.depthAttachmentPixelFormat = .depth32Float
         let a = pd.colorAttachments[0]!
@@ -1312,15 +1465,13 @@ extension SceneRenderer {
         // (t.materialParams 는 GLSL 유니폼 선언 순서 — sceneKey 로 mat.customConstants 조회, 없으면 셰이더
         // 기본값). 스크립트(.scripted) 는 3D 머티리얼 파서가 애초에 뽑지 않아(loadMesh3DMaterial 스코프
         // 밖) 대상 없음 — 2D 와 달리 per-frame 재평가는 미지원(정적 상수만).
-        let material: [SIMD4<Float>] = t.materialParams.map { p in
-            let v = mat.customConstants[p.sceneKey] ?? p.defaultValue
-            return SIMD4<Float>(v.count > 0 ? v[0] : 0, v.count > 1 ? v[1] : 0,
-                                v.count > 2 ? v[2] : 0, v.count > 3 ? v[3] : 0)
+        let material = packedMaterial(t.materialParams) { parameter in
+            mat.customConstants[parameter.sceneKey] ?? parameter.defaultValue
         }
         let lw = Float(max(1, mat.texture.width)), lh = Float(max(1, mat.texture.height))
-        var texRes = [SIMD4<Float>](repeating: SIMD4(lw, lh, lw, lh), count: 8)
-        var texWrap = [Float](repeating: 0, count: 8)
-        var texFilter = [Float](repeating: 0, count: 8)
+        var texRes = [SIMD4<Float>](repeating: SIMD4(lw, lh, lw, lh), count: 10)
+        var texWrap = [Float](repeating: 0, count: 10)
+        var texFilter = [Float](repeating: 0, count: 10)
         texRes[0] = SIMD4(lw, lh, lw, lh)
         // **[2026-09-01 r4-43]** 알베도는 **슬롯 0 전용**이다. 종전 `first { $0 != nil }`(첫 non-null)
         // 은 슬롯을 무시해 `{"textures":[null,"foil_silver_normal"]}` 같은 재질에서 슬롯 1 노멀맵의
@@ -1335,7 +1486,7 @@ extension SceneRenderer {
             let name = slot < mat.customTextures.count ? mat.customTextures[slot] : nil
             if let tex = resolveTexture(name, package: package, device: device) {
                 aux.append((slot, tex))
-                if slot < 8 {
+                if slot < 10 {
                     let w = Float(max(1, tex.width)), h = Float(max(1, tex.height))
                     texRes[slot] = SIMD4(w, h, w, h)
                     texWrap[slot] = resolveTextureClampUVs(name, package: package) ? 1 : 0
@@ -1344,7 +1495,9 @@ extension SceneRenderer {
             }
         }
         return CustomMeshShader(pipeline: pipe, material: material, aux: aux,
-                                texRes: texRes, texWrap: texWrap, texFilter: texFilter)
+                                texRes: texRes, texWrap: texWrap, texFilter: texFilter,
+                                materialParams: t.materialParams, engineParams: t.engineParams,
+                                vertexTextureSlots: t.vertexTextureSlots, usesSourceVertices: sourceLayout != nil)
     }
 
     func shadow3DPipeline(lib: MTLLibrary, vertex: String, cutout: Bool,
@@ -1424,7 +1577,7 @@ extension SceneRenderer {
         var result: [Int: MTLBuffer] = [:]
         for (index, renderable) in meshRenderables.enumerated() {
             guard let model = renderable.model, let ring = renderable.boneRing, !model.bones.isEmpty else { continue }
-            let matrices = Model3DPose.skinMatrices(
+            let matrices = renderable.animationState?.skinMatrices ?? Model3DPose.skinMatrices(
                 model: model, animation: renderable.animIndex, time: time, rate: renderable.animRate)
             guard !matrices.isEmpty, let buffer = ring.load(matrices, device: device) else { continue }
             result[index] = buffer
@@ -1446,13 +1599,14 @@ extension SceneRenderer {
                 guard let ring = mesh.customSkinRing,
                       mesh.modelMeshIndex >= 0, mesh.modelMeshIndex < model.meshes.count else { continue }
                 if matrices == nil {
-                    let m = Model3DPose.skinMatrices(
+                    let m = renderable.animationState?.skinMatrices ?? Model3DPose.skinMatrices(
                         model: model, animation: renderable.animIndex, time: time, rate: renderable.animRate)
                     guard !m.isEmpty else { break }
                     matrices = m
                 }
                 guard let m = matrices else { break }
-                let packed = Model3DPose.cpuSkinnedPacked(mesh: model.meshes[mesh.modelMeshIndex], matrices: m)
+                let packed = Model3DPose.cpuSkinnedPacked(mesh: model.meshes[mesh.modelMeshIndex], matrices: m,
+                                                            includeTangents: true, includeUV1: true)
                 guard let buffer = ring.load(packed, device: device) else { continue }
                 result[index, default: [:]][mi] = buffer
             }
@@ -1616,7 +1770,8 @@ extension SceneRenderer {
                             pipeline = cutout ? shadowPipelineStaticCutout : shadowPipelineStaticOpaque
                         }
                         guard let pipeline else { continue }
-                        uniform.tint = mesh.tint
+                        uniform.tint = mesh.tint * model3DTint(for: renderable.id)
+                        uniform.extra.y = Float(mesh.vertexFloats)
                         uniform.material.z = mesh.alphaCutoff
                         encoder.setRenderPipelineState(pipeline)
                         encoder.setCullMode(mesh.cullBack ? .back : .none)
@@ -1639,21 +1794,24 @@ extension SceneRenderer {
     }
 
     /// Metal encoder는 framebuffer billboard에서 재생성되므로 scene-wide PBR 상수를 한 곳에서 재바인드한다.
-    func bindScene3DLighting(frame: inout Scene3DFrameUniform,
+    @discardableResult func bindScene3DLighting(frame: inout Scene3DFrameUniform,
                             lights: [Scene3DLightUniform],
                             shadowMatrices: [simd_float4x4],
                             shadowTexture: MTLTexture?,
-                            into encoder: MTLRenderCommandEncoder) {
+                            into encoder: MTLRenderCommandEncoder) -> Bool {
         encoder.setFragmentBytes(&frame, length: MemoryLayout<Scene3DFrameUniform>.stride, index: 2)
-        lights.withUnsafeBytes { bytes in
-            guard let base = bytes.baseAddress else { return }
-            encoder.setFragmentBytes(base, length: bytes.count, index: 3)
+        func bind<T>(_ values: [T], index: Int) -> Bool {
+            values.withUnsafeBytes { bytes in
+                guard let base = bytes.baseAddress else { return false }
+                if bytes.count <= 4096 { encoder.setFragmentBytes(base, length: bytes.count, index: index); return true }
+                guard let buffer = encoder.device.makeBuffer(bytes: base, length: bytes.count) else { return false }
+                encoder.setFragmentBuffer(buffer, offset: 0, index: index)
+                return true
+            }
         }
-        shadowMatrices.withUnsafeBytes { bytes in
-            guard let base = bytes.baseAddress else { return }
-            encoder.setFragmentBytes(base, length: bytes.count, index: 4)
-        }
+        guard bind(lights, index: 3), bind(shadowMatrices, index: 4) else { return false }
         encoder.setFragmentTexture(shadowTexture, index: 1)
+        return true
     }
 
     /// 3D 메시 패스: target 에 clearColor 로 클리어 + 뎁스(.less) 붙여 씬 순서대로 드로우.
@@ -1677,23 +1835,7 @@ extension SceneRenderer {
         }
         // text/node/camera 스크립트와 shake는 호출부의 frame prepass에서 정확히 한 번 평가됐다.
         // 여기서 재평가하면 stateful JS의 side effect가 한 프레임에 두 번 진행된다.
-        // 현재 로컬 변환으로 계층 노드 맵 재구성(월드행렬 합성 입력).
-        var nmap: [Int: Scene3DMath.Node] = [:]
-        nmap.reserveCapacity(nodes3D.count + billboards.count)
-        for n in nodes3D {
-            nmap[n.id] = Scene3DMath.Node(origin: n.origin, angles: n.angles, scale: n.scale,
-                                          parent: n.parent, visible: n.visible)
-        }
-        // E1(⑦): 빌보드도 다른 오브젝트의 parent 가 될 수 있다 — 종전엔 nmap 에 nodes3D 만 있어
-        // billboard 를 parent 참조하는 요소가 Scene3DMath.worldMatrix(nil 반환)에 매프레임 조용히
-        // 드롭됐다. encodeBillboard 자신의 로컬 변환(:1470, angles 는 카메라-페이싱이라 항등 — 실제
-        // 회전은 roll 로 별도 적용)과 동일 규약으로 등록해 자신이 렌더되는 위치와 일치시킨다.
-        // 레이어(빌보드) id 가 nodes3D id 와 충돌하면 F437 규약과 동형으로 빌보드(이미지 콘텐츠) 우선.
-        for bb in billboards where bb.id != 0 {
-            nmap[bb.id] = Scene3DMath.Node(origin: bb.origin, angles: SIMD3<Float>(0, 0, 0),
-                                           scale: SIMD3(bb.scale.x, bb.scale.y, 1),
-                                           parent: bb.parent, visible: bb.visible)
-        }
+        let nmap = make3DNodeMap()
         var billboardTextures: [Int: MTLTexture] = [:]
         for (i, bb) in billboards.enumerated() where !bb.effects.isEmpty && !bb.isFrameBuffer {
             var current = bb.texture
@@ -1791,9 +1933,9 @@ extension SceneRenderer {
         // 와인딩: front = CCW(A/B 실측 — CW 는 젤다 회랑이 인사이드아웃: 근접 벽이 컬링되어
         // 뒤쪽 외벽이 보임). cullmode "normal" 메시가 CCW-front 백페이스 컬에서 preview 와 일치.
         enc.setFrontFacing(.counterClockwise)
-        bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
+        guard bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
                             shadowMatrices: shadowResult.matrices, shadowTexture: shadowResult.texture,
-                            into: enc)
+                            into: enc) else { enc.endEncoding(); return false }
         let debug3D = Self.debugFlag("WAPLE_3D_DEBUG")
         for item in draw3DOrder {
             if item.bb {
@@ -1839,9 +1981,9 @@ extension SceneRenderer {
                         guard let nextEnc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return false }
                         enc = nextEnc
                         enc.setFrontFacing(.counterClockwise)
-                        bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
+                        guard bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
                                             shadowMatrices: shadowResult.matrices,
-                                            shadowTexture: shadowResult.texture, into: enc)
+                                            shadowTexture: shadowResult.texture, into: enc) else { enc.endEncoding(); return false }
                         if let srcTex {
                             // 프레임버퍼 후처리(fullscreenlayer)는 스크린공간 풀스크린 합성 — 카메라 프로젝션 우회.
                             encodeFullscreenComposite(bb, texture: srcTex, into: enc, device: device, over: over)
@@ -1873,7 +2015,7 @@ extension SceneRenderer {
                 for (meshIdx, mesh) in mr.meshes.enumerated() {
                     // 스키닝 메시(16f 패킹)는 반드시 스키닝 파이프라인 필요 — 본버퍼 미준비면 스킵(8f 셰이더로 오독 방지).
                     if mesh.skinned && boneBuf == nil { continue }
-                    u.tint = mesh.tint
+                    u.tint = mesh.tint * model3DTint(for: mr.id)
                     u.material = SIMD4(mesh.roughness, mesh.metallic, mesh.alphaCutoff, mesh.unlit ? 0 : 1)
                     // F662: specularTint.w = fog 모드(0 비적용/1 rgb/2 rgb+alpha additive). scene fog 활성 +
                     // 머티리얼 FOG!=0 일 때만. fullscreen composite(unlit, 스크린공간)는 0 유지(별도 경로).
@@ -1887,7 +2029,7 @@ extension SceneRenderer {
                     // shaders.combos.engineInjected · render-pass bit13), LDR 폴백에서는 1 을 넘는 곱을
                     // 흡수할 톤맵/saturate 패스가 아예 없어 그대로 백화가 된다.
                     // 배치는 refract/reflect 분기보다 **위** — 세 드로우 경로가 같은 u 를 쓴다.
-                    u.extra = SIMD4(sceneIsHDR ? mesh.brightness : 1, 0, 0, 0)
+                    u.extra = SIMD4(sceneIsHDR ? mesh.brightness : 1, Float(mesh.vertexFloats), 0, 0)
                     let useSkin = mesh.skinned && boneBuf != nil
                     let customSkinBuf = customSkins?[meshIdx]
                     // H4: REFRACT 메시(정적·비커스텀 한정 — 커스텀 셰이더/스키닝은 기존 경로 폴터): 여기까지의
@@ -1923,9 +2065,9 @@ extension SceneRenderer {
                         guard let nextEnc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return false }
                         enc = nextEnc
                         enc.setFrontFacing(.counterClockwise)
-                        bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
+                        guard bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
                                             shadowMatrices: shadowResult.matrices,
-                                            shadowTexture: shadowResult.texture, into: enc)
+                                            shadowTexture: shadowResult.texture, into: enc) else { enc.endEncoding(); return false }
                         if let snap {
                             enc.setRenderPipelineState(refractPipe)
                             if let ds = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: device) {
@@ -1981,9 +2123,9 @@ extension SceneRenderer {
                         guard let nextEnc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return false }
                         enc = nextEnc
                         enc.setFrontFacing(.counterClockwise)
-                        bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
+                        guard bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
                                             shadowMatrices: shadowResult.matrices,
-                                            shadowTexture: shadowResult.texture, into: enc)
+                                            shadowTexture: shadowResult.texture, into: enc) else { enc.endEncoding(); return false }
                         if let snap {
                             enc.setRenderPipelineState(reflectPipe)
                             if let ds = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: device) {
@@ -2012,10 +2154,11 @@ extension SceneRenderer {
                     var usedCustom = false
                     // H1 Phase 2: 커스텀 셰이더 파이프라인 우선. 스키닝 메시는 CPU 프리스킨(8f) 버퍼로
                     // rigid 입력 계약을 맞춘다(프리스킨 실패 시 스톡 GPU 스키닝 mv_skin 폴터).
-                    if let custom = mesh.customShader, !mesh.skinned || customSkinBuf != nil {
+                    if let custom = mesh.customShader, !mesh.skinned || customSkinBuf != nil || custom.usesSourceVertices {
                         pipe = custom.pipeline
                         usedCustom = true
-                        if let customSkinBuf { meshVBuf = customSkinBuf }
+                        if let raw = mesh.customVertexBuffer { meshVBuf = raw }
+                        else if let customSkinBuf { meshVBuf = customSkinBuf }
                     } else if (mesh.normalTexture != nil || mesh.maskTexture != nil), !useSkin,
                               let normalPipe = mesh.additive ? meshPipelineNormalAdditive : meshPipelineNormal {
                         // M3: PBR 노멀맵/마스크 파이프라인(정적 메시 한정).
@@ -2216,8 +2359,9 @@ extension SceneRenderer {
         let syMag = simd_length(SIMD3(m.columns.1.x, m.columns.1.y, m.columns.1.z))
         let sx = bb.scale.x < 0 ? -sxMag : sxMag
         let sy = bb.scale.y < 0 ? -syMag : syMag
-        let hw = bb.size.x * 0.5 * sx
-        let hh = bb.size.y * 0.5 * sy
+        let drawSize = bb.textState == nil ? bb.size : SIMD2(Float(bb.texWidth), Float(bb.texHeight))
+        let hw = drawSize.x * 0.5 * sx
+        let hh = drawSize.y * 0.5 * sy
         // W-①: center(위치, columns.3)는 위 hw/hh 가드(columns 0/1 유래 스케일)로는 안 걸러진다 — origin
         // 프로퍼티 스크립트가 미정 shared 값(예 shared.xx1)을 읽어 NaN 을 내면(1프레임 지연으로 자가 치유되는
         // 라이브와 달리 단일 프레임 캡처는 못 고침 — F309 문서화 패턴과 동류) center 가 NaN 인 채로 아래
@@ -2249,7 +2393,7 @@ extension SceneRenderer {
         }
         // visibility는 GPU draw만 막는다. native 포인터 순회는 invisible solid도 위 기하에서
         // 이벤트를 발화하고, visible은 disablePropagation 여부를 판단할 때만 본다.
-        guard bb.visible, parentVisible else { return }
+        guard bb.visible, parentVisible, bb.textState?.hasContent != false else { return }
         func vtx(_ p: SIMD3<Float>, _ uu: Float, _ vv: Float) -> [Float] {
             [p.x, p.y, p.z, receiverNormal.x, receiverNormal.y, receiverNormal.z, uu, vv]
         }
@@ -2262,12 +2406,12 @@ extension SceneRenderer {
             mvp: viewProj,
             model: matrix_identity_float4x4,
             normalMatrix: matrix_identity_float4x4,
-            tint: bb.tint,
+            tint: bb.textState == nil ? bb.tint : SIMD4(1, 1, 1, bb.tint.w),
             material: SIMD4(bb.roughness, bb.metallic, 0, bb.lighting ? 2 : 0),
             // F662: 빌보드(genericimage4)도 scene fog 대상(WE FOG 콤보 기본 1 — 이미지 레이어의 FOG:0
             // 명시 오브아웃은 SceneLayer 미파스라 미지원, 코퍼스 해당 0건). w = fog 모드.
             specularTint: SIMD4(bb.specularTint.x, bb.specularTint.y, bb.specularTint.z,
-                                scene3DFog.enabled
+                                scene3DFog.enabled && bb.foggy
                                     ? (bb.additive ? 2 : 1) : 0),
             rim: .zero)  // 빌보드(2D 이미지 레이어)는 RIMLIGHTING/SHADINGGRADIENT 콤보 대상 아님(F274 — 콤보는
                          // .mdl 메시 재질에만 실존, 코퍼스 460 전건 billboard 레이어에 0건)
@@ -2514,6 +2658,7 @@ extension SceneRenderer {
             enc.setVertexBuffer(vbuf, offset: 0, index: 0)
             enc.setVertexBytes(&vp, length: MemoryLayout<simd_float4x4>.stride, index: 1)
             enc.setFragmentTexture(sys.texture, index: 0)
+            enc.setFragmentTexture(sys.texture, index: 3)
             if useFog {
                 // C4-(ii): overbright — FogU3D.eye.w 는 거리 계산에 쓰이지 않는 패딩이라 재사용(기본 1).
                 fogUniform.eye.w = sys.overbright

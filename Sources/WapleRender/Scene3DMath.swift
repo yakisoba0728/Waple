@@ -5,6 +5,9 @@ import WapleCore
 /// 실측 확정 규약(2026-07-03, 3662790108 태양계 / 3737268876 젤다 렌더 vs preview 판정 — SceneRenderer
 /// build3D 의 주석 참조): 뷰는 우수(RH, 전방 -Z), fov 는 세로축, 오일러는 R = Rz·Ry·Rx (X 먼저 적용).
 enum Scene3DMath {
+    static func matrixElements(_ matrix: simd_float4x4) -> [Float] {
+        (0..<4).flatMap { column in (0..<4).map { matrix[column][$0] } }
+    }
     /// gluLookAt 동형(우수 좌표, 카메라 전방 = 뷰 -Z). eye 는 원점으로, center 는 -Z 축 위로 사상.
     static func lookAt(eye: SIMD3<Float>, center: SIMD3<Float>, up: SIMD3<Float>) -> simd_float4x4 {
         // F533(F-7): 전방 퇴화(eye==center/비유한)나 up 퇴화(영벡터·전방과 평행·비유한)면 정규화가
@@ -123,19 +126,20 @@ enum Scene3DMath {
         let scale: SIMD3<Float>
         let parent: Int?
         let visible: Bool
+        var localMatrix: simd_float4x4? = nil
     }
 
     /// id 노드의 월드행렬(부모 체인 합성)과 유효 가시성(조상 중 하나라도 false → false).
     /// 사이클/미지 id 는 안전 종단: 사이클이면 그 지점에서 체인 중단(자기 로컬까지만), 미지 부모는 루트 취급.
     static func worldMatrix(id: Int, nodes: [Int: Node]) -> (matrix: simd_float4x4, visible: Bool)? {
         guard let node = nodes[id] else { return nil }
-        var m = modelMatrix(origin: node.origin, angles: node.angles, scale: node.scale)
+        var m = node.localMatrix ?? modelMatrix(origin: node.origin, angles: node.angles, scale: node.scale)
         var visible = node.visible
         var seen: Set<Int> = [id]
         var pid = node.parent
         while let p = pid, !seen.contains(p), let pn = nodes[p] {
             seen.insert(p)
-            m = modelMatrix(origin: pn.origin, angles: pn.angles, scale: pn.scale) * m
+            m = (pn.localMatrix ?? modelMatrix(origin: pn.origin, angles: pn.angles, scale: pn.scale)) * m
             visible = visible && pn.visible
             pid = pn.parent
         }

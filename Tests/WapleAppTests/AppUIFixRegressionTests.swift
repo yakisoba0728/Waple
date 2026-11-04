@@ -18,19 +18,13 @@ final class AppUIFixRegressionTests: XCTestCase {
             { _, _, progress, completion in
                 self.progress = progress
                 self.completion = completion
+                return nil
             }
         }
     }
 
-    private var savedUsername = ""
 
-    override func setUp() async throws {
-        savedUsername = SteamCmdDownloader.username   // download() 가 UserDefaults 를 덮어쓰므로 복원용
-    }
 
-    override func tearDown() async throws {
-        SteamCmdDownloader.username = savedUsername
-    }
 
     private func tempDir() -> URL {
         let d = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
@@ -60,6 +54,7 @@ final class AppUIFixRegressionTests: XCTestCase {
                                    keyProvider: keyProvider,
                                    keySaver: keySaver,
                                    steamcmdAvailable: true,
+                                   usernameProvider: { "tester" }, usernameSaver: { _ in },
                                    downloader: fake.body)
         vm.usernameInput = "tester"
         return vm

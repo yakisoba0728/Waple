@@ -106,6 +106,43 @@ enum SteamCmdDownloader {
         return bases.map { $0.appendingPathComponent(relative, isDirectory: true) }
     }
 
+    /// Cancellation owns the launch race as well as an already-running process.
+    final class DownloadTask: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        private var process: Process?
+
+        var isCancelled: Bool {
+            lock.lock(); defer { lock.unlock() }
+            return cancelled
+        }
+
+        func cancel(terminateGrace: TimeInterval = 5) {
+            lock.lock()
+            guard !cancelled else { lock.unlock(); return }
+            cancelled = true
+            let running = process
+            lock.unlock()
+            guard let running, running.isRunning else { return }
+            running.terminate()
+            DispatchQueue.global().asyncAfter(deadline: .now() + terminateGrace) {
+                if running.isRunning { kill(running.processIdentifier, SIGKILL) }
+            }
+        }
+
+        fileprivate func start(_ process: Process) throws -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard !cancelled else { return false }
+            try process.run()
+            self.process = process
+            return true
+        }
+
+        fileprivate func finished() {
+            lock.lock(); process = nil; lock.unlock()
+        }
+    }
+
     // MARK: - 실행(백그라운드 Process + 타임아웃). 진행/완료 콜백은 메인 큐.
 
     /// itemId 를 내려받아 결과 폴더 URL 을 completion 으로 돌려준다(실패/부재/미로그인 → nil).
@@ -117,9 +154,11 @@ enum SteamCmdDownloader {
     /// 이 함수가 만든 백그라운드 큐(`.utility`)를 거쳐 `DispatchQueue.main` 으로 다시 넘어가므로,
     /// 큐 경계를 최소 두 번 넘는다. 종전에는 그 사실이 타입에 없어 호출부가 무엇을 캡처해도
     /// 컴파일러가 아무 말도 하지 않았다.
+    @discardableResult
     static func download(itemId: String, username: String, timeout: TimeInterval = 900,
                          progress: @escaping @Sendable (Progress) -> Void,
-                         completion: @escaping @Sendable (URL?) -> Void) {
+                         completion: @escaping @Sendable (URL?) -> Void) -> DownloadTask {
+        let task = DownloadTask()
         // F840: itemId 는 원격(Steam Web API) 문자열이다. 셸도 문자열 보간도 없지만
         //  (1) steamcmd 는 `+` 로 시작하는 argv 를 **새 명령**으로 읽는다 — id 가 `+runscript` 면
         //      arguments() 가 만든 argv 에 명령이 하나 끼어든다.
@@ -129,21 +168,21 @@ enum SteamCmdDownloader {
         guard WorkshopQuery.isValidPublishedFileID(itemId) else {
             WapleLog.warn("[Waple] refusing steamcmd download for non-numeric workshop id: \(itemId)")
             completeOnMain(completion, nil)
-            return
+            return task
         }
         guard let exe = executableURL else {
             WapleLog.warn("[Waple] steamcmd not found — 'brew install steamcmd' to download workshop items")
             completeOnMain(completion, nil)
-            return
+            return task
         }
         guard !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             WapleLog.warn("[Waple] steamcmd username not set — cannot download")
             completeOnMain(completion, nil)
-            return
+            return task
         }
         DispatchQueue.global(qos: .utility).async {
             let result = run(exe: exe, args: arguments(username: username, itemId: itemId),
-                             timeout: timeout, progress: progress)
+                             timeout: timeout, progress: progress, task: task)
             guard result.sawSuccess else {
                 WapleLog.warn("[Waple] steamcmd download did not report success for item \(itemId)")
                 completeOnMain(completion, nil)
@@ -165,8 +204,9 @@ enum SteamCmdDownloader {
             if found == nil {
                 WapleLog.warn("[Waple] steamcmd reported success but no content folder found for item \(itemId)")
             }
-            completeOnMain(completion, found)
+            completeOnMain(completion, task.isCancelled ? nil : found)
         }
+        return task
     }
 
     private static func isDirectory(_ url: URL) -> Bool {
@@ -186,17 +226,19 @@ enum SteamCmdDownloader {
     /// `progress` 는 이 함수가 `DispatchQueue.main.async` 로 넘기므로 `@Sendable` 이다(download 와 동일 근거).
     static func run(exe: URL, args: [String], timeout: TimeInterval,
                     terminateGrace: TimeInterval = 5,
-                    progress: @escaping @Sendable (Progress) -> Void) -> (sawSuccess: Bool, path: String?) {
+                    progress: @escaping @Sendable (Progress) -> Void,
+                    task: DownloadTask = DownloadTask()) -> (sawSuccess: Bool, path: String?) {
         let proc = Process()
         proc.executableURL = exe
         proc.arguments = args
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = pipe
-        do { try proc.run() } catch {
+        do { guard try task.start(proc) else { return (false, nil) } } catch {
             WapleLog.warn("[Waple] steamcmd launch failed: \(error)")
             return (false, nil)
         }
+        defer { task.finished() }
         // 감사 V06: SIGTERM 을 무시하는 프로세스 대비 — 유예 후 SIGKILL 에스컬레이션.
         // 프로세스 사망 시 파이프가 닫혀 위 읽기 루프(availableData)와 waitUntilExit 가 풀린다.
         let escalator = DispatchWorkItem {
@@ -224,17 +266,17 @@ enum SteamCmdDownloader {
                 buffer.removeSubrange(buffer.startIndex...nl)
                 guard let line = String(data: lineData, encoding: .utf8), let p = parse(line: line) else { continue }
                 if p == .success { sawSuccess = true; reportedPath = successPath(line) ?? reportedPath }
-                DispatchQueue.main.async { progress(p) }
+                DispatchQueue.main.async { if !task.isCancelled { progress(p) } }
             }
         }
         // 마지막 줄이 개행 없이 EOF 로 끝날 수 있다 — 남은 버퍼도 파싱(성공 신호를 놓치지 않게).
         if let line = String(data: buffer, encoding: .utf8), let p = parse(line: line) {
             if p == .success { sawSuccess = true; reportedPath = successPath(line) ?? reportedPath }
-            DispatchQueue.main.async { progress(p) }
+            DispatchQueue.main.async { if !task.isCancelled { progress(p) } }
         }
         proc.waitUntilExit()
         killer.cancel()
         escalator.cancel()
-        return (sawSuccess, reportedPath)
+        return (sawSuccess && !task.isCancelled, task.isCancelled ? nil : reportedPath)
     }
 }

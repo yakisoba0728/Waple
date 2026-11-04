@@ -160,7 +160,7 @@ final class SpriteSheetLayerRenderTests: XCTestCase {
     /// 초대형 멀티페이지(스택 높이 20000 > Metal 16384): stackedAtlas 가 디코드 전 조기 거부 →
     /// resolveTextureWithFrames 가 **정지 폴백(frames=[])** 으로 "조용한 오프레임 애니" 대신 page 0
     /// 정지. 실코퍼스 6씬(3379048027 7페이지 sumH 52920 등)의 CI 안전 미러(1×10000 ×2페이지).
-    func testTallMultipageFallsBackToStaticNotWrongFrames() throws {
+    func testTallMultipageKeepsFramesAndStreamsPages() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         func f32(_ v: Float) -> Data { var b = v.bitPattern.littleEndian; return Data(bytes: &b, count: 4) }
         let ph = 10000
@@ -180,8 +180,13 @@ final class SpriteSheetLayerRenderTests: XCTestCase {
         guard let res = r.resolveTextureWithFrames("materials/tall.tex", package: package, device: device) else {
             return XCTFail("resolveTextureWithFrames nil")
         }
-        XCTAssertTrue(res.frames.isEmpty, "스택 높이>16384 → 정지 폴백(imageId≥1 조용한 오프레임 금지)")
-        XCTAssertEqual(res.texture.height, ph, "폴백은 page 0 텍스처(정지 표시)")
+        XCTAssertEqual(res.frames.count, 2, "oversized sheets keep their animation metadata")
+        XCTAssertEqual(res.texture.height, ph)
+        let source = try XCTUnwrap(r.pagedTextureSources[ObjectIdentifier(res.texture)])
+        let second = try XCTUnwrap(source.texture(page: 1, renderer: r, device: device))
+        XCTAssertFalse(second === res.texture)
+        XCTAssertEqual(second.height, ph)
+        XCTAssertLessThanOrEqual(source.residentPageCount, 2)
     }
 
     // MARK: 실코퍼스(폴더 있을 때만 — CI 안전 skip)

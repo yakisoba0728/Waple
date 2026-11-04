@@ -231,7 +231,7 @@ struct WapleCompatCLI {
                                    Existing <outDir>/<label> is refused (exit 2); use a new label
                                    or output root for every attempt, including failed retries.
                                    Failed attempts may leave diagnostic output; check exit status.
-          --compare <baselineDir> Capture + diff current build against a --capture baseline.
+          --compare <baselineDir> Capture twice in fresh processes + diff; report current determinism and its loss.
           --decode-ogg <file>     Decode one .ogg (Vorbis) to raw float32 PCM on stdout (dev harness).
           --deep                  Deep compat scan: real parse/decode/translate/compile over the
                                    corpus (see DeepScan report for exact "supported" criteria).

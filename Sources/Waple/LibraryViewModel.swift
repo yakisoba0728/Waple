@@ -129,6 +129,7 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     let monitors: MonitorAssignmentStore
     let favorites: FavoritesStore
     let folders: FolderStore
+    private let userShortcuts: UserShortcutStore
 
     /// 화면 목록 제공(키+표시명) — AppDelegate 주입.
     var screensProvider: (() -> [(key: String, name: String)])?
@@ -154,12 +155,13 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     @Published var isPaused = false
 
     init(store: LibraryStore, playlist: PlaylistStore, monitors: MonitorAssignmentStore,
-         favorites: FavoritesStore, folders: FolderStore) {
+         favorites: FavoritesStore, folders: FolderStore, userShortcuts: UserShortcutStore? = nil) {
         self.store = store
         self.playlist = playlist
         self.monitors = monitors
         self.favorites = favorites
         self.folders = folders
+        self.userShortcuts = userShortcuts ?? UserShortcutStore(baseDirectory: store.storageDirectory)
         self.entries = store.entries
         self.selectedId = store.selectedId
         // F840: 어떤 입력이 바뀌든 ObservableObject 는 objectWillChange 를 먼저 낸다(willSet 시점) —
@@ -247,6 +249,9 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     /// 모니터 할당이 함께 있어도 발화한다 — 그 경우에도 재적용(onAssignmentsChanged) 전에
     /// 전역 선택이 비워져야 부활을 막을 수 있다.
     var onGlobalSelectionRemoved: (() -> Void)?
+    /// Remove persisted entry resources, invalidating live script stores before their next flush.
+    /// AppDelegate also clears app-owned per-entry playback overrides through this hook.
+    var onRemoveScriptStorage: ((String) -> Void)?
 
     /// 라이브러리에서 제거(파일 보존) + 전 스토어 orphan 정리. 적용 중 배경은 계속 재생된다
     /// (렌더러는 폴더를 직접 들고 있음) — Now Playing 표시는 '적용된 배경 없음'으로 떨어진다.
@@ -263,7 +268,7 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         let wasGlobalSelection = selectedId == entry.id
         // F069: 재생목록에 없던 항목을 제거할 때도 무조건 onPlaylistChanged 를 호출하면 자동전환
         // 카운트다운이 불필요하게 리셋된다 — 제거 전에 실제 포함 여부를 확인해 두었다가 가드한다.
-        let wasInPlaylist = playlist.ids.contains(entry.id)
+        let wasInPlaylist = playlist.savedPlaylists.contains { $0.ids.contains(entry.id) }
         store.remove(id: entry.id)
         playlist.remove(entry.id)
         monitors.removeAssignments(entryId: entry.id)
@@ -274,11 +279,12 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         // 다시 가져오기 · 고아 폴더 정리 후 재사용)에서 새 배경이 남의 편집값을 물려받는다.
         // 확인 대화상자 문구도 이 정리를 명시한다(`WallpaperGridView`·`SelectionPanelView`).
         //
-        // **남는 격차: `script-storage/<id>.json`.** 그쪽은 `ScriptLocalStorage(sceneId: project.id)`
-        // 로 **파서 프로젝트 id** 를 쓰는데 이 뷰모델은 라이브러리 엔트리 id 만 들고 있고 둘은
-        // 다를 수 있다(F480/F194 접미 유일화). 잘못된 키로 남의 파일을 지우는 쪽이 남겨 두는
-        // 것보다 나쁘므로 여기서는 손대지 않는다 — 프로젝트 파스를 이 경로에 들이는 별도 작업이다.
+        // Mount resolution now preserves library identity. Delegate cleanup invalidates live
+        // script stores as well as their file, so a delayed flush cannot resurrect removed data.
         UserPropertyStore.reset(id: entry.id)
+        do { try userShortcuts.remove(entryID: entry.id) }
+        catch { onNotify?(NSLocalizedString("사용자 바로가기 연결을 지우지 못했습니다.", comment: "바로가기 제거 실패")) }
+        onRemoveScriptStorage?(entry.id)
         entries = store.entries
         if selectedId == entry.id { selectedId = nil }
         if focusedId == entry.id { focusedId = nil }
@@ -434,8 +440,8 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
 
     /// 워크샵 다운로드로 받은 배경 폴더 1개를 라이브러리에 가져온다(기존 importFolder 재사용). 실패 → nil.
     @discardableResult
-    func importDownloaded(_ folderURL: URL) -> LibraryEntry? {
-        guard let entry = try? store.importFolder(folderURL) else {
+    func importDownloaded(_ folderURL: URL, workshopItemID: String? = nil) -> LibraryEntry? {
+        guard let entry = try? store.importFolder(folderURL, workshopItemID: workshopItemID) else {
             onNotify?(String(format: NSLocalizedString("다운로드한 폴더를 가져오지 못했습니다: %@",
                                                       comment: "워크샵 다운로드분 임포트 실패"),
                             folderURL.lastPathComponent))
@@ -528,6 +534,27 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         return entry
     }
 
+    /// Only declared shortcut names can be installed in the script's allowlist.
+    func shortcutBindings(for entryID: String) -> [String: URL] {
+        guard let entry = entries.first(where: { $0.id == entryID }) else { return [:] }
+        let allowed = Set(editableProperties(for: entry).filter { $0.type.lowercased() == "usershortcut" }.map(\.key))
+        return userShortcuts.bindings(for: entryID).filter { allowed.contains($0.key) }.mapValues(\.targetURL)
+    }
+
+    @discardableResult
+    func setShortcutBinding(_ url: URL?, propertyKey: String, for entry: LibraryEntry) -> Bool {
+        guard entries.contains(where: { $0.id == entry.id }),
+              editableProperties(for: entry).contains(where: { $0.key == propertyKey && $0.type.lowercased() == "usershortcut" }) else { return false }
+        do { try userShortcuts.set(url, propertyKey: propertyKey, entryID: entry.id) }
+        catch {
+            onNotify?(NSLocalizedString("바로가기를 저장하지 못했습니다. 앱 또는 올바른 http/https 웹 주소를 선택하세요.", comment: "바로가기 대상 검증/저장 실패"))
+            return false
+        }
+        objectWillChange.send()
+        reapplyIfCurrent(entry)
+        return true
+    }
+
     // MARK: - 유저 속성 편집
 
     /// 편집 가능한 속성 목록(기본값 + 저장된 오버라이드 병합).
@@ -562,6 +589,8 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
 
     func resetProperties(for entry: LibraryEntry) {
         UserPropertyStore.reset(id: entry.id)
+        do { try userShortcuts.remove(entryID: entry.id) }
+        catch { onNotify?(NSLocalizedString("사용자 바로가기 연결을 지우지 못했습니다.", comment: "바로가기 초기화 실패")) }
         reapplyIfCurrent(entry)
     }
 

@@ -27,9 +27,8 @@ enum RenderPauseComposition {
         let paused: Bool
         /// 정책이 `stop`(렌더러 해제)을 요구했는가.
         ///
-        /// **의도적으로 정지로 축소한다 — 이것은 미결이 아니라 결론이다.** 근거는 아래
-        /// `stopIsReducedToPause` 에 적었다. 이름을 남기는 것은 그 축소를 세는 자리가
-        /// 있어야 하기 때문이다.
+        /// AppDelegate releases the renderer while retaining its screen slot.
+        /// `paused` also freezes the playlist clock until restoration succeeds.
         let policyWantsStop: Bool
         /// 정책이 `muted` 를 요구했는가. WE 에서 음소거는 모니터별이 아니라 **전역**이라
         /// (판정 타입 주석) 이 값이 화면마다 갈리면 `wantsGlobalMute(_:)` 가 하나로 접는다.
@@ -39,7 +38,9 @@ enum RenderPauseComposition {
         let policyWantsMute: Bool
     }
 
-    // MARK: - `stop` 을 정지로 접는다 — 왜 그것이 옳은가 (stage 3②)
+    // MARK: - `stop` 축소의 이전 결정 (stage 3② — 역사 기록)
+    // [2026-11-05] 아래 실패 복구 우려를 빈 슬롯+재시도로 해결해 실제 해제로 전환했다.
+    // 이전 판단 근거는 보존한다. 실기 재마운트 지연 측정은 여전히 별도 검증이다.
     //
     // [2026-08-27] stage 2 는 이 축소를 "표면이 없어서 못 한다" 로 적었다. stage 3 에서
     // **적극적인 선택으로 승격한다.** 셋을 놓고 골랐다:
@@ -82,14 +83,24 @@ enum RenderPauseComposition {
     // 재마운트가 한 번도 실패하지 않는지 ② 재마운트 비용이 절전 복귀 체감을 해치지 않는지를
     // 재라. 그 두 수치 없이 이 축소를 걷는 것은 이 주석을 읽지 않은 것과 같다.
 
-    /// `stop` 이 정지로 접힌다는 사실 자체. 상수로 두는 이유는 이 축소가 **결론**이라는 것을
-    /// 코드에서 읽을 수 있게 하려는 것이고, 오라클이 이 값을 근거로 단언할 수 있게 하려는 것이다.
-    static let stopIsReducedToPause = true
+    /// Compatibility marker retained for the regression that tracks this choice.
+    // The previous decision above is retained as history. AppDelegate now keeps
+    // an empty slot during stop and retries failed restoration without losing it.
+    static let stopIsReducedToPause = false
+
+    /// Resource edges are independent of pause edges. Failed restoration leaves
+    /// the empty slot intact so the caller can retry without losing its project.
+    @discardableResult
+    static func reconcileResources(wantsStop: Bool, isLoaded: Bool,
+                                   release: () -> Void, restore: () throws -> Void) rethrows -> Bool {
+        if wantsStop && isLoaded { release(); return true }
+        if !wantsStop && !isLoaded { try restore(); return true }
+        return false
+    }
 
     /// 합류 규칙. **전역 사유가 서 있으면 정책을 보지 않고 멈춘다** — 그쪽이 더 강한 요구다.
     ///
-    /// `stop` 은 `PlaybackVerdict` 안에서 이미 다른 둘을 가리므로(그 타입 주석),
-    /// 여기서는 "정지" 로만 접는다. 그 축소의 근거는 위 `stopIsReducedToPause` 블록에 있다.
+    /// Stop also marks the clock paused; its separate resource bit drives unload.
     static func decide(globallyPaused: Bool,
                        verdict: PlaybackVerdict,
                        monitorIndex: Int) -> Decision {

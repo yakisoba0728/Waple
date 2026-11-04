@@ -28,7 +28,7 @@ final class GLSLTranslatorNoInterpolationTests: XCTestCase {
     /// 빌더(SceneRendererFrameEncoder.engineUniform)와 레이아웃 동기 필수.
     func testEngineUDeclaresTexFilter() throws {
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
-        XCTAssertTrue(t.msl.contains("float4 texWrap[2]; float4 texFilter[2];"), t.msl)
+        XCTAssertTrue(t.msl.contains("float4 texWrap[3]; float4 texFilter[3];"), t.msl)
     }
 
     /// nearest 샘플러 쌍 방출: min/mag 필터만 point, 어드레스 모드·mip 필터(linear — 1단계 mip 활성화,

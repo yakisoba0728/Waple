@@ -17,13 +17,22 @@ public final class DesktopWindowController {
     public init() {}
 
     /// 모든 화면에 대해 데스크탑 창을 다시 만든다.
-    public func rebuild() {
+    public func rebuild(spanning: Bool = false) {
         teardown()
-        for screen in NSScreen.screens {
-            let window = DesktopWindow(screen: screen)
+        let screens = NSScreen.screens
+        let targets = spanning ? Array(screens.prefix(1)) : screens
+        let frame = spanning ? Self.spanningFrame(screens.map(\.frame)) : nil
+        for screen in targets {
+            let window = DesktopWindow(screen: screen, frame: frame)
             window.orderFrontRegardless()
             windows.append(window)
         }
+    }
+
+    public static func spanningFrame(_ frames: [CGRect]) -> CGRect? {
+        let valid = frames.filter { !$0.isEmpty && !$0.isNull && !$0.isInfinite }
+        guard let first = valid.first else { return nil }
+        return valid.dropFirst().reduce(first) { $0.union($1) }
     }
 
     /// 화면 키와 함께(모니터별 배경).

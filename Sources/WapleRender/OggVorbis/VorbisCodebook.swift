@@ -2,7 +2,7 @@ import Foundation
 
 enum VorbisError: Error, Equatable {
     case badHeader(String)
-    case unsupported(String)     // 명세 내 미구현 기능(floor0 등) — 명확히 스킵
+    case unsupported(String)     // 명세 내 미구현 기능 — 명확히 스킵
     case corrupt(String)
 }
 

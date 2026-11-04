@@ -13,10 +13,11 @@ public final class DesktopWindow: NSWindow {
         return "name-\(screen.localizedName)"
     }
 
-    public init(screen: NSScreen) {
+    public init(screen: NSScreen, frame: CGRect? = nil) {
         screenKey = DesktopWindow.screenKey(for: screen)
+        let frame = frame ?? screen.frame
         super.init(
-            contentRect: screen.frame,
+            contentRect: frame,
             styleMask: .borderless,
             backing: .buffered,
             defer: false
@@ -30,9 +31,9 @@ public final class DesktopWindow: NSWindow {
         hasShadow = false
         isOpaque = false
         backgroundColor = .clear
-        setFrame(screen.frame, display: true)
+        setFrame(frame, display: true)
 
-        let content = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        let content = NSView(frame: NSRect(origin: .zero, size: frame.size))
         content.wantsLayer = true
         contentView = content
     }

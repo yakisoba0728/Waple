@@ -109,12 +109,8 @@ struct VolumetricLightParameters: Equatable {
     /// 그때 셰이더가 `spotCookie = 1.0`(`:137`) · `maxLightScale ×0.5`(`:119`) 로 간다.
     /// (종전 인용 `0x140198568` 은 명령 경계도 아니다 — `0x140198563 call` 중간이다.)
     ///
-    /// Waple 호출부는 종을 넘기지 않으므로 콘 코사인의 퇴화값으로 **근사 판정**한다.
-    /// 코퍼스에서는 일치한다(콘을 저작하는 라이트는 `lspot` 5개뿐 — 워크샵 162 씬 실측).
-    /// **다만 정확하지는 않다**: `ldirectional`(종 3)은 콘 미저작이라 여기서 point 로 잡히는데
-    /// WE 는 `#else` 가지(스팟 스무드스텝, 기본 콘 20°/30°)로 간다. 도달 0건이라 화면 영향은
-    /// 없지만 종 문자열을 넘기면 프록시 없이 닫힌다 — 호출부 소관이라 보고서로 넘긴다.
-    var isPointLight: Bool { outerCone <= -0.999 }
+    /// Cone width cannot identify a light kind: a spot/directional can have an unauthored cone too.
+    var isPointLight: Bool = false
 }
 
 final class VolumetricLightPass {

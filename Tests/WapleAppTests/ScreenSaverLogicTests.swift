@@ -1,6 +1,7 @@
 import XCTest
 @testable import Waple
 import WapleCore
+import WapleRender
 
 /// 화면보호기 순수 결정 로직 검증 — moduleDict 조립 / 설치 경로 / 대상 동영상 결정.
 /// 부수효과(설치/CFPreferences)는 ScreenSaverController 로 분리되어 있어 여기서는 다루지 않는다.
@@ -55,6 +56,25 @@ final class ScreenSaverLogicTests: XCTestCase {
     func testVideoPath_missingFileNameOrProject_nil() {
         XCTAssertNil(ScreenSaverLogic.videoPath(for: project(type: .video, fileName: nil)))
         XCTAssertNil(ScreenSaverLogic.videoPath(for: nil))
+    }
+
+    func testVideoConfigurationPreservesFitRateAndVideoOnlyBoundary() throws {
+        let video = project(type: .video, fileName: "movie.mp4")
+        let configuration = try XCTUnwrap(ScreenSaverLogic.videoConfiguration(for: video, fitMode: .stretch, rate: 1.5))
+        XCTAssertEqual(configuration["videoPath"] as? String, "/tmp/wp/movie.mp4")
+        XCTAssertEqual(configuration["videoFitMode"] as? String, "stretch")
+        XCTAssertEqual(configuration["videoPlaybackRate"] as? NSNumber, NSNumber(value: Float(1.5)))
+        XCTAssertEqual(configuration.count, 3)
+        XCTAssertNil(ScreenSaverLogic.videoConfiguration(for: project(type: .scene, fileName: "scene.pkg"), fitMode: .fit, rate: 1))
+    }
+
+    func testVideoConfigurationBoundsInvalidRates() {
+        let video = project(type: .video, fileName: "movie.mp4")
+        let cases: [(Float, Float)] = [(.nan, 1), (.infinity, 1), (-1, 0.1), (9, 2)]
+        for (input, expected) in cases {
+            let value = ScreenSaverLogic.videoConfiguration(for: video, fitMode: .fill, rate: input)?["videoPlaybackRate"] as? NSNumber
+            XCTAssertEqual(value?.floatValue, expected)
+        }
     }
 
     // MARK: - enable 시 사용자 원본 화면보호기 백업 판정

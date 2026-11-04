@@ -78,6 +78,7 @@ public struct PuppetModel: Equatable {
         /// **섹션 헤더의 필드로 오인**해 읽고 버리고 있었다(§6). 이제 채운다 — `clipIndex(clipId:)` 가
         /// 이름 휴리스틱보다 먼저 이 값을 본다. u64 가 Int 범위를 넘으면 nil(이름 폴백 유지).
         public var id: Int? = nil
+        public var rawEvents: [ModelAnimationEvent] = []
     }
 
     /// 부착점(씬 `attachment` 이름 본-슬롯 부착) — Model3D.Attachment 와 동형(컨테이너 경로에서 이식).
@@ -144,6 +145,7 @@ public struct PuppetModel: Equatable {
                               })
             a.events = anim.events
             a.id = anim.id   // C③: Model3D 클립 id 이식(있으면) — id 기반 클립 선택의 근거.
+            a.rawEvents = anim.rawEvents
             return a
         }
         return pm
@@ -357,6 +359,18 @@ public struct PuppetModel: Equatable {
                     tracks.append(keys)
                 }
                 guard ok, tracks.count == Int(boneCount) else { break }  // 부분 애니는 드롭, 누적분 유지
+                if let tail = ModelAnimationTail.parse(bytes, at: o, limit: bytes.count, version: 1,
+                                                        flags: clipFlags, boneCount: Int(clamping: boneCount),
+                                                        tagCount: 0, constraintCount: 0, meshCount: 1) {
+                    o = tail.end
+                    var animation = Animation(name: name, mode: mode, fps: fps,
+                                                lengthFrames: Int(clamping: length), tracks: tracks,
+                                                events: tail.markers(fps: fps), id: clipId)
+                    animation.rawEvents = tail.events
+                    anims.append(animation)
+                    continue
+                }
+                // [폐기된 과거 진단 — 아래2026-11-05 정정 참조]
                 // **클립 flags bit0 → 꼬리 0xC0(192)바이트 레코드**(docs/re/skeleton-animation.md §6.2:
                 // `0x140264fc9 test byte [rbp+0xc0],1` → `0x140264fdb call 0x14028af20`, 기본값에
                 // -1(`0x140264ff7`)과 1.0f 가 깔린다). 버전 게이트 밖이라 MDLA0001 에도 붙고,
@@ -370,15 +384,13 @@ public struct PuppetModel: Equatable {
                 // 코퍼스(446)는 이 머신에 없다. 그래서 **건너뛰지 않은 자리에서 이벤트 블록이
                 // 성립하지 않을 때만** 건너뛴다. 종전에 통과하던 입력은 첫 조건에서 걸러지므로
                 // 거동이 그대로다(순수 추가).
-                if clipFlags & 1 != 0,
-                   eventCountLooksValid(at: o) == nil,
-                   eventCountLooksValid(at: o + 0xC0) != nil {
-                    o += 0xC0
-                }
+                // [2026-11-05 correction] The0xC0 above was allocation size, not serialized bytes.
+                // The recovered reader above consumes u16+4u32 (18B). This fallback only retains the
+                // old tolerance for a flagged clip that omitted its record and starts with valid events.
                 // 이벤트 블록은 MDLA 버전과 무관하다(0x14026536d count,
                 // 0x1402653bd time, 0x1402653e0 JSON cstring). time은 JSON frame과 중복이라
                 // 소비만 하고, 공개 마커 값은 다른 애니 경로와 같은 JSON payload를 정본으로 삼는다.
-                guard let eventCount = u32(o), eventCount <= 4096 else { break }
+                guard let eventCount = eventCountLooksValid(at: o) else { break }
                 o += 4
                 var events: [AnimationMarker] = []
                 var eventsOK = true
