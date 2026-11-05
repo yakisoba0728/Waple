@@ -193,6 +193,7 @@ public enum TextRasterizer {
         let foreground = Self.cgColor(tint)
         var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: foreground]
         if style.spacing.x.isFinite, style.spacing.x != 0 { attrs[.kern] = CGFloat(style.spacing.x) }
+        let fillAttributes = attrs
         if style.outline {
             attrs[.strokeColor] = Self.cgColor(style.outlineColor)
             attrs[.strokeWidth] = -CGFloat(style.activeOutlineWidth) * 100 / CTFontGetSize(font)
@@ -232,24 +233,29 @@ public enum TextRasterizer {
             clipped = true
         }
 
-        var lines = rows.map {
-            CTLineCreateWithAttributedString(NSAttributedString(string: $0, attributes: attrs))
-        }
-        if clipped, ellipsis, let lastRow = rows.last {
-            let cand = CTLineCreateWithAttributedString(
-                NSAttributedString(string: lastRow + "\u{2026}", attributes: attrs))
-            if let mw = maxWidth, mw.isFinite, CTLineGetTypographicBounds(cand, nil, nil, nil) > Double(mw) {
-                let token = CTLineCreateWithAttributedString(NSAttributedString(string: "\u{2026}", attributes: attrs))
-                lines[lines.count - 1] = CTLineCreateTruncatedLine(cand, Double(mw), .end, token) ?? cand
-            } else {
-                lines[lines.count - 1] = cand
+        func makeLines(_ attrs: [NSAttributedString.Key: Any]) -> [CTLine] {
+            var lines = rows.map {
+                CTLineCreateWithAttributedString(NSAttributedString(string: $0, attributes: attrs))
             }
-        }
-        if justify, let mw = maxWidth, mw.isFinite, mw >= 1 {
-            for i in lines.indices where midParagraph[i] {
-                lines[i] = CTLineCreateJustifiedLine(lines[i], 1.0, Double(mw)) ?? lines[i]
+            if clipped, ellipsis, let lastRow = rows.last {
+                let cand = CTLineCreateWithAttributedString(
+                    NSAttributedString(string: lastRow + "\u{2026}", attributes: attrs))
+                if let mw = maxWidth, mw.isFinite, CTLineGetTypographicBounds(cand, nil, nil, nil) > Double(mw) {
+                    let token = CTLineCreateWithAttributedString(NSAttributedString(string: "\u{2026}", attributes: attrs))
+                    lines[lines.count - 1] = CTLineCreateTruncatedLine(cand, Double(mw), .end, token) ?? cand
+                } else {
+                    lines[lines.count - 1] = cand
+                }
             }
+            if justify, let mw = maxWidth, mw.isFinite, mw >= 1 {
+                for i in lines.indices where midParagraph[i] {
+                    lines[i] = CTLineCreateJustifiedLine(lines[i], 1.0, Double(mw)) ?? lines[i]
+                }
+            }
+            return lines
         }
+        let lines = makeLines(attrs)
+        let fillLines = style.outline ? makeLines(fillAttributes) : []
 
         // 줄 높이는 폰트 메트릭(빈 줄도 한 행 차지) — 폭은 줄별 실측 최대치.
         // F476: 기본 폰트 메트릭만 쓰면 CoreText 캐스케이드로 그려지는 폴백 글리프(CJK·이모지 등
@@ -339,6 +345,11 @@ public enum TextRasterizer {
                 }
                 ctx.textPosition = CGPoint(x: x, y: CGFloat(canvasH) - 1 - insetY - ascent - CGFloat(i) * lineH)
                 CTLineDraw(line, ctx)
+                if style.outline {
+                    // Draw fill last so a wide stroke cannot cover thin glyph interiors.
+                    ctx.textPosition = CGPoint(x: x, y: CGFloat(canvasH) - 1 - insetY - ascent - CGFloat(i) * lineH)
+                    CTLineDraw(fillLines[i], ctx)
+                }
             }
             // ── premultiplied → straight ─────────────────────────────────────────────────
             // 종전엔 알파>0 픽셀의 rgb 를 무조건 255 로 밀었다. 흰색 글리프(rgb=alpha)에는 맞지만,

@@ -74,7 +74,7 @@ final class WapleMTKView: MTKView {
 /// 핀 값도 `SIMD2(0.5, 0.5)`(마우스 미구동 중앙 규약) 그대로다. 유일한 동작 변화는 ③ —
 /// 캡처 중 클릭 모니터를 안 켜는 것이고, 이는 캡처에 도달하는 라이브 입력의 **순감**이다.
 /// 반대로 라이브 인스턴스가 남의 캡처에 오염되지 않게 된 것이 ②의 수정이다.
-public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, @unchecked Sendable {
+public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKViewDelegate, @unchecked Sendable {
     /// Metal `PBRMaterialUniforms`: exactly two float4 values (32 bytes).
     struct PBRMaterialUniforms {
         var scalars: SIMD4<Float>       // x=roughness, y=metallic
@@ -663,7 +663,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate, 
             let g = texts[u]
             // 실물 히트 순회의 첫 관문은 image/text 공통 solid(bit13)다(`0x14018a02d`).
             let size = g.rasterHitSize.x > 0 && g.rasterHitSize.y > 0
-                ? g.rasterHitSize : SIMD2<Float>(g.rasterWidth, g.rasterHeight)
+                ? g.rasterHitSize : PointerHit.textHitSize(
+                inkBox: SIMD2<Float>(g.rasterWidth, g.rasterHeight),
+                padding: SIMD2(t.padding.x, t.padding.y),
+                paddingActive: PointerHit.textPaddingActive(hasEffects: !t.effects.isEmpty,
+                    opaqueBackground: t.opaqueBackground, colorBlendMode: t.colorBlendMode))
             let align = Self.textAlignmentString(h: t.horizontalAlign, v: t.verticalAlign)
             let quad = Self.layerHitQuad(origin: t.origin, size: Vec2(x: size.x, y: size.y),
                                          scale: t.scale, angleZ: t.angleZ, alignment: align)

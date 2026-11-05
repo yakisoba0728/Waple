@@ -243,10 +243,12 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSetting
         cycleEndObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main
         ) { [weak self, weak queue, weak looper] notification in
+            guard let ended = notification.object as? AVPlayerItem else { return }
+            let endedID = ObjectIdentifier(ended)
             MainActor.assumeIsolated {
                 guard let self, let queue, let looper, self.mountToken == token,
-                      self.player === queue, let ended = notification.object as? AVPlayerItem,
-                      looper.loopingPlayerItems.contains(where: { $0 === ended }),
+                      self.player === queue,
+                      looper.loopingPlayerItems.contains(where: { ObjectIdentifier($0) == endedID }),
                       let projectID = self.projectId else { return }
                 NotificationCenter.default.post(name: Self.playbackCycleEndedNotification,
                     object: self, userInfo: ["projectId": projectID])
@@ -493,19 +495,26 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSetting
     }
 
     /// Snapshot the current decoded video time; asynchronous decode never advances the player clock.
-    public func captureCurrentImage(completion: @escaping @MainActor (NSImage?) -> Void) {
-        guard let player, let item = player.currentItem else { completion(nil); return }
+    public func captureCurrentImage(completion: @escaping @MainActor @Sendable (NSImage?) -> Void) {
+        guard let player, let item = player.currentItem,
+              let asset = item.asset as? AVURLAsset else { completion(nil); return }
         let token = mountToken
         let time = player.currentTime()
-        let generator = AVAssetImageGenerator(asset: item.asset)
-        generator.appliesPreferredTrackTransform = true
+        let url = asset.url
         Task { [weak self, weak player] in
-            let image = try? await generator.image(at: time).image
+            let image = await Self.decodeSnapshot(url: url, time: time)
             guard let self, let player, self.mountToken == token, self.player === player else {
                 completion(nil); return
             }
             completion(image.map { NSImage(cgImage: $0, size: .zero) })
         }
+    }
+
+    /// The generator is created and used entirely outside actor isolation; only its image crosses back.
+    private nonisolated static func decodeSnapshot(url: URL, time: CMTime) async -> CGImage? {
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        generator.appliesPreferredTrackTransform = true
+        return try? await generator.image(at: time).image
     }
 
     public func teardown() {

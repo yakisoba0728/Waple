@@ -79,14 +79,15 @@ extension TextRasterizer {
                                     "TwemojiMozilla", "Segoe UI Symbol", "Microsoft YaHei", "Malgun Gothic",
                                     "Apple Color Emoji", "PingFang SC", "Apple SD Gothic Neo"]
 
-    private static let fallbackDescriptors: [CTFontDescriptor] = {
+    private static var fallbackDescriptors: [CTFontDescriptor] {
         let available = Set((CTFontManagerCopyAvailableFontFamilyNames() as? [String]) ?? [])
         return fallbackFontNames.filter { available.contains($0) }.map { name in
             CTFontDescriptorCreateWithAttributes([kCTFontFamilyNameAttribute: name] as CFDictionary)
         }
-    }()
+    }
 
     static func withFallbackCascade(_ font: CTFont) -> CTFont {
+        let fallbackDescriptors = Self.fallbackDescriptors
         guard !fallbackDescriptors.isEmpty else { return font }
         let descriptor = CTFontDescriptorCreateWithAttributes([kCTFontCascadeListAttribute: fallbackDescriptors] as CFDictionary)
         return CTFontCreateCopyWithAttributes(font, CTFontGetSize(font), nil, descriptor)

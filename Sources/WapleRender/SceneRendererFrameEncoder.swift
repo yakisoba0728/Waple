@@ -2231,7 +2231,11 @@ extension SceneRenderer {
             angles: angles)
         cameraParallaxFrameOriginByOrder[t.order] = origin
         let hitSize = t.rasterHitSize.x > 0 && t.rasterHitSize.y > 0
-            ? t.rasterHitSize : SIMD2<Float>(t.rasterWidth, t.rasterHeight)
+            ? t.rasterHitSize : PointerHit.textHitSize(
+                inkBox: SIMD2<Float>(t.rasterWidth, t.rasterHeight),
+                padding: SIMD2(t.def.padding.x, t.def.padding.y),
+                paddingActive: PointerHit.textPaddingActive(hasEffects: !t.def.effects.isEmpty,
+                    opaqueBackground: t.def.opaqueBackground, colorBlendMode: t.def.colorBlendMode))
         let hitAlign = Self.textAlignmentString(h: t.def.horizontalAlign, v: t.def.verticalAlign)
         let leaf = cameraParallaxLeafByOrder[t.order]
         let leafOrigin = leaf.map {

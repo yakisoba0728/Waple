@@ -5,7 +5,7 @@ import WapleCore
 
 /// Non-interactive transparent outgoing-frame overlay. The incoming renderer lives underneath.
 @MainActor
-public final class PlaylistTransitionView: MTKView, @preconcurrency MTKViewDelegate {
+public final class PlaylistTransitionView: MTKView, MTKViewDelegate {
     private var transitionRenderer: PlaylistTransitionRenderer?
     private let commandQueue: MTLCommandQueue
     private let durationMillis: Int

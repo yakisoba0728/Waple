@@ -16,33 +16,33 @@ import Observation
 enum SystemPreference {
     /// "동작 줄이기". 이동·확대를 페이드로 대체해야 한다 → `Motion` 이 소비한다.
     static var reduceMotion: Bool {
-        AccessibilityDisplayPreferences.shared.snapshot.reduceMotion
+        MainActor.assumeIsolated { AccessibilityDisplayPreferences.shared.snapshot.reduceMotion }
     }
 
     /// "투명도 줄이기". 시스템 `Material` 은 대체로 스스로 반응하지만, 재질 **위에** 얹은
     /// 반투명 오버레이(그라디언트 스크림 등)는 반응하지 않는다 — 그쪽은 직접 불투명하게 한다.
     static var reduceTransparency: Bool {
-        AccessibilityDisplayPreferences.shared.snapshot.reduceTransparency
+        MainActor.assumeIsolated { AccessibilityDisplayPreferences.shared.snapshot.reduceTransparency }
     }
 
     /// "색상 없이 구분". 색만으로 전달하던 상태에 모양·글자를 덧붙여야 한다는 신호다.
     /// 다만 규약상 **이 값이 false 여도 색 단독 전달은 금지**다(§4.5) — 이건 색맹 사용자가
     /// 설정을 켜지 않았을 때도 지켜야 하는 하한이라, 이 프로퍼티는 추가 보강용이다.
     static var differentiateWithoutColor: Bool {
-        AccessibilityDisplayPreferences.shared.snapshot.differentiateWithoutColor
+        MainActor.assumeIsolated { AccessibilityDisplayPreferences.shared.snapshot.differentiateWithoutColor }
     }
 
     /// "대비 증가". 시맨틱 컬러를 쓰면 시스템이 알아서 처리하므로 보통 읽을 일이 없다.
     /// 커스텀 반투명 위에 글자를 얹는 자리에서만 참고한다.
     static var increaseContrast: Bool {
-        AccessibilityDisplayPreferences.shared.snapshot.increaseContrast
+        MainActor.assumeIsolated { AccessibilityDisplayPreferences.shared.snapshot.increaseContrast }
     }
 }
 
 
 /// The workspace posts accessibility display changes on its own notification center.
 /// Injectable snapshots keep the notification→observation seam testable without changing OS settings.
-@Observable
+@MainActor @Observable
 final class AccessibilityDisplayPreferences {
     struct Snapshot: Equatable {
         var reduceMotion: Bool
@@ -72,13 +72,15 @@ final class AccessibilityDisplayPreferences {
         snapshot = read()
         observer = center.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
                                       object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            let next = self.read()
-            if next != self.snapshot { self.snapshot = next }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let next = self.read()
+                if next != self.snapshot { self.snapshot = next }
+            }
         }
     }
 
-    deinit {
+    isolated deinit {
         if let observer { center.removeObserver(observer) }
     }
 }

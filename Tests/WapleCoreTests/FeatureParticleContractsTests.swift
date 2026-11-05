@@ -13,7 +13,8 @@ final class FeatureParticleContractsTests: XCTestCase {
     func testRemapOutputMarksCPBeforeConflictingInstanceOverride() throws {
         for section in ["operator", "initializer"] {
             let element = section == "operator" ? "remapvalue" : "remapinitialvalue"
-            let raw: [String: Any] = ["emitter": [["name": "boxrandom", "distancemax": "0 0 0", "rate": 0,
+            // maxcount 부재의 파서 기본은0: 방출을 관측하는 fixture는 용량을 명시해야 한다.
+            let raw: [String: Any] = ["maxcount": 8, "emitter": [["name": "boxrandom", "distancemax": "0 0 0", "rate": 0,
                                                  "instantaneous": 1, "controlpoint": 1]],
                                       "controlpoint": [["offset": "0 0 0"], ["offset": "2 3 0"]],
                                       section: [["name": element, "output": "controlpoint", "outputcontrolpoint0": 1]]]
@@ -43,8 +44,8 @@ final class FeatureParticleContractsTests: XCTestCase {
     }
 
     func testSceneProjectionReachesRootAndChildParticleDefaults() throws {
-        let child = #"{"emitter":[{"name":"boxrandom","rate":0,"instantaneous":1}],"initializer":[{"name":"lifetimerandom","min":10,"max":10},{"name":"sizerandom"}]}"#
-        let root = #"{"emitter":[{"name":"boxrandom","rate":0,"instantaneous":1}],"initializer":[{"name":"lifetimerandom","min":10,"max":10},{"name":"sizerandom"}],"children":[{"name":"particles/child.json","type":"static"}]}"#
+        let child = #"{"maxcount":8,"emitter":[{"name":"boxrandom","rate":0,"instantaneous":1}],"initializer":[{"name":"lifetimerandom","min":10,"max":10},{"name":"sizerandom"}]}"#
+        let root = #"{"maxcount":8,"emitter":[{"name":"boxrandom","rate":0,"instantaneous":1}],"initializer":[{"name":"lifetimerandom","min":10,"max":10},{"name":"sizerandom"}],"children":[{"name":"particles/child.json","type":"static"}]}"#
         for orthographic in [false, true] {
             let projection = orthographic ? #""orthogonalprojection":{"width":100,"height":100}"# : ""
             let scene = """

@@ -370,7 +370,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         videoCycleObserver = NotificationCenter.default.addObserver(
             forName: VideoRenderer.playbackCycleEndedNotification, object: nil, queue: .main
         ) { [weak self] notification in
-            MainActor.assumeIsolated { self?.playlistVideoEnded(notification) }
+            guard let sender = notification.object as AnyObject?,
+                  let projectId = notification.userInfo?["projectId"] as? String else { return }
+            let identity = ObjectIdentifier(sender)
+            MainActor.assumeIsolated { self?.playlistVideoEnded(rendererIdentity: identity, projectId: projectId) }
         }
         schedulePlaylistTimer()
 
@@ -813,8 +816,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let web = renderer as? WebRenderer {
             web.onVideoEnded = { [weak self, weak web] in
                 guard let self, let web else { return }
-                self.playlistVideoEnded(Notification(name: VideoRenderer.playbackCycleEndedNotification,
-                    object: web, userInfo: ["projectId": project.id]))
+                self.playlistVideoEnded(rendererIdentity: ObjectIdentifier(web), projectId: project.id)
             }
         }
         guard let scene = renderer as? SceneRenderer else { return }
@@ -1404,11 +1406,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func playlistVideoEnded(_ notification: Notification) {
-        guard let sender = notification.object as AnyObject?,
-              let index = renderers.firstIndex(where: { ($0 as AnyObject) === sender }),
+    private func playlistVideoEnded(rendererIdentity: ObjectIdentifier, projectId: String) {
+        guard let index = renderers.firstIndex(where: { ObjectIdentifier($0 as AnyObject) == rendererIdentity }),
               rendererProjects.indices.contains(index),
-              notification.userInfo?["projectId"] as? String == rendererProjects[index].project.id else { return }
+              projectId == rendererProjects[index].project.id else { return }
         let key = rendererProjects[index].screenKey
         let keys = playlistScreenKeys()
         guard keys.contains(key), !playlistDriver.hasPendingAdvance,
