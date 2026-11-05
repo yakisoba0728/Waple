@@ -1039,7 +1039,7 @@ final class GLSLMatrixVaryingTests: XCTestCase {
         for k in 0..<3 {
             XCTAssertTrue(msl.contains("out.v_M_\(k) = v_M[\(k)];"), "vert 열 \(k) 복사가 없다: \(msl)")
         }
-        XCTAssertTrue(msl.contains("float3x3 v_M;"), "vert 로컬 선언이 없다: \(msl)")
+        XCTAssertTrue(msl.contains("float3x3 v_M = float3x3(0.0);"), "vert 로컬의 0 초기화가 없다: \(msl)")
     }
 
     /// `mat4x3` = **4열 × 3행**(MSL `float4x3` 과 같은 규약) — 열은 3성분이다.
