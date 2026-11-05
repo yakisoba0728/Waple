@@ -76,7 +76,7 @@ final class SettingsViewModel: ObservableObject {
     var onMonitorLayoutChanged: (() -> Void)?
     var onMediaOutputChanged: (() -> Void)?
     var systemNoticesEnabled: () -> Bool = { false }
-    var onSetSystemNotices: ((Bool, @escaping @MainActor (Bool) -> Void) -> Void)?
+    var onSetSystemNotices: (@MainActor (Bool, @escaping SystemNoticeDelivery.AuthorizationCompletion) -> Void)?
     var occlusionState: () -> (enabled: Bool, threshold: Double) = { (false, 0) }
     var stillSyncEnabled: () -> Bool = { false }
     /// 화면이 둘 이상인가 — 축별 선택지에서 `pauseall` 을 보일지 결정한다(WE UI 빌더 `k(e,t,a)`
@@ -305,7 +305,7 @@ final class SettingsViewModel: ObservableObject {
         onMediaOutputChanged?()
     }
 
-    func setSystemNotices(_ enabled: Bool) {
+    @MainActor func setSystemNotices(_ enabled: Bool) {
         onSetSystemNotices?(enabled) { [weak self] granted in
             self?.notificationsEnabled = granted
             if enabled && !granted {

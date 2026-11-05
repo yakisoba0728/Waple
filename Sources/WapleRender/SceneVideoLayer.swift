@@ -99,6 +99,29 @@ final class SemaphoreResultBox<T>: @unchecked Sendable {
     init(_ value: T) { self.value = value }
 }
 
+/// Only these playback flags cross the NotificationCenter callback boundary; every access uses one lock.
+private final class VideoPlaybackEndState: @unchecked Sendable {
+    struct Flags {
+        var loops = true
+        var playing = true
+        var paused = false
+        var endedGeneration: UInt64 = 0
+    }
+    private let lock = NSLock()
+    private var flags = Flags()
+    func access<Value>(_ operation: (inout Flags) -> Value) -> Value {
+        lock.lock(); defer { lock.unlock() }
+        return operation(&flags)
+    }
+    func finishedCycle() -> (loops: Bool, shouldPlay: Bool) {
+        access { state in
+            state.endedGeneration &+= 1
+            if !state.loops { state.playing = false }
+            return (state.loops, !state.paused && state.playing)
+        }
+    }
+}
+
 public final class SceneVideoLayer {
     public let mp4URL: URL
 
@@ -113,14 +136,21 @@ public final class SceneVideoLayer {
     /// ponytail: 고정 3-deep 링. 티어링이 스모크에서 보이면 semaphore 완료핸들러 해제로 승급.
     private var frameHold: [(CVPixelBuffer, CVMetalTexture)] = []
     private var lastLiveTexture: MTLTexture?
-    private var runtimeLoops = true
-    private var runtimePlaying = true
+    private let playbackEndState = VideoPlaybackEndState()
+    private var runtimeLoops: Bool {
+        get { playbackEndState.access { $0.loops } }
+        set { playbackEndState.access { $0.loops = newValue } }
+    }
+    private var runtimePlaying: Bool {
+        get { playbackEndState.access { $0.playing } }
+        set { playbackEndState.access { $0.playing = newValue } }
+    }
     private var runtimeRate: Double = 1
     private var runtimeAnchorTime: Double = 0
     private var runtimeAnchorPosition: Double = 0
     private var runtimeLastSceneTime: Double = 0
     private var runtimeHasControl = false
-    private var runtimeEndedGeneration: UInt64 = 0
+    private var runtimeEndedGeneration: UInt64 { playbackEndState.access { $0.endedGeneration } }
     /// F5-2: startLive 가 채운다 — identity(기본값)면 기존 CVMetalTextureCache 제로카피 경로 그대로.
     private var trackOrientation: VideoTrackOrientation = .identity
 
@@ -209,12 +239,11 @@ public final class SceneVideoLayer {
         // 되감기는 그대로 한다 — 재개하면 처음부터가 옳고, 그 자체로는 소리도 그림도 없다.
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
-        ) { [weak self, weak p] _ in
-            guard let self else { return }
-            self.runtimeEndedGeneration &+= 1
-            guard self.runtimeLoops else { self.runtimePlaying = false; p?.pause(); return }
+        ) { [state = playbackEndState, weak p] _ in
+            let decision = state.finishedCycle()
+            guard decision.loops else { p?.pause(); return }
             p?.seek(to: .zero)
-            guard !self.paused, self.runtimePlaying else { return }
+            guard decision.shouldPlay else { return }
             p?.play()
         }
         player = p
@@ -343,7 +372,10 @@ public final class SceneVideoLayer {
     /// r3-O14: 정지 여부. 루프 옵저버가 "종료 → 무조건 재생" 을 하지 않도록 이 플래그를 본다.
     /// `AVPlayer.rate` 대신 별도 플래그를 두는 이유는 형제 `WebRenderer`/`VideoRenderer` 와 같다 —
     /// `rate` 는 seek·이음매에서 0 을 스치는 **순간 상태**라 의도를 답하지 못한다.
-    private var paused = false
+    private var paused: Bool {
+        get { playbackEndState.access { $0.paused } }
+        set { playbackEndState.access { $0.paused = newValue } }
+    }
     public func pause() { paused = true; player?.pause() }
     public func resume() { paused = false; if runtimePlaying { player?.play() } }
 

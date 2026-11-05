@@ -5,7 +5,8 @@ import UserNotifications
 /// operations keep tests away from permission dialogs and real notifications.
 @MainActor
 final class SystemNoticeDelivery: NSObject, UNUserNotificationCenterDelegate {
-    typealias Authorize = (@escaping @MainActor (Bool) -> Void) -> Void
+    typealias AuthorizationCompletion = @MainActor @Sendable (Bool) -> Void
+    typealias Authorize = @MainActor (@escaping AuthorizationCompletion) -> Void
     private let authorize: Authorize
     private let post: (String) -> Void
     private var last: (message: String, time: Date)?
@@ -17,7 +18,7 @@ final class SystemNoticeDelivery: NSObject, UNUserNotificationCenterDelegate {
         super.init()
     }
 
-    func requestAuthorization(completion: @escaping @MainActor (Bool) -> Void) { authorize(completion) }
+    func requestAuthorization(completion: @escaping AuthorizationCompletion) { authorize(completion) }
 
     @discardableResult
     func deliver(_ message: String, enabled: Bool, windowVisible: Bool, now: Date = Date()) -> Bool {

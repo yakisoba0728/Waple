@@ -119,7 +119,7 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
         MainActor.assumeIsolated { teardown() }
     }
 
-    public func captureCurrentImage(completion: @escaping @MainActor (NSImage?) -> Void) {
+    public func captureCurrentImage(completion: @escaping @MainActor @Sendable (NSImage?) -> Void) {
         guard let web = webView, web.bounds.width > 0, web.bounds.height > 0 else { completion(nil); return }
         let generation = documentGeneration
         let configuration = WKSnapshotConfiguration()

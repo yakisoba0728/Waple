@@ -340,8 +340,11 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
         d.append(Data("test|idle_bone".utf8)); d.append(0)
         d.append(Data("single".utf8)); d.append(0)
         f32(30); u32(1); u32(0); u32(2); u32(0)
-        u32(UInt32(2 * 36)); key((0, 0, 0)); key((0, 0, 0)); u32(0)   // 본0: 정지
-        u32(UInt32(2 * 36)); key((0, 0, 0)); key((0, 2, 0)); u32(0)   // 본1: y+2
+        u32(0); u32(UInt32(2 * 36)); key((0, 0, 0)); key((0, 0, 0))   // trackFlags | bytes | 본0 키
+        u32(0); u32(UInt32(2 * 36)); key((0, 0, 0)); key((0, 2, 0))   // trackFlags | bytes | 본1 키
+        u32(0); d.append(0); d.append(0)  // v3 scalar tracks and v3/v4 gates
+        for _ in 0..<6 { f32(0) }         // v5 bounds
+        d.append(0); u32(0)               // v6 gate and events
         return d
     }
 
@@ -395,6 +398,7 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
         let model = try XCTUnwrap(Model3D.parse(skinnedQuadMDL()))
         XCTAssertEqual(model.bones.count, 2)
         XCTAssertEqual(model.animations.count, 1)
+        XCTAssertEqual(model.animations[0].tracks[1].last?.position.y, 2)
         XCTAssertTrue(model.meshes[0].skinned)
 
         // 애니 포즈(t=1 → single 모드 마지막 키: y+2): 상단(32,21) 흰, 하단(32,35) 검정.

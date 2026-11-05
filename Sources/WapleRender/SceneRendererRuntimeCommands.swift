@@ -252,8 +252,12 @@ extension SceneRenderer {
         } else { return false }
         hasAnimations = true
         shouldAnimate = true
-        mtkView?.isPaused = false
-        mtkView?.enableSetNeedsDisplay = false
+        let generation = sceneMountGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.sceneMountGeneration == generation else { return }
+            self.mtkView?.isPaused = false
+            self.mtkView?.enableSetNeedsDisplay = false
+        }
         return true
     }
 
