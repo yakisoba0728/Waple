@@ -1414,7 +1414,11 @@ extension SceneRenderer {
         pd.vertexFunction = lib.makeFunction(name: "ev_main")
         pd.fragmentFunction = lib.makeFunction(name: "ef_main")
         let vd = MTLVertexDescriptor()
-        if let layout = sourceLayout {
+        // A shader without bone inputs needs the animated CPU buffer, not raw bind-pose vertices.
+        let nativeSkinning = t.vertexAttributes.contains("a_BlendIndices")
+            || t.vertexAttributes.contains("a_BlendWeights") || t.engineParams.contains { $0.name == "g_Bones" }
+        let usesSourceVertices = sourceLayout != nil && (!sourceIsSkinned || nativeSkinning)
+        if usesSourceVertices, let layout = sourceLayout {
             for name in t.vertexAttributes {
                 guard let shaderAttribute = GLSLTranslator.vertexAttributeWhitelist.first(where: { $0.name == name }) else { return nil }
                 let attribute = layout.attributes.first(where: { $0.name == name })
@@ -1497,7 +1501,7 @@ extension SceneRenderer {
         return CustomMeshShader(pipeline: pipe, material: material, aux: aux,
                                 texRes: texRes, texWrap: texWrap, texFilter: texFilter,
                                 materialParams: t.materialParams, engineParams: t.engineParams,
-                                vertexTextureSlots: t.vertexTextureSlots, usesSourceVertices: sourceLayout != nil)
+                                vertexTextureSlots: t.vertexTextureSlots, usesSourceVertices: usesSourceVertices)
     }
 
     func shadow3DPipeline(lib: MTLLibrary, vertex: String, cutout: Bool,
