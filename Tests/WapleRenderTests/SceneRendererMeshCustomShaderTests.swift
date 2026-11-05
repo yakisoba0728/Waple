@@ -339,7 +339,7 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
         }
         d.append(Data("test|idle_bone".utf8)); d.append(0)
         d.append(Data("single".utf8)); d.append(0)
-        f32(30); u32(1); u32(0); u32(2); u32(0)
+        f32(30); u32(1); u32(0); u32(2)  // fps | length | clipFlags | boneCount
         u32(0); u32(UInt32(2 * 36)); key((0, 0, 0)); key((0, 0, 0))   // trackFlags | bytes | 본0 키
         u32(0); u32(UInt32(2 * 36)); key((0, 0, 0)); key((0, 2, 0))   // trackFlags | bytes | 본1 키
         u32(0); d.append(0); d.append(0)  // v3 scalar tracks and v3/v4 gates

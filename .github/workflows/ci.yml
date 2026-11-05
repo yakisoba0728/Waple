@@ -152,7 +152,7 @@ jobs:
           echo "### 엄격 동시성 진단 (${{ matrix.configuration }})" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "총 warning: \`${TOTAL:-0}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "Sources 고유 진단: \`${SOURCE_WARNINGS:-0}\` (상한 25)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Sources 고유 진단: \`${SOURCE_WARNINGS:-0}\` (상한 24)" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| 건수 | 파일 |" >> "$GITHUB_STEP_SUMMARY"
           echo "| ---: | --- |" >> "$GITHUB_STEP_SUMMARY"
@@ -169,17 +169,18 @@ jobs:
             | sort | uniq -c | sort -rn | head -25 >> "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "</details>" >> "$GITHUB_STEP_SUMMARY"
-          if [ "${SOURCE_WARNINGS:-0}" -gt 25 ]; then
-            echo "::error::Sources warning ${SOURCE_WARNINGS}자리 — Swift 6 전환 기준선 25 초과."
+          # run42075332702 · 2051a1bd: debug 소스 고유 경고24 실측(25→24).
+          if [ "${SOURCE_WARNINGS:-0}" -gt 24 ]; then
+            echo "::error::Sources warning ${SOURCE_WARNINGS}자리 — Swift 6 전환 기준선 24 초과."
             exit 1
           fi
           # 래칫 알림 — 위 주석의 "진단을 고친 커밋은 아래 상한도 함께 낮춘다" 를 사람이 기억에
           # 의존해 지키고 있었다. 실측이 상한보다 낮으면 그 사실을 요약에 남긴다(실패는 아니다 —
           # 같은 PR 안에서 낮추라는 지시다). 상한을 낮춰도 형제 계약 테스트
           # (`scripts/dev/tests/test_workflow_contracts.py`)가 깨지지 않게 그쪽도 숫자를 파싱한다.
-          if [ "${SOURCE_WARNINGS:-0}" -lt 25 ]; then
-            echo "::notice::Sources warning ${SOURCE_WARNINGS}자리 — 상한 25 보다 낮다. 이 스텝의 상한도 ${SOURCE_WARNINGS} 로 낮춰라(증가 금지 래칫)."
-            echo "- 상한 인하 권고: \`25\` → \`${SOURCE_WARNINGS}\`" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${SOURCE_WARNINGS:-0}" -lt 24 ]; then
+            echo "::notice::Sources warning ${SOURCE_WARNINGS}자리 — 상한 24 보다 낮다. 이 스텝의 상한도 ${SOURCE_WARNINGS} 로 낮춰라(증가 금지 래칫)."
+            echo "- 상한 인하 권고: \`24\` → \`${SOURCE_WARNINGS}\`" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # release 빌드 로그도 올린다 — 이 레인의 존재 이유가 최적화 의존 결함인데
