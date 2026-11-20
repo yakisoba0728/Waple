@@ -31,7 +31,6 @@ import urllib.error
 import urllib.request
 
 API = "https://api.github.com"
-a_repo = [None]   # main() 이 채운다(종료 코드 판정이 repo 를 알아야 한다)
 MARK = {"success": "OK ", "failure": "FAIL", "cancelled": "CANC", "skipped": "SKIP",
         "timed_out": "TIME", "startup_failure": "BOOM", None: "... "}
 
@@ -123,41 +122,12 @@ def show_runs(repo, branch, limit):
     print("== %s @ %s ==" % (repo, branch))
     if not runs:
         print("  (실행 없음)")
-        HIDDEN["no_runs"] = True
-    seen_workflows = {}
     for r in runs:
         c = r.get("conclusion")
         mark = "... " if r["status"] != "completed" else MARK.get(c, "?   ")
         state = c or r["status"]
         print("[%s] %s  %-5s %-12s run=%s  %sZ"
               % (mark, r["head_sha"][:7], r["name"], state, r["id"], r["created_at"][11:19]))
-        seen_workflows.setdefault(r["head_sha"], set()).add(r["name"])
-    # **CI 가 없는 SHA 를 조용히 넘기지 않는다.** 문서 전용이라 paths-ignore 로 스킵된 것과
-    # 트리거가 깨져 안 돈 것은 화면상 구분이 안 되는데, 후자는 "검증 0" 이라 치명적이다
-    # (ci.yml 주석의 `branches: [main]` 사고가 정확히 그것이었다 — 8커밋을 검증 없이 푸시).
-    for sha, names in seen_workflows.items():
-        if "CI" in names:
-            continue
-        # **페이지 잘림에 속지 않는다.** 위 목록은 최근 N개일 뿐이라, 오래된 SHA 의 CI 실행이
-        # 화면 밖에 있을 수 있다. 그 상태로 경고하면 늑대소년이 된다(실제로 첫 판에 오탐이 났다).
-        # 그 SHA 로 한정해 한 번 더 물어 확인한 뒤에만 판정한다.
-        try:
-            byname = api("repos/%s/actions/runs?head_sha=%s&per_page=20" % (repo, sha))
-            if any(r["name"] == "CI" for r in byname.get("workflow_runs", [])):
-                continue
-        except SystemExit:
-            continue
-        verdict = docs_only_commit(repo, sha)
-        if verdict is True:
-            print("     %s: CI 없음 — 문서 전용이라 paths-ignore 로 **정상 스킵**(spec 은 돌았다)" % sha[:7])
-        elif verdict is False:
-            print("     %s: ⚠ CI 없음인데 코드 변경이 있다 — 트리거를 확인할 것" % sha[:7])
-            # 로컬 HEAD 에 대해서만 종료코드로 올린다. 창 안의 옛 SHA 까지 실패로 치면
-            # 이미 지나간 이력 때문에 영영 붉어져 아무도 안 보게 된다.
-            if sha == head_sha():
-                HIDDEN["ci_missing_for_head"] = True
-        else:
-            print("     %s: CI 없음 — 사유 판정 불가(아직 큐잉 중일 수 있다)" % sha[:7])
     return runs
 
 
@@ -209,8 +179,7 @@ def test_tally(repo, job_id):
 # 이 도구가 유일하게 드러내는 사고(release 레인 `continue-on-error` 가 가리는 테스트 실패)가
 # 둘 다 **기계적으로는 초록**이었다. `until python3 scripts/dev/ci-status.py; do …; done` 이
 # 그 자리에서 성공으로 빠져나온다 — 사람이 화면을 읽을 때만 보이는 경고는 게이트가 아니다.
-HIDDEN = {"test_failures": 0, "ci_missing_for_head": False, "no_runs": False,
-          "inspected_test_jobs": set(), "unverified_test_jobs": set()}
+HIDDEN = {"test_failures": 0, "inspected_test_jobs": set(), "unverified_test_jobs": set()}
 
 
 def inspect_hidden_test_failures(repo, run_id):
@@ -247,17 +216,11 @@ def show_jobs(repo, run_id, tests=False):
         if tests and j["status"] == "completed":
             t = test_tally(repo, j["id"])
             if t is not None:
-                HIDDEN["unverified_test_jobs"].discard(j["id"])
-                HIDDEN["inspected_test_jobs"].add(j["id"])
                 executed, skipped, failures = t
                 note = "실행 %d · 스킵 %d · 실패 %d" % (executed, skipped, failures)
-                if failures:
-                    HIDDEN["test_failures"] += failures
                 if failures and c == "success":
                     note += "  ← 잡은 success 인데 테스트는 실패(continue-on-error)"
                 line += "\n       %s" % note
-            elif c == "success" and "release" in j["name"].lower():
-                HIDDEN["unverified_test_jobs"].add(j["id"])
         print(line)
         for s in j.get("steps", []):
             sc = s.get("conclusion") or s["status"]
@@ -299,7 +262,6 @@ def main():
     ap.add_argument("--interval", type=int, default=30)
     ap.add_argument("--timeout", type=int, default=1800)
     a = ap.parse_args()
-    a_repo[0] = a.repo
     branch = a.branch or current_branch()
 
     if a.log is not None:
@@ -307,11 +269,16 @@ def main():
         return 0
 
     deadline = time.time() + a.timeout
-    runs = []
+    local = head_sha()
     while True:
         runs = show_runs(a.repo, branch, a.limit)
-        head = runs[0]["head_sha"] if runs else None
-        pending = [r for r in runs if r["head_sha"] == head and r["status"] != "completed"]
+        head = local or (runs[0]["head_sha"] if runs else None)
+        # Even when one local run is visible, the display window may omit another workflow's verdict.
+        same = []
+        if head:
+            response = api("repos/%s/actions/runs?head_sha=%s&per_page=100" % (a.repo, head))
+            same = [r for r in response.get("workflow_runs", []) if r["head_sha"] == head]
+        pending = [r for r in same if r["status"] != "completed"]
         if not a.watch or not pending or time.time() > deadline:
             break
         print("  ... %d개 진행 중, %ds 후 재확인" % (len(pending), a.interval), flush=True)
@@ -342,40 +309,34 @@ def main():
             if pick:
                 show_jobs(a.repo, pick["id"], tests=a.tests)
 
-    if HIDDEN["no_runs"] or not runs:
+    if not runs and not same:
         # 브랜치에 실행이 하나도 없다 = 검증 0. 종전엔 0(성공)이었다.
         print("\n[ci-status] 이 브랜치에 워크플로 실행이 없다 — 검증된 것이 없다")
         return 1
-    # **로컬 HEAD 를 기준으로 판정한다.** 목록의 맨 위(runs[0])를 쓰면 푸시 직후 새 실행이
-    # 아직 안 뜬 창에서 **직전 커밋의 결과**를 보고 "끝났다" 고 답한다 — 대기 루프가
-    # 그 자리에서 빠져나온다(실제로 당했다). HEAD 의 실행이 하나도 없으면 "진행 중"(2)이다.
-    local = head_sha()
-    if local and not any(r["head_sha"] == local for r in runs):
-        # 단, 문서 전용 커밋은 CI 가 영영 안 뜬다 — 그 경우 spec 만 보고 판정한다.
-        by_sha = api("repos/%s/actions/runs?head_sha=%s&per_page=20" % (a_repo[0], local))
-        mine = by_sha.get("workflow_runs", [])
-        if not mine:
-            print("     %s: 아직 실행이 뜨지 않았다(진행 중으로 본다)" % local[:7])
-            return 2
-        runs = mine
-        head = local
-    else:
-        head = local or runs[0]["head_sha"]
-    same = [r for r in runs if r["head_sha"] == head]
     if not same:
         return 2
     if any(r["status"] != "completed" for r in same):
         return 2
     if any(r.get("conclusion") != "success" for r in same):
         return 1
+    workflows = {r["name"] for r in same}
+    if "CI" not in workflows:
+        docs_only = docs_only_commit(a.repo, head)
+        if docs_only is False:
+            print("\n[ci-status] HEAD 에 코드 변경이 있는데 CI 실행이 없다 — 검증 0")
+            return 1
+        if docs_only is None:
+            print("\n[ci-status] CI 실행이 없고 스킵 사유를 확인하지 못했다 — 검증 미확정")
+            return 2
+        print("     %s: CI 없음 — 문서 전용이라 paths-ignore 로 **정상 스킵**" % head[:7])
+    if "spec" not in workflows:
+        print("\n[ci-status] spec 실행을 확인하지 못했다 — 검증 미확정")
+        return 2
     # release `Test` 는 continue-on-error 이므로 workflow/job 이 success 여도 테스트가 실패할
     # 수 있다. 사람이 `--tests` 를 붙였을 때만 보던 정보를 기본/--watch 종료코드에도 넣는다.
     for run in same:
         if run.get("name") == "CI":
             inspect_hidden_test_failures(a.repo, run["id"])
-    if HIDDEN["ci_missing_for_head"]:
-        print("\n[ci-status] HEAD 에 코드 변경이 있는데 CI 실행이 없다 — 검증 0")
-        return 1
     if HIDDEN["test_failures"]:
         # release 레인은 `continue-on-error` 라 잡이 success 로 끝나면서 테스트는 실패한다.
         # 기본/--watch 경로에서도 자동으로 읽는다. `--tests` 는 잡별 상세 표시 옵션일 뿐이다.

@@ -7,10 +7,7 @@ on:
   push:
     tags:
       - "v*"
-  # 태그 push 가 정식 경로다. 여기에 수동 실행을 하나 더 둔 이유는 **태그를 못 미는 자격증명**이
-  # 있기 때문이다(브랜치 push 만 허용되는 세션에서 `git push origin <tag>` 이 HTTP 403 이다).
-  # 그때도 프리뷰 빌드를 낼 수 있어야 한다. 태그는 `gh release create --target <sha>` 가
-  # 그 커밋에 만들어 준다 — 즉 태그 없이 시작해도 결과물은 태그 경로와 같다.
+  # 수동 실행은 main에서만 허용하며, 검증 후 릴리스 태그를 생성한다.
   workflow_dispatch:
     inputs:
       tag:
@@ -22,14 +19,38 @@ permissions:
   contents: write   # gh release create 에 필요
   actions: read     # 이 커밋의 CI 성공 실행을 발행 전에 확인
 
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release:
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    environment: release
     # ci.yml 과 동일 러너/툴체인 — 릴리스 산출물이 CI 가 검증한 것과 같은 컴파일러로 만들어진다.
     runs-on: macos-26
     timeout-minutes: 40
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require trusted release ref
+        env:
+          RELEASE_READY: ${{ vars.WAPLE_RELEASE_READY }}
+        run: |
+          if [[ "$RELEASE_READY" != "true" ]]; then
+            echo "::error::Configure the protected release environment and its WAPLE_RELEASE_READY variable."
+            exit 1
+          fi
+          RELEASE_SHA=$(git rev-parse HEAD)
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main; then
+            echo "::error::The release commit must be on main."
+            exit 1
+          fi
+          echo "RELEASE_SHA=$RELEASE_SHA" >> "$GITHUB_ENV"
 
       - name: Toolchain facts
         run: |
@@ -41,31 +62,20 @@ jobs:
       # ci.yml + spec.yml 성공 실행을 API 로 확인한다. 태그 push 때 세 워크플로가 동시에
       # 시작하므로 missing/pending 은 제한시간 동안 기다리고, failure/cancelled 는 즉시 막는다.
 
-      # 두 경로(태그 push · 수동 실행)가 **같은 변수 하나**로 합류한다. 이 아래로는
-      # `GITHUB_REF_NAME` 을 쓰지 않는다 — 수동 실행에서는 그것이 브랜치 이름이라 태그가 아니다.
-      # [2026-08-25] `inputs.tag` 를 **`env:` 경유로** 받는다.
-      #
-      # `${{ inputs.tag }}` 를 `run:` 본문에 직접 적으면 GitHub 이 셸 실행 **전에** 그 자리를
-      # 문자열로 치환한다. 즉 값이 셸 문법으로 파싱되고, 아래 `case "$TAG" in v*)` 검증은
-      # 그보다 **나중**이라 막지 못한다. 이 잡은 `contents: write` 와 서명·공증 secrets 6개를
-      # 들고 있으므로 방어층 하나가 빠진 상태였다.
-      #
-      # 특권 상승은 아니다 — `workflow_dispatch` 를 부를 수 있는 사람은 워크플로 파일 자체를
-      # 고쳐서 같은 일을 할 수 있다. 그래도 "입력이 코드가 되는 자리" 를 남겨 둘 이유는 없다.
-      # `env:` 로 넘기면 값은 환경변수로만 들어가고 셸이 파싱하지 않는다.
+      # Read dispatch inputs through env and validate before writing GITHUB_ENV.
       - name: Extract version from tag
         env:
           DISPATCH_TAG: ${{ inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             TAG="$DISPATCH_TAG"
           else
             TAG="${GITHUB_REF_NAME}"
           fi
-          case "$TAG" in
-            v*) ;;
-            *) echo "::error::릴리스 태그는 v 로 시작해야 한다 — 받은 값: '$TAG'"; exit 1 ;;
-          esac
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::Expected a release tag such as v0.2.0 or v0.2.0-beta.1."
+            exit 1
+          fi
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
           VERSION="${TAG#v}"                # v 접두사 제거 → 0.2.0
           PLIST_VERSION="${VERSION%%-*}"    # 프리릴리즈 접미사 제거 → 0.1.0 (CFBundleShortVersionString 은 숫자+점만 허용)
@@ -77,17 +87,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # 판정 로직은 로컬 단위 테스트가 가능한 helper 에 둔다. helper rc: 0=둘 다 성공,
-          # 1=terminal failure, 2=missing/pending. 최대 20분만 기다려 잡 전체 40분 예산을 지킨다.
+          # Wait up to 20 minutes for both workflows on the exact source commit.
+          set -euo pipefail
           for attempt in {1..60}; do
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${GITHUB_SHA}&per_page=100" \
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${RELEASE_SHA}&per_page=100" \
               > "$RUNNER_TEMP/actions-runs.json"
-            set +e
-            python3 scripts/dev/check-release-ci.py "$GITHUB_SHA" "$RUNNER_TEMP/actions-runs.json"
-            rc=$?
-            set -e
+            if ci_attempt=$(python3 scripts/dev/check-release-ci.py "$RELEASE_SHA" "$RUNNER_TEMP/actions-runs.json"); then
+              read -r run_id run_attempt <<< "$ci_attempt"
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$run_id/attempts/$run_attempt/jobs?per_page=100" \
+                > "$RUNNER_TEMP/ci-jobs.json"
+              python3 scripts/dev/check-release-ci.py --jobs "$RUNNER_TEMP/ci-jobs.json"
+              exit 0
+            else
+              rc=$?
+            fi
             case "$rc" in
-              0) exit 0 ;;
               1) exit 1 ;;
               2)
                 if [ "$attempt" -eq 60 ]; then
@@ -114,53 +128,18 @@ jobs:
           fi
           echo "WEAssets 배포 승인 preflight 통과(권리 자체를 이 워크플로가 판정한 것은 아니다)."
 
-      # 발행된 릴리스를 덮어쓰지 않는 것은 옳다. 문제는 **언제** 그걸 알아차리느냐였다 —
-      # 2026-08-17 태그를 재지목(force push)했더니 워크플로가 다시 돌아, 빌드·패키징·
-      # 공증 게이트·SHA 계산을 전부 끝낸 **마지막 스텝**에서 "a release with the same tag
-      # name already exists" 로 죽었다(런 31987727378). 3분을 태우고 나서 아무 것도 하지
-      # 않는 것이 확정됐고, 실행 이력엔 릴리스가 깨진 것처럼 빨간 줄이 남는다.
-      #
-      # 전제 검사를 파괴적/비싼 단계 **앞**으로 옮긴다. 기존 릴리스는 건드리지 않는다.
-      # [2026-08-25] **릴리스만 보고 태그를 안 보던 구멍을 닫는다.**
-      #
-      # 아래 `gh release create` 는 `--target` 으로 이 커밋을 겨누는데, GitHub API 는 **태그가
-      # 이미 있으면 `target_commitish` 를 쓰지 않는다**(기존 태그가 가리키는 커밋이 이긴다).
-      # 그런데 이 전제 검사는 `gh release view` 로 **릴리스만** 조회했다. 그래서 이런 상태가 가능했다:
-      #   ① 태그 push → 빌드 → 공증 실패 → 잡이 죽는다. **태그는 남고 릴리스는 없다.**
-      #   ② 고친 뒤 같은 태그로 재시도(수동 실행) → 이 검사는 릴리스가 없으니 통과 →
-      #      빌드는 **새 커밋**으로 하는데 `create` 는 **옛 태그 커밋**에 릴리스를 만든다.
-      #   ③ 결과: 릴리스 페이지가 가리키는 커밋과 첨부 DMG 의 빌드 커밋이 **어긋난다**.
-      # 재현 가능한 릴리스라는 이 리포의 전제가 조용히 깨지는 자리다.
-      #
-      # 태그가 이미 있으면 그것이 **이 커밋을 가리킬 때만** 진행한다.
       - name: Refuse to clobber an existing release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "::error::릴리스 $RELEASE_TAG 이 이미 발행돼 있다. 태그 재지목만으로는 덮어쓰지 않는다."
-            echo "다시 내려면 새 태그를 쓰거나, 의도적이라면 먼저 지워라: gh release delete $RELEASE_TAG"
+            echo "::error::Release $RELEASE_TAG already exists."
             exit 1
           fi
-          # 태그 선존재 검사 — `gh release create --target` 은 태그가 있으면 무시된다.
-          REMOTE_SHA=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG^{}" | cut -f1)
-          if [ -z "$REMOTE_SHA" ]; then
-            REMOTE_SHA=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG" | cut -f1)
-          fi
-          if [ -n "$REMOTE_SHA" ] && [ "$REMOTE_SHA" != "$GITHUB_SHA" ]; then
-            echo "::error::태그 $RELEASE_TAG 은 이미 $REMOTE_SHA 를 가리키는데 이 실행은 $GITHUB_SHA 를 빌드한다."
-            echo "gh release create 는 태그가 있으면 --target 을 무시하므로, 릴리스 페이지의 커밋과"
-            echo "첨부 DMG 의 빌드 커밋이 어긋난다. 태그를 지우고 다시 붙이거나 새 태그를 써라."
-            exit 1
-          fi
-          if [ -n "$REMOTE_SHA" ]; then
-            echo "태그 $RELEASE_TAG 이 이 커밋($GITHUB_SHA)을 가리킨다 — 진행한다."
-          else
-            echo "릴리스·태그 $RELEASE_TAG 없음 — 진행한다."
-          fi
+          bash scripts/dev/check-release-tag.sh preflight "$RELEASE_TAG" "$RELEASE_SHA"
 
       # Developer ID 서명/공증은 secrets 이 설정된 경우에만 활성화된다.
-      # 하나라도 없으면 ad-hoc 서명으로 폴백한다(로컬 패키징과 동일) — 릴리스가 멈추지 않는다.
+      # 모두 비어 있을 때만 ad-hoc을 허용한다. 일부만 설정한 경우는 오류다.
       # 필요한 secrets(6개, docs/RELEASING.md §서명/공증 참조):
       #   DEVELOPER_ID_APPLICATION   "Developer ID Application: NAME (TEAMID)"
       #   DEVELOPER_ID_CERT_P12      .p12 를 base64 로 인코딩한 문자열
@@ -182,10 +161,13 @@ jobs:
             echo "available=true" >> "$GITHUB_OUTPUT"
             echo "WAPLE_SIGN_IDENTITY=$DEV_ID" >> "$GITHUB_ENV"
             echo "Developer ID 서명 + 공증 모드: $DEV_ID"
-          else
+          elif [ -z "$DEV_ID$CERT$CERT_PASSWORD$NOTARY_APPLE_ID$NOTARY_TEAM_ID$NOTARY_PASSWORD" ]; then
             echo "available=false" >> "$GITHUB_OUTPUT"
             echo "WAPLE_SIGN_IDENTITY=-" >> "$GITHUB_ENV"
             echo "secrets 미설정 — ad-hoc 서명으로 진행(공증 없음, 첫 실행 Gatekeeper 안내가 릴리스 노트에 붙는다)"
+          else
+            echo "::error::Configure all six signing secrets in the release environment."
+            exit 1
           fi
 
       # 러너는 매 실행 새 VM 이라 인증서가 없다 — 임시 키체인을 만들어 .p12 를 임포트한다.
@@ -239,7 +221,7 @@ jobs:
           xcrun stapler staple Waple.dmg
           # 검증: 스테이플된 티켓과 서명이 실제로 통과하는지 확인한다(실패면 릴리스를 만들지 않는다).
           xcrun stapler validate Waple.dmg
-          spctl -a -vvv -t install Waple.dmg
+          spctl -a -vvv -t open --context context:primary-signature Waple.dmg
 
       - name: Compute SHA-256
         run: |
@@ -254,8 +236,9 @@ jobs:
       # 그 안내가 거짓이 되므로 signing 스텝 출력으로 분기한다.
       - name: Create GitHub Release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           cat > release-notes.md <<EOF
           ## Waple ${RELEASE_TAG}
 
@@ -294,11 +277,13 @@ jobs:
           case "$RELEASE_TAG" in
             *-*) FLAGS="--prerelease" ;;
           esac
-          # `--target` 이 있어야 수동 실행에서 **이 커밋에** 태그가 생긴다(태그 push 경로에서는
-          # 이미 그 커밋이라 무해하다).
+          # An existing tag wins over gh release create --target. Bind it first.
+          TAG_MODE=require
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then TAG_MODE=create; fi
+          bash scripts/dev/check-release-tag.sh "$TAG_MODE" "$RELEASE_TAG" "$RELEASE_SHA"
           gh release create "$RELEASE_TAG" Waple.dmg \
-            $FLAGS \
-            --target "$GITHUB_SHA" \
+            "$FLAGS" \
+            --verify-tag \
             --title "Waple ${RELEASE_TAG}" \
             --notes-file release-notes.md
 

@@ -35,7 +35,7 @@ def load():
     return m
 
 
-def run(runs, jobs=None, tally=None, docs_only=False, argv=("--tests",)):
+def run(runs, jobs=None, tally=None, docs_only=False, argv=("--tests",), visible=None):
     m = load()
     m.head_sha = lambda: SHA
 
@@ -47,7 +47,7 @@ def run(runs, jobs=None, tally=None, docs_only=False, argv=("--tests",)):
         if "/commits/" in path:
             return {"files": [{"filename": "README.md"}] if docs_only
                     else [{"filename": "Sources/a.swift"}]}
-        return {"workflow_runs": runs}
+        return {"workflow_runs": runs if visible is None else visible}
 
     m.api = api
     m.test_tally = lambda repo, job_id: tally
@@ -74,6 +74,16 @@ SPEC_OK = wf(name="spec", id=2)
 
 
 class TestExitCodeContract(unittest.TestCase):
+    def test_display_limit_does_not_hide_an_exact_sha_ci_failure(self):
+        failed_ci = wf(conclusion="failure")
+        rc, out = run([SPEC_OK, failed_ci], visible=[SPEC_OK], argv=("--limit", "1"))
+        self.assertEqual(rc, 1, out)
+
+    def test_ci_success_without_spec_is_unverified(self):
+        rc, out = run([CI_OK], argv=())
+        self.assertEqual(rc, 2, out)
+        self.assertIn("spec", out)
+
     def test_missing_release_tally_is_unverified_in_all_modes(self):
         jobs = [dict(name="swift · release", id=9, status="completed",
                      conclusion="success", steps=[])]

@@ -154,7 +154,7 @@ hr; echo "6. 골든 무변화 (Task 1·2 는 픽셀을 바꾸면 안 된다)"; h
 # 구현 직전 캡처가 없을 때 **차선의 후보**로만 쓸 것:
 #   WAPLE_PRE_RELEASE_BASELINE=spec/golden/snapshot/baseline-6f0bcf0
 PRE="${WAPLE_PRE_RELEASE_BASELINE:-}"
-if [ -z "$PRE" ] || [ ! -d "$PRE/thumbs" ]; then
+if [ -z "$PRE" ]; then
     echo "  !! 구현 전 release 기준선이 없다. 이 대조는 성립하지 않는다."
     echo "     커밋된 baseline-81098bb 는 debug 라 release 캡처와 항상 30종이 어긋난다."
     echo "     구현 **전에** 아래를 떠 두고 WAPLE_PRE_RELEASE_BASELINE 으로 지정할 것:"
@@ -181,25 +181,28 @@ echo "  캡처: $CAPTURE_ROOT/$LABEL"
 if [ "${SKIP_GOLDEN_DIFF:-0}" = "1" ]; then
     echo "  (구현 전 release 기준선 부재로 대조 생략)"
 else
-python3 - "$PRE" "$CAPTURE_ROOT/$LABEL" <<'PY'
+python3 - "$PRE" "$CAPTURE_ROOT/$LABEL" <<'PY' || bad "구현 전 골든 대조 실패"
 import json, os, sys
 a, b = sys.argv[1], sys.argv[2]
 try:
     from PIL import Image
 except ImportError:
-    print("  (PIL 없음 — 픽셀 대조 건너뜀. pip3 install pillow)"); sys.exit(0)
+    print("  !! PIL 없음 — 픽셀 대조를 실행할 수 없다 (pip3 install pillow)"); sys.exit(2)
 ma = {e["id"]: e for e in json.load(open(os.path.join(a, "manifest.json")))["entries"]}
 mb_path = os.path.join(b, "manifest.json")
 if not os.path.exists(mb_path):
     print("  !! B 매니페스트 없음 — 캡처 실패"); sys.exit(1)
 mb = {e["id"]: e for e in json.load(open(mb_path))["entries"]}
+if not ma or set(ma) != set(mb):
+    print("  !! 캡처 씬 목록이 기준선과 같아야 한다."); sys.exit(1)
 changed = []
-for sid in sorted(set(ma) & set(mb)):
+for sid in sorted(ma):
     pa = os.path.join(a, "thumbs", f"{sid}.png")
     pb = os.path.join(b, "thumbs", f"{sid}.png")
-    if not (os.path.exists(pa) and os.path.exists(pb)): continue
+    if not (os.path.isfile(pa) and os.path.isfile(pb)):
+        print(f"  !! 썸네일 누락: {sid}"); sys.exit(1)
     if open(pa, "rb").read() == open(pb, "rb").read(): continue
-    ia, ib = Image.open(pa).convert("RGB"), Image.open(pb).convert("RGB")
+    ia, ib = Image.open(pa).convert("RGBA"), Image.open(pb).convert("RGBA")
     if ia.size != ib.size: changed.append((sid, -1)); continue
     pxa, pxb = ia.load(), ib.load()
     w, h = ia.size; mx = 0
@@ -213,6 +216,7 @@ for sid, mx in changed[:20]:
     print(f"    {sid} 최대차 {mx}")
 if changed:
     print("  !! Task 1·2 는 픽셀을 바꾸면 안 된다. 위 씬을 조사할 것.")
+    sys.exit(1)
 PY
 fi
 

@@ -69,7 +69,8 @@ class WapleSaverLifecycleTests(unittest.TestCase):
         )
         self.assertIn("BOOL playable = [self isPlayableVideoPath:path];", reload)
         self.assertIn(
-            "BOOL contentMatchesState = (playable && self.player != nil) "
+            "BOOL contentMatchesState = (playable && self.player != nil "
+            "&& self.player.currentItem.status != AVPlayerItemStatusFailed) "
             "|| (!playable && self.player == nil);",
             reload,
         )

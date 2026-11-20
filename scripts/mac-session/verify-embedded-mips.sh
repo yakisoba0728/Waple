@@ -112,7 +112,7 @@ if [ "$CAPTURE_RC" -ne 0 ]; then
 fi
 echo "  캡처: $CAPTURE_ROOT/$LABEL"
 
-if [ -z "$PRE" ] || [ ! -d "$PRE/thumbs" ]; then
+if [ -z "$PRE" ]; then
     warn "구현 전 release 기준선이 없어 대조를 건너뛴다."
     echo "     커밋된 baseline-81098bb 는 **debug** 캡처다 — release 와는 코드 변경 없이도"
     echo "     30종이 어긋나므로 이 대조에 쓰면 항상 오탐이다."
@@ -202,21 +202,23 @@ if not expected:
 try:
     from PIL import Image
 except ImportError:
-    print("  (PIL 없음 — pip3 install pillow 후 재실행)"); sys.exit(0)
+    print("  !! PIL 없음 — 픽셀 대조를 실행할 수 없다 (pip3 install pillow)"); sys.exit(2)
 ma = {e["id"]: e for e in json.load(open(os.path.join(pre, "manifest.json")))["entries"]}
 mbp = os.path.join(post, "manifest.json")
 if not os.path.exists(mbp):
     print("  !! 캡처 실패 — 매니페스트 없음"); sys.exit(1)
 mb = {e["id"]: e for e in json.load(open(mbp))["entries"]}
-common = sorted(set(ma) & set(mb))
+if not ma or set(ma) != set(mb):
+    print("  !! 캡처 씬 목록이 기준선과 같아야 한다."); sys.exit(1)
+common = sorted(ma)
 changed = set()
 for sid in common:
     pa, pb = os.path.join(pre, "thumbs", f"{sid}.png"), os.path.join(post, "thumbs", f"{sid}.png")
-    if not (os.path.exists(pa) and os.path.exists(pb)):
-        continue
+    if not (os.path.isfile(pa) and os.path.isfile(pb)):
+        print(f"  !! 썸네일 누락: {sid}"); sys.exit(1)
     if open(pa, "rb").read() == open(pb, "rb").read():
         continue
-    ia, ib = Image.open(pa).convert("RGB"), Image.open(pb).convert("RGB")
+    ia, ib = Image.open(pa).convert("RGBA"), Image.open(pb).convert("RGBA")
     if ia.size != ib.size:
         changed.add(sid); continue
     if any(p != q for p, q in zip(ia.getdata(), ib.getdata())):

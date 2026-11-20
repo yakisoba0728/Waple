@@ -7,6 +7,7 @@
 @property(nonatomic, copy) void (^pendingSeek)(BOOL);
 @end
 @implementation ProbeItem
+- (AVPlayerItemStatus)status { return AVPlayerItemStatusReadyToPlay; }
 - (void)seekToTime:(CMTime)time completionHandler:(void (^)(BOOL))completionHandler {
     self.pendingSeek = completionHandler;
 }
@@ -50,14 +51,42 @@ static void finish(ProbeItem *item, BOOL success) {
 static void end(ProbeItem *item) {
     [NSNotificationCenter.defaultCenter postNotificationName:AVPlayerItemDidPlayToEndTimeNotification object:item];
 }
+
+static void checkFailedDecode(NSString *path, BOOL english) {
+    ProbeSaver *view = [[ProbeSaver alloc] initWithFrame:NSMakeRect(0, 0, 320, 180) isPreview:YES];
+    view.configuration = @{@"videoPath": path};
+    [view startAnimation];
+    AVPlayer *first = view.player;
+    check(first != nil, @"existing file with a supported extension reaches AVFoundation");
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:5];
+    while (view.player && deadline.timeIntervalSinceNow > 0) {
+        drain();
+        [view animateOneFrame];
+    }
+    check(first.currentItem.status == AVPlayerItemStatusFailed && !view.player && !view.playerLayer,
+          @"failed decoder and layer are released");
+    NSString *message = view.messageLayer.string;
+    check([message containsString:english ? @"Unable to play the video" : @"동영상을 재생할 수 없습니다"],
+          @"decode failure displays localized guidance");
+    [view stopAnimation];
+    [view startAnimation];
+    check(view.player && view.player != first, @"restart attempts a fresh decode");
+    [view stopAnimation];
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         [NSApplication sharedApplication];
+        BOOL english = argc > 2 && strcmp(argv[2], "en") == 0;
+        if (argc > 3 && strcmp(argv[3], "decode") == 0) {
+            checkFailedDecode(@(argv[1]), english);
+            NSLog(@"SAVER_DECODE_OK %@", english ? @"en" : @"ko");
+            return 0;
+        }
         method_setImplementation(class_getClassMethod(AVPlayerItem.class, @selector(playerItemWithURL:)), (IMP)makeItem);
         method_setImplementation(class_getClassMethod(AVPlayer.class, @selector(playerWithPlayerItem:)), (IMP)makePlayer);
         ProbeSaver *view = [[ProbeSaver alloc] initWithFrame:NSMakeRect(0, 0, 320, 180) isPreview:YES];
         NSString *message = view.messageLayer.string;
-        BOOL english = argc > 2 && strcmp(argv[2], "en") == 0;
         check([message containsString:english ? @"No video to play" : @"재생할 동영상이 없습니다"], @"localized saver-bundle message");
         view.configuration = @{@"videoPath": @(argv[1]), @"videoFitMode": @"fit", @"videoPlaybackRate": @1.5};
         [view startAnimation];

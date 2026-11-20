@@ -5,13 +5,19 @@ Waple 은 외부 SPM 의존성 0 원칙을 지킨다. 패키징도 macOS 기본 
 
 ## 1. 릴리스 절차(자동화)
 
-**태그 push 가 릴리스의 시작점이다.** `.github/workflows/release.yml` 이 아래를 자동 수행한다:
+**`main`에 포함된 커밋의 태그 push가 릴리스의 시작점이다.** 저장소 관리자가 다음을 먼저 설정한다.
+
+1. GitHub의 `release` 환경을 만들고 배포를 `main`과 `v*` 태그로 제한한다. 배포 검토자를 지정하고 실행자가 자기 실행을 승인할 수 없도록 설정한다.
+2. 릴리스 담당자만 `v*` 태그를 만들 수 있도록 규칙을 설정하고 태그 갱신·삭제를 제한한다. 수동 실행을 사용할 경우 승인된 릴리스 워크플로의 토큰에도 최초 태그 생성 권한이 필요하다.
+3. 서명용 비밀값은 `release` 환경에 저장하고 동일한 이름의 저장소 수준 비밀값을 제거한다. 환경 설정을 마친 뒤 환경 변수 `WAPLE_RELEASE_READY=true`를 추가한다.
+
+`.github/workflows/release.yml`의 동작은 다음과 같다.
 
 1. 태그(`v0.2.0` 등)에서 버전 추출(v 접두사 제거) → `WAPLE_VERSION` 으로 주입.
    빌드 번호(`WAPLE_BUILD`)는 `github.run_number`.
-2. 이 정확한 커밋 SHA의 `CI`·`spec` 워크플로 성공 실행과 아래 배포 승인 변수를 확인한다.
+2. 이 정확한 커밋 SHA의 push 또는 수동 실행에서 `CI`·`spec` 성공과 CI 실행 시도의 debug·release XCTest 성공, 아래 배포 승인 변수를 확인한다.
    태그 push 때 세 워크플로가 동시에 시작하므로 missing/pending 은 최대 20분 기다리고,
-   failure/cancelled 는 즉시 중단한다.
+   failure/cancelled 는 즉시 중단한다. 과거 CI 실행이나 한쪽 잡만 재실행한 경우에는 두 XCTest 성공을 확인할 수 있도록 전체 잡을 다시 실행한다.
 3. `scripts/package-app.sh` 실행 → `Waple.dmg` 산출(서명: 아래 §2 참조).
 4. `shasum -a 256 Waple.dmg` 계산.
 5. **draft** GitHub Release 생성 + `Waple.dmg` 업로드. 본문에 sha256 포함
@@ -26,25 +32,17 @@ Waple 은 외부 SPM 의존성 0 원칙을 지킨다. 패키징도 macOS 기본 
 
 ### 1-1. 태그를 못 밀 때 — 수동 실행 경로
 
-**[2026-08-25 문서화]** `release.yml` 에는 `workflow_dispatch` 경로가 있다(`7791a40` 에서 추가됐고
-이 문서가 따라오지 못했다). 브랜치 push 만 허용되는 자격증명에서는 `git push origin <tag>` 이
-HTTP 403 이라 정식 경로를 못 타는데, 그때도 프리뷰 빌드를 낼 수 있어야 해서 둔 것이다.
+`workflow_dispatch`로도 `main`의 검증된 커밋을 배포할 수 있다.
 
 ```
-Actions → Release → Run workflow → 브랜치 선택 → tag 입력(예: v0.1.0-beta.7)
+Actions → Release → Run workflow → main 선택 → tag 입력(예: v0.1.0-beta.7)
 ```
 
-- 태그는 미리 만들지 않는다. `gh release create --target <실행 커밋 sha>` 가 그 커밋에 만들어 준다.
-  즉 **태그 없이 시작해도 결과물은 태그 경로와 같다.**
+- 태그 없이 실행하면 패키징을 마친 뒤 워크플로가 빌드한 커밋에 태그를 만든다.
 - `tag` 에 `-` 가 들어가면 prerelease 로 공개된다(`v0.1.0-beta.7` → prerelease).
-- 입력값은 `v` 로 시작해야 한다. 아니면 `Extract version from tag` 스텝이 거부한다.
+- 태그는 `v0.2.0` 또는 `v0.2.0-beta.1`과 같은 버전 형식을 사용한다.
 
-**주의 — 같은 태그로 재시도할 때.** `gh release create` 는 **태그가 이미 있으면 `--target` 을
-무시한다**(기존 태그가 가리키는 커밋이 이긴다). 그래서 "태그 push → 공증 실패 → 태그만 남음 →
-고친 뒤 수동 실행으로 재시도" 하면 릴리스 페이지가 가리키는 커밋과 첨부 DMG 의 빌드 커밋이
-어긋난다. `Refuse to clobber an existing release` 스텝이 이제 **태그도 함께 조회**해서
-이 커밋을 가리키지 않으면 빌드 전에 멈춘다 — 그 메시지가 나오면 태그를 지우고 다시 붙이거나
-새 태그를 써라.
+**같은 태그로 재시도할 때** 워크플로는 원격 태그가 빌드한 커밋을 가리키는지 패키징 전과 발행 직전에 확인한다. 새 커밋을 배포할 때는 새 버전 태그를 사용한다.
 
 ### 1-2. 공개 산출물 배포 승인 preflight
 
@@ -78,8 +76,8 @@ WAPLE_VERSION=1.2.3 WAPLE_BUILD=45 WAPLE_SIGN_IDENTITY="Developer ID Application
 2. `Waple.app` 번들 구성(`Contents/MacOS/Waple` + `Info.plist`, `LSUIElement`=메뉴 바 전용 앱).
 3. 화멘보호기 번들 `Waple.saver` 를 `clang -bundle` 로 컴파일해 앱 `Resources/` 에 동봉
    (SPM 은 `.saver` 타깃을 못 만들므로 직접 컴파일).
-4. `codesign --force --deep` 서명(중첩 saver 번들 포함).
-5. `hdiutil create -format UDZO` 로 배포용 `Waple.dmg` 생성(앱 + `/Applications` 심볼릭 링크).
+4. saver와 앱을 각각 안쪽부터 서명하고 검증한다. Developer ID로 서명한 앱에는 Music과 Spotify 연동용 Apple Events 권한이 포함된다.
+5. `hdiutil create -format UDZO` 로 배포용 `Waple.dmg` 생성(앱 + `/Applications` 심볼릭 링크). Developer ID가 지정된 경우 DMG도 서명한다.
 6. `shasum -a 256 Waple.dmg` 출력.
 
 산출물:
@@ -108,9 +106,7 @@ WAPLE_VERSION=1.2.3 WAPLE_BUILD=45 WAPLE_SIGN_IDENTITY="Developer ID Application
 
 ### 서명/공증 정책
 
-- **CI**: 아래 secrets **6개가 전부** 설정되면 Developer ID 서명 + `notarytool` 공증 +
-  `stapler staple` + 검증까지 자동 수행한다. 하나라도 없으면 ad-hoc 서명으로 폴백하고
-  릴리스 노트에 첫 실행 Gatekeeper 안내가 붙는다(릴리스 자체는 멈추지 않는다).
+- **CI**: `release` 환경에 아래 비밀값 **6개가 전부** 설정되면 Developer ID 서명, `notarytool` 공증, `stapler staple`과 검증을 수행한다. 모두 비워 둔 경우 ad-hoc으로 서명하고 릴리스 노트에 첫 실행 Gatekeeper 안내를 넣는다. 일부만 설정돼 있으면 발행을 중단한다.
 
 | secret | 내용 |
 | --- | --- |
@@ -123,7 +119,7 @@ WAPLE_VERSION=1.2.3 WAPLE_BUILD=45 WAPLE_SIGN_IDENTITY="Developer ID Application
 
 워크플로가 하는 일(순서): 임시 키체인 생성 → `.p12` 임포트 →
 `set-key-partition-list`(이걸 빼면 codesign 이 GUI 프롬프트를 기다리다 잡이 멈춘다) →
-패키징 → `notarytool submit --wait` → `stapler staple` → `stapler validate` + `spctl` →
+패키징 → `notarytool submit --wait` → `stapler staple` → `stapler validate` + DMG 열기용 Gatekeeper 검사 →
 잡 종료 시 키체인 삭제(`if: always()`).
 
 `--keychain-profile` 방식은 쓰지 않는다 — 그건 `notarytool store-credentials` 를 미리
@@ -136,6 +132,7 @@ WAPLE_SIGN_IDENTITY="Developer ID Application: <NAME> (<TEAMID>)" scripts/packag
 xcrun notarytool submit Waple.dmg --apple-id <APPLE_ID> --team-id <TEAMID> --password <APP_PASSWORD> --wait
 xcrun stapler staple Waple.dmg
 xcrun stapler validate Waple.dmg
+spctl -a -vvv -t open --context context:primary-signature Waple.dmg
 ```
 
 ## 3. Homebrew Cask 템플릿
