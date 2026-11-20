@@ -116,13 +116,20 @@ final class AudioMediaFeatureTests: XCTestCase {
 
     func testPermissionDenialStaysSilentUntilExplicitRetry() {
         let attempts = Box(0)
+        let explicitlyRetried = Box(false)
         let denied = expectation(description: "denied capture feeds silence")
+        let unexpected = expectation(description: "subscriber change did not restart capture")
+        unexpected.isInverted = true
         let recovered = expectation(description: "explicit retry recovers")
         let stopped = expectation(description: "stop recovered session")
         let session = Session(stopped: stopped)
         let core = SharedAudioCaptureCore(starter: { _, _ in
             attempts.update { $0 += 1 }
             if attempts.read() == 1 {
+                throw NSError(domain: SCStreamErrorDomain, code: SCStreamError.Code.userDeclined.rawValue)
+            }
+            if !explicitlyRetried.read() {
+                unexpected.fulfill()
                 throw NSError(domain: SCStreamErrorDomain, code: SCStreamError.Code.userDeclined.rawValue)
             }
             recovered.fulfill()
@@ -135,10 +142,16 @@ final class AudioMediaFeatureTests: XCTestCase {
         }
         provider.start()
         wait(for: [denied], timeout: 3)
+        provider.onFrame = nil
+        provider.stop()
+        let replacement = SystemAudioSpectrumProvider(capture: core, automaticWatchdog: false)
+        replacement.start()
+        wait(for: [unexpected], timeout: 0.25)
         XCTAssertEqual(attempts.read(), 1)
+        explicitlyRetried.update { $0 = true }
         core.retry()
         wait(for: [recovered], timeout: 3)
-        provider.stop()
+        replacement.stop()
         wait(for: [stopped], timeout: 3)
     }
 

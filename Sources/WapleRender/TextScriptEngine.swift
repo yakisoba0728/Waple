@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import JavaScriptCore
 import WapleCore
@@ -366,32 +367,54 @@ public final class ScriptLocalStorage: @unchecked Sendable {
     private var ownedStates: [Location: State] = [:]
     private var invalidated = false
 
-    private static func safeName(_ sceneId: String) -> String {
-        let safe = String(sceneId.map { ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_") ? $0 : "_" })
-        return safe.isEmpty ? "scene" : safe
+    private static func storageLocation(sceneId: String, base: URL) -> (directory: URL, filename: String) {
+        let digest = SHA256.hash(data: Data(sceneId.utf8)).map { String(format: "%02x", $0) }.joined()
+        return (base.appendingPathComponent("by-installation", isDirectory: true), digest)
     }
 
-    /// A nil display ID preserves the legacy screen filename. Apps pass a stable display identity.
+    private static func exactLegacyLocations(sceneId: String, base: URL) -> [URL] {
+        // A rewritten or differently cased name can't establish ownership of legacy storage.
+        guard !sceneId.isEmpty, sceneId.utf8.count <= 200,
+              sceneId.allSatisfy({ $0.isLetter || $0.isNumber || ".-_".contains($0) }) else { return [] }
+        let urls = ["json", "scopes"].map { base.appendingPathComponent(sceneId + "." + $0) }
+        let fm = FileManager.default
+        guard urls.contains(where: { fm.fileExists(atPath: $0.path) }),
+              let names = try? fm.contentsOfDirectory(atPath: base.path) else { return [] }
+        return urls.filter { url in
+            names.contains { $0.utf8.elementsEqual(url.lastPathComponent.utf8) }
+                && (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == false
+        }
+    }
+
+    /// A nil display ID uses the shared screen state. Apps pass a stable display identity.
     public init(sceneId: String, screenId: String? = nil, baseDirectory: URL? = nil, debounce: TimeInterval = 0.75) {
-        let base = (baseDirectory ?? Self.defaultBaseDirectory()).standardizedFileURL
-        let safe = Self.safeName(sceneId)
-        self.namespace = base.appendingPathComponent(safe + ".json").path
+        let legacyBase = (baseDirectory ?? Self.defaultBaseDirectory()).standardizedFileURL
+        let (base, safe) = Self.storageLocation(sceneId: sceneId, base: legacyBase)
+        let defaultScreen = base.appendingPathComponent(safe + ".json")
+        self.namespace = defaultScreen.path
         self.scopeDirectory = base.appendingPathComponent(safe + ".scopes", isDirectory: true)
         if let screenId {
             let encoded = screenId.utf8.map { String(format: "%02x", $0) }.joined()
             self.defaultURL = scopeDirectory.appendingPathComponent("screen-" + (encoded.isEmpty ? "default" : encoded) + ".json")
         } else {
-            self.defaultURL = base.appendingPathComponent(safe + ".json")
+            self.defaultURL = defaultScreen
         }
         self.debounce = debounce.isFinite ? max(0, debounce) : 0.75
         Self.lifecycleLock.lock()
-        // Migrate the previous per-wallpaper screen value once; other displays get independent copies.
-        let legacy = base.appendingPathComponent(safe + ".json")
-        if screenId != nil, !FileManager.default.fileExists(atPath: defaultURL.path),
-           FileManager.default.fileExists(atPath: legacy.path) {
+        let fm = FileManager.default
+        for legacy in Self.exactLegacyLocations(sceneId: sceneId, base: legacyBase) {
+            let target = legacy.pathExtension == "json" ? defaultScreen : scopeDirectory
+            guard !fm.fileExists(atPath: target.path) else { continue }
             do {
-                try FileManager.default.createDirectory(at: scopeDirectory, withIntermediateDirectories: true)
-                try FileManager.default.copyItem(at: legacy, to: defaultURL)
+                try fm.createDirectory(at: base, withIntermediateDirectories: true)
+                try fm.moveItem(at: legacy, to: target)
+            } catch { WapleLog.warn("[Waple] script storage identity migration failed: \(error)") }
+        }
+        // Migrate the previous per-wallpaper screen value once; other displays get independent copies.
+        if screenId != nil, !fm.fileExists(atPath: defaultURL.path), fm.fileExists(atPath: defaultScreen.path) {
+            do {
+                try fm.createDirectory(at: scopeDirectory, withIntermediateDirectories: true)
+                try fm.copyItem(at: defaultScreen, to: defaultURL)
             } catch { WapleLog.warn("[Waple] script localStorage migration failed: \(error)") }
         }
         _ = state(.screen); _ = state(.global)
@@ -509,17 +532,18 @@ public final class ScriptLocalStorage: @unchecked Sendable {
 
     public static func remove(sceneId: String, baseDirectory: URL? = nil) throws {
         lifecycleLock.lock(); defer { lifecycleLock.unlock() }
-        let base = (baseDirectory ?? defaultBaseDirectory()).standardizedFileURL
-        let safe = safeName(sceneId)
-        let legacy = base.appendingPathComponent(safe + ".json")
+        let legacyBase = (baseDirectory ?? defaultBaseDirectory()).standardizedFileURL
+        let (base, safe) = storageLocation(sceneId: sceneId, base: legacyBase)
+        let defaultScreen = base.appendingPathComponent(safe + ".json")
         let scopes = base.appendingPathComponent(safe + ".scopes", isDirectory: true)
         for wrapper in states.values {
-            guard let state = wrapper.value, state.namespace == legacy.path else { continue }
+            guard let state = wrapper.value, state.namespace == defaultScreen.path else { continue }
             state.invalidated = true; state.pendingSave?.cancel()
         }
         // Invalidated states remain reachable by retired stores, but a remount gets fresh state.
-        states = states.filter { $0.value.value != nil && $0.value.value?.namespace != legacy.path }
-        for url in [legacy, scopes] where FileManager.default.fileExists(atPath: url.path) {
+        states = states.filter { $0.value.value != nil && $0.value.value?.namespace != defaultScreen.path }
+        let locations = [defaultScreen, scopes] + exactLegacyLocations(sceneId: sceneId, base: legacyBase)
+        for url in locations where FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }
     }
@@ -1451,8 +1475,8 @@ public final class TextScriptEngine {
     /// 백그라운드 스레드 격리는 프레임마다 동기 결과를 요구하는 호출 체인(AppDelegate → mount →
     /// makeScriptEngine → evaluate*)의 전면 재구조라 침습적이라 보류했다. 따라서 이 가드는 자명한
     /// 경우만 거르는 최선 노력이며 `while (f(x))` 류 계산 조건의 정교한 무한 루프는 여전히 통과한다 —
-    /// 제3자 스크립트의 악의적/버그성 행 유발은 수용 리스크로 남는다(정상 스크립트 오탐보다 행
-    /// 방지를 우선하는 기존 방향 유지).
+    /// 데스크톱 플레이어는 설치별로 스크립트 실행을 허용한 씬에서만 이 평가기에 도달한다.
+    /// 허용한 씬의 스크립트가 앱을 멈추는 위험은 남는다.
     static func passesPracticalSafetyChecks(_ script: String) -> Bool {
         guard script.count <= maxScriptCharacters else {
             NSLog("%@", "[Waple] text script rejected: source too large (\(script.count) chars)")

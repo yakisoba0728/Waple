@@ -24,6 +24,15 @@ extension SceneRenderer {
                               device: MTLDevice) -> [ParticlePageBatch]? {
         guard let source = pagedTextureSources[ObjectIdentifier(system.texture)], !system.frames.isEmpty else { return nil }
         var batches: [ParticlePageBatch] = []
+        // Draw order is significant for translucent particles. Reuse each upload even
+        // if a subsequent draw for the same page is separated by other pages.
+        var framePages: [Int: MTLTexture] = [:]
+        func texture(for page: Int) -> MTLTexture? {
+            if let cached = framePages[page] { return cached }
+            let loaded = source.texture(page: page, renderer: self, device: device)
+            framePages[page] = loaded
+            return loaded
+        }
         for particle in snapshot {
             let pair = Self.framePair(for: particle, system: system)
             let current = system.frames[max(0, min(system.frames.count - 1, pair.current))].imageId
@@ -32,8 +41,8 @@ extension SceneRenderer {
                 batches[last].particles.append(particle)
                 continue
             }
-            guard let firstTexture = source.texture(page: current, renderer: self, device: device),
-                  let nextTexture = source.texture(page: next, renderer: self, device: device) else { continue }
+            guard let firstTexture = texture(for: current),
+                  let nextTexture = texture(for: next) else { continue }
             var selected = system
             selected.texture = firstTexture; selected.nextTexture = nextTexture
             batches.append(ParticlePageBatch(system: selected, particles: [particle], current: current, next: next))

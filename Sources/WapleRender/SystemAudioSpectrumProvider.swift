@@ -527,6 +527,7 @@ nonisolated final class SharedAudioCaptureCore: NSObject, SCStreamOutput, SCStre
     private let starter: @Sendable (SharedAudioCaptureCore, Int) async throws -> AudioCaptureSession
     private let scheduleRetry: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
     private var retryAttempts = 0
+    private var requiresExplicitRetry = false
 
     init(starter: @escaping @Sendable (SharedAudioCaptureCore, Int) async throws -> AudioCaptureSession = { core, generation in
         try await SharedAudioCaptureCore.makeSession(core: core, generation: generation)
@@ -549,7 +550,7 @@ nonisolated final class SharedAudioCaptureCore: NSObject, SCStreamOutput, SCStre
     func add(_ p: SystemAudioSpectrumProvider) {
         lock.lock()
         subscribers[ObjectIdentifier(p)] = WeakBox(p)
-        if running { lock.unlock(); return }   // 캡처 이미 활성(다른 구독자) — 등록만
+        guard !running, !requiresExplicitRetry else { lock.unlock(); return }
         running = true
         generation += 1
         let gen = generation
@@ -641,6 +642,7 @@ nonisolated final class SharedAudioCaptureCore: NSObject, SCStreamOutput, SCStre
     func retry() {
         lock.lock()
         subscribers = subscribers.filter { $0.value.provider != nil }
+        requiresExplicitRetry = false
         guard !subscribers.isEmpty else { lock.unlock(); return }
         let old = session
         session = nil
@@ -666,7 +668,10 @@ nonisolated final class SharedAudioCaptureCore: NSObject, SCStreamOutput, SCStre
             [SCStreamError.Code.userDeclined.rawValue, SCStreamError.Code.userStopped.rawValue,
              SCStreamError.Code.missingEntitlements.rawValue].contains(nsError.code)
         // Respect user denial/stop. The explicit retry API is required after permission changes.
-        if userStopped { running = false }
+        if userStopped {
+            running = false
+            requiresExplicitRetry = true
+        }
         lock.unlock()
         NSLog("%@", "[Waple] audio capture failed, feeding silence: \(error)")
         liveSubscribers().forEach { $0.feedZeros() }
@@ -700,16 +705,19 @@ nonisolated final class SharedAudioCaptureCore: NSObject, SCStreamOutput, SCStre
     /// WebRenderer.swift 의 didFinish 주석 참조.
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio else { return }
-        let live = liveSubscribers()
+        lock.lock()
+        guard running, session?.owns(stream) == true else { lock.unlock(); return }
+        let live = subscribers.values.compactMap { $0.provider }
+        if live.count < subscribers.count { subscribers = subscribers.filter { $0.value.provider != nil } }
         if live.isEmpty {
             // 구독자가 stop 없이 전원 해제됨 — 고아 캡처 자체 종료(구형에서 provider deinit 이 stream 을
             // 해제하던 것과 동등한 생명주기). 정상 경로(teardown 의 stop)에선 도달하지 않는 방어.
-            lock.lock()
             let s = stopCaptureIfRunningLocked()
             lock.unlock()
             Task { await s?.stop() }
             return
         }
+        lock.unlock()
         for p in live { p.process(sampleBuffer: sampleBuffer) }
     }
 }

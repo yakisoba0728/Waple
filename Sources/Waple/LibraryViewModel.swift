@@ -105,7 +105,7 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     /// 적용 요청을 AppDelegate 로 전달한다. `pending`은 선변환 중이므로 선택을
     /// 아직 영속하지 않고, AppDelegate의 실제 교체 성공 콜백을 받은 이 타입이 commit한다.
     /// 완료 콜백은 반환값이 `.pending`일 때만 나중에 정확히 한 번 호출한다.
-    var onApply: ((URL, @escaping (WallpaperApplyResolution) -> Void) -> WallpaperApplyDisposition)?
+    var onApply: ((LibraryEntry, URL, @escaping (WallpaperApplyResolution) -> Void) -> WallpaperApplyDisposition)?
     var onCancelPendingApply: (() -> Void)?
     private var pendingApplyEntryId: String?
     private var applyGeneration: UInt64 = 0
@@ -135,6 +135,8 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     var screensProvider: (() -> [(key: String, name: String)])?
     /// 모니터 할당 변경 → 즉시 재적용 트리거.
     var onAssignmentsChanged: (() -> Void)?
+    var playbackContainsEntry: (String) -> Bool = { _ in false }
+    var onPlaybackPermissionChanged: ((LibraryEntry) -> Void)?
     /// 재생목록 변경 → 타이머 재구성 트리거.
     var onPlaylistChanged: (() -> Void)?
     /// 웹 조작 창 열기(적용된 웹 월페이퍼의 입력 프록시) — AppDelegate 주입.
@@ -251,11 +253,16 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     var onGlobalSelectionRemoved: (() -> Void)?
     /// Remove persisted entry resources, invalidating live script stores before their next flush.
     /// AppDelegate also clears app-owned per-entry playback overrides through this hook.
-    var onRemoveScriptStorage: ((String) -> Void)?
+    var onRemoveScriptStorage: ((LibraryEntry) -> Void)?
 
     /// 라이브러리에서 제거(파일 보존) + 전 스토어 orphan 정리. 적용 중 배경은 계속 재생된다
     /// (렌더러는 폴더를 직접 들고 있음) — Now Playing 표시는 '적용된 배경 없음'으로 떨어진다.
     func remove(_ entry: LibraryEntry) {
+        guard entries.contains(where: { $0.userStateID == entry.userStateID }) else { return }
+        guard store.remove(id: entry.id) else {
+            onNotify?(NSLocalizedString("라이브러리에서 배경을 지우지 못했습니다.", comment: "library index write failed on removal"))
+            return
+        }
         if pendingApplyEntryId == entry.id {
             applyGeneration &+= 1
             pendingApplyEntryId = nil
@@ -269,7 +276,6 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         // F069: 재생목록에 없던 항목을 제거할 때도 무조건 onPlaylistChanged 를 호출하면 자동전환
         // 카운트다운이 불필요하게 리셋된다 — 제거 전에 실제 포함 여부를 확인해 두었다가 가드한다.
         let wasInPlaylist = playlist.savedPlaylists.contains { $0.ids.contains(entry.id) }
-        store.remove(id: entry.id)
         playlist.remove(entry.id)
         monitors.removeAssignments(entryId: entry.id)
         favorites.remove(entry.id)
@@ -281,10 +287,10 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         //
         // Mount resolution now preserves library identity. Delegate cleanup invalidates live
         // script stores as well as their file, so a delayed flush cannot resurrect removed data.
-        UserPropertyStore.reset(id: entry.id)
-        do { try userShortcuts.remove(entryID: entry.id) }
+        UserPropertyStore.reset(id: entry.userStateID)
+        do { try userShortcuts.remove(entryID: entry.userStateID) }
         catch { onNotify?(NSLocalizedString("사용자 바로가기 연결을 지우지 못했습니다.", comment: "바로가기 제거 실패")) }
-        onRemoveScriptStorage?(entry.id)
+        onRemoveScriptStorage?(entry)
         entries = store.entries
         if selectedId == entry.id { selectedId = nil }
         if focusedId == entry.id { focusedId = nil }
@@ -339,6 +345,9 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         }
     }
 
+    static let importStorageFailure = NSLocalizedString("가져온 배경을 라이브러리에 저장하지 못했습니다.",
+                                                        comment: "library storage write failed")
+
     /// F582: 상위 폴더 가져오기도 zip/동영상과 같이 importQueue 를 거친다 — 후보 나열(디렉터리
     /// 순회 I/O)은 백그라운드, 스토어 등록(importFolders, 저장 일괄화)은 메인 홉(스토어 변경
     /// 메인 한정 규약 유지). 종전엔 호출 스레드=메인에서 전체 순회·파싱을 동기 실행해 UI 가 정지했다.
@@ -353,7 +362,9 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 defer { self.endImport() }
-                let imported = store.importFolders(folders)
+                let imported: [LibraryEntry]
+                do { imported = try store.importFoldersPersisting(folders) }
+                catch { self.onNotify?(Self.importStorageFailure); return }
                 self.entries = store.entries
                 // 시도 수는 호출부가 이미 안다(후보 목록의 길이) — 이 경로는 스토어 시그니처를
                 // 바꿀 필요가 없다.
@@ -374,10 +385,15 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         importQueue.async { [weak self] in
             let temp = store.extractZipToTemp(url)
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+                guard let self else {
+                    if let temp { try? FileManager.default.removeItem(at: temp) }
+                    return
+                }
                 defer { self.endImport() }
                 // zip 은 안에 배경이 몇 개인지 호출부가 알 수 없다 — 시도 수를 스토어가 함께 낸다.
-                let outcome = temp.map { store.importExtractedZipCounting($0) } ?? (imported: [], attempted: 0)
+                let outcome: (imported: [LibraryEntry], attempted: Int)
+                do { outcome = try temp.map { try store.importExtractedZipPersisting($0) } ?? ([], 0) }
+                catch { self.onNotify?(Self.importStorageFailure); return }
                 self.entries = store.entries
                 self.reportImport(
                     imported: outcome.imported.count, attempted: outcome.attempted,
@@ -415,15 +431,19 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         importQueue.async { [weak self] in
             let folder = prepare(url)
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                defer { self.endImport() }
-                guard let folder, (try? store.importFolder(folder)) != nil else {
-                    // F583: 준비(관리 폴더에 복사 완료) 후 등록이 실패하면 부분 산출물이 고아로 남는다 —
-                    // 이 임포트를 위해 만든 폴더이므로 정리한다(videoPrepare 계약 주석 참조).
+                guard let self else {
                     if let folder { try? FileManager.default.removeItem(at: folder) }
-                    self.onNotify?(String(format: NSLocalizedString("동영상 가져오기에 실패했습니다: %@",
-                                                                   comment: "동영상 임포트 실패"),
-                                         url.lastPathComponent))
+                    return
+                }
+                defer { self.endImport() }
+                let importFailure = String(format: NSLocalizedString("동영상 가져오기에 실패했습니다: %@",
+                                                                     comment: "동영상 임포트 실패"),
+                                           url.lastPathComponent)
+                guard let folder else { self.onNotify?(importFailure); return }
+                do { try store.importFolder(folder) }
+                catch {
+                    try? FileManager.default.removeItem(at: folder)
+                    self.onNotify?(error is LibraryStore.PersistenceError ? Self.importStorageFailure : importFailure)
                     return
                 }
                 self.entries = store.entries
@@ -432,23 +452,36 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// 워크샵 다운로드 직후 평점 반영(0…1). 표시용 메타 — 실패 무해.
-    func setRating(_ score: Double, for entry: LibraryEntry) {
-        store.setRating(score, id: entry.id)
-        entries = store.entries
-    }
-
     /// 워크샵 다운로드로 받은 배경 폴더 1개를 라이브러리에 가져온다(기존 importFolder 재사용). 실패 → nil.
     @discardableResult
     func importDownloaded(_ folderURL: URL, workshopItemID: String? = nil) -> LibraryEntry? {
-        guard let entry = try? store.importFolder(folderURL, workshopItemID: workshopItemID) else {
+        do { return try registerDownload(folderURL, workshopItemID: workshopItemID) }
+        catch is LibraryStore.PersistenceError { onNotify?(Self.importStorageFailure); return nil }
+        catch {
             onNotify?(String(format: NSLocalizedString("다운로드한 폴더를 가져오지 못했습니다: %@",
                                                       comment: "워크샵 다운로드분 임포트 실패"),
                             folderURL.lastPathComponent))
             return nil
         }
+    }
+
+    func registerDownload(_ folderURL: URL, workshopItemID: String?, rating: Double? = nil) throws -> LibraryEntry {
+        guard Self.isUsableWorkshopFolder(folderURL) else { throw ProjectParseError.fileNotFound }
+        let entry = try store.importFolder(folderURL, workshopItemID: workshopItemID, rating: rating)
         entries = store.entries
         return entry
+    }
+
+    func isUsableWorkshopEntry(_ entry: LibraryEntry) -> Bool {
+        guard let folder = store.resolveFolderURL(for: entry) else { return false }
+        return Self.isUsableWorkshopFolder(folder)
+    }
+
+    private static func isUsableWorkshopFolder(_ folder: URL) -> Bool {
+        guard let project = try? ProjectJSONParser.parse(folderURL: folder) else { return false }
+        guard project.type == .video || project.type == .web else { return true }
+        guard let file = WallpaperPathSecurity.containedFileURL(project.fileName, root: folder) else { return false }
+        return (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
     }
 
     /// 적용 요청의 세 상태를 그대로 돌려준다. 특히 `.pending`을 Bool 성공으로 접지 않는다 —
@@ -457,7 +490,8 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     func apply(_ entry: LibraryEntry,
                completion: @escaping (WallpaperApplyResolution) -> Void = { _ in })
         -> WallpaperApplyDisposition {
-        guard let folder = store.resolveFolderURL(for: entry) else {
+        guard entries.contains(where: { $0.userStateID == entry.userStateID }),
+              let folder = store.resolveFolderURL(for: entry) else {
             onNotify?(String(format: NSLocalizedString("‘%@’의 폴더를 찾을 수 없습니다. 다시 가져오세요.",
                                                       comment: "적용 실패 — 폴더 해석 불가"),
                             entry.title))
@@ -468,9 +502,9 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         applyGeneration &+= 1
         let generation = applyGeneration
         pendingApplyEntryId = entry.id
-        let disposition = onApply?(folder) { [weak self] resolution in
+        let disposition = onApply?(entry, folder) { [weak self] resolution in
             guard let self, self.applyGeneration == generation,
-                  self.entries.contains(where: { $0.id == entry.id }) else {
+                  self.entries.contains(where: { $0.userStateID == entry.userStateID }) else {
                 completion(.cancelled)
                 return
             }
@@ -538,20 +572,21 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     func shortcutBindings(for entryID: String) -> [String: URL] {
         guard let entry = entries.first(where: { $0.id == entryID }) else { return [:] }
         let allowed = Set(editableProperties(for: entry).filter { $0.type.lowercased() == "usershortcut" }.map(\.key))
-        return userShortcuts.bindings(for: entryID).filter { allowed.contains($0.key) }.mapValues(\.targetURL)
+        return userShortcuts.bindings(for: entry.userStateID).filter { allowed.contains($0.key) }.mapValues(\.targetURL)
     }
 
     @discardableResult
     func setShortcutBinding(_ url: URL?, propertyKey: String, for entry: LibraryEntry) -> Bool {
-        guard entries.contains(where: { $0.id == entry.id }),
+        guard entries.contains(where: { $0.userStateID == entry.userStateID }),
               editableProperties(for: entry).contains(where: { $0.key == propertyKey && $0.type.lowercased() == "usershortcut" }) else { return false }
-        do { try userShortcuts.set(url, propertyKey: propertyKey, entryID: entry.id) }
+        do { try userShortcuts.set(url, propertyKey: propertyKey, entryID: entry.userStateID) }
         catch {
             onNotify?(NSLocalizedString("바로가기를 저장하지 못했습니다. 앱 또는 올바른 http/https 웹 주소를 선택하세요.", comment: "바로가기 대상 검증/저장 실패"))
             return false
         }
         objectWillChange.send()
-        reapplyIfCurrent(entry)
+        if url == nil { refreshPlaybackPermissions(for: entry) }
+        else { refreshPlayback(for: entry) }
         return true
     }
 
@@ -575,33 +610,48 @@ final class LibraryViewModel: ObservableObject, @unchecked Sendable {
         let propertyRoot = resolved?.folderURL ?? folder
         guard let props = try? WallpaperProperties.parse(folderURL: propertyRoot) else { return [] }
         let overrides = UserPropertyStore.overrides(
-            id: entry.id,
+            id: entry.userStateID,
             presetOverrides: resolved?.presetOverrides ?? [:],
             presetResourceRoot: resolved?.presetFolderURL
         )
         return WallpaperProperties.applying(overrides: overrides, to: props)
     }
 
-    func setProperty(key: String, value: PropertyValue, for entry: LibraryEntry) {
-        UserPropertyStore.set(value, key: key, id: entry.id)
-        reapplyIfCurrent(entry)
+    func setProperty(key: String, value: PropertyValue, for entry: LibraryEntry, fromResourcePicker: Bool = false) {
+        guard entries.contains(where: { $0.userStateID == entry.userStateID }) else { return }
+        var absolutePath: String?
+        if fromResourcePicker, case .string(let path) = value { absolutePath = path }
+        let previous = UserPropertyStore.resourceGrants(id: entry.userStateID)[key]
+        if absolutePath != nil || previous != nil {
+            UserPropertyStore.setResourceGrant(absolutePath: absolutePath, key: key, id: entry.userStateID)
+        }
+        UserPropertyStore.set(value, key: key, id: entry.userStateID)
+        if previous != nil { refreshPlaybackPermissions(for: entry) }
+        else { refreshPlayback(for: entry) }
     }
 
     func resetProperties(for entry: LibraryEntry) {
-        UserPropertyStore.reset(id: entry.id)
-        do { try userShortcuts.remove(entryID: entry.id) }
+        guard entries.contains(where: { $0.userStateID == entry.userStateID }) else { return }
+        UserPropertyStore.reset(id: entry.userStateID)
+        do { try userShortcuts.remove(entryID: entry.userStateID) }
         catch { onNotify?(NSLocalizedString("사용자 바로가기 연결을 지우지 못했습니다.", comment: "바로가기 초기화 실패")) }
-        reapplyIfCurrent(entry)
+        refreshPlaybackPermissions(for: entry)
+    }
+
+    func refreshPlaybackPermissions(for entry: LibraryEntry) {
+        if let onPlaybackPermissionChanged { onPlaybackPermissionChanged(entry) }
+        else { refreshPlayback(for: entry) }
     }
 
     /// 현재 적용 중인 배경이면 즉시 재적용(변경 반영 — fit-mode 패턴).
-    private func reapplyIfCurrent(_ entry: LibraryEntry) {
+    func refreshPlayback(for entry: LibraryEntry) {
+        guard entries.contains(where: { $0.userStateID == entry.userStateID }) else { return }
         if selectedId == entry.id {
             guard let folder = store.resolveFolderURL(for: entry) else { return }
-            _ = onApply?(folder, { _ in })
+            _ = onApply?(entry, folder, { _ in })
             return
         }
-        if monitors.all.values.contains(entry.id) {
+        if monitors.all.values.contains(entry.id) || playbackContainsEntry(entry.id) {
             onAssignmentsChanged?()
         }
     }

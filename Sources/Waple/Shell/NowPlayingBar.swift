@@ -97,6 +97,7 @@ enum NowPlayingSubtitle {
 /// 시그니처: 하단 Now Playing 바 — 적용 중 배경의 애니 썸네일·제목 상시 + 재생 컨트롤 + 재생목록 + 가져오기.
 struct NowPlayingBar: View {
     @ObservedObject var viewModel: LibraryViewModel
+    var canAdvancePlaylist: () -> Bool
     @State private var showPlaylist = false
 
     /// 제목·부제 블록의 최대 폭. 이 화면 하나만 쓰는 값이라 공용 토큰(`Metrics`)이 아니라
@@ -141,7 +142,7 @@ struct NowPlayingBar: View {
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.plain)
-            .disabled(viewModel.playlist.ids.count < 2)
+            .disabled(!canAdvancePlaylist())
             .help("다음 배경")
 
             // w5d-settings-ia: 동영상 음량/배속 — 재생 컨텍스트(appliedEntry)를 이미 아는 하단 바로

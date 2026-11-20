@@ -71,6 +71,7 @@ public struct SceneLayer: Equatable {
     public var foggy: Bool = true
     public var castShadow: Bool = false
     public let textureEntryName: String
+    public var textureUserPropertyKey: String? = nil
     public var name: String = ""
     /// scene.json objects[] 의 id(부모 트랜스폼 룩업용 — 퍼펫 레이어 parent 체인 합성에 사용).
     public var id: Int = 0
@@ -925,32 +926,31 @@ public struct SceneLight3D: Equatable {
     /// WE 셰이더 g_LTube_OriginB(A2-pbr-lighting.md §4.3). origin 과 같은 부모-로컬 공간이라
     /// 2D 씬은 origin 과 함께 월드로 덮어쓴다(composeLightParentTransforms). nil = 미저작(비-tube 포함).
     public var originB: Vec3? = nil
-    public let angles: Vec3
-    public let color: Vec3
-    public let radius: Float
-    public let intensity: Float
-    public let exponent: Float
+    public var angles: Vec3
+    public var color: Vec3
+    public var radius: Float
+    public var intensity: Float
+    public var exponent: Float
     /// lspot 콘 전각(도). WE 에디터 "Inner/Outer cone". lpoint/ldirectional 은 미사용(0).
-    public let innerCone: Float
-    public let outerCone: Float
-    public let castShadow: Bool
+    public var innerCone: Float
+    public var outerCone: Float
+    public var castShadow: Bool
     /// F750(S-47): `cascadedistance0-2` — directional CSM 3-스플릿 far 경계 거리. 실측 11건
     /// (코퍼스 스캔 2026-07: lpoint 7/lspot 1/ldirectional 3 — WE 에디터가 라이트 종 무관하게 기록).
     /// 3키는 항상 동반(부분 저작 0건). nil = 미저작. 파스·보존 전용 — F661 단일 오소 근사가
     /// 캐스케이드로 승격될 때 소비(렌더 미배선).
     public let cascadeDistances: Vec3?
     /// F750(S-47): `castvolumetrics` — 볼류메트릭 라이트 샤프트 캐스트 플래그(실측 2건, 전부 true).
-    public let castVolumetrics: Bool
+    public var castVolumetrics: Bool
     /// F750(S-47): `volumetricsexponent` — 볼류메트릭 감쇠 지수. 실측 13건(기본 1.0, 비기본 1.7/2.82/3.04).
-    public let volumetricsExponent: Float
+    public var volumetricsExponent: Float
     /// F750(S-47): `density` — 볼류메트릭 산란 밀도. 실측 13건(기본 2.0, 비기본 0.65..4.12).
-    public let density: Float
+    public var density: Float
     public let parent: Int?
     public var order: Int = 0
     /// 프로퍼티 스크립트(color/intensity/radius/origin/angles — 키 → JS 소스). SceneObject3D.propertyScripts/
     /// SceneNode3D.propertyScripts 와 동일 규약(파스 캡처). 실측: intensity 8건(주야 조명 감쇠 컨트롤러),
-    /// color 1건(3737268876 젤다). TODO(소비 미배선): per-frame 재평가는 코퍼스 저빈도라 YAGNI 보류 —
-    /// 렌더러는 현재 정적 초기값(위 필드)만 소비한다.
+    /// color 1건(3737268876 젤다). 3D 렌더러는 위 초기값과 함께 매 프레임 평가한다.
     public var propertyScripts: [String: String] = [:]
     public var propertyScriptProps: [String: String] = [:]
     public var propertyAnimations: [String: PropertyAnimation] = [:]
@@ -2188,9 +2188,13 @@ extension SceneDocument {
         let scaleFull = floats(obj["scale"])
         var scaleZ: Float = scaleFull.count >= 3 ? scaleFull[2] : 1
         let entryName: String
+        var textureUserPropertyKey: String? = nil
         var isFB = false
         switch resolved {
         case .entry(let name): entryName = name
+        case .file(let path, let propertyKey):
+            entryName = path
+            textureUserPropertyKey = propertyKey
         case .solid: entryName = ""
         case .frameBuffer(let fullscreen):
             entryName = ""; isFB = true
@@ -2321,6 +2325,7 @@ extension SceneDocument {
         }
         var layer = SceneLayer(
             textureEntryName: entryName,
+            textureUserPropertyKey: textureUserPropertyKey,
             origin: origin,
             size: size,
             scale: scale,
@@ -3395,6 +3400,7 @@ extension SceneDocument {
     /// 레이어 소스 해석 결과.
     private enum LayerTexture {
         case entry(String)                    // 일반 텍스처 엔트리
+        case file(String, propertyKey: String?)
         case solid                            // 무텍스처 머티리얼(flat) → 솔리드 필
         case frameBuffer(fullscreen: Bool)    // _rt_FullFrameBuffer → 컴포지션 레이어
     }
@@ -3447,6 +3453,7 @@ extension SceneDocument {
         // 텍스처 배열은 빈 슬롯을 null 로 표기할 수 있으므로(예: [null, "real.tex"]),
         // 첫 항목이 아니라 첫 non-null·non-empty 문자열을 사용한다.
         var textures = pass0["textures"] as? [Any] ?? []
+        var textureUserKeys: [Int: String] = [:]
         if let userTextures = pass0["usertextures"] as? [Any] {
             for (slot, rawUserKey) in userTextures.enumerated() {
                 guard let userKey = rawUserKey as? String,
@@ -3454,6 +3461,7 @@ extension SceneDocument {
                       !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
                 while textures.count <= slot { textures.append(NSNull()) }
                 textures[slot] = override
+                textureUserKeys[slot] = userKey
             }
         }
         // P1 solid_instance: 레이어 obj 의 instance{textures,usertextures} 가 base material 슬롯을
@@ -3466,6 +3474,7 @@ extension SceneDocument {
                 guard let name = raw as? String, !name.isEmpty else { continue }
                 while textures.count <= slot { textures.append(NSNull()) }
                 textures[slot] = name
+                textureUserKeys.removeValue(forKey: slot)
             }
             for (slot, raw) in ((instance["usertextures"] as? [Any]) ?? []).enumerated() {
                 guard let userKey = (raw as? String) ?? ((raw as? [String: Any])?["name"] as? String),
@@ -3473,9 +3482,11 @@ extension SceneDocument {
                       !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
                 while textures.count <= slot { textures.append(NSNull()) }
                 textures[slot] = override
+                textureUserKeys[slot] = userKey
             }
         }
-        guard let name = textures.compactMap({ $0 as? String }).first(where: { !$0.isEmpty }) else {
+        guard let slot = textures.firstIndex(where: { ($0 as? String)?.isEmpty == false }),
+              let name = textures[slot] as? String else {
             // 무텍스처 머티리얼(예: util/solidlayer 의 shader "flat") → 솔리드 필.
             return .solid
         }
@@ -3485,7 +3496,7 @@ extension SceneDocument {
             return .frameBuffer(fullscreen: fullscreen)
         }
         if name.hasPrefix("/") {
-            return .entry(name)
+            return .file(name, propertyKey: textureUserKeys[slot])
         }
         let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
         for candidate in candidates {

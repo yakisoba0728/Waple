@@ -89,6 +89,7 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
         let parentScale: SIMD2<Float>
         let parentAngle: Float
         let parentLayers: [AnimationLayer]
+        let parentUID: Int
     }
     /// F722: 머티리얼 usertextures 의 시스템 미디어 키 요청 종류 — $mediaThumbnail(현재 트랙 아트워크) /
     /// $mediaPreviousThumbnail(직전 트랙 아트워크). buildDisplayTextures 가 레이어 base 를 라이브 텍스처로 교체.
@@ -219,7 +220,15 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
     var hasScriptedText = false
 
     /// 씬 공유 JSContext(mount 당 1개) — 모든 프로퍼티 스크립트가 `shared` 로 통신(주야 컨트롤러 등).
+    /// The desktop app sets this from the user's decision before mounting.
+    public var allowsSceneScripts = true
     var sceneScript: SceneScriptContext?
+    private(set) var mountedResourceGrants: [String: String] = [:]
+
+    public func hasStaleResourceGrants(id: String) -> Bool {
+        let current = UserPropertyStore.resourceGrants(id: id)
+        return mountedResourceGrants.contains { current[$0.key] != $0.value }
+    }
     /// Retained source model for runtime layer creation; renderer arrays remain stable slot owners.
     var runtimeSceneDocument: SceneDocument?
     var runtimePackage: ScenePackage?
@@ -259,7 +268,8 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
     /// C④: 퍼펫 animationlayers 캐스케이드 중 rate 가 스크립트로 매프레임 재평가되는 레이어의 dt 적분
     /// 누적 위상(GPULayer.uid → 캐스케이드 순서 배열, 인덱스는 eff/resolved 와 동일). 레이어 수 변경
     /// (visible 토글로 캐스케이드 구성이 바뀜) 시 길이 불일치로 자동 무효화(재시딩).
-    var puppetCascadePhase: [Int: [Float]] = [:]
+    var puppetCascadePhase: [Int: [Int: Float]] = [:]
+    var puppetFramePoses: [Int: PuppetFramePose] = [:]
     /// C④: 위 위상 적분의 dt 계산용 — 레이어가 마지막으로 encodeLayer 를 통과한 씬 시각.
     var puppetCascadeLastTime: [Int: Float] = [:]
 
@@ -276,6 +286,7 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
     func makeScriptEngine(_ src: String, layerName: String? = nil, currentLayerIndex: Int? = nil,
                           scriptPropsJSON: String? = nil, detachedLayer: Bool = false,
                           owner: TextScriptEngine.ScriptOwner = .layer) -> TextScriptEngine? {
+        guard allowsSceneScripts else { return nil }
         // 오디오 소비 스크립트 게이팅: 참조가 보이면 hasAudio 승격 → mount 말미의 provider 기동
         // (기존엔 셰이더 오디오 효과만 켰다). 모든 스크립트 로드는 mount 의 기동 검사보다 앞선다.
         if !hasAudio, Self.scriptWantsAudio(src) { hasAudio = true }
@@ -820,9 +831,17 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
         var lastF: Float = -1
     }
     /// 오브젝트(레이어) 단위 발화 타깃: 마커 타임라인들 + 같은 오브젝트의 animationEvent 훅 엔진들.
+    enum AnimationClipSource {
+        case puppet(uid: Int, model: PuppetModel)
+        case model(ModelAnimationState)
+    }
+
     struct AnimEventTarget {
         var timelines: [AnimEventTimeline]
         let engines: [TextScriptEngine]
+        var clipSource: AnimationClipSource? = nil
+        var clipCursors: [Int: AnimationClipClock] = [:]
+        var sampledClipClocks = false
     }
     var animEventTargets: [AnimEventTarget] = []
 
@@ -864,29 +883,14 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
         animEventTargets = []
         for gl in layers {
             guard let def = gl.def else { continue }
-            var timelines = defEventTimelines(def)
-            // 퍼펫 .mdl 클립 마커: 재생 중 클립만(FrameEncoder 규칙 — 2+ 활성 레이어면 이름 매칭
-            // 캐스케이드(각자 rate), 0/1 이면 클립 0 고정). 클립 클록 = PuppetPose.frame 과 동일 파라미터.
-            if let pm = gl.puppet, !pm.animations.isEmpty {
-                let eff = def.animationLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
-                let playing: [(clip: Int, rate: Float)] = eff.count >= 2
-                    ? eff.map { (PuppetPose.clipIndex(model: pm, name: $0.element.name, fallback: $0.offset,
-                                                      clipId: $0.element.clipId), $0.element.rate) }
-                    : [(0, 1)]
-                for (ci, rate) in playing {
-                    guard ci >= 0, ci < pm.animations.count else { continue }
-                    let clip = pm.animations[ci]
-                    guard !clip.events.isEmpty else { continue }
-                    timelines.append(AnimEventTimeline(events: clip.events, fps: clip.fps,
-                                                       length: Float(clip.lengthFrames), mode: clip.mode, rate: rate))
-                }
+            let timelines = defEventTimelines(def)
+            let source: AnimationClipSource? = gl.puppet.flatMap { model in
+                model.animations.contains { !$0.events.isEmpty } ? .puppet(uid: gl.uid, model: model) : nil
             }
-            // 엔진: 레이어 propScripts + animationlayers 스크립트(buildLayers 인스턴스 재사용 —
-            // 종전 animLayerEngines(def) 는 훅 등록용 별도 인스턴스를 만들어 IIFE 를 중복 실행했다).
-            let engines = gl.propScripts.map(\.engine) + gl.animLayerScripts.map(\.engine)
-            let hookEngines = engines.filter { $0.hookNames.contains("animationEvent") }
-            guard !timelines.isEmpty, !hookEngines.isEmpty else { continue }
-            animEventTargets.append(AnimEventTarget(timelines: timelines, engines: hookEngines))
+            let hookEngines = (gl.propScripts.map(\.engine) + gl.animLayerScripts.map(\.engine))
+                .filter { $0.hookNames.contains("animationEvent") }
+            guard !hookEngines.isEmpty, !timelines.isEmpty || source != nil else { continue }
+            animEventTargets.append(AnimEventTarget(timelines: timelines, engines: hookEngines, clipSource: source))
         }
         // 3D 씬 빌보드(2D 이미지 레이어 — 실물 젤다 눈꺼풀 blink 가 이 경로): 록스텝 def 로 결속.
         for (i, bb) in billboards.enumerated() where i < billboardDefs.count {
@@ -912,27 +916,14 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
                                                        mode: a.mode, rate: 1))
                 }
             }
-            // 모델 활성 클립 마커(.mdl MDLA0006 트레일러 — 젤다 talon snore, link Look Left/Right).
-            if let mr = renderableByID[obj.id], let model = mr.model,
-               mr.animIndex >= 0, mr.animIndex < model.animations.count {
-                let clip = model.animations[mr.animIndex]
-                if !clip.events.isEmpty {
-                    timelines.append(AnimEventTimeline(events: clip.events, fps: clip.fps,
-                                                       length: Float(clip.lengthFrames), mode: clip.mode,
-                                                       rate: mr.animRate))
-                }
+            let state = renderableByID[obj.id]?.animationState
+            let source: AnimationClipSource? = state.flatMap {
+                $0.model.animations.contains { !$0.events.isEmpty } ? .model($0) : nil
             }
-            var engines = nodeScripts[obj.id]?.map(\.engine) ?? []
-            for al in obj.animationLayers {
-                for src in al.scripts.values {
-                    if let e = makeScriptEngine(src, layerName: obj.name.isEmpty ? nil : obj.name) {
-                        engines.append(e)
-                    }
-                }
-            }
+            let engines = (nodeScripts[obj.id]?.map(\.engine) ?? []) + (state?.scripts.map(\.engine) ?? [])
             let hookEngines = engines.filter { $0.hookNames.contains("animationEvent") }
-            guard !timelines.isEmpty, !hookEngines.isEmpty else { continue }
-            animEventTargets.append(AnimEventTarget(timelines: timelines, engines: hookEngines))
+            guard !hookEngines.isEmpty, !timelines.isEmpty || source != nil else { continue }
+            animEventTargets.append(AnimEventTarget(timelines: timelines, engines: hookEngines, clipSource: source))
         }
     }
 
@@ -961,6 +952,51 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
             }
         }
         if fired { mtkView?.needsDisplay = true }
+    }
+
+    /// Sample the unwrapped phases used by the corresponding mesh, including scripted rates.
+    @MainActor func tickClipAnimationEvents() {
+        for index in animEventTargets.indices {
+            guard let source = animEventTargets[index].clipSource else { continue }
+            typealias Clip = (events: [AnimationMarker], length: Float, mode: String)
+            let clocks: [AnimationClipClock]
+            let clip: (Int) -> Clip
+            switch source {
+            case .puppet(let uid, let model):
+                clocks = puppetFramePoses[uid]?.clocks ?? []
+                clip = { index in
+                    let animation = model.animations[index]
+                    return (animation.events, Float(animation.lengthFrames), animation.mode)
+                }
+            case .model(let state):
+                clocks = state.clipClocks()
+                clip = { index in
+                    let animation = state.model.animations[index]
+                    return (animation.events, Float(animation.lengthFrames), animation.mode)
+                }
+            }
+            let previous = animEventTargets[index].clipCursors
+            let firstSample = !animEventTargets[index].sampledClipClocks
+            animEventTargets[index].sampledClipClocks = true
+            animEventTargets[index].clipCursors = Dictionary(clocks.map { ($0.layer, $0) },
+                uniquingKeysWith: { first, _ in first })
+            for clock in clocks where clock.phase.isFinite {
+                let prev: Float
+                if let last = previous[clock.layer], last.clip == clock.clip {
+                    guard last.revision == clock.revision else { continue }
+                    prev = last.phase
+                } else {
+                    prev = firstSample || clock.phase == 0 ? -1 : clock.phase
+                }
+                let animation = clip(clock.clip)
+                for name in PropertyAnimation.firedMarkers(events: animation.events, length: animation.length,
+                    mode: animation.mode, prevF: prev, curF: clock.phase) {
+                    let event = Self.animationEventJS(name: name)
+                    for engine in animEventTargets[index].engines { engine.callHook("animationEvent", eventJS: event) }
+                    mtkView?.needsDisplay = true
+                }
+            }
+        }
     }
 
     /// 전역 leftMouseDown/Up 모니터(데스크탑 창은 ignoresMouseEvents=true — 클릭은 다른 앱으로 가고
@@ -1726,6 +1762,8 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
     var is3D = false
     var has3DScripts = false
     var scene3DLights: [SceneLight3D] = []
+    var scene3DLightRuntimes: [Scene3DLightRuntime] = []
+    var scene3DShaderLightSlots: [String: Int] = [:]
     /// 씬 `general.lightconfig`(`SceneDocument.lightConfig`). **nil = 미저작** — 그때는 종전
     /// first-`Scene3DLighting.maximumLights` 폴백 그대로라 비트동일이다(동봉 172 씬 중 저작은
     /// `modeleditor`/`particleelementpreviews/collisionmodel` **2건**뿐이고, 그 둘은 저작 카운트가
@@ -1834,6 +1872,9 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
         teardown()
+        if let id = project.libraryUserStateID {
+            mountedResourceGrants = UserPropertyStore.resourceGrants(id: id)
+        }
         let mountWindow = container.window
         hasMissingRequiredSharedAssets = false
         scenePausedAt = nil
@@ -1875,7 +1916,9 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
         var data = Data()
         if let pkgURL {
             do {
-                data = try WapleProfiler.time("pkgRead") { try Data(contentsOf: pkgURL) }
+                data = try WapleProfiler.time("pkgRead") {
+                    try ScenePackage.readData(at: pkgURL, in: project.folderURL)
+                }
             } catch {
                 NSLog("%@", "[Waple] scene mount: cannot read \(pkgURL.path): \(error)")
                 throw RendererError.assetMissing
@@ -1910,7 +1953,7 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
                 }, onMissingRequiredAsset: { [weak self] in
                     self?.markMissingRequiredSharedAsset()
                 }, userProps: UserPropertyStore.rawOverrides(
-                    id: project.id,
+                    id: project.userStateID,
                     projectDefaults: baseProps,
                     presetOverrides: project.presetOverrides,
                     presetResourceRoot: project.presetFolderURL
@@ -1926,7 +1969,7 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
         // project.json 기본값 + 유저/프리셋 오버라이드(LibraryViewModel 유효값 계산과 동형).
         // 값 부재/미매치는 기본 image 로 폴백 → 무회귀. 변경은 reapply(remount)로 새 스냅샷.
         let overrides = UserPropertyStore.overrides(
-            id: project.id,
+            id: project.userStateID,
             presetOverrides: project.presetOverrides,
             presetResourceRoot: project.presetFolderURL
         )
@@ -1989,7 +2032,10 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
             hdrBloomPyramidPass = HDRBloomPyramidPass(device: device)
         }
         // H5: 볼륨 라이트 샤프트 패스(castVolumetrics 라이트가 있는 3D 씬).
-        if doc.camera3D != nil, doc.lights3D.contains(where: { $0.castVolumetrics }) {
+        if doc.camera3D != nil, doc.lights3D.contains(where: {
+            $0.castVolumetrics || $0.propertyAnimations["castvolumetrics"] != nil
+                || $0.propertyScripts["castvolumetrics"] != nil
+        }) {
             volumetricLightPass = VolumetricLightPass(device: device)
         }
 
@@ -2090,11 +2136,13 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
         // F810(S-7 잔여): localStorage 디스크 영속은 라이브 마운트 한정(container.window != nil —
         // sceneAudio :1221 과 동일 판정). 헤드리스 캡처(스냅샷)는 환경 잔존 상태가 렌더를 오염시키지
         // 않게 인메모리 유지(결정성 계약). 멀티모니터는 같은 씬 id 파일을 공유(원자 쓰기, 최종자 승).
-        sceneScript = SceneScriptContext(layers: scriptLayerDescriptors,
-                                         soundNames: doc.sounds.map { $0.name },
-                                         width: projW, height: projH,
-                                         localStorageStore: mountWindow != nil
-                                             ? ScriptLocalStorage(sceneId: project.id) : nil)
+        if allowsSceneScripts {
+            sceneScript = SceneScriptContext(layers: scriptLayerDescriptors,
+                                             soundNames: doc.sounds.map { $0.name },
+                                             width: projW, height: projH,
+                                             localStorageStore: mountWindow != nil
+                                                 ? ScriptLocalStorage(sceneId: project.userStateID) : nil)
+        }
         sceneScript?.installBoundUserShortcuts(runtimeBoundUserShortcutNames)
         sceneScript?.onOpenUserShortcut = runtimeUserShortcutHandler
         prepareSceneScriptRuntime(package: package, sceneFileName: project.fileName, document: doc)
@@ -2162,7 +2210,7 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
                 lightKindCone = u.kindCone      // F800(S-9)
                 lightAmbient = SIMD4(u.ambientTerm.x, u.ambientTerm.y, u.ambientTerm.z, 0)
             }
-            layers = buildLayers(doc: doc, package: package, device: device, sceneID: project.id)
+            layers = buildLayers(doc: doc, package: package, device: device, sceneID: project.id, project: project)
             // 감사 V07: NoInterpolation 무효과 레이어가 있을 때만 nearest 변형 5종 빌드(동일 디스크립터,
             // frag 만 nearestSource 동명 함수로 교체 — 선형 본체와 1:1 대응). 미빌드/nil 이면 encodeLayer 선형 폴터.
             if let libN = libraryNearest, layers.contains(where: { $0.noInterp && $0.effects.isEmpty }) {
@@ -2654,8 +2702,15 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
         // pause() 후에도 needsDisplay 재드로(호버/리사이즈)가 여길 지나므로 명시 가드.
         if scenePausedAt == nil { tickAnimationEvents(time: time) }
 
+        if !is3D {
+            refreshScriptedTexts(device: device, time: time)
+            if ortho3DHybrid { evaluate3DScripts(time: time) }
+        }
+        sceneAudio?.tick(time: time)
+
         // 3D 씬: 메시 + 빌보드 패스(뎁스, per-frame 스크립트) → scene-global finalizer.
         if is3D {
+            if scenePausedAt == nil { tickClipAnimationEvents() }
             beginFramePool()
             frameShakeOffset = .zero  // 3D shake는 cached camera pose의 world eye/center에 이미 반영됨.
             guard let cameraFrame3D,
@@ -2687,9 +2742,6 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
             return
         }
 
-        refreshScriptedTexts(device: device, time: time)  // 매 프레임 update() 재평가(F724 — 변경 시에만 재래스터)
-        if ortho3DHybrid { evaluate3DScripts(time: time) }  // F721: ortho 3D 메시/노드 스크립트(encode3D 와 동일 1프레임 1회)
-        sceneAudio?.tick(time: time)  // F214: volume 프로퍼티 스크립트 per-frame 재평가(헤드리스는 sceneAudio nil → no-op)
         // 효과 있는 레이어는 오프스크린 베이스→효과 패스 후 결과 텍스처로 교체.
         publishSceneRuntimeSnapshots(time: time)
         consumeSceneRuntimeCommands()
@@ -2770,6 +2822,7 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
             cb.commit(); return
         }
         finalEnc.endEncoding()
+        if scenePausedAt == nil { tickClipAnimationEvents() }
         pushLiveSceneLayers()  // F743(S-35): JS thisScene.layers 라이브 갱신(다음 프레임 스크립트 독해용)
         guard finalizeScene(
             source: acc,
@@ -2843,6 +2896,17 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
         // 비디오 프레임(헤드리스=AVAssetImageGenerator@scene-time, 결정적)을 형제 레이어와 함께 렌더한다.
         guard let device, let queue, pipeline != nil, let target = makeOffscreenBGRA(width, height, device) else { return [] }
         let savedProjection = SIMD2(projW, projH)
+        let savedPuppetPhases = puppetCascadePhase
+        let savedPuppetTimes = puppetCascadeLastTime
+        let savedPuppetPoses = puppetFramePoses
+        puppetCascadePhase.removeAll()
+        puppetCascadeLastTime.removeAll()
+        puppetFramePoses.removeAll()
+        defer {
+            puppetCascadePhase = savedPuppetPhases
+            puppetCascadeLastTime = savedPuppetTimes
+            puppetFramePoses = savedPuppetPoses
+        }
         updateAutomaticProjection(CGSize(width: width, height: height))
         defer { projW = savedProjection.x; projH = savedProjection.y; projAspect = projW / projH }
         // 라이브 창에 붙은 인스턴스에서도 진단/썸네일용 캡처 API를 부를 수 있다. encode 경로는
@@ -2931,7 +2995,8 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
                 presentInteractionGeometry()
                 cb.commit()
                 cb.waitUntilCompleted()
-                let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
+                guard cb.status == .completed else { continue }
+                let url = toDir.appendingPathComponent(OffscreenCapture.frameFileName(for: t, among: times))
                 if writeFramePNG(target, width: width, height: height, to: url) { urls.append(url) }
             }
             return urls
@@ -2962,6 +3027,7 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
             while simTime < t - 1e-4 { let s = min(dt, t - simTime); for i in rootIdxs { _ = sims[i].step(s) }; simTime += s }
             guard let cb = queue.makeCommandBuffer() else { continue }
             // 효과 패스(오디오 포함, currentSpectrum 사용) 적용한 표시 텍스처.
+            refreshScriptedTexts(device: device, time: t)
             publishSceneRuntimeSnapshots(time: t)
             consumeSceneRuntimeCommands()
             let displayTextures = buildDisplayTextures(device: device, time: t, cb: cb)  // beginFramePool 포함
@@ -3024,7 +3090,8 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
             presentInteractionGeometry()
             cb.commit()
             cb.waitUntilCompleted()
-            let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
+            guard cb.status == .completed else { continue }
+            let url = toDir.appendingPathComponent(OffscreenCapture.frameFileName(for: t, among: times))
             if writeFramePNG(target, width: width, height: height, to: url) { urls.append(url) }
         }
         return urls
@@ -3102,6 +3169,7 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
 
     public func teardown() {
         destroySceneScripts()
+        mountedResourceGrants.removeAll()
         scriptScreenSize = .zero
         automaticProjection = false
         initialPresentNotBefore = 0
@@ -3155,7 +3223,8 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
         // 파티클은 이 항목을 다시 쓰지 않으므로, 남아 있으면 다음 씬의 같은 인덱스가 영구 무방출로 굳는다.
         scriptParticleEmissionPaused.removeAll()
         loggedDrawFailureKeys.removeAll()
-        puppetCascadePhase.removeAll(); puppetCascadeLastTime.removeAll()  // C④: 마운트 재사용 stale 위상 방지
+        puppetCascadePhase.removeAll(); puppetCascadeLastTime.removeAll()
+        puppetFramePoses.removeAll()
         additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipelines = [:]
         refractParticlePipelineAdditive = nil   // C4-(iii)
         additiveNearestPipeline = nil; translucentNearestPipeline = nil  // 감사 V07: nearest 변형 해제
@@ -3166,7 +3235,8 @@ public final class SceneRenderer: NSObject, @MainActor WallpaperRenderer, MTKVie
         customLayerQuadInterleaved = nil  // F1(flip①): 커스텀 2D 레이어 전용 쿼드 버퍼
         camera3D = nil; is3D = false; has3DScripts = false; scene3DFog = Scene3DFog(); scene3DEnvironment = nil  // F745
         ortho3DHybrid = false  // F721: 하이브리드 상태 리셋(마운트 재사용)
-        scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero
+        scene3DLights = []; scene3DLightRuntimes = []; scene3DShaderLightSlots = [:]
+        scene3DAmbient = .zero; scene3DSkylight = .zero
         scene3DLightConfig = nil   // 마운트 재사용 시 이전 씬 예산 잔류 방지(미저작 씬이 종전 폴백으로 복귀)
         nodes3D = []; meshRenderables = []; billboards = []; billboardDefs = []; cameraScripts = []
         text3DControllers = []

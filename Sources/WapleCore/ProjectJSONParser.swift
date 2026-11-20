@@ -7,18 +7,27 @@ public enum ProjectParseError: Error, Equatable {
 
 public enum ProjectJSONParser {
     public static func parse(folderURL: URL) throws -> WallpaperProject {
+        try parse(json: readObject(in: folderURL), folderURL: folderURL)
+    }
+
+    public static func readObject(in folderURL: URL) throws -> [String: Any] {
         let projectURL = folderURL.appendingPathComponent("project.json")
-        guard let data = try? Data(contentsOf: projectURL) else {
+        guard let data = try? WallpaperPathSecurity.readRegularFile(projectURL, in: folderURL,
+                                                                    maximumBytes: 8 * 1024 * 1024) else {
             throw ProjectParseError.fileNotFound
         }
-        return try parse(data: data, folderURL: folderURL)
+        return try parseObject(data)
     }
 
     public static func parse(data: Data, folderURL: URL) throws -> WallpaperProject {
+        try parse(json: parseObject(data), folderURL: folderURL)
+    }
+
+    private static func parseObject(_ data: Data) throws -> [String: Any] {
         guard let obj = AssetJSON.dictionary(data) else {
             throw ProjectParseError.invalidJSON
         }
-        return parse(json: obj, folderURL: folderURL)
+        return obj
     }
 
     /// F231: project.json 을 호출자가 이미 별도 목적(예: WallpaperCompatibilityAnalyzer 의 raw 필드

@@ -9,11 +9,17 @@ final class ShaderFeatureMetalTests: XCTestCase {
     private func render(vertex: String? = nil, fragment: String, combos: [String: Int] = [:],
                         material: [String: [Float]] = [:], engine: [String: [Float]] = [:],
                         include: (String) -> String? = { _ in nil },
-                        textures: [Int: MTLTexture] = [:], device suppliedDevice: MTLDevice? = nil) throws -> SIMD4<Float> {
+                        textures: [Int: MTLTexture] = [:], device suppliedDevice: MTLDevice? = nil,
+                        languageVersion: MTLLanguageVersion? = nil) throws -> SIMD4<Float> {
         guard let device = suppliedDevice ?? MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let translated = try XCTUnwrap(GLSLTranslator.translate(vertex: vertex ?? self.vertex, fragment: fragment,
                                                                combos: combos, include: include))
-        let library = try device.makeLibrary(source: translated.msl, options: nil)
+        let options = languageVersion.map { version in
+            let options = MTLCompileOptions()
+            options.languageVersion = version
+            return options
+        }
+        let library = try device.makeLibrary(source: translated.msl, options: options)
         let pipeline = MTLRenderPipelineDescriptor()
         pipeline.vertexFunction = library.makeFunction(name: "ev_main")
         pipeline.fragmentFunction = library.makeFunction(name: "ef_main")
@@ -167,6 +173,24 @@ final class ShaderFeatureMetalTests: XCTestCase {
         """, combos: ["LIGHTING": 1, "LIGHTS_POINT": 1],
         engine: ["g_LPoint_Color": [0.1, 0.2, 0.3, 2], "g_LPoint_Origin": [0.01, 0.02, 0.03, 3]])
         assertColor(pixel, SIMD4(0.23, 0.46, 0.69, 1))
+    }
+
+    func testReferenceParametersCopyBackToSwizzlesInBothEntryAndHelperBodies() throws {
+        let pixel = try render(fragment: """
+        void fade(inout float alpha) { alpha *= 0.5; }
+        float adjust(inout float alpha, out vec2 channels) {
+            alpha *= 0.5;
+            channels = vec2(0.7, 0.4);
+            return 0.2;
+        }
+        float apply(inout vec4 color) { return adjust(color.a, color.gb); }
+        void main() {
+            gl_FragColor = vec4(1.0);
+            gl_FragColor.r = apply(gl_FragColor);
+            if (gl_FragColor.r < 0.3) fade(gl_FragColor.a);
+        }
+        """, languageVersion: .version2_4)
+        assertColor(pixel, SIMD4(0.2, 0.7, 0.4, 0.25))
     }
 
     func testVertexTextureIsBoundToVertexStage() throws {

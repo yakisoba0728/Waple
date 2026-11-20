@@ -229,6 +229,7 @@ final class WebPropertyDeliveryTests: XCTestCase {
         let expectedPath = expected.resolvingSymlinksInPath().path
         try "ok".write(to: expected, atomically: true, encoding: .utf8)
         UserPropertyStore.set(.string(external.path), key: "images", id: dir.lastPathComponent)
+        UserPropertyStore.setResourceGrant(absolutePath: external.path, key: "images", id: dir.lastPathComponent)
         try """
         <html><body><script>
         window.__random = null;
@@ -241,7 +242,7 @@ final class WebPropertyDeliveryTests: XCTestCase {
         {"type":"web","file":"index.html","title":"random","general":{"properties":{"images":{"type":"directory","value":""}}}}
         """.write(to: dir.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
 
-        let project = try ProjectJSONParser.parse(folderURL: dir)
+        let project = try ProjectJSONParser.parse(folderURL: dir).with(userStateID: dir.lastPathComponent)
         let renderer = WebRenderer(mode: .web)
         try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
         defer { renderer.teardown() }
@@ -307,6 +308,7 @@ final class WebPropertyDeliveryTests: XCTestCase {
         let project = try ProjectJSONParser.parse(folderURL: dir)
         let renderer = WebRenderer(mode: .web)
         let provider = FakeAudioProvider()
+        renderer.allowsWebMedia = true
         renderer.audioProviderFactory = { provider }
         try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
         defer { renderer.teardown() }

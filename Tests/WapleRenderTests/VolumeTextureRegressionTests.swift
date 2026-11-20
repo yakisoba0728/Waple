@@ -4,6 +4,19 @@ import Metal
 @testable import WapleRender
 
 final class VolumeTextureRegressionTests: XCTestCase {
+    func testConfiguredLUTLoadsMaterialVolumeWithoutRequiredAssetFallback() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let renderer = SceneRenderer()
+        renderer.device = device
+        renderer.runtimePackage = .assemble([("materials/lut/preset.tex", volumeData())])
+        renderer.applyColorGradingSettings(SceneColorGradingSettings(lutName: "preset", lutAmount: 1))
+        XCTAssertEqual(renderer.colorGradingLUT?.textureType, .type3D)
+        XCTAssertEqual(renderer.colorGradingLUT?.depth, 2)
+        renderer.applyColorGradingSettings(SceneColorGradingSettings(lutName: "missing", lutAmount: 1))
+        XCTAssertNil(renderer.colorGradingLUT)
+        XCTAssertFalse(renderer.hasMissingRequiredSharedAssets)
+    }
+
     private func volumeData(encodedHeight: Int = 4) -> Data {
         var pixels: [UInt8] = []
         for z in 0..<2 { for y in 0..<2 { for x in 0..<2 {

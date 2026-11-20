@@ -19,6 +19,29 @@ public struct PlaylistConfiguration: Codable, Equatable, Sendable {
     public var transitionTimeMillis: Int
     public var transitionPool: [Int]
 
+    /// The last slot ends at midnight. Distribute unspecified boundaries between saved times.
+    public var effectiveDaytimeEnds: [Float] {
+        guard !ids.isEmpty else { return [] }
+        var ends: [Float] = []
+        var previous: Float = 0
+        for (index, id) in ids.enumerated() {
+            let endpoint: Float
+            if index == ids.count - 1 {
+                endpoint = 1
+            } else {
+                guard let saved = daytimeEnds[id], saved.isFinite else { continue }
+                endpoint = min(1, max(previous, saved))
+            }
+            let missing = index + 1 - ends.count
+            for offset in 1...missing {
+                ends.append(offset == missing ? endpoint
+                    : previous + (endpoint - previous) * Float(offset) / Float(missing))
+            }
+            previous = endpoint
+        }
+        return ends
+    }
+
     public init(id: String = "default", name: String = "Default", enabled: Bool = false,
                 delayMinutes: Double = 30, mode: PlaylistMode = .timer, ids: [String] = [],
                 shuffle: Bool = false, videoSequence: Bool = false, updateOnPause: Bool = false,
@@ -131,6 +154,7 @@ public final class PlaylistStore {
             // Preserve duplicate-id records under distinct identities instead of dropping user data.
             var seen = Set<String>()
             for index in configurations.indices {
+                configurations[index] = configurations[index].normalized()
                 let base = configurations[index].id.isEmpty ? "default" : configurations[index].id
                 var identifier = base
                 var suffix = 2
@@ -176,7 +200,13 @@ public final class PlaylistStore {
         get { model.configurations.first { $0.id == model.selectedPlaylistId } ?? model.configurations[0] }
         set {
             guard let index = model.configurations.firstIndex(where: { $0.id == model.selectedPlaylistId }) else { return }
+            let previous = model.configurations[index]
             var value = newValue.normalized()
+            // Earlier versions persisted the implicit midnight boundary as an explicit value.
+            if let previousLast = previous.ids.last, let newLast = value.ids.last,
+               !previous.ids.contains(newLast), value.daytimeEnds[previousLast] == 1 {
+                value.daytimeEnds.removeValue(forKey: previousLast)
+            }
             value.id = model.selectedPlaylistId
             model.configurations[index] = value
         }
@@ -278,7 +308,7 @@ public final class PlaylistStore {
         var next = model
         for index in next.configurations.indices {
             next.configurations[index].ids.removeAll { $0 == id }
-            next.configurations[index].daytimeEnds.removeValue(forKey: id)
+            next.configurations[index] = next.configurations[index].normalized()
         }
         next.currentByScreen = next.currentByScreen.filter { $0.value != id }
         if next != model { model = next }

@@ -65,33 +65,50 @@ public final class LibraryStore: @unchecked Sendable {
         }
     }
 
-    private func save() {
+    public enum PersistenceError: Error {
+        case indexUnavailable
+        case indexWriteFailed(Error)
+    }
+
+    private func writeIndex(entries: [LibraryEntry], selectedId: String?) throws {
         saveCount += 1
         guard !indexLoadFailed else {
-            NSLog("%@", "[Waple] library index save skipped at \(indexURL.path) — earlier read failed transiently, avoiding clobber")
-            return
+            throw PersistenceError.indexUnavailable
         }
         guard backupCorruptStoreFile(indexURL, &indexCorrupt) else {
-            NSLog("%@", "[Waple] library index save skipped at \(indexURL.path) — corrupt original backup failed, avoiding clobber")
-            return
+            throw PersistenceError.indexUnavailable
         }
         let idx = Index(entries: entries, selectedId: selectedId)
         do {
             let data = try JSONEncoder().encode(idx)
             try data.write(to: indexURL, options: [.atomic])
         } catch {
+            throw PersistenceError.indexWriteFailed(error)
+        }
+    }
+
+    private func save() {
+        do {
+            try writeIndex(entries: entries, selectedId: selectedId)
+        } catch {
             NSLog("%@", "[Waple] failed to save library index at \(indexURL.path): \(error)")
         }
     }
 
     @discardableResult
-    public func importFolder(_ folderURL: URL, workshopItemID: String? = nil) throws -> LibraryEntry {
-        try importFolder(folderURL, saving: true, workshopItemID: workshopItemID)
+    public func importFolder(_ folderURL: URL, workshopItemID: String? = nil,
+                             rating: Double? = nil) throws -> LibraryEntry {
+        var next = entries
+        let entry = try register(folderURL, in: &next, workshopItemID: workshopItemID, rating: rating)
+        try writeIndex(entries: next, selectedId: selectedId)
+        entries = next
+        return entry
     }
 
-    /// F582: 일괄 임포트(importFolders)는 폴더마다 save() 하지 않고 마지막에 한 번만 저장한다
-    /// (호출마다 전체 인덱스 재작성 O(n²) 방지). 단건 임포트는 종전대로 즉시 저장.
-    private func importFolder(_ folderURL: URL, saving: Bool, workshopItemID: String? = nil) throws -> LibraryEntry {
+    /// Prepare an index entry without publishing the batch until its single write succeeds.
+    private func register(_ folderURL: URL, in entries: inout [LibraryEntry],
+                          workshopItemID: String? = nil, rating: Double? = nil,
+                          reuseExisting: Bool = true) throws -> LibraryEntry {
         let project = try ProjectJSONParser.parse(folderURL: folderURL)
         let bookmark = try folderURL.bookmarkData(
             options: [], includingResourceValuesForKeys: nil, relativeTo: nil
@@ -100,28 +117,13 @@ public final class LibraryStore: @unchecked Sendable {
         // 귀결 — 예: workshopid 없는 두 배경이 같은 폴더명)를 가리키면 무통지 대체(엔트리 실종 +
         // 북마크 앨리어싱) 대신 접미로 유일화해 둘 다 보존한다. 같은 실경로(재가져오기/갱신)면
         // 종전대로 덮어쓴다(테스트: testReimportUpdatesEntryAndMovesToEnd).
-        var id = project.id
-        if let existing = entries.first(where: { $0.id == id }) {
-            // F586: 기존 엔트리의 북마크 해석이 실패(nil)하면 같은 소스인지 확인할 수 없다 —
-            // 충돌 검사를 건너뛰고 무통지 대체하지 말고 유일화한다(보존 우선; 깨진 엔트리는
-            // 어차피 해석 불가라 유실은 제한적).
-            let sameFolder = resolveFolderURL(for: existing)?.standardizedFileURL
-                == folderURL.standardizedFileURL
-            if !sameFolder {
-                // F581: 유일화 엔트리(id-2, id-3 …)가 이미 이 폴더를 가리키면 같은 소스의
-                // 재임포트다 — 새 접미를 붙이지 말고 그 엔트리를 갱신한다(재임포트마다
-                // X-3, X-4 … 중복 누적 방지).
-                if let sameSource = entries.first(where: {
-                    isUniquifiedVariant($0.id, base: id)
-                        && resolveFolderURL(for: $0)?.standardizedFileURL == folderURL.standardizedFileURL
-                }) {
-                    id = sameSource.id
-                } else {
-                    id = uniqueEntryId(basedOn: id)
-                }
-            }
+        let source = folderURL.resolvingSymlinksInPath().standardizedFileURL
+        let sameSource = entries.first { existing in
+            reuseExisting && (existing.id == project.id || isUniquifiedVariant(existing.id, base: project.id))
+                && resolveFolderURL(for: existing, refreshing: false)?.resolvingSymlinksInPath().standardizedFileURL == source
         }
-        var entry = LibraryEntry(
+        let id = sameSource?.id ?? uniqueEntryId(basedOn: project.id, entries: entries)
+        let entry = LibraryEntry(
             id: id,
             title: project.title,
             typeRaw: project.type.storageString,
@@ -129,20 +131,13 @@ public final class LibraryStore: @unchecked Sendable {
             previewName: project.previewName,
             bookmark: bookmark,
             tags: project.tags,
-            contentRating: project.contentRating
+            contentRating: project.contentRating,
+            rating: rating.flatMap { (0...1).contains($0) ? $0 : nil } ?? sameSource?.rating,
+            workshopItemID: workshopItemID ?? sameSource?.workshopItemID ?? Self.steamWorkshopItemID(for: source),
+            installationID: sameSource != nil ? sameSource?.installationID : UUID()
         )
-        // 재임포트는 **project.json 에서 되살릴 수 있는 필드만** 다시 채운다. `rating` 은 워크샵
-        // vote_data 에서 다운로드 시점에만 오므로(WorkshopViewModel:253 → setRating) 여기서
-        // 되살릴 방법이 없다. 이관하지 않으면 아래 removeAll/append 교체로 nil 이 덮어써서,
-        // `importFolders(scanImportableFolders(in:))`(:152) 한 번에 **모든 평점이 무통지로
-        // 소실**됐다 — 재다운로드한 것만 복구되는 사용자 데이터 소실이다.
-        // id 가 uniqueEntryId 로 새로 발급된 경우엔 기존 엔트리가 없어 자연히 nil 이 된다(정상).
-        let previous = entries.first { $0.id == entry.id }
-        entry.rating = previous?.rating
-        entry.workshopItemID = workshopItemID ?? previous?.workshopItemID ?? project.workshopId
         entries.removeAll { $0.id == entry.id }
         entries.append(entry)
-        if saving { save() }
         return entry
     }
 
@@ -153,8 +148,9 @@ public final class LibraryStore: @unchecked Sendable {
     }
 
     /// 이미 쓰이는 id 와 충돌할 때 접미(-2, -3, …)로 유일화한다.
-    private func uniqueEntryId(basedOn base: String) -> String {
+    private func uniqueEntryId(basedOn base: String, entries: [LibraryEntry]) -> String {
         let existingIds = Set(entries.map(\.id))
+        guard existingIds.contains(base) else { return base }
         var n = 2
         while existingIds.contains("\(base)-\(n)") { n += 1 }
         return "\(base)-\(n)"
@@ -191,11 +187,23 @@ public final class LibraryStore: @unchecked Sendable {
     /// 인덱스 재작성이 누적되는 O(n²) 방지).
     @discardableResult
     public func importFolders(_ folderURLs: [URL]) -> [LibraryEntry] {
+        do { return try importFoldersPersisting(folderURLs) }
+        catch {
+            NSLog("%@", "[Waple] failed to commit imported folders: \(error)")
+            return []
+        }
+    }
+
+    public func importFoldersPersisting(_ folderURLs: [URL]) throws -> [LibraryEntry] {
+        var next = entries
         var imported: [LibraryEntry] = []
         for url in folderURLs {
-            if let entry = try? importFolder(url, saving: false) { imported.append(entry) }
+            if let entry = try? register(url, in: &next) { imported.append(entry) }
         }
-        if !imported.isEmpty { save() }
+        if !imported.isEmpty {
+            try writeIndex(entries: next, selectedId: selectedId)
+            entries = next
+        }
         return imported
     }
 
@@ -240,97 +248,71 @@ public final class LibraryStore: @unchecked Sendable {
     /// 시도 수를 아는 것은 이 루프뿐이라 여기서 함께 내보낸다. 기존 반환형을 바꾸지 않으려고
     /// 메서드를 더한 것이다 — 이 타깃의 시그니처 변경은 최소로 한다.
     public func importExtractedZipCounting(_ temp: URL) -> (imported: [LibraryEntry], attempted: Int) {
+        do { return try importExtractedZipPersisting(temp) }
+        catch {
+            NSLog("%@", "[Waple] failed to commit imported archive: \(error)")
+            return ([], 0)
+        }
+    }
+
+    public func importExtractedZipPersisting(_ temp: URL) throws -> (imported: [LibraryEntry], attempted: Int) {
         let fm = FileManager.default
         defer { try? fm.removeItem(at: temp) }   // 임시 해제 작업공간 정리
-
         let importedDir = baseDirectory.appendingPathComponent("imported", isDirectory: true)
-        try? fm.createDirectory(at: importedDir, withIntermediateDirectories: true)
-
-        var imported: [LibraryEntry] = []
-        var usedNames = Set<String>()   // 이번 zip 안의 동명 루트(WE export 관례 `Wallpaper/`) 상호 덮어쓰기 방지
         let roots = ZipImporter.findProjectRoots(in: temp, fileManager: fm)
+        guard !roots.isEmpty else { return ([], 0) }
+        try fm.createDirectory(at: importedDir, withIntermediateDirectories: true)
+        var next = entries
+        var imported: [LibraryEntry] = []
+        var movedFolders: [URL] = []
+        var reservedNames = Set(entries.map(\.id))
+        for entry in entries {
+            if let folder = resolveFolderURL(for: entry, refreshing: false),
+               folder.deletingLastPathComponent().standardizedFileURL.path == importedDir.standardizedFileURL.path {
+                reservedNames.insert(folder.lastPathComponent)
+            }
+        }
         for root in roots {
-            // F247: 관리 폴더명은 원본 래퍼 폴더명이 아니라 **project.json 이 선언한 id**
-            // (workshopid 우선, 없으면 폴더명 폴백 — ProjectJSONParser.parse 와 동일 규칙)로 정한다.
-            // 래퍼명(WE export 관례 `Wallpaper/`)은 비유일이라 그대로 쓰면, 동명이나 서로 다른
-            // 배경의 두 번째 zip import 가 첫 배경의 관리 폴더를 조용히 지우고 그 위에 얹혀
-            // 첫 엔트리의 북마크가 두 번째 배경 콘텐츠로 앨리어싱된다(무경고 데이터 손실).
-            // move 전, 아직 임시 해제 위치에 있는 root 에서 미리 파싱한다.
-            let parsed = try? ProjectJSONParser.parse(folderURL: root)
-            let hasStableId = parsed?.workshopId != nil   // 전역 유일 식별자 — 있으면 재import 를 확정할 수 있다
-            var name = WallpaperPathSecurity.normalizedPathComponent(parsed?.id) ?? root.lastPathComponent
-            // F580: project.json 선언 id(workshopid 우선)는 살균되지 않은 원문이라 "../../" 같은
-            // 경로 탈출 벡터다 — 그대로 관리 폴더명에 쓰면 dest 가 imported/ 밖을 가리켜
-            // removeItem/moveItem 이 임의 디렉터리를 파괴·교체한다. 단일 컴포넌트로 살균하고,
-            // 불가하면 원본 루트 폴더명으로 폴백한다.
-            if usedNames.contains(name) {
-                name = uniqueManagedName(name, usedNames: usedNames, in: importedDir, fm: fm)
-            }
-            // 콜 간(이전 import) 충돌: workshopid 로 정체성이 확정된 경우만 "같은 배경 재가져오기"로
-            // 보고 덮어쓴다. 확정할 수 없는데(workshopid 없음) 관리 폴더가 이미 있으면 지우지 않고
-            // 유일화한다 — 폴더명 폴백만으로는 서로 다른 배경을 구분할 수 없기 때문(무통지 데이터 손실 방지).
-            if fm.fileExists(atPath: importedDir.appendingPathComponent(name).path), !hasStableId {
-                name = uniqueManagedName(name, usedNames: usedNames, in: importedDir, fm: fm)
-            }
-            usedNames.insert(name)
+            guard let project = try? ProjectJSONParser.parse(folderURL: root) else { continue }
+            // An archive can claim any workshop ID. Never replace another managed folder from its claim.
+            let baseName = WallpaperPathSecurity.normalizedPathComponent(project.id) ?? root.lastPathComponent
+            let name = uniqueManagedName(baseName, reservedNames: reservedNames, in: importedDir, fm: fm)
             let dest = importedDir.appendingPathComponent(name, isDirectory: true)
-            // F584: 실패 경로를 try? 로 삼키면 어느 배경이 왜 빠졌는지 무통지다 — 각 단계 실패를
-            // 로그로 남기고, 이동 후 등록 실패 시 엔트리 없는 고아 관리 폴더를 정리한다.
-            var replacedFolderBackup: URL?
-            if fm.fileExists(atPath: dest.path) {
-                let backup = importedDir.appendingPathComponent(".\(name).replaced-\(UUID().uuidString)", isDirectory: true)
-                do {
-                    // 교체 완료 전에는 기존 폴더를 지우지 않는다. 같은 볼륨의 숨김 형제 경로로 rename 해
-                    // 새 root 이동/등록 어느 단계가 실패해도 원래 dest 로 되돌릴 수 있게 한다.
-                    try fm.moveItem(at: dest, to: backup)
-                    replacedFolderBackup = backup
-                } catch {
-                    NSLog("%@", "[Waple] failed to stage existing managed folder \(dest.path): \(error) — skipping")
-                    continue
-                }
-            }
             do {
                 try fm.moveItem(at: root, to: dest)
             } catch {
                 NSLog("%@", "[Waple] failed to move \(root.path) into library: \(error) — skipping")
-                restoreReplacedManagedFolder(replacedFolderBackup, to: dest, fm: fm)
                 continue
             }
             do {
-                // 감사 V06: 루트마다 저장(saving: true)하면 인덱스를 N번 재작성하는 O(n²) —
-                // F582(importFolders)와 같이 루프 동안은 저장을 미루고 마지막에 1회만 저장한다.
-                let entry = try importFolder(dest, saving: false)
+                let entry = try register(dest, in: &next, reuseExisting: false)
                 imported.append(entry)
-                if let backup = replacedFolderBackup {
-                    do { try fm.removeItem(at: backup) }
-                    catch { NSLog("%@", "[Waple] failed to remove replaced managed folder backup \(backup.path): \(error)") }
-                }
+                movedFolders.append(dest)
+                reservedNames.insert(name)
             } catch {
                 NSLog("%@", "[Waple] failed to register imported folder \(dest.path): \(error) — rolling back")
                 try? fm.removeItem(at: dest)
-                restoreReplacedManagedFolder(replacedFolderBackup, to: dest, fm: fm)
             }
         }
-        if !imported.isEmpty { save() }   // 감사 V06: 일괄 임포트 저장 일괄화(F582 패턴)
+        if !imported.isEmpty {
+            do { try writeIndex(entries: next, selectedId: selectedId) }
+            catch {
+                for folder in movedFolders { try? fm.removeItem(at: folder) }
+                throw error
+            }
+            entries = next
+        }
         return (imported, roots.count)
     }
 
-    private func uniqueManagedName(_ base: String, usedNames: Set<String>, in importedDir: URL, fm: FileManager) -> String {
-        var n = 2
-        while usedNames.contains("\(base)-\(n)")
-                || fm.fileExists(atPath: importedDir.appendingPathComponent("\(base)-\(n)").path) { n += 1 }
-        return "\(base)-\(n)"
-    }
-
-    /// stable-id 교체 실패 시 숨김 형제 경로에 보관한 기존 폴더를 원래 관리 경로로 복원한다.
-    private func restoreReplacedManagedFolder(_ backup: URL?, to dest: URL, fm: FileManager) {
-        guard let backup else { return }
-        do {
-            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
-            try fm.moveItem(at: backup, to: dest)
-        } catch {
-            NSLog("%@", "[Waple] failed to roll back managed folder \(backup.path) to \(dest.path): \(error)")
+    private func uniqueManagedName(_ base: String, reservedNames: Set<String>, in importedDir: URL, fm: FileManager) -> String {
+        func isTaken(_ name: String) -> Bool {
+            reservedNames.contains(name) || fm.fileExists(atPath: importedDir.appendingPathComponent(name).path)
         }
+        guard isTaken(base) else { return base }
+        var n = 2
+        while isTaken("\(base)-\(n)") { n += 1 }
+        return "\(base)-\(n)"
     }
 
     public func select(_ id: String) {
@@ -340,13 +322,25 @@ public final class LibraryStore: @unchecked Sendable {
 
     /// 엔트리 제거(파일은 건드리지 않음 — 인덱스 등록 해제). 선택 중이었으면 선택 해제.
     /// 스토어 간 orphan 정리는 호출자(LibraryViewModel.remove)가 오케스트레이션한다.
-    public func remove(id: String) {
-        entries.removeAll { $0.id == id }
-        if selectedId == id { selectedId = nil }
-        save()
+    @discardableResult
+    public func remove(id: String) -> Bool {
+        let next = entries.filter { $0.id != id }
+        let selection = selectedId == id ? nil : selectedId
+        do { try writeIndex(entries: next, selectedId: selection) }
+        catch {
+            NSLog("%@", "[Waple] failed to remove library entry: \(error)")
+            return false
+        }
+        entries = next
+        selectedId = selection
+        return true
     }
 
     public func resolveFolderURL(for entry: LibraryEntry) -> URL? {
+        resolveFolderURL(for: entry, refreshing: true)
+    }
+
+    private func resolveFolderURL(for entry: LibraryEntry, refreshing: Bool) -> URL? {
         var stale = false
         let resolved: URL
         do {
@@ -364,13 +358,14 @@ public final class LibraryStore: @unchecked Sendable {
         // library.json 을 통째로 다시 쓰는 동기 디스크 I/O 가 일어났다(뷰 업데이트 중 상태 변경 +
         // 그리드 스크롤마다 쓰기). 해석 결과는 지금 그대로 돌려주고 저장만 뒤로 미루면
         // 재해석 비용도, 저장 목적(다음 실행에서의 해석 실패 방지)도 그대로다.
-        if stale, let fresh = try? resolved.bookmarkData(
+        if refreshing, stale, let fresh = try? resolved.bookmarkData(
             options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
             let entryId = entry.id
+            let original = entry.bookmark
             DispatchQueue.main.async { [weak self] in
                 guard let self,
                       let idx = self.entries.firstIndex(where: { $0.id == entryId }),
-                      self.entries[idx].bookmark != fresh else { return }
+                      self.entries[idx].bookmark == original, original != fresh else { return }
                 self.entries[idx].bookmark = fresh
                 self.save()
             }
@@ -380,9 +375,24 @@ public final class LibraryStore: @unchecked Sendable {
 
     /// 워크샵 평점 저장(0…1). 미존재 id 는 no-op.
     public func setRating(_ rating: Double, id: String) {
-        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
-        entries[i].rating = rating
-        save()
+        guard (0...1).contains(rating), let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        var next = entries
+        next[i].rating = rating
+        do { try writeIndex(entries: next, selectedId: selectedId) }
+        catch {
+            NSLog("%@", "[Waple] failed to save workshop rating: \(error)")
+            return
+        }
+        entries = next
+    }
+
+    private static func steamWorkshopItemID(for folder: URL) -> String? {
+        let components = Array(folder.pathComponents.suffix(5))
+        guard components.count == 5,
+              components.prefix(4).elementsEqual(["steamapps", "workshop", "content", "431960"]),
+              let id = components.last, (1...20).contains(id.utf8.count),
+              id.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
+        return id
     }
 
     /// 구버전 인덱스(tags==nil) 엔트리의 tags/contentRating 을 디스크 project.json 에서 1회 백필.
@@ -403,10 +413,18 @@ public final class LibraryStore: @unchecked Sendable {
     /// 종전의 "매 실행 재시도 I/O 를 막는다" 는 목적은 **파스 I/O** 쪽에서 그대로 유지된다.
     func backfillMetadataIfNeeded() {
         var changed = false
-        for i in entries.indices where entries[i].tags == nil {
-            guard let folder = resolveFolderURL(for: entries[i]) else {
+        for i in entries.indices where entries[i].tags == nil || entries[i].workshopItemID == nil {
+            guard let folder = resolveFolderURL(for: entries[i], refreshing: entries[i].tags == nil) else {
                 continue   // 일시적일 수 있다 — nil 로 남겨 다음 실행에 재시도
             }
+            if entries[i].workshopItemID == nil,
+               let id = Self.steamWorkshopItemID(for: folder),
+               let manifest = WallpaperPathSecurity.containedFileURL("project.json", root: folder),
+               (try? manifest.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+                entries[i].workshopItemID = id
+                changed = true
+            }
+            guard entries[i].tags == nil else { continue }
             changed = true
             guard let project = try? ProjectJSONParser.parse(folderURL: folder) else {
                 entries[i].tags = []   // 볼륨은 붙어 있는데 project.json 이 없거나 깨졌다(안정적)

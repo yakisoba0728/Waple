@@ -119,4 +119,16 @@ final class Feature3DRuntimeRegressionTests: XCTestCase {
         XCTAssertFalse(spot.isPointLight)
         XCTAssertFalse(directional.isPointLight)
     }
+
+    func testAnimatedLightValuesReachTheResolvedFrame() throws {
+        let renderer = try renderer(objects: #"""
+        {"id":1,"light":"lpoint","radius":5,"color":"1 1 1","intensity":{"value":1,
+          "script":"export function update(value) { return 2 + engine.runtime; }"},
+          "visible":{"value":false,"script":"export function update(value) { return engine.runtime >= 1; }"}}
+        """#)
+        XCTAssertTrue(Scene3DLighting.resolveLights(renderer.scene3DLights, nodes: [:]).isEmpty)
+        renderer.evaluate3DScripts(time: 1.5)
+        let light = try XCTUnwrap(Scene3DLighting.resolveLights(renderer.scene3DLights, nodes: [:]).first)
+        XCTAssertEqual(light.colorRadius.x, 3.5, accuracy: 0.001)
+    }
 }

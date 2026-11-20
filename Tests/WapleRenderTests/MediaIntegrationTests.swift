@@ -45,7 +45,9 @@ final class NowPlayingParseTests: XCTestCase {
 final class WebMediaDeliveryTests: XCTestCase {
     private struct FakeProvider: NowPlayingProvider {
         func fetch() -> NowPlayingInfo? {
-            NowPlayingInfo(state: .playing, title: "T1", artist: "A1", album: "L1", position: 7, duration: 100)
+            NowPlayingInfo(state: .playing, title: "T1", artist: "A1", album: "L1",
+                           position: 7.123456789, duration: 100, subTitle: "Episode",
+                           albumArtist: "Ensemble", genres: "Classical", contentType: "podcast")
         }
     }
 
@@ -56,7 +58,7 @@ final class WebMediaDeliveryTests: XCTestCase {
         <html><body><script>
         window.__got = {};
         window.wallpaperRegisterMediaStatusListener(function(e) { window.__got.state = e.state; });
-        window.wallpaperRegisterMediaPropertiesListener(function(e) { window.__got.title = e.title; window.__got.artist = e.artist; });
+        window.wallpaperRegisterMediaPropertiesListener(function(e) { window.__got.props = e; });
         window.wallpaperRegisterMediaTimelineListener(function(e) { window.__got.pos = e.position; });
         </script></body></html>
         """
@@ -66,6 +68,7 @@ final class WebMediaDeliveryTests: XCTestCase {
 
         let project = try ProjectJSONParser.parse(folderURL: dir)
         let r = WebRenderer(mode: .web)
+        r.allowsWebMedia = true
         r.nowPlayingProvider = FakeProvider()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200)), project: project)
         defer { r.teardown() }
@@ -82,12 +85,14 @@ final class WebMediaDeliveryTests: XCTestCase {
                 sem.fulfill()
             }
             wait(for: [sem], timeout: 2)
-            if got["state"] != nil, got["title"] != nil, got["pos"] != nil { break }
+            if got["state"] != nil, got["props"] != nil, got["pos"] != nil { break }
         }
         XCTAssertEqual(got["state"] as? Int, 1)
-        XCTAssertEqual(got["title"] as? String, "T1")
-        XCTAssertEqual(got["artist"] as? String, "A1")
-        XCTAssertEqual(got["pos"] as? Double ?? -1, 7, accuracy: 0.001)
+        XCTAssertEqual(got["props"] as? [String: String], [
+            "title": "T1", "artist": "A1", "albumTitle": "L1", "subTitle": "Episode",
+            "albumArtist": "Ensemble", "genres": "Classical", "contentType": "podcast",
+        ])
+        XCTAssertEqual(got["pos"] as? Double ?? -1, 7.123456789, accuracy: 0.000000001)
     }
 
     private struct FakeArtworkProvider: NowPlayingProvider, ArtworkProviding {
@@ -121,6 +126,7 @@ final class WebMediaDeliveryTests: XCTestCase {
 
         let project = try ProjectJSONParser.parse(folderURL: dir)
         let r = WebRenderer(mode: .web)
+        r.allowsWebMedia = true
         r.nowPlayingProvider = FakeArtworkProvider()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200)), project: project)
         defer { r.teardown() }

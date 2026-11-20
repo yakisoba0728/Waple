@@ -12,6 +12,14 @@ public enum OffscreenCapture {
     public static let sceneRandomSeed: UInt64 = 0xC0FFEE_1038
     public static let scenePointerUV = SIMD2<Float>(0.5, 0.5)
 
+    public static func frameFileName(for time: Float, among times: [Float]) -> String {
+        let rounded = String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), time)
+        let collides = times.contains {
+            $0 != time && String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), $0) == rounded
+        }
+        return "frame_t\(rounded)\(collides ? "_\(time)" : "").png"
+    }
+
     private struct StoppedNowPlaying: NowPlayingProvider {
         func fetch() -> NowPlayingInfo? { nil }
     }

@@ -61,6 +61,14 @@ extension SnapshotPipeline {
             fputs("[snap] ⚠️ 베이스라인에 activeDebugGates 기록 없음(전-F145 스키마) — 캡처 당시 게이트 상태를 알 수 없어 불일치 검사를 건너뜁니다.\n", stderr)
         }
         let baseThumbs = baselineDir.appendingPathComponent("thumbs", isDirectory: true)
+        let folders = sceneFolders(root: root, matchingIDs: Set(baseline.entries.map(\.id)))
+        let folderByID = Dictionary(uniqueKeysWithValues: folders.map { ($0.lastPathComponent, $0) })
+        let sceneIDs = baseline.entries.compactMap { entry -> String? in
+            guard folderByID[entry.id] != nil,
+                  FileManager.default.fileExists(atPath: baseThumbs.appendingPathComponent("\(entry.id).png").path)
+            else { return nil }
+            return entry.id
+        }
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(
             "waple_snap_cmp_\(UUID().uuidString)", isDirectory: true)
         let selfCheckDir = tmp.appendingPathComponent("self-check", isDirectory: true)
@@ -75,13 +83,15 @@ extension SnapshotPipeline {
         // Recheck this build in a fresh process. A historic nondeterministic label must not
         // permanently grant lax thresholds, nor hide a newly introduced loss of determinism.
         let helperPath = ProcessInfo.processInfo.environment["WAPLE_SNAPSHOT_HELPER"] ?? CommandLine.arguments[0]
-        do {
-            let status = try launchSelfCheckPass(executableURL: URL(fileURLWithPath: helperPath).standardizedFileURL,
-                                                root: root, outDir: selfCheckDir)
-            if status != 0 { fputs("[snap] current self-check helper exit \(status) — validating available frames\n", stderr) }
-        } catch {
-            fputs("[snap] current self-check unavailable: \(error)\n", stderr)
-            return 2
+        if !sceneIDs.isEmpty {
+            do {
+                let status = try launchSelfCheckPass(executableURL: URL(fileURLWithPath: helperPath).standardizedFileURL,
+                                                    root: root, outDir: selfCheckDir, sceneIDs: sceneIDs)
+                if status != 0 { fputs("[snap] current self-check helper exit \(status) — validating available frames\n", stderr) }
+            } catch {
+                fputs("[snap] current self-check unavailable: \(error)\n", stderr)
+                return 2
+            }
         }
 
         var rows: [CompareRow] = []
@@ -90,19 +100,17 @@ extension SnapshotPipeline {
         var selfCheckMissing: [String] = []
         var skippedMissing: [String] = []      // 현재 코퍼스에 없거나 썸네일 없음
 
-        // F520: sceneFolders 와 동일 해석 — 개발 루트/backgrounds 직접 지정 모두 수용.
-        let container = sceneContainer(root: root)
         for entry in baseline.entries {
             autoreleasepool {
-                let folder = container.appendingPathComponent(entry.id)
-                guard FileManager.default.fileExists(atPath: folder.path),
+                guard let folder = folderByID[entry.id],
                       let base = pngToRGBA(baseThumbs.appendingPathComponent("\(entry.id).png"),
                                            width: baseline.thumbWidth, height: baseline.thumbHeight) else {
                     skippedMissing.append(entry.id); return
                 }
                 do {
                     let project = try ProjectJSONParser.parse(folderURL: folder)
-                    guard case let .pixels(cur, _) = try captureFrame(project: project, into: tmp) else {
+                    guard project.type == .scene,
+                          case let .pixels(cur, _) = try captureFrame(project: project, into: tmp) else {
                         regressedToEmpty.append(entry.id); return
                     }
                     guard let second = pngToRGBA(selfCheckDir.appendingPathComponent("\(entry.id).png"),
@@ -181,9 +189,10 @@ extension SnapshotPipeline {
         // 순서를 뒤집지 않는 이유: 모집단이 반쯤 유실된 상태의 회귀 목록은 그 자체가 신뢰할 수
         // 없어서, 먼저 환경을 고치라고 말하는 쪽이 옳다.
         let minComparedPercent = 90
-        if rows.count * 100 < baseline.entries.count * minComparedPercent {
-            let pct = rows.count * 100 / baseline.entries.count
-            fputs("[snap] ⚠️ compared=\(rows.count)/\(baseline.entries.count) (\(pct)%) — "
+        let available = baseline.entries.count - skippedMissing.count
+        if available * 100 < baseline.entries.count * minComparedPercent {
+            let pct = available * 100 / baseline.entries.count
+            fputs("[snap] ⚠️ available=\(available)/\(baseline.entries.count) (\(pct)%) — "
                   + "하한 \(minComparedPercent)% 미만. 베이스라인 씬이 현재 코퍼스/썸네일에서 "
                   + "대량 누락됐다 — 이 상태의 '무회귀' 는 의미가 없다. "
                   + "root 지정 확인: \(root) (skip=\(skippedMissing.count))\n", stderr)

@@ -188,7 +188,8 @@ struct RemoteTileView: View {
     }
 
     static func progressText(_ percent: Double) -> String {
-        String(format: NSLocalizedString("다운로드 중 %lld%%", comment: "다운로드 진행률"), Int(percent))
+        guard (0...100).contains(percent) else { return NSLocalizedString("다운로드 중", comment: "진행률 없음") }
+        return String(format: NSLocalizedString("다운로드 중 %lld%%", comment: "다운로드 진행률"), Int(percent))
     }
 
     // MARK: - 접근성

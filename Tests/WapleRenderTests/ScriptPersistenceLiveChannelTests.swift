@@ -22,8 +22,6 @@ final class ScriptPersistenceLiveChannelTests: XCTestCase {
         let scene1 = try XCTUnwrap(SceneScriptContext(localStorageStore: store1))
         scene1.context.evaluateScript("localStorage.set('storedPos', { x: 123, y: 45, z: 0 }); localStorage.set('n', 7);")
         store1.flush()   // 마운트 해제(teardown) 경로의 즉시 기록
-        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("3367988661.json").path),
-                      "flush 후 씬 id 키 JSON 파일이 디스크에 있어야")
 
         // 새 마운트(새 스토어 + 새 JSContext) — 디스크에서 시드돼야 한다.
         let store2 = ScriptLocalStorage(sceneId: "3367988661", baseDirectory: dir, debounce: 3600)
@@ -33,6 +31,21 @@ final class ScriptPersistenceLiveChannelTests: XCTestCase {
         XCTAssertEqual(pos, "123,45", "오브젝트 값(드래그 위치)이 재시작 간에 복원돼야")
         let n = scene2.context.evaluateScript("localStorage.get('n')")?.toString()
         XCTAssertEqual(n, "7", "스칼라 값도 복원돼야")
+    }
+
+    func testMigratesAnExactlyNamedLegacyScriptState() throws {
+        let dir = tempStorageDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let legacy = dir.appendingPathComponent("MyWallpaper.json")
+        let saved = try JSONSerialization.data(withJSONObject: ["storedX": "24"])
+        try saved.write(to: legacy)
+
+        let first = ScriptLocalStorage(sceneId: "MyWallpaper", baseDirectory: dir, debounce: 3600)
+        XCTAssertEqual(first.get(key: "storedX"), "24")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacy.path))
+        let second = ScriptLocalStorage(sceneId: "MyWallpaper", baseDirectory: dir, debounce: 3600)
+        XCTAssertEqual(second.get(key: "storedX"), "24")
     }
 
     /// delete/clear 도 디스크에 반영(종전 인메모리 전용이면 리마운트 시 부활하는 결함).

@@ -248,7 +248,7 @@ public enum DeepScan {
         // 설치본 도달 0건(type:"preset" 이 0건) — 워크샵 코퍼스에서만 움직인다.
         var knownTypes: [String: WallpaperType] = [:]
         for f in folders {
-            if let raw = rawJSON(f.appendingPathComponent("project.json")) {
+            if let raw = try? ProjectJSONParser.readObject(in: f) {
                 let parsed = ProjectJSONParser.parse(json: raw, folderURL: f)
                 knownTypes[f.lastPathComponent] = parsed.type
                 knownTypes[parsed.id] = parsed.type
@@ -298,7 +298,7 @@ public enum DeepScan {
     // MARK: project dispatch
 
     static func scanProject(_ folder: URL, assetsDir: URL?, knownTypes: [String: WallpaperType], agg: DeepAgg) {
-        guard let raw = rawJSON(folder.appendingPathComponent("project.json")) else {
+        guard let raw = try? ProjectJSONParser.readObject(in: folder) else {
             agg.sync { agg.projectJSONTotal += 1; agg.projTypeTotal["invalid", default: 0] += 1 }
             return
         }
@@ -393,7 +393,7 @@ public enum DeepScan {
                                                hasDependency: project.dependency != nil) {
         case .package(let pkgURL):
             // memory-map: a 700MB pkg stays paged instead of resident, so N concurrent scenes don't OOM.
-            guard let pkgData = try? Data(contentsOf: pkgURL, options: .mappedIfSafe),
+            guard let pkgData = try? ScenePackage.readData(at: pkgURL, in: folder, mapped: true),
                   let parsed = try? ScenePackage.parse(pkgData) else { return false }
             package = parsed
         case .directory:
@@ -805,9 +805,9 @@ public enum DeepScan {
         // (`ProjectJSONParser.swift:42`)에서 이미 막히므로 남는 것은 **패키지 안 심링크**뿐이고,
         // `WapleCompat` 은 반출 경로 없는 CLI 라 귀결은 좁다 — 그래도 형제와 규약을 맞춘다.
         // 검증 실패는 "알 수 없는 컨테이너" 로 집계한다(스캐너 판정과 같은 방향).
-        guard let url = WallpaperPathSecurity.containedFileURL(file, root: folder) else {
+        guard let url = readableEntry(file, in: folder) else {
             agg.sync { agg.videoTotal += 1; agg.videoUnknownContainer += 1
-                       agg.addSample2(&agg.videoFailSamples, "\(project.id)/\(file) (경로 봉쇄)") }
+                       agg.addSample2(&agg.videoFailSamples, "\(project.id)/\(file) (파일 없음·읽기 불가)") }
             return false
         }
         if VideoRenderer.nativeVideoExtensions.contains(ext) {
@@ -868,8 +868,7 @@ public enum DeepScan {
     // MARK: web
 
     static func scanWeb(_ folder: URL, project: WallpaperProject, agg: DeepAgg) -> Bool {
-        let present = project.fileName.flatMap { WallpaperPathSecurity.containedFileURL($0, root: folder) }
-            .map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        let entryURL = readableEntry(project.fileName, in: folder)
         // **[2026-08-21 클러스터 BE] 탐지 문자열은 `WebBridgeSignal` 하나가 갖는다.**
         // 종전에는 이 두 줄에 마커가 리터럴로 박혀 있었고 형제 스캐너에는 같은 것이 **10종**
         // 박혀 있었다 — 같은 웹 벽지를 두 스캐너에 물리면 서로 다른 얘기를 했다. 문자열을 합쳐
@@ -880,7 +879,7 @@ public enum DeepScan {
         // `index.html` 이고 신호가 전부 하위 `js/` 에 있어 여기서는 0건으로 보인다 —
         // 즉 이 카운터들은 지금도 부분집합이다. 크롤 도입은 스캔 벽시계를 건드리므로 별건으로 뺀다.
         var randomFile = false, serviceWorker = false
-        if let entry = project.fileName, let url = WallpaperPathSecurity.containedFileURL(entry, root: folder),
+        if let url = entryURL,
            let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) {
             let signals = WebBridgeSignal.signals(in: text)
             randomFile = signals.contains(.randomFile)
@@ -888,11 +887,19 @@ public enum DeepScan {
         }
         agg.sync {
             agg.webTotal += 1
-            if present { agg.webIndexPresent += 1 }
+            if entryURL != nil { agg.webIndexPresent += 1 }
             if randomFile { agg.webRandomFile += 1 }
             if serviceWorker { agg.webServiceWorker += 1 }
         }
-        return present
+        return entryURL != nil
+    }
+
+    private static func readableEntry(_ path: String?, in folder: URL) -> URL? {
+        guard let url = WallpaperPathSecurity.containedFileURL(path, root: folder)?.resolvingSymlinksInPath(),
+              (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+              FileManager.default.isReadableFile(atPath: url.path)
+        else { return nil }
+        return url
     }
 
     // MARK: helpers

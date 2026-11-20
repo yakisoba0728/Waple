@@ -131,6 +131,7 @@ public func passes(_ m: DiffMetrics, _ t: DiffThreshold) -> Bool {
 public func parseCaptureTimes(_ raw: String?, fallback: [Float]) -> [Float] {
     guard let raw, !raw.trimmingCharacters(in: .whitespaces).isEmpty else { return fallback }
     let vals = raw.split(separator: ",").compactMap { Float($0.trimmingCharacters(in: .whitespaces)) }
+        .filter { $0.isFinite && $0 >= 0 }
     return vals.isEmpty ? fallback : vals
 }
 

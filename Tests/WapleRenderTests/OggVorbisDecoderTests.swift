@@ -120,6 +120,13 @@ final class OggVorbisDecoderTests: XCTestCase {
         XCTAssertLessThan(audio.samples.map { abs($0) }.max() ?? 0, 1.01)
     }
 
+    func testPCM16WAVWritesLittleEndianPayload() {
+        let audio = DecodedAudio(samples: [-1, 0, 1, 0.5], channels: 2, sampleRate: 48_000)
+        let wav = audio.pcm16WAV()
+        XCTAssertEqual(wav.count, 52)
+        XCTAssertEqual(Array(wav[44...]), [0x00, 0x80, 0x00, 0x00, 0xff, 0x7f, 0xff, 0x3f])
+    }
+
     /// naive 와 fast 디코드가 동일 파일에서 수치적으로 일치(fast IMDCT 실경로 회귀).
     func testTinyOggFastEqualsNaive() throws {
         let fast = try OggVorbisDecoder.decode(TinyOgg.data, useFastIMDCT: true)

@@ -84,7 +84,7 @@ public enum SnapshotPipeline {
     ///
     /// The same project.json scene selection applies to packed, unpacked and mixed corpora.
     /// Legacy package-only folders remain visible so malformed projects are reported as failures.
-    static func sceneFolders(root: String) -> [URL] {
+    static func sceneFolders(root: String, matchingIDs: Set<String>? = nil) -> [URL] {
         let base = sceneContainer(root: root)
         let fm = FileManager.default
         func isLegacyScene(_ url: URL) -> Bool {
@@ -92,23 +92,27 @@ public enum SnapshotPipeline {
                 || fm.fileExists(atPath: url.appendingPathComponent("gifscene.pkg").path)
         }
         if fm.fileExists(atPath: base.appendingPathComponent("project.json").path) {
-            return declaredSceneFolders(container: base)
+            return declaredSceneFolders(container: base, matchingIDs: matchingIDs)
         }
-        if isLegacyScene(base) { return [base] }
+        if isLegacyScene(base) {
+            return matchingIDs?.contains(base.lastPathComponent) == false ? [] : [base]
+        }
         let items = (try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)) ?? []
-        let declared = declaredSceneFolders(container: base)
+        let declared = declaredSceneFolders(container: base, matchingIDs: matchingIDs)
         let legacy = items.filter {
-            isLegacyScene($0) && !fm.fileExists(atPath: $0.appendingPathComponent("project.json").path)
+            matchingIDs?.contains($0.lastPathComponent) != false
+                && isLegacyScene($0) && !fm.fileExists(atPath: $0.appendingPathComponent("project.json").path)
         }
         return (declared + legacy).sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     /// Scene projects declared by project.json, including extension-based type inference.
-    static func declaredSceneFolders(container: URL) -> [URL] {
+    static func declaredSceneFolders(container: URL, matchingIDs: Set<String>?) -> [URL] {
         let folders = (try? WallpaperCompatibilityAnalyzer.projectFolders(in: container)) ?? []
         return folders.filter { folder in
-            guard let data = try? Data(contentsOf: folder.appendingPathComponent("project.json")),
-                  let raw = AssetJSON.dictionary(data) else { return false }
+            // Known baseline IDs must still be checked when their current project is malformed or has changed type.
+            if let matchingIDs { return matchingIDs.contains(folder.lastPathComponent) }
+            guard let raw = try? ProjectJSONParser.readObject(in: folder) else { return false }
             return ProjectJSONParser.parse(json: raw, folderURL: folder).type == .scene
         }
     }
@@ -126,23 +130,15 @@ public enum SnapshotPipeline {
         // 예상 파일명을 먼저 지워 "이번 호출이 실제로 쓴 파일만" 아래서 보이게 한다.
         let fm = FileManager.default
         for t in captureTimes {
-            try? fm.removeItem(at: tmp.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png"))
+            try? fm.removeItem(at: tmp.appendingPathComponent(OffscreenCapture.frameFileName(for: t, among: captureTimes)))
         }
         let urls = try MainActor.assumeIsolated {
             try OffscreenCapture.scene(project: project, width: thumbW, height: thumbH,
                                        times: captureTimes, toDir: tmp)
         }
-        let primaryName = "frame_t\(String(format: "%.1f", primaryCaptureTime)).png"
-        if let exact = urls.first(where: { $0.lastPathComponent == primaryName }) {
-            guard let rgba = pngToRGBA(exact, width: thumbW, height: thumbH) else { return .empty }
-            return .pixels(rgba, png: exact)
-        }
-        // primaryCaptureTime 프레임 자체가 없다(예: captureTimes 가 명시적으로 captureT 를 빼고 지정돼
-        // primaryCaptureTime 이 첫 값으로 폴백했는데 그 프레임마저 못 나온 경우) — urls.first 로 대체하되
-        // 매니페스트의 captureTime 필드(=primaryCaptureTime)와 실제 반환 프레임의 시각이 어긋난다는 사실을
-        // 표면화한다(조용히 다른 시각 프레임을 "캐논"으로 둔갑시키지 않기 위함).
-        guard let png = urls.first, let rgba = pngToRGBA(png, width: thumbW, height: thumbH) else { return .empty }
-        fputs("[snap] ⚠️ primaryCaptureTime(\(primaryCaptureTime)) 프레임 없음 — \(png.lastPathComponent) 로 대체(매니페스트 captureTime 값과 실제 프레임 시각 불일치 가능)\n", stderr)
+        let primaryName = OffscreenCapture.frameFileName(for: primaryCaptureTime, among: captureTimes)
+        guard let png = urls.first(where: { $0.lastPathComponent == primaryName }),
+              let rgba = pngToRGBA(png, width: thumbW, height: thumbH) else { return .empty }
         return .pixels(rgba, png: png)
     }
 
@@ -191,10 +187,11 @@ public enum SnapshotPipeline {
     /// 상한을 붙이면 대형 코퍼스(수백 씬)의 정상 실행을 잘라 거짓 실패를 만든다.
     /// 앱 수명주기 안에서 도는 자리(`AppDelegate`)에는 같은 논리가 성립하지 않는다 — 그쪽은
     /// 이 레인 소유가 아니라 보고서로 넘긴다.
-    static func launchSelfCheckPass(executableURL: URL, root: String, outDir: URL) throws -> Int32 {
+    static func launchSelfCheckPass(executableURL: URL, root: String, outDir: URL,
+                                    sceneIDs: [String] = []) throws -> Int32 {
         let process = Process()
         process.executableURL = executableURL
-        process.arguments = [selfCheckPassFlag, root, outDir.path]
+        process.arguments = [selfCheckPassFlag, root, outDir.path] + sceneIDs
         try process.run()
         process.waitUntilExit()
         return process.terminationStatus
@@ -206,7 +203,7 @@ public enum SnapshotPipeline {
 
     /// 부모 `runCapture`가 결정성 판정에 사용할 독립 캡처 한 벌을 만든다.
     /// 장면마다 프로세스를 띄우지 않고 한 helper 프로세스가 정렬된 코퍼스를 한 번 순회한다.
-    public static func runSelfCheckPass(root: String, outDir: URL) -> Int32 {
+    public static func runSelfCheckPass(root: String, outDir: URL, sceneIDs: [String] = []) -> Int32 {
         let fm = FileManager.default
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
             "waple_snap_self_\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
@@ -222,7 +219,7 @@ public enum SnapshotPipeline {
 
         let restore = pinRenderSettings(root: root)
         defer { restore() }
-        let folders = sceneFolders(root: root)
+        let folders = sceneFolders(root: root, matchingIDs: sceneIDs.isEmpty ? nil : Set(sceneIDs))
         guard !folders.isEmpty else {
             fputs("[snap self-check] 씬 0개: \(root)\n", stderr)
             return 2
@@ -279,9 +276,8 @@ public enum SnapshotPipeline {
             return 2
         }
         let thumbs = dst.appendingPathComponent("thumbs", isDirectory: true)
-        // F148: PID 로 스코프 — 동시 두 프로세스가 같은 고정 경로에 쓰면 서로의 캡처를 덮어써 매니페스트
-        // 해시/썸네일 불일치나 쓰기 도중 읽기로 손상된 PNG "empty" 오분류가 날 수 있었다.
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_snap_cap_\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+        // 동시 실행과 중단된 실행의 프레임을 섞지 않도록 매번 별도 경로를 쓴다.
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("waple_snap_cap_\(UUID().uuidString)", isDirectory: true)
         let fm = FileManager.default
         do {
             try fm.createDirectory(at: thumbs, withIntermediateDirectories: true)
@@ -290,6 +286,7 @@ public enum SnapshotPipeline {
             fputs("[snap] capture directory creation failed: \(error)\n", stderr)
             return 2
         }
+        defer { try? fm.removeItem(at: tmp) }
 
         let restore = pinRenderSettings(root: root)
         defer { restore() }
@@ -323,6 +320,7 @@ public enum SnapshotPipeline {
         }
         var entries: [SnapshotEntry] = [], empties: [String] = [], failures: [String] = []
         var nonDet: [String] = []
+        let canonicalNames = Set(folders.map { "\($0.lastPathComponent).png" })
         // H13(2026-09-01): 셀프체크 2차 캡처가 실제로 픽셀을 낸 씬 수. 아래 하한의 모집단이다.
         var selfChecked = 0
 
@@ -336,21 +334,23 @@ public enum SnapshotPipeline {
                     }
                     // 썸네일 복사는 2차 캡처 전에 — 캡처 파일명이 고정(frame_t6.0.png)이라 셀프체크가
                     // png1 을 덮어쓰면 썸네일(2차)과 manifest hash/meanLuma(1차 rgba1)가 영구 불일치.
-                    try? fm.removeItem(at: thumbs.appendingPathComponent("\(id).png"))
-                    // F524: 복사 실패를 try? 로 삼키면 매니페스트 entry 만 남아 이후 compare 가 skippedMissing
-                    // 으로 회귀 커버리지를 조용히 잃는다 — 실패를 stderr 로 표면화(캡처 자체는 계속).
                     do { try fm.copyItem(at: png1, to: thumbs.appendingPathComponent("\(id).png")) }
-                    catch { fputs("[snap] ⚠️ 썸네일 복사 실패 \(id): \(error) — 이후 compare 에서 이 씬은 skip 됩니다\n", stderr) }
+                    catch {
+                        failures.append(id)
+                        fputs("[snap] 썸네일 복사 실패 \(id): \(error)\n", stderr)
+                        return
+                    }
                     // F2-puppet①: WAPLE_CAPTURE_TIME 로 다중 시각을 지정했으면 진단용 부가 프레임을
                     // <id>_t<초>.png 로 thumbs/ 옆에 남긴다(매니페스트 entry/self-check 은 캐논 1장만 —
                     // 스키마 불변). 셀프체크(2차 캡처)가 tmp 를 덮어쓰기 전에 먼저 복사해야 한다.
                     if captureTimes.count > 1 {
                         for t in captureTimes where t != primaryCaptureTime {
-                            let name = "frame_t\(String(format: "%.1f", t)).png"
+                            let name = OffscreenCapture.frameFileName(for: t, among: captureTimes)
                             let src = tmp.appendingPathComponent(name)
                             guard fm.fileExists(atPath: src.path) else { continue }
-                            let dst = thumbs.appendingPathComponent("\(id)_t\(String(format: "%.1f", t)).png")
-                            try? fm.removeItem(at: dst)
+                            let diagnosticName = id + String(name.dropFirst("frame".count))
+                            guard !canonicalNames.contains(diagnosticName) else { continue }
+                            let dst = thumbs.appendingPathComponent(diagnosticName)
                             try? fm.copyItem(at: src, to: dst)
                         }
                     }
@@ -436,6 +436,10 @@ public enum SnapshotPipeline {
                   + "중간에 죽었다(WAPLE_SNAPSHOT_HELPER 확인). 이 매니페스트는 결정성 분류가 "
                   + "없는 것과 같고, 설치되면 `--compare` 가 전건을 lax 임계로 판정한다 — "
                   + "기준선으로 쓰지 마라.\n", stderr)
+            return 2
+        }
+        guard !entries.isEmpty || !failures.isEmpty else {
+            fputs("[snap] no scenes produced a canonical frame\n", stderr)
             return 2
         }
         return failures.isEmpty ? 0 : 1

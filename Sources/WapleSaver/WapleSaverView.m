@@ -60,6 +60,10 @@
 }
 
 - (void)animateOneFrame {
+    if (self.player.currentItem.status == AVPlayerItemStatusFailed) {
+        [self tearDownContent];
+        [self showMessage:@"Waple\n동영상을 재생할 수 없습니다. Waple에서 다른 동영상 배경을 적용한 뒤 다시 시도하세요."];
+    }
     [self layoutContent];  // 화면 크기 변화 대응(프리뷰↔전체화면)
 }
 
@@ -104,7 +108,9 @@
 
 // 존재하는 파일 + AVFoundation 이 확실히 재생하는 컨테이너만 허용.
 - (BOOL)isPlayableVideoPath:(NSString *)path {
-    if (path.length == 0 || ![NSFileManager.defaultManager fileExistsAtPath:path]) {
+    BOOL isDirectory = NO;
+    if (path.length == 0 || ![NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&isDirectory]
+        || isDirectory) {
         return NO;
     }
     return [@[ @"mp4", @"mov", @"m4v" ] containsObject:path.pathExtension.lowercaseString];
@@ -144,7 +150,8 @@
     NSDictionary *videoIdentity = playable ? [self videoFileIdentityForPath:path] : nil;
     BOOL sameIdentity = !playable || (videoIdentity != nil
         && [videoIdentity isEqual:self.loadedVideoIdentity]);
-    BOOL contentMatchesState = (playable && self.player != nil)
+    BOOL contentMatchesState = (playable && self.player != nil
+        && self.player.currentItem.status != AVPlayerItemStatusFailed)
         || (!playable && self.player == nil);
     if (self.hasLoadedContent && samePath && sameIdentity && contentMatchesState) {
         return;
@@ -158,9 +165,7 @@
     self.loadedVideoIdentity = [self videoFileIdentityForPath:path];
     self.hasLoadedContent = YES;
     if (![self isPlayableVideoPath:path]) {
-        NSBundle *bundle = [NSBundle bundleForClass:WapleSaverView.class];
-        NSString *message = @"Waple\n재생할 동영상이 없습니다 — Waple 메뉴에서 동영상 배경을 적용한 뒤 다시 시도하세요.";
-        [self showMessage:[bundle localizedStringForKey:message value:message table:nil]];
+        [self showMessage:@"Waple\n재생할 동영상이 없습니다 — Waple 메뉴에서 동영상 배경을 적용한 뒤 다시 시도하세요."];
         return;
     }
 
@@ -202,11 +207,12 @@
 // 검은 배경 위 중앙 안내 텍스트.
 - (void)showMessage:(NSString *)message {
     self.messageLayer = [CATextLayer layer];
-    self.messageLayer.string = message;
+    NSBundle *bundle = [NSBundle bundleForClass:WapleSaverView.class];
+    self.messageLayer.string = [bundle localizedStringForKey:message value:message table:nil];
     self.messageLayer.alignmentMode = kCAAlignmentCenter;
     self.messageLayer.wrapped = YES;
     self.messageLayer.fontSize = 22.0;
-    self.messageLayer.foregroundColor = NSColor.secondaryLabelColor.CGColor;
+    self.messageLayer.foregroundColor = NSColor.whiteColor.CGColor;
     CGFloat scale = self.window.screen.backingScaleFactor;
     self.messageLayer.contentsScale = scale > 0.0 ? scale : 1.0;
     [self.layer addSublayer:self.messageLayer];

@@ -81,6 +81,7 @@ final class WebRenderFixRegressionTests: XCTestCase {
 
         let provider = FakeAudioProvider()
         let renderer = WebRenderer(mode: .web)
+        renderer.allowsWebMedia = true
         renderer.audioProviderFactory = { provider }
         renderer.nowPlayingProvider = NilNowPlayingProvider()
         try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),

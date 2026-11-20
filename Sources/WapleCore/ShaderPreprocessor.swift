@@ -238,14 +238,16 @@ public enum ShaderPreprocessor {
         var d = defines
         var textDefines: [String: String] = [:]
         var funcMacros: [String: (params: [String], body: String)] = [:]
-        var flagDefines = Set<String>()   // 값 없는 소스 #define — #ifdef 전용, 본문 "1" 치환 금지
         // F421: 비-10진 수치 리터럴 값 define(`#define X 0x10` 류) — #if 식에서 참조되면
         // 10진 파서로는 오평가이므로 그 #if 를 거부한다(본문 텍스트 치환은 기존대로 동작).
         var suspectDefines = Set<String>()
         // C 규약(위치-인지): 정의는 이후 줄부터, 재정의 시 이전 정의는 그 줄까지(실물 frame_builder).
         struct MacroDef { let name: String; let value: String?; let fn: (params: [String], body: String)?
                           let fromLine: Int; var toLine: Int = Int.max }
-        var macroDefs: [MacroDef] = []
+        // Seeded combos participate in the same source ranges as authored definitions.
+        var macroDefs = defines.sorted { $0.key < $1.key }.map {
+            MacroDef(name: $0.key, value: String($0.value), fn: nil, fromLine: 0)
+        }
         func closePrev(_ name: String, at line: Int) {
             for i in macroDefs.indices where macroDefs[i].name == name && macroDefs[i].toLine == Int.max {
                 macroDefs[i].toLine = line
@@ -255,7 +257,6 @@ public enum ShaderPreprocessor {
             d.removeValue(forKey: name)
             textDefines.removeValue(forKey: name)
             funcMacros.removeValue(forKey: name)
-            flagDefines.remove(name)
             suspectDefines.remove(name)
             closePrev(name, at: line)
         }
@@ -463,7 +464,6 @@ public enum ShaderPreprocessor {
                     clearDefinition(name, at: out.count)
                     if value.isEmpty {
                         d[name] = 1  // 값 없는 #define NAME → #ifdef 용, 본문 치환은 안 함(빈 치환은 위험)
-                        flagDefines.insert(name)
                     } else {
                         if let v = Int(value) {
                             d[name] = v
@@ -496,12 +496,6 @@ public enum ShaderPreprocessor {
         }
         // 본문 매크로 확장: object-like 치환 + 함수형 매크로 호출 확장을 한 루프에서 fixpoint 까지(캡 12)
         // — 별칭(#define A Bf)·매크로가 매크로를 부르는 체인(실물 Blend* 계열)이 수렴하도록.
-        // combos/[COMBO] 기본값 등 소스 밖에서 온 정의는 전체 범위(fromLine 0).
-        for (k, v) in d where textDefines[k] == nil && funcMacros[k] == nil && !flagDefines.contains(k) {
-            // 소스 밖(combos/[COMBO] 기본값)에서 온 정의 — 전체 범위. 값 없는 소스 define 은
-            // 위 주석대로 본문 치환 제외(여기 걸리면 본문 NAME 이 "1" 로 둔갑 — C 빈치환과 다름).
-            macroDefs.append(MacroDef(name: k, value: String(v), fn: nil, fromLine: 0))
-        }
         guard !macroDefs.isEmpty else { return out.joined(separator: "\n") }
         var lines = out
         for _ in 0..<12 {
@@ -770,11 +764,17 @@ enum ExprEval {
         let lexed = tokenize(expr)
         guard !lexed.unsupported else { return nil }
         let knownNames = definedNames ?? Set(defines.keys)
-        var remainingBudget = max(0, expansionBudget)
-        guard let toks = expandTokens(lexed.tokens, defines: defines, knownNames: knownNames,
-                                     suspect: suspect, textDefines: textDefines, depth: macroDepth,
-                                     remainingBudget: &remainingBudget) else { return nil }
-        return evaluateTokens(toks, defines: defines, knownNames: knownNames, suspect: suspect)
+        func expanded(preserveFragments: Bool) -> [String]? {
+            var remainingBudget = max(0, expansionBudget)
+            return expandTokens(lexed.tokens, defines: defines, knownNames: knownNames,
+                                suspect: suspect, textDefines: textDefines, depth: macroDepth,
+                                preserveFragments: preserveFragments, remainingBudget: &remainingBudget)
+        }
+        guard let tokens = expanded(preserveFragments: true) else { return nil }
+        if let result = evaluateTokens(tokens, defines: defines, knownNames: knownNames, suspect: suspect) { return result }
+        // Retain the established zero fallback for non-expression GLSL definitions.
+        guard !textDefines.isEmpty, let fallback = expanded(preserveFragments: false) else { return nil }
+        return evaluateTokens(fallback, defines: defines, knownNames: knownNames, suspect: suspect)
     }
 
     // G5 — **실물은 `#if` 식 안에서도 매크로를 확장한다.** 확장은 파서가 아니라 **렉서**가 한다:
@@ -785,11 +785,12 @@ enum ExprEval {
     // 그래서 `#define A B` + `#define B 1` 에서 `#if A` 가 실물은 **참**이다.
     // 종전 Waple 은 정수 값 맵(`d`)만 봐서 이런 이름을 전부 **0** 으로 읽었다.
     // 별도 scalar로 평가하는 후속 근사도 저작하지 않은 괄호를 더하므로, 이제 토큰을 같은 스트림에 넣는다.
-    // 본문이 식으로 안 읽히면 **0**(실물도 미지 식별자를 0 으로 보고 잔여 토큰은 버린다).
+    // 완성된 식에서 먼저 판정한다. 그래도 실패하면 기존 비식 매크로의 0 폴백을 시도한다.
     // 동봉·설치본 자산에서 `#if` 가 비-정수 object-like 매크로를 참조하는 경우는 **0건**(실측)
     // 이라 도달은 워크샵 셰이더뿐이다.
     private static func expandTokens(_ tokens: [String], defines: [String: Int], knownNames: Set<String>,
                                      suspect: Set<String>, textDefines: [String: String], depth: Int,
+                                     preserveFragments: Bool,
                                      remainingBudget: inout Int,
                                      expanding: Set<String> = []) -> [String]? {
         let maxTokens = 65_536
@@ -823,9 +824,10 @@ enum ExprEval {
                 } else {
                     guard let expanded = expandTokens(lexed.tokens, defines: defines, knownNames: knownNames,
                                                       suspect: suspect, textDefines: textDefines, depth: depth + 1,
+                                                      preserveFragments: preserveFragments,
                                                       remainingBudget: &remainingBudget,
                                                       expanding: expanding.union([token])) else { return nil }
-                    if evaluateTokens(expanded, defines: defines, knownNames: knownNames, suspect: suspect) != nil {
+                    if preserveFragments || evaluateTokens(expanded, defines: defines, knownNames: knownNames, suspect: suspect) != nil {
                         replacement = expanded
                     } else {
                         // 기존 규약: vec3(...) 같은 비식 매크로는 0, 잘못된 수치 define는 거부한다.

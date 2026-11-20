@@ -14,6 +14,21 @@ import XCTest
 /// **프로젝트 폴더 봉쇄 검사가 없다**. 즉 아래 규칙들은 WE 호환이 아니라 Waple 고유의
 /// 강화이므로, 패리티가 아니라 **불변식이 실제로 성립하는지**를 고정한다.
 final class WallpaperPathSecurityTests: XCTestCase {
+    func testRegularFileReadChecksTypeAndByteBudget() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let directory = root.appendingPathComponent("nested", isDirectory: true)
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let file = directory.appendingPathComponent("asset")
+        let content = Data([1, 2, 3])
+        try content.write(to: file)
+        XCTAssertEqual(try WallpaperPathSecurity.readRegularFile(file, in: root, maximumBytes: 3), content)
+        XCTAssertEqual(try WallpaperPathSecurity.readRegularFile(file, in: root, maximumBytes: 3, mapped: true), content)
+        XCTAssertThrowsError(try WallpaperPathSecurity.readRegularFile(file, in: root, maximumBytes: 2))
+        XCTAssertThrowsError(try WallpaperPathSecurity.readRegularFile(directory, in: root, maximumBytes: 3))
+    }
 
     // MARK: - 어휘적 봉쇄
 

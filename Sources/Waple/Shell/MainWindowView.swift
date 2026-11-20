@@ -27,7 +27,8 @@ struct MainWindowView: View {
     @ObservedObject var viewModel: LibraryViewModel
     @ObservedObject var banner: StatusBannerModel
     @ObservedObject var onboarding: OnboardingModel
-    var screenFrames: () -> [CGRect]
+    var screenFrames: () -> [String: CGRect]
+    var canAdvancePlaylist: () -> Bool
     // 워크샵/디스커버 VM 은 창이 소유 — 사이드바를 오가도 결과·다운로드 진행 상태가 유지된다.
     @StateObject private var workshopVM: WorkshopViewModel
     @StateObject private var discoverVM = DiscoverViewModel()
@@ -42,18 +43,19 @@ struct MainWindowView: View {
         SmokeLaunch.current.showsSidebar ? .all : .automatic
 
     init(viewModel: LibraryViewModel, banner: StatusBannerModel, onboarding: OnboardingModel,
-         screenFrames: @escaping () -> [CGRect]) {
+         screenFrames: @escaping () -> [String: CGRect], canAdvancePlaylist: @escaping () -> Bool) {
         self.viewModel = viewModel
         self.banner = banner
         self.onboarding = onboarding
         self.screenFrames = screenFrames
+        self.canAdvancePlaylist = canAdvancePlaylist
         _workshopVM = StateObject(wrappedValue: WorkshopViewModel(library: viewModel))
     }
 
     var body: some View {
         VStack(spacing: 0) {
             split
-            NowPlayingBar(viewModel: viewModel)
+            NowPlayingBar(viewModel: viewModel, canAdvancePlaylist: canAdvancePlaylist)
         }
         .frame(minWidth: Metrics.windowMin.width, minHeight: Metrics.windowMin.height)
         .overlay(alignment: .top) { StatusBanner(model: banner) }

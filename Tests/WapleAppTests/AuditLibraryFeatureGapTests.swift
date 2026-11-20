@@ -161,9 +161,9 @@ final class AuditLibraryFeatureGapTests: XCTestCase {
         let removed = store.entries[0]
         let neighbor = store.entries[1]
         var cleanup: [String] = []
-        viewModel.onRemoveScriptStorage = { cleanup.append($0) }
+        viewModel.onRemoveScriptStorage = { cleanup.append($0.userStateID) }
         viewModel.remove(removed)
-        XCTAssertEqual(cleanup, [removed.id])
+        XCTAssertEqual(cleanup, [removed.userStateID])
         XCTAssertEqual(viewModel.entries.map(\.id), [neighbor.id])
     }
 

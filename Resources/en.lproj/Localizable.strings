@@ -56,6 +56,9 @@
 "가져오는 중…" = "Importing…";
 "가져온 배경에 태그나 나이 등급이 없습니다." = "The wallpapers you imported carry no tags or age ratings.";
 "가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요." = "No wallpapers were imported. Check that the folder you chose contains a valid project.json.";
+"가져온 배경을 라이브러리에 저장하지 못했습니다." = "Could not save the imported wallpapers to the library.";
+"라이브러리에서 배경을 지우지 못했습니다." = "Could not remove the wallpaper from the library.";
+"더 불러오기" = "Load more";
 "거를 수 있는 항목이 없습니다" = "Nothing to filter by";
 "검색" = "Search";
 "검색 URL 을 만들 수 없습니다." = "Could not build the search URL.";
@@ -307,7 +310,7 @@
 "키 삭제" = "Delete key";
 "Keychain 에서 삭제되고 창작마당 검색이 멈춥니다. 다시 쓰려면 키를 새로 입력해야 합니다." = "It is removed from your Keychain and Workshop search stops working. You will have to paste a new key to use it again.";
 "창을 닫고 배경을 먼저 가져오세요." = "Close this window and import a wallpaper first.";
-"‘%@’ 은(는) 받았지만 라이브러리에 넣지 못했습니다 — 받은 폴더에 project.json 이 없거나 읽을 수 없습니다." = "‘%@’ was downloaded but could not be added to your library — the downloaded folder has no readable project.json.";
+"‘%@’ 은(는) 받았지만 라이브러리에 넣지 못했습니다. project.json 또는 재생 파일을 읽을 수 없습니다." = "‘%@’ was downloaded but could not be added to the library. The project.json or playback file could not be read.";
 
 /* 2026-11-05 current feature completion */
 "Wallpaper Engine 폴더·상위 폴더·.zip·동영상을 선택하세요." = "Choose a Wallpaper Engine folder, parent folder, .zip, or video.";
@@ -368,3 +371,8 @@
 "창이 닫혀 있을 때 시스템 알림" = "System notifications when windows are closed";
 "하나의 배경을 모든 화면에 늘이기" = "Stretch one wallpaper across all displays";
 "화면마다 다른 배경" = "Wallpaper per display";
+"배경화면 권한" = "Wallpaper Permissions";
+"시스템 오디오 정보 공유" = "Share System Audio Information";
+"이 배경과 배경이 불러온 웹 스크립트에 소리 스펙트럼과 재생 중인 미디어 정보를 공유합니다." = "Shares audio spectrum data and Now Playing information with this wallpaper and scripts it loads.";
+"이 배경의 씬 스크립트 허용" = "Allow This Wallpaper’s Scene Scripts";
+"신뢰하는 배경에만 허용하세요. 느리거나 멈춘 스크립트는 Waple을 멈추게 할 수 있습니다." = "Allow only for wallpapers you trust. A slow or stalled script can make Waple unresponsive.";

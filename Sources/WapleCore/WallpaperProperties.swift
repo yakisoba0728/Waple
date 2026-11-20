@@ -238,11 +238,7 @@ public enum WallpaperProperties {
     }
 
     public static func parse(folderURL: URL) throws -> [WallpaperProperty] {
-        let url = folderURL.appendingPathComponent("project.json")
-        guard let data = try? Data(contentsOf: url) else { throw ProjectParseError.fileNotFound }
-        guard let obj = AssetJSON.dictionary(data) else {
-            throw ProjectParseError.invalidJSON
-        }
+        let obj = try ProjectJSONParser.readObject(in: folderURL)
         let generalObject = obj["general"] as? [String: Any]
         let general = generalObject?["properties"] as? [String: Any] ?? [:]
         let localization = generalObject?["localization"] as? [String: Any]

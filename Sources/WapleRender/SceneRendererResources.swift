@@ -357,7 +357,8 @@ extension SceneRenderer {
     }
 
     /// 레이어를 후→전 순서(JSON 순서)로 GPU 리소스화. 디코드 실패 레이어는 스킵.
-    func buildLayers(doc: SceneDocument, package: ScenePackage, device: MTLDevice, sceneID: String) -> [GPULayer] {
+    func buildLayers(doc: SceneDocument, package: ScenePackage, device: MTLDevice, sceneID: String,
+                     project: WallpaperProject? = nil) -> [GPULayer] {
         // W-7: 정사영 씬의 실효 FOV는 general.perspectiveoverridefov다
         // (`wallpaper64.exe` 0x140189278–0x1401892c4). 인스턴스에 보존해 정적 버퍼와
         // encodeLayer의 애니/스크립트 재빌드가 같은 값을 소비한다. 클램프는 정점 소비부에서
@@ -437,11 +438,14 @@ extension SceneRenderer {
                     return (up.texture, up.width, up.height)
                 },
                 alternate: {
-                    guard let decoded = bitmapRGBAFile(layer.textureEntryName),
-                          let texture = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else {
+                    guard let project,
+                          let data = Self.bitmapTextureData(layer.textureEntryName,
+                                                            propertyKey: layer.textureUserPropertyKey,
+                                                            project: project, grants: mountedResourceGrants),
+                          let texture = decodeArtworkTexture(data, device: device) else {
                         return nil
                     }
-                    return (texture, decoded.width, decoded.height)
+                    return (texture, texture.width, texture.height)
                 }
             ) {
                 mtl = loaded.texture
@@ -542,7 +546,9 @@ extension SceneRenderer {
             // 부모/퍼펫/부착점 어느 하나라도 부재 → nil = 무부착 폴백(기존 베이크 위치 그대로 — 무회귀·무크래시).
             var attach: SceneRenderer.PuppetAttach? = nil
             if let attName = layer.attachment, let pid = layer.parent,
-               let parentDef = doc.layers.first(where: { $0.id == pid }), let pp = parentDef.puppet {
+               let parentUID = doc.layers.firstIndex(where: { $0.id == pid }),
+               let pp = doc.layers[parentUID].puppet {
+                let parentDef = doc.layers[parentUID]
                 let pm: PuppetModel?
                 if let cached = attachPuppets[pp] {
                     pm = cached
@@ -556,7 +562,7 @@ extension SceneRenderer {
                         parentOrigin: SIMD2(parentDef.origin.x, parentDef.origin.y),
                         parentScale: SIMD2(parentDef.scale.x, parentDef.scale.y),
                         parentAngle: parentDef.angleZ,
-                        parentLayers: parentDef.animationLayers)
+                        parentLayers: parentDef.animationLayers, parentUID: parentUID)
                     if !pm.animations.isEmpty { hasAnimations = true }  // 본 애니 추종 = 연속 리드로
                 }
             }
@@ -1467,7 +1473,7 @@ extension SceneRenderer {
     }
 
     /// F722: 미디어 아트워크 원본 바이트(JPEG/PNG — MediaPoller 공급) → RGBA8 텍스처.
-    /// 디코드 실패 시 nil(호출부는 이전 텍스처/placeholder 유지). bitmapRGBAFile 과 동일 디코드 규약.
+    /// 디코드 실패 시 nil(호출부는 이전 텍스처/placeholder 유지).
     func decodeArtworkTexture(_ data: Data, device: MTLDevice) -> MTLTexture? {
         guard let image = NSImage(data: data),
               let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
@@ -1478,7 +1484,7 @@ extension SceneRenderer {
         // 새어나간다(UB — 그 포인터의 유효 수명은 CGContext 생성 호출 뿐인데 컨텍스트가 draw 까지
         // 붙잡는다). 형제 경로(ArtworkColors.palette · TexDecoder.draw · TextRasterizer.render)와
         // 동일하게 컨텍스트 생성·드로잉을 withUnsafeMutableBytes 안에서 끝낸다.
-        // [2026-08-27] F840 이 형제 넷을 고칠 때 이 자리와 bitmapRGBAFile · SnapshotPipeline.pngToRGBA
+        // [2026-08-27] F840 이 형제 넷을 고칠 때 이 자리와 구 bitmapRGBAFile · SnapshotPipeline.pngToRGBA
         // 셋이 빠져 있었다. 로직은 손대지 않은 순수 형태 이식이다.
         let ok = pixels.withUnsafeMutableBytes { ptr -> Bool in
             guard let base = ptr.baseAddress,
@@ -1966,7 +1972,7 @@ extension SceneRenderer {
                         guard let d = effectScopedData(c, root: root, package: package) else { continue }
                         if let v = decodeTexAsset(d, device: device) { return v }
                         // 소스 폼(.png)은 TEXV0005 헤더가 없어 `TexImage.parse` 가 nil — ImageIO 로 직접
-                        // 디코드한다(`decodeArtworkTexture` = bitmapRGBAFile 과 동일 규약, RGBA8 상주).
+                        // 디코드한다(`decodeArtworkTexture`, RGBA8 상주).
                         // 실측 3건 전부 알파 없는 RGB PNG 라 premultipliedLast 는 항등이다.
                         // 스프라이트 프레임은 `.tex` 의 TEXS 청크에만 있으므로 frames=[](정지).
                         if let t = decodeArtworkTexture(d, device: device) { return (texture: t, frames: []) }
@@ -2511,31 +2517,23 @@ extension SceneRenderer {
         return texture
     }
 
-    private func bitmapRGBAFile(_ path: String) -> (pixels: Data, width: Int, height: Int)? {
-        guard path.hasPrefix("/"),
-              let image = NSImage(contentsOfFile: path),
-              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
-              cg.width > 0, cg.height > 0 else { return nil }
-        let width = cg.width
-        let height = cg.height
-        var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        // F840 — 위 decodeArtworkTexture 와 같은 이식. inout 포인터를 컨텍스트에 넘기지 않는다.
-        let ok = pixels.withUnsafeMutableBytes { ptr -> Bool in
-            guard let base = ptr.baseAddress,
-                  let ctx = CGContext(
-                      data: base,
-                      width: width,
-                      height: height,
-                      bitsPerComponent: 8,
-                      bytesPerRow: width * 4,
-                      space: CGColorSpaceCreateDeviceRGB(),
-                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                  ) else { return false }
-            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
-            return true
+    static func bitmapTextureData(_ path: String, propertyKey: String?, project: WallpaperProject,
+                                  grants: [String: String]) -> Data? {
+        guard path.hasPrefix("/"), !path.contains("\0") else { return nil }
+        let file = URL(fileURLWithPath: path)
+        let maximumBytes = 64 * 1024 * 1024
+        for root in [project.folderURL, project.presetFolderURL].compactMap({ $0 }) {
+            if let data = try? WallpaperPathSecurity.readRegularFile(file, in: root, maximumBytes: maximumBytes) {
+                return data
+            }
         }
-        guard ok else { return nil }
-        return (Data(pixels), width, height)
+        // Only an override for the same property can use the file the user picked.
+        guard let propertyKey, project.libraryUserStateID != nil,
+              let allowed = grants[propertyKey] else { return nil }
+        let resolved = file.resolvingSymlinksInPath().standardizedFileURL
+        guard resolved.path == allowed else { return nil }
+        return try? WallpaperPathSecurity.readRegularFile(resolved, in: resolved.deletingLastPathComponent(),
+                                                          maximumBytes: maximumBytes)
     }
 
     /// 텍스트 오브젝트 준비: 폰트 바이트(pkg→base-assets) + 스크립트 엔진 + 초기 텍스트 래스터.
@@ -2557,7 +2555,9 @@ extension SceneRenderer {
             let loaded = t.script.flatMap { makeScriptEngine($0, layerName: t.name.isEmpty ? nil : t.name,
                                                              currentLayerIndex: descriptorIndex,
                                                              scriptPropsJSON: t.scriptProps) }
-            if t.script != nil && loaded == nil { NSLog("%@", "[Waple] text script failed to load (empty text): \(t.script!.prefix(60))") }
+            if allowsSceneScripts, let script = t.script, loaded == nil {
+                NSLog("%@", "[Waple] text script failed to load (empty text): \(script.prefix(60))")
+            }
             let engine = (loaded?.hasUpdate == true) ? loaded : nil
             let initial = engine != nil ? (engine!.evaluate(current: t.text) ?? "") : t.text
             // 프로퍼티 스크립트(origin/scale/alpha/color/angles/visible, F218/F219): 레이어 propScripts
@@ -2582,7 +2582,7 @@ extension SceneRenderer {
             // F741(S-13): 텍스트 effects[](F693 파스·보존)를 래스터 텍스처에 적용할 GPU 체인 —
             // 레이어와 동일 빌더(buildEffectChain). texRes 는 초기 래스터 dims 로 베이크(문자열이
             // 바뀌어 재래스터돼도 효과 해상도는 초기값 유지 — ponytail: 갱신 시 재빌드는 후속 과제).
-            if !t.effects.isEmpty, g.texture != nil {
+            if !t.effects.isEmpty {
                 g.effects = buildEffectChain(t.effects, package: package, device: device,
                                              texW: max(1, Int(g.rasterWidth)), texH: max(1, Int(g.rasterHeight)),
                                              compositeImageTextures: compositeImageTextures)

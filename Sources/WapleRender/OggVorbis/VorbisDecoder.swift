@@ -20,12 +20,15 @@ public struct DecodedAudio: Equatable {
         d.append(contentsOf: Array("fmt ".utf8)); u32(16); u16(1); u16(ch)
         u32(sr); u32(byteRate); u16(ch * 2); u16(16)
         d.append(contentsOf: Array("data".utf8)); u32(dataBytes)
-        var pcm = [Int16](repeating: 0, count: samples.count)
-        for i in 0..<samples.count {
-            let v = max(-1, min(1, samples[i]))
-            pcm[i] = Int16(v < 0 ? v * 32768 : v * 32767)
+        let payloadStart = d.count
+        d.count += dataBytes
+        d.withUnsafeMutableBytes { bytes in
+            for i in samples.indices {
+                let v = max(-1, min(1, samples[i]))
+                let sample = Int16(v < 0 ? v * 32768 : v * 32767).littleEndian
+                bytes.storeBytes(of: sample, toByteOffset: payloadStart + i * 2, as: Int16.self)
+            }
         }
-        pcm.withUnsafeBytes { d.append(contentsOf: $0) }
         return d
     }
 }
@@ -181,12 +184,14 @@ private final class VorbisStream {
         // 코드북
         let cbCount = Int(r.read(8)) + 1
         codebooks.reserveCapacity(cbCount)
-        // 코드북 개별 상한(2^24 셀)만으로는 256개 합산 시 수십 GB — 총량도 같은 상한으로 캡(OOM 방어).
-        var totalCells = 0
+        // N번째 코드북의 배열을 잡기 전에 스트림 전체의 남은 예산을 적용한다.
+        var remainingCells = VorbisCodebook.maximumCells
+        var remainingTrieNodes = VorbisCodebook.maximumTrieNodes
         for _ in 0..<cbCount {
-            let book = try VorbisCodebook.parse(&r)
-            totalCells += book.entries * max(1, book.dimensions)
-            guard totalCells <= 1 << 24 else { throw VorbisError.corrupt("codebooks total size \(totalCells)") }
+            let book = try VorbisCodebook.parse(&r, maximumCells: remainingCells,
+                                               maximumTrieNodes: remainingTrieNodes)
+            remainingCells -= book.entries * book.dimensions
+            remainingTrieNodes -= book.trieNodeCount
             codebooks.append(book)
         }
 

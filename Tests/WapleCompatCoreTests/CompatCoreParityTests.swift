@@ -329,6 +329,31 @@ final class CompatCoreParityTests: XCTestCase {
 
     // MARK: - ⑤ preset 의존 — 여기만 런타임과 같고 형제 스캐너가 느슨하다
 
+    func testDeepScanRejectsMissingConvertibleVideoAndWebEntryDirectory() throws {
+        let root = makeRoot("MissingEntryFiles")
+        let video = writeProject(root.appendingPathComponent("video"), #"{"type":"video","file":"clip.webm"}"#)
+        let web = writeProject(root.appendingPathComponent("web"), #"{"type":"web","file":"index.html"}"#)
+        try FileManager.default.createDirectory(at: web.appendingPathComponent("index.html"), withIntermediateDirectories: true)
+
+        let missing = DeepScan.run(rootPath: root.path, only: nil)
+        XCTAssertTrue(missing.projectsFound)
+        XCTAssertEqual(missing.unsupported, 2)
+
+        try Data().write(to: video.appendingPathComponent("clip.webm"))
+        XCTAssertEqual(DeepScan.run(rootPath: root.path, only: "video").unsupported, 0,
+                       "A readable convertible file remains a supported-in-principle candidate")
+    }
+
+    func testInventoryQuotesAnIDContainingCommaAndQuote() throws {
+        let root = makeRoot("InventoryEscaping")
+        writeProject(root.appendingPathComponent("foo,\"bar"), #"{"type":"scene","file":"scene.json"}"#,
+                     extra: ["scene.json": #"{"general":{},"objects":[]}"#])
+        let csv = root.appendingPathComponent("inventory.csv")
+        XCTAssertEqual(ProfilePipeline.runInventory(root: root.path, outCSV: csv), 0)
+        let contents = try String(contentsOf: csv, encoding: .utf8)
+        XCTAssertTrue(contents.contains("\"foo,\"\"bar\",0,0,0,0,0,0,0"))
+    }
+
     /// F137/F411 로직. **분석기는 존재만 보고 DeepScan 은 마운트 가능한 타입까지 본다** —
     /// 런타임(`PresetResolver` + `RendererFactory`)이 후자와 같으므로 이 파일이 정본이다
     /// (분석기 쪽이 거짓 음성; 설치본 preset 0건이라 도달 0 — `docs/re/…` §7-4).

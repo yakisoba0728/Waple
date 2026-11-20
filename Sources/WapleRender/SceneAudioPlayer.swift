@@ -93,7 +93,7 @@ public final class SceneAudioPlayer {
     public func play(name: String) { named[name]?.trigger() }
     public func stop(name: String) { named[name]?.stop() }
     /// 일시정지(현재 플레이어). 재생 재개는 play(name:) 트리거(처음부터) — 3596485909 getChildren 경로 한정 사용.
-    public func pause(name: String) { named[name]?.pause() }
+    public func pause(name: String) { named[name]?.pauseByScript() }
     /// 실재생 상태(주크박스 폴링용) — 곡 자연종료 시 false 로 떨어진다.
     public func isPlaying(name: String) -> Bool { named[name]?.isPlaying ?? false }
     /// 스크립트 관점 볼륨(오서 볼륨, 0…1). 실제 출력은 VideoSettings 배수와 곱해진다.
@@ -210,6 +210,8 @@ nonisolated final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Se
     private var player: AVAudioPlayer?
     private var stopped = false
     private var paused = false
+    private var pausedByScript = false
+    private var resumeCurrent = false
     /// 곡 간 대기(random gap) 중 일시정지되면 여기 다음 인덱스를 보관 → resume 이 재개(정지 중 재생 방지).
     private var pendingNext: Int?
     /// F410: gap 콜백 stale 가드용 세대 — trigger/stop 마다 증가. 곡 종료로 예약된 asyncAfter 가 만기되기
@@ -263,8 +265,9 @@ nonisolated final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Se
     /// 트리거 재생: 정지/일시정지 플래그 리셋 후 처음부터 재시작(재트리거 = 재시작).
     func trigger() {
         generation += 1   // F410: 진행 중이던 gap 콜백 무효화(새 곡 절단 방지)
-        stopped = false; paused = false; pendingNext = nil
+        stopped = false; pausedByScript = false; pendingNext = nil; resumeCurrent = false
         player?.stop()
+        player = nil
         _ = startFirstPlayable()
     }
 
@@ -299,7 +302,8 @@ nonisolated final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Se
             if mode == "loop" && entries.count == 1 { p.numberOfLoops = -1 } else { p.delegate = self }
             p.volume = outputVolume
             p.prepareToPlay()
-            p.play()
+            if paused { resumeCurrent = true }
+            else { p.play() }
             player = p
             index = i
             return true
@@ -323,13 +327,17 @@ nonisolated final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Se
         // F552: stale 콜백 가드 — trigger/stop 으로 현재 플레이어가 교체/해제된 뒤 도착한 이전 곡의 종료
         // 통지는 폐기한다. F410 세대 가드는 gap asyncAfter 경로만 보호하고 이 홉 경로(gap=0 즉시 play(at:))는
         // 물방비였다 — 트리거 직전 자연종료 곡의 통지가 새 곡을 절단하는 것을 차단.
-        guard p === player, !stopped,
-              let next = SceneAudioPlayer.nextIndex(mode: mode, current: index, count: entries.count) else { return }
+        guard p === player, !stopped else { return }
+        resumeCurrent = false
+        guard let next = SceneAudioPlayer.nextIndex(mode: mode, current: index, count: entries.count) else {
+            player = nil
+            return
+        }
         // random 모드는 곡 사이 [mintime,maxtime]초 대기 후 다음 곡(WE 셔플 간격). 그 외 gap=0(즉시).
         // 다음 곡 실패 시 이 플레이리스트만 종료(코퍼스는 참조 파일 전부 존재 — 실사용에선 발생 안 함).
         let gap = SceneAudioPlayer.gapSeconds(mode: mode, minTime: minTime, maxTime: maxTime)
         guard gap > 0 else {
-            if paused { pendingNext = next }
+            if paused || pausedByScript { pendingNext = next }
             else { _ = play(at: next) }
             return
         }
@@ -337,18 +345,38 @@ nonisolated final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Se
         DispatchQueue.main.asyncAfter(deadline: .now() + gap) { [weak self] in
             // F410: 만기 전 trigger/stop 으로 세대가 바뀌었으면 stale — 폐기(새 곡 절단 방지).
             guard let self, !self.stopped, self.generation == gen else { return }
-            if self.paused { self.pendingNext = next }   // 정지 중이면 보류 → resume 이 재개
+            if self.paused || self.pausedByScript { self.pendingNext = next }
             else { _ = self.play(at: next) }
         }
     }
 
-    func pause() { paused = true; player?.pause() }
-    func resume() {
-        paused = false
-        if let next = pendingNext { pendingNext = nil; _ = play(at: next); return }  // gap 중 정지됐던 다음 곡
-        if let p = player, !p.isPlaying { p.play() }
+    func pauseByScript() {
+        pausedByScript = true
+        resumeCurrent = false
+        player?.pause()
     }
-    func stop() { generation += 1; stopped = true; pendingNext = nil; player?.stop(); player = nil }
+
+    func pause() {
+        guard !paused else { return }
+        resumeCurrent = player?.isPlaying == true
+        paused = true
+        player?.pause()
+    }
+
+    func resume() {
+        guard paused else { return }
+        paused = false
+        defer { resumeCurrent = false }
+        guard !pausedByScript else { return }
+        if let next = pendingNext { pendingNext = nil; _ = play(at: next); return }  // gap 중 정지됐던 다음 곡
+        if resumeCurrent { player?.play() }
+    }
+
+    func stop() {
+        generation += 1; stopped = true; pendingNext = nil; resumeCurrent = false
+        player?.stop()
+        player = nil
+    }
     var isPlaying: Bool { player?.isPlaying ?? false }
     var hasPlayer: Bool { player != nil }
     /// F552 회귀 테스트용 읽기 전용 접근자(stale 콜백이 현재 플레이어를 교체했는지 검증).

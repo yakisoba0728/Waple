@@ -456,6 +456,37 @@ extension SceneRenderer {
         }
 
         build3DTransformNodes(doc: doc)
+        scene3DLightRuntimes = doc.lights3D.enumerated().compactMap { index, light in
+            var scripts: [String: TextScriptEngine] = [:]
+            for key in Scene3DLightRuntime.keys {
+                guard let source = light.propertyScripts[key] else { continue }
+                scripts[key] = makeScriptEngine(source, layerName: light.name.isEmpty ? nil : light.name,
+                    scriptPropsJSON: light.propertyScriptProps[key], detachedLayer: true)
+            }
+            guard !light.propertyAnimations.isEmpty || !scripts.isEmpty else { return nil }
+            return Scene3DLightRuntime(index: index, authored: light, scripts: scripts)
+        }
+        // Specialize for authored slots, including lights that can become visible
+        // after the pipeline is compiled.
+        let potentialLights = doc.lights3D.map { authored in
+            var light = authored
+            if light.propertyScripts["visible"] != nil || light.propertyAnimations["visible"] != nil {
+                light.initialVisible = true
+            }
+            if light.propertyScripts["radius"] != nil || light.propertyAnimations["radius"] != nil {
+                light.radius = max(1, light.radius)
+            }
+            return light
+        }
+        let potentialNodes = make3DNodeMap().mapValues {
+            Scene3DMath.Node(origin: $0.origin, angles: $0.angles, scale: $0.scale,
+                parent: $0.parent, visible: true, localMatrix: $0.localMatrix)
+        }
+        let eligibleSlots = Scene3DLightKind.allCases.flatMap { kind in
+            Scene3DLighting.resolveLights(potentialLights.filter { Scene3DLightKind(type: $0.type) == kind },
+                nodes: potentialNodes, config: scene3DLightConfig)
+        }
+        scene3DShaderLightSlots = Scene3DLighting.shaderLightValues(eligibleSlots).combos
 
         // ── 메시 지오메트리(모델). 정적 비가시(조상 그룹) 판정은 base 트랜스폼 기준으로 프리컬 — 스크립트로
         //    다시 켜지는 서브트리는 드묾(젤다 link_adult 는 그룹 visible=false 고정). ──
@@ -616,7 +647,8 @@ extension SceneRenderer {
         }
         // 카메라 스크립트 또는 활성 애니(스키닝) 가 있으면 연속 렌더 필요.
         let hasSkinAnim = meshRenderables.contains { $0.animIndex >= 0 || $0.animationState?.layers.isEmpty == false }
-        has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim || !text3DControllers.isEmpty || scene3DEnvironment?.isDynamic == true
+        has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim
+            || !text3DControllers.isEmpty || scene3DEnvironment?.isDynamic == true || !scene3DLightRuntimes.isEmpty
 
         // F309: mount 직후 1회 프라이밍 패스. encode3D 는 매 프레임 text3DControllers(:717-722 상당)를
         // eval3DOrder 보다 항상 먼저 평가한다 — 순서를 뒤집으면(eval3DOrder→text) 이번엔 text(배열
@@ -690,7 +722,7 @@ extension SceneRenderer {
             // encode3D 의 매프레임 evaluate3DScripts 가 그때부터 정상 평가 — 프라이밍 1회만 미적용, 무해
             // — F309 프라이밍 목적은 mesh/node 가 text 콘텐츠발 shared 를 초회부터 보는 것뿐).
             rebuild3DDrawOrders()
-            has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim || !text3DControllers.isEmpty || scene3DEnvironment?.isDynamic == true
+            has3DScripts = has3DScripts || !eval3DOrder.isEmpty
             NSLog("%@", "[Waple] 3D scene text: \(textBBLoaded) billboards (\(textBBSkipped) skipped)")
         }
 
@@ -841,6 +873,7 @@ extension SceneRenderer {
             sceneScript?.updateSceneLayers(nodes3D.map(scriptLayerDescriptor), startingAt: firstIndex)
         }
         for renderable in meshRenderables { renderable.animationState?.evaluate(time: time) }
+        for light in scene3DLightRuntimes { scene3DLights[light.index] = light.evaluate(time: time) }
         if let environment = scene3DEnvironment { scene3DFog = environment.evaluate(time: time) }
         consumeSceneRuntimeCommands()
         if let device { refresh3DTextTextures(device: device) }
@@ -1390,9 +1423,7 @@ extension SceneRenderer {
         combos["SKINNING"] = sourceLayout != nil && sourceIsSkinned ? 1 : 0
         combos["BONECOUNT"] = max(1, boneCount)
         combos["HDR"] = sceneIsHDR ? 1 : 0
-        let lightPlan = Scene3DLighting.shaderLightValues(Scene3DLighting.resolveLights(scene3DLights,
-            nodes: make3DNodeMap(), config: scene3DLightConfig))
-        for (key, value) in lightPlan.combos { combos[key] = value }
+        for (key, value) in scene3DShaderLightSlots { combos[key] = value }
         for (slot, comboName) in GLSLTranslator.samplerCombos(frag) where combos[comboName] == nil {
             let bound = slot < mat.customTextures.count && mat.customTextures[slot] != nil
             if bound { combos[comboName] = 1 }
@@ -1617,6 +1648,60 @@ extension SceneRenderer {
         }
         customSkinFrameMemo = (time, result)
         return result
+    }
+
+    /// Both 3D projection modes use the translated shader's vertex and uniform ABI.
+    func drawCustomMesh(_ mesh: GPU3DMesh, uniform: MeshUniform, customSkin: MTLBuffer?,
+                        boneBuffer: MTLBuffer?, boneCount: Int, time: Float, view: simd_float4x4,
+                        projection: simd_float4x4, eye: SIMD3<Float>, lights: [Scene3DResolvedLight],
+                        shadowTexture: MTLTexture?, into encoder: MTLRenderCommandEncoder) -> Bool {
+        guard let custom = mesh.customShader else { return false }
+        let vertices: MTLBuffer
+        if custom.usesSourceVertices {
+            guard let source = mesh.customVertexBuffer else { return false }
+            vertices = source
+        } else if mesh.skinned {
+            guard let customSkin else { return false }
+            vertices = customSkin
+        } else {
+            vertices = mesh.vbuf
+        }
+        guard bindUniformSlots(custom.material, to: encoder, index: 0) else { return false }
+        if !custom.engineParams.isEmpty {
+            let bones: [simd_float4x4]
+            if custom.engineParams.contains(where: { $0.name == "g_Bones" }),
+               let boneBuffer, boneCount > 0 {
+                let data = boneBuffer.contents().assumingMemoryBound(to: simd_float4x4.self)
+                bones = Array(UnsafeBufferPointer(start: data, count: boneCount))
+            } else { bones = [] }
+            let values = shader3DEngineValues(model: uniform.model, view: view,
+                projection: projection, eye: eye, lights: lights, bones: bones)
+            guard bindEngineParameters(custom.engineParams, to: encoder, overrides: values) else { return false }
+        }
+        encoder.setRenderPipelineState(custom.pipeline)
+        if let state = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: encoder.device) {
+            encoder.setDepthStencilState(state)
+        }
+        encoder.setCullMode(mesh.cullBack ? .back : .none)
+        encoder.setVertexBuffer(vertices, offset: 0, index: 4)
+        let engine = engineUniform(time: time, texRes: custom.texRes, texWrap: custom.texWrap,
+            texFilter: custom.texFilter, layerTint: uniform.tint,
+            targetRes: custom.texRes.first ?? SIMD4(1, 1, 1, 1), mvp: uniform.mvp)
+        engine.withUnsafeBytes {
+            encoder.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
+            encoder.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
+        }
+        encoder.setFragmentTexture(mesh.texture, index: 0)
+        if custom.vertexTextureSlots.contains(0) { encoder.setVertexTexture(mesh.texture, index: 0) }
+        for (slot, texture) in custom.aux {
+            encoder.setFragmentTexture(texture, index: slot)
+            if custom.vertexTextureSlots.contains(slot) { encoder.setVertexTexture(texture, index: slot) }
+        }
+        encoder.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
+            indexType: .uint32, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+        // Slot 1 can be a translated texture or the stock shadow atlas.
+        encoder.setFragmentTexture(shadowTexture, index: 1)
+        return true
     }
 
     /// `castShadow` point 의 6면을 2×3 viewport에, directional(F661)은 단일 오소를 슬라이스 전체에,
@@ -2153,17 +2238,11 @@ extension SceneRenderer {
                         }
                         // 스냅샷 확보 실패 — 재개한 enc 에서 일반 파이프라인으로 identity 폴터.
                     }
+                    if drawCustomMesh(mesh, uniform: u, customSkin: customSkinBuf, boneBuffer: boneBuf,
+                        boneCount: mr.model?.bones.count ?? 0, time: time, view: view, projection: proj,
+                        eye: eye, lights: resolvedLights, shadowTexture: shadowResult.texture, into: enc) { continue }
                     let pipe: MTLRenderPipelineState
-                    var meshVBuf = mesh.vbuf
-                    var usedCustom = false
-                    // H1 Phase 2: 커스텀 셰이더 파이프라인 우선. 스키닝 메시는 CPU 프리스킨(8f) 버퍼로
-                    // rigid 입력 계약을 맞춘다(프리스킨 실패 시 스톡 GPU 스키닝 mv_skin 폴터).
-                    if let custom = mesh.customShader, !mesh.skinned || customSkinBuf != nil || custom.usesSourceVertices {
-                        pipe = custom.pipeline
-                        usedCustom = true
-                        if let raw = mesh.customVertexBuffer { meshVBuf = raw }
-                        else if let customSkinBuf { meshVBuf = customSkinBuf }
-                    } else if (mesh.normalTexture != nil || mesh.maskTexture != nil), !useSkin,
+                    if (mesh.normalTexture != nil || mesh.maskTexture != nil), !useSkin,
                               let normalPipe = mesh.additive ? meshPipelineNormalAdditive : meshPipelineNormal {
                         // M3: PBR 노멀맵/마스크 파이프라인(정적 메시 한정).
                         pipe = normalPipe
@@ -2181,72 +2260,28 @@ extension SceneRenderer {
                         enc.setDepthStencilState(ds)
                     }
                     enc.setCullMode(mesh.cullBack ? .back : .none)
-                    // P⑥: 커스텀 파이프라인(번역 셰이더)은 buffer 계약이 스톡 mf_main/mv_main 과 다르다
-                    // (buffer(1)=EngineU 336B — engineUniform() 이 단일 정본, MeshUniform 256B 오독 해소.
-                    // 정점은 머티리얼 상수 p[[buffer(0)]] 와 충돌 회피 위해 buffer(4), 2D 커스텀 레이어
-                    // 경로(SceneRendererFrameEncoder.swift:1094-1099)와 동일 계약).
-                    if usedCustom, let custom = mesh.customShader {
-                        enc.setVertexBuffer(meshVBuf, offset: 0, index: 4)
-                        // 번역 셰이더의 mul(v, mvp) 는 mvp·v 로 방출된다(GLSLTranslator translateBody ①
-                        // 의 ((b)*(a)) 셰임) — stock 과 같은 규약이라 u.mvp 를 **전치 없이** 넘긴다.
-                        // 종전 .transpose 는 번역기가 v·mvp 로 방출하던 시기(d45c259)의 보정이었다.
-                        let mat = custom.material
-                        if !mat.isEmpty {
-                            mat.withUnsafeBytes {
-                                enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0)
-                                enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
-                            }
-                        }
-                        // X-⑤ 교차배치(검증 must_fix): g_TexelSize 는 이제 targetRes(dst) 기준 — 3D 커스텀
-                        // 메시 경로는 2D 커스텀 레이어(SceneRendererFrameEncoder.swift:1130)와 마찬가지로
-                        // 다운스케일 멀티패스 체인이 없어 스코프 밖(X-⑤ 커밋 노트) — 종전 tex0 근사(texRes[0])
-                        // 를 그대로 targetRes 에 실어 무회귀 유지. 누락 시 기본값(1,1,1,1)으로 g_TexelSize=1.0
-                        // (UV 전체 1텍셀)이 돼 조용히 깨진다 — engineUniform 필수 인자화로 재발 방지.
-                        let eng = engineUniform(time: time, texRes: custom.texRes, texWrap: custom.texWrap,
-                                                texFilter: custom.texFilter, layerTint: u.tint,
-                                                targetRes: custom.texRes.first ?? SIMD4(1, 1, 1, 1), mvp: u.mvp)
-                        eng.withUnsafeBytes {
-                            enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
-                            enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
-                        }
-                        enc.setFragmentTexture(mesh.texture, index: 0)
-                        // 보조 텍스처(materials textures[1..]) — bindScene3DLighting 이 걸어 둔 texture(1)
-                        // 섀도우 아틀라스(depth2d_array)를 셰이더가 g_Texture1 을 선언한 슬롯에서만 덮어써
-                        // 타입 불일치를 해소한다(선언 안 하면 ef_main 인자 자체가 없어 무해). 원복은 이
-                        // 드로우 콜 "뒤"(아래 drawIndexedPrimitives 다음)에서 한다 — 여기서 하면 이번
-                        // 드로우 자체가 샘플할 aux 를 draw 도달 전에 되돌려버린다.
-                        for (slot, tex) in custom.aux { enc.setFragmentTexture(tex, index: slot) }
-                    } else {
-                        enc.setVertexBuffer(meshVBuf, offset: 0, index: 0)
-                        var bu = u
-                        enc.setVertexBytes(&bu, length: MemoryLayout<MeshUniform>.stride, index: 1)
-                        if useSkin, let boneBuf { enc.setVertexBuffer(boneBuf, offset: 0, index: 2) }
-                        enc.setFragmentBytes(&bu, length: MemoryLayout<MeshUniform>.stride, index: 1)
-                        enc.setFragmentTexture(mesh.texture, index: 0)
-                        // gradientTex 는 mf_main 이 항상 선언하는 인자 — shadingGradient 가 꺼져 있으면 절대
-                        // 샘플되지 않으므로(u.rim.w==0) 자기 텍스처를 채워 넣어 바인딩 부재를 피한다.
-                        enc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
-                        // M3/M①: PBR 노멀맵/마스크 텍스처 바인딩(mf_normal 전용 슬롯). 미보유 시 자기
-                        // 알베도로 슬롯을 채우고(미바인딩 회피, gradientTex 선례와 동일), 소비 여부는 셰이더가
-                        // normalParams.z(hasNormal)/y(hasMask) 플래그로만 게이트 — mask.r>0 값 기반 오폴백 제거.
-                        if pipe === meshPipelineNormal || pipe === meshPipelineNormalAdditive {
-                            enc.setFragmentTexture(mesh.normalTexture ?? mesh.texture, index: 3)
-                            enc.setFragmentTexture(mesh.maskTexture ?? mesh.texture, index: 4)
-                            var normalParams = SIMD4<Float>(mesh.normalTextureFormat,
-                                                            mesh.maskTexture != nil ? 1 : 0,
-                                                            mesh.normalTexture != nil ? 1 : 0, 0)
-                            enc.setFragmentBytes(&normalParams, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
-                        }
+                    enc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
+                    var bu = u
+                    enc.setVertexBytes(&bu, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                    if useSkin, let boneBuf { enc.setVertexBuffer(boneBuf, offset: 0, index: 2) }
+                    enc.setFragmentBytes(&bu, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                    enc.setFragmentTexture(mesh.texture, index: 0)
+                    // gradientTex 는 mf_main 이 항상 선언하는 인자 — shadingGradient 가 꺼져 있으면 절대
+                    // 샘플되지 않으므로(u.rim.w==0) 자기 텍스처를 채워 넣어 바인딩 부재를 피한다.
+                    enc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
+                    // M3/M①: PBR 노멀맵/마스크 텍스처 바인딩(mf_normal 전용 슬롯). 미보유 시 자기
+                    // 알베도로 슬롯을 채우고(미바인딩 회피, gradientTex 선례와 동일), 소비 여부는 셰이더가
+                    // normalParams.z(hasNormal)/y(hasMask) 플래그로만 게이트 — mask.r>0 값 기반 오폴백 제거.
+                    if pipe === meshPipelineNormal || pipe === meshPipelineNormalAdditive {
+                        enc.setFragmentTexture(mesh.normalTexture ?? mesh.texture, index: 3)
+                        enc.setFragmentTexture(mesh.maskTexture ?? mesh.texture, index: 4)
+                        var normalParams = SIMD4<Float>(mesh.normalTextureFormat,
+                                                        mesh.maskTexture != nil ? 1 : 0,
+                                                        mesh.normalTexture != nil ? 1 : 0, 0)
+                        enc.setFragmentBytes(&normalParams, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
                     }
                     enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
                                               indexType: .uint32, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
-                    // P⑥: 인코더 텍스처 바인딩은 다음 draw 까지 지속된다(Metal encoder 상태) — 커스텀
-                    // 메시의 aux 가 slot 1(가장 흔한 textures[1])을 덮어썼다면, 같은 enc 로 뒤이어 그려질
-                    // 스톡/다른 커스텀 메시(그쪽은 texture(1)을 재바인딩하지 않고 루프 진입 전 1회
-                    // 바인딩에 의존한다)가 섀도우 아틀라스 대신 이 aux 색상 텍스처를 타입 불일치로
-                    // 샘플하는 회귀를 막기 위해, 이 드로우 콜이 끝난 뒤 즉시 원복한다(무aux/slot1
-                    // 미포함이면 무해한 재바인딩 — 이번 드로우 자체는 이미 위에서 aux 를 소비했다).
-                    if usedCustom { enc.setFragmentTexture(shadowResult.texture, index: 1) }
                 }
             }
         }
@@ -2645,9 +2680,6 @@ extension SceneRenderer {
             let snapshot = snaps[idx]
             guard !snapshot.isEmpty else { skipEmpty += 1; continue }
             drawn += 1
-            let verts = particle3DVertices(snapshot, sys, m: m, right: right, up: up)
-            let vertexCount = verts.count / ParticleShaders.vertexFloats3D
-            guard vertexCount > 0, let vbuf = sys.scratch.load(verts, device: device) else { continue }
             let useFog = fogActive && sys.foggy
             let pipe: MTLRenderPipelineState?
             if useFog {
@@ -2659,10 +2691,7 @@ extension SceneRenderer {
             enc.setRenderPipelineState(pipe)
             enc.setDepthStencilState(dstate)
             enc.setCullMode(.none)
-            enc.setVertexBuffer(vbuf, offset: 0, index: 0)
             enc.setVertexBytes(&vp, length: MemoryLayout<simd_float4x4>.stride, index: 1)
-            enc.setFragmentTexture(sys.texture, index: 0)
-            enc.setFragmentTexture(sys.texture, index: 3)
             if useFog {
                 // C4-(ii): overbright — FogU3D.eye.w 는 거리 계산에 쓰이지 않는 패딩이라 재사용(기본 1).
                 fogUniform.eye.w = sys.overbright
@@ -2672,7 +2701,25 @@ extension SceneRenderer {
                 var overbright = sys.overbright
                 enc.setFragmentBytes(&overbright, length: MemoryLayout<Float>.stride, index: 0)
             }
-            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
+            func draw(_ particles: [Particle], system: GPUParticleSystem, paged: Bool) {
+                let verts = particle3DVertices(particles, system, m: m, right: right, up: up)
+                let vertexCount = verts.count / ParticleShaders.vertexFloats3D
+                guard vertexCount > 0 else { return }
+                // Separate buffers keep later batches from overwriting an earlier draw in this encoder.
+                let buffer = paged ? verts.withUnsafeBytes {
+                    device.makeBuffer(bytes: $0.baseAddress!, length: $0.count)
+                } : system.scratch.load(verts, device: device)
+                guard let buffer else { return }
+                enc.setVertexBuffer(buffer, offset: 0, index: 0)
+                enc.setFragmentTexture(system.texture, index: 0)
+                enc.setFragmentTexture(system.nextTexture ?? system.texture, index: 3)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
+            }
+            if let batches = pagedParticleBatches(snapshot, system: sys, device: device) {
+                for batch in batches { draw(batch.particles, system: batch.system, paged: true) }
+            } else {
+                draw(snapshot, system: sys, paged: false)
+            }
         }
         if dbg { NSLog("%@", "[Particle3D] t=\(time) drawn=\(drawn) skipInvis=\(skipInvis) skipParent=\(skipParent) skipEmpty=\(skipEmpty) of \(particleSystems.count)") }
     }
@@ -2775,49 +2822,12 @@ extension SceneRenderer {
             var ratio = sys.texRatio
             if !sys.frames.isEmpty {
                 let fc = sys.frames.count
-                let fi: Int
-                // 좌표(= WE `lifetime * numFrames`)를 같이 들고 나온다 — `blend` 는 인덱스를 고른
-                // **그 좌표의 소수부**여야 한다(WE 는 `ComputeSpriteFrame` 한 곳에서 floor/frac 을
-                // 동시에 낸다). 좌표가 없는 갈래(mapsequence)는 nil = 크로스페이드 없음.
-                var coord: Float? = nil
-                if p.frame >= 0 {
-                    // mapsequence: 스폰 시 프레임 확정 → 크로스페이드 금지(2D 형제와 같은 규약).
-                    fi = sheetFrameIndex(sequence: p.frame, frameCount: fc, mirror: sys.mapSeqMirror)
-                }
-                else if sys.def.animationMode == .sequence {
-                    // F730(S-22): animationmode=sequence — 수명에 걸쳐 시트 전체 순차 재생 ×sequencemultiplier
-                    // (3=수명 내 3회전, 0.5=절반까지). 수명 진행률 t×fc×rate 를 sheetFrameIndex 로 루프 폴드
-                    // (sequence 의 폴드는 순환 — mapsequence 전용 mirror 와 무관). 비유한 rate/수명은 0/ε 폴터.
-                    let t = p.age / max(1e-4, p.lifetime)
-                    let rate = sys.def.sequenceMultiplier.isFinite ? max(0, sys.def.sequenceMultiplier) : 0
-                    let c = t * Float(fc) * rate
-                    fi = sheetFrameIndex(sequence: c, frameCount: fc, mirror: false)
-                    coord = c
-                }
-                // F530-sweep: 2D 형제(SceneRendererFrameEncoder.particleSheetPair)와 동일 가드.
-                // 폴백 프레임시간은 형제 자리 셋이 공유하는 한 상수다(TexImage.fallbackFrameTime 주석).
-                else {
-                    let c = p.age / max(TexImage.fallbackFrameTime, sys.frames[0].time)
-                    fi = safeInt(Double(c)).map { $0 % fc } ?? 0
-                    coord = c
-                }
-                // 크로스페이드 게이트는 2D 와 같다 — `animationmode != "randomframe"` 하나
-                // (파스 0x1401c5717 → [def+0x30]; 콤보 0x1401d24d2). `randomframe` 은 시뮬이
-                // 스폰 시 p.frame 을 확정해 애초에 위 첫 갈래로 간다.
-                let pair: TexImage.SheetFramePair
-                if let c = coord, sys.def.animationMode != .randomframe {
-                    // **인덱스는 위에서 고른 fi 를 그대로 쓴다** — `sheetFramePair` 와 어긋나는
-                    // 퇴화 입력에서는 blend 를 0 으로 접는다(TexImage.reconciledSheetPair 주석).
-                    pair = TexImage.reconciledSheetPair(
-                        currentIndex: fi,
-                        pair: TexImage.sheetFramePair(frameCoordinate: c, frameCount: fc, crossfade: true))
-                } else {
-                    pair = TexImage.fixedSheetPair(currentIndex: fi)
-                }
+                let pair = Self.framePair(for: p, system: sys)
                 let cur = sys.frames[max(0, min(fc - 1, pair.current))]
                 let nxt = sys.frames[max(0, min(fc - 1, pair.next))]
                 let q0 = TexImage.sheetFrameQuadUV(cur, textureWidth: sys.texture.width, textureHeight: sys.texture.height)
-                let q1 = TexImage.sheetFrameQuadUV(nxt, textureWidth: sys.texture.width, textureHeight: sys.texture.height)
+                let nextTexture = sys.nextTexture ?? sys.texture
+                let q1 = TexImage.sheetFrameQuadUV(nxt, textureWidth: nextTexture.width, textureHeight: nextTexture.height)
                 uv = (0..<4).map { q0.corner($0) }
                 uvNext = (0..<4).map { q1.corner($0) }
                 blend = pair.blend

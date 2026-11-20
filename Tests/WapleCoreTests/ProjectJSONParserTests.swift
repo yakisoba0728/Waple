@@ -7,6 +7,24 @@ final class ProjectJSONParserTests: XCTestCase {
         return try ProjectJSONParser.parse(data: Data(json.utf8), folderURL: url)
     }
 
+    func testReadsProjectAndPropertiesFromRegularMetadataFile() throws {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+
+        let file = folder.appendingPathComponent("project.json")
+        try fm.createDirectory(at: file, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try ProjectJSONParser.parse(folderURL: folder)) { error in
+            XCTAssertEqual(error as? ProjectParseError, .fileNotFound)
+        }
+        try fm.removeItem(at: file)
+        let json = #"{"type":"web","title":"Metadata","general":{"properties":{"enabled":{"type":"bool","value":true}}}}"#
+        try Data(json.utf8).write(to: file)
+        XCTAssertEqual(try ProjectJSONParser.parse(folderURL: folder).title, "Metadata")
+        XCTAssertEqual(try WallpaperProperties.parse(folderURL: folder).first?.value, .bool(true))
+    }
+
     // 작업 5: 원시 동영상 임포트 최소 project.json 은 파서로 왕복 가능해야 한다.
     func testProjectJSONBuilderVideoRoundTrips() throws {
         let json = ProjectJSONBuilder.videoProject(file: "clip.mp4", preview: "preview.jpg", title: "My Clip")

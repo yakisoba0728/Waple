@@ -201,9 +201,9 @@ struct PropertyEditorView: View {
     /// 영속화의 **유일한 출구**. 커밋 경로가 넷(즉시·텍스트·슬라이더·컬러)이라 여기 모아 두지
     /// 않으면 "저장됨" 통지가 붙는 경로와 안 붙는 경로가 갈린다. 종전에도 같은 두 줄이
     /// 네 벌로 흩어져 있었다.
-    private func persist(_ i: Int) {
+    private func persist(_ i: Int, fromResourcePicker: Bool = false) {
         guard props.indices.contains(i) else { return }
-        viewModel.setProperty(key: props[i].key, value: props[i].value, for: entry)
+        viewModel.setProperty(key: props[i].key, value: props[i].value, for: entry, fromResourcePicker: fromResourcePicker)
         onCommit()
     }
 
@@ -400,7 +400,8 @@ struct PropertyEditorView: View {
         if !directory { panel.allowedContentTypes = PropertyResourceSelection.allowedContentTypes(for: props[i]) }
         if panel.runModal() == .OK, let url = panel.url,
            directory || PropertyResourceSelection.accepts(url, for: props[i]) {
-            commit(i, .string(url.path))
+            props[i].value = .string(url.path)
+            persist(i, fromResourcePicker: true)
         }
     }
 }

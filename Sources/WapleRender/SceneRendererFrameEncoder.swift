@@ -153,23 +153,7 @@ extension SceneRenderer {
             var ratio = sys.texRatio
             if !sys.frames.isEmpty {
                 let fc = sys.frames.count
-                let pair: TexImage.SheetFramePair
-                if p.frame >= 0 {
-                    // mapsequence: 스폰 시 프레임이 확정된다 → **크로스페이드 금지**(blend = 0).
-                    // 고정 프레임에 다음 프레임을 섞으면 틀리고, WE 가 `randomframe` 에서
-                    // `SPRITESHEETBLEND` 를 끄는 이유와 같은 이유다(§10.3). 이 분기는
-                    // `particleSheetPair` 를 아예 안 타므로 게이트가 자동으로 걸리지 않는다 —
-                    // `sprite-occlusion.md` §11.3 이 "빠뜨리기 쉬운 자리" 로 지목한 자리다.
-                    let idx = sheetFrameIndex(sequence: p.frame, frameCount: fc, mirror: sys.mapSeqMirror)
-                    pair = TexImage.fixedSheetPair(currentIndex: idx)
-                } else {
-                    // F740(S-22): def.animationmode=sequence/sequencemultiplier 소비(그 외 frametime 폴터).
-                    // 크로스페이드 게이트(`animationmode != "randomframe"`)는 이 함수가 진다.
-                    pair = Self.particleSheetPair(age: p.age, lifetime: p.lifetime,
-                                                  frameTime: sys.frames[0].time, frameCount: fc,
-                                                  mode: sys.def.animationMode,
-                                                  seqMul: sys.def.sequenceMultiplier)
-                }
+                let pair = Self.framePair(for: p, system: sys)
                 let cur = sys.frames[max(0, min(fc - 1, pair.current))]
                 let nxt = sys.frames[max(0, min(fc - 1, pair.next))]
                 let tw = sys.texture.width, th = sys.texture.height
@@ -319,12 +303,7 @@ extension SceneRenderer {
         // 축 이름은 WE 규약 기준이다 — fu*=폭 방향, fv*=길이 방향(아래 삼각 조립 주석 참조).
         if !sys.frames.isEmpty {
             let fc = sys.frames.count
-            let idx = p.frame >= 0
-                ? sheetFrameIndex(sequence: p.frame, frameCount: fc, mirror: sys.mapSeqMirror)
-                : Self.particleSheetFrameIndex(age: p.age, lifetime: p.lifetime,
-                                               frameTime: sys.frames[0].time, frameCount: fc,
-                                               mode: sys.def.animationMode,
-                                               seqMul: sys.def.sequenceMultiplier)  // F740(S-22): 쿼드 경로와 동일 폴터
+            let idx = Self.framePair(for: p, system: sys).current
             let fr = sys.frames[max(0, min(fc - 1, idx))]
             let tw = Float(max(1, sys.texture.width)), th = Float(max(1, sys.texture.height))
             rotation = fr.rotationQuarters
@@ -1115,6 +1094,7 @@ extension SceneRenderer {
                                 particleVisible: ((Int) -> Bool)? = nil,
                                 aspectScale: inout SIMD2<Float>, compositionRootID: Int? = nil) -> MTLRenderCommandEncoder? {
         if compositionRootID == nil {
+            puppetFramePoses.removeAll(keepingCapacity: true)
             cameraParallaxFrameOriginByOrder.removeAll(keepingCapacity: true)
             prepareLateCameraParallaxAnimatedImageRoots(time: time)
             pendingInteractionGeometry.removeAll(keepingCapacity: true)
@@ -1296,12 +1276,7 @@ extension SceneRenderer {
         // W1-yaxis: sy 부호 반전으로 det 부호가 perspective 경로와 같아져 CCW 로 동반 전환.
         menc.setFrontFacing(.counterClockwise)
         // 월드행렬 입력(노드 계층) + 라이팅 바인드(섀도우 없음 — identity 행렬/nil 텍스처).
-        var nmap: [Int: Scene3DMath.Node] = [:]
-        nmap.reserveCapacity(nodes3D.count)
-        for n in nodes3D {
-            nmap[n.id] = Scene3DMath.Node(origin: n.origin, angles: n.angles, scale: n.scale,
-                                          parent: n.parent, visible: n.visible)
-        }
+        let nmap = make3DNodeMap()
         let resolvedLights = Scene3DLighting.resolveLights(scene3DLights, nodes: nmap,
                                                           config: scene3DLightConfig)
         var frameUniform = Scene3DFrameUniform(
@@ -1319,6 +1294,7 @@ extension SceneRenderer {
         bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
                             shadowMatrices: noShadow, shadowTexture: nil, into: menc)
         let skinBuffers = prepare3DSkinBuffers(time: time, device: device)
+        let customSkinBuffers = prepare3DCustomSkinBuffers(time: time, device: device)
         for idx in meshIndices {
             let mr = meshRenderables[idx]
             guard let w = Scene3DMath.worldMatrix(id: mr.id, nodes: nmap), w.visible else { continue }
@@ -1338,10 +1314,10 @@ extension SceneRenderer {
                 specularTint: SIMD4(1, 1, 1, 0),
                 rim: SIMD4(2, 4, 0, 0))
             let boneBuf = skinBuffers[idx]
-            for mesh in mr.meshes {
+            for (meshIndex, mesh) in mr.meshes.enumerated() {
                 // 스키닝 메시는 스킨 파이프라인+본 버퍼 필수(없으면 스킵 — encode3D 와 동일 규약).
                 if mesh.skinned && boneBuf == nil { continue }
-                u.tint = mesh.tint
+                u.tint = mesh.tint * model3DTint(for: mr.id)
                 u.material = SIMD4(mesh.roughness, mesh.metallic, mesh.alphaCutoff, mesh.unlit ? 0 : 1)
                 u.specularTint = SIMD4(mesh.specularTint.x, mesh.specularTint.y, mesh.specularTint.z, 0)
                 // F274: RIMLIGHTING/SHADINGGRADIENT 콤보 유니폼 + 게이트 플래그.
@@ -1450,6 +1426,11 @@ extension SceneRenderer {
                     }
                     // 스냅샷 확보 실패 — 재개한 menc 에서 일반 파이프라인으로 identity 폴터.
                 }
+                let eye = SIMD3(frameUniform.cameraEye.x, frameUniform.cameraEye.y, frameUniform.cameraEye.z)
+                if drawCustomMesh(mesh, uniform: u, customSkin: customSkinBuffers[idx]?[meshIndex],
+                    boneBuffer: boneBuf, boneCount: mr.model?.bones.count ?? 0, time: time,
+                    view: matrix_identity_float4x4, projection: proj, eye: eye, lights: resolvedLights,
+                    shadowTexture: nil, into: menc) { continue }
                 let pipe: MTLRenderPipelineState
                 if useSkin {
                     let skinPipe = mesh.additive ? (meshPipelineSkinAdditive ?? meshPipelineSkin) : meshPipelineSkin
@@ -1599,14 +1580,11 @@ extension SceneRenderer {
             // 베이크된 월드 변환에 합성. childWorld(t) = P∘A(t)∘childLocal 이 되어 정적 배치(부착점 상대)와
             // 본 애니 추종을 한 식으로 해소. 부착점 부재/퇴화 스케일 → 무부착(기존 위치 유지 — 무회귀).
             if let att = layer.attach {
-                let eff = att.parentLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
-                // 부모 퍼펫 렌더와 동일 디스패치: 2+ 레이어 = 캐스케이드, 그 외 = 클립 0(attachmentFrame 폴백).
-                let resolved: [(anim: Int, additive: Bool, weight: Float, rate: Float)] = eff.count >= 2
-                    ? eff.map { (PuppetPose.clipIndex(model: att.model, name: $0.element.name, fallback: $0.offset,
-                                                      clipId: $0.element.clipId),
-                                 $0.element.additive, $0.element.blend, $0.element.rate) }
-                    : []
-                if let A = PuppetPose.attachmentFrame(model: att.model, name: att.name, layers: resolved, time: time),
+                let parent = layers.first { $0.uid == att.parentUID }
+                let pose = parent.map { puppetFramePose($0, model: att.model, time: time) }
+                    ?? resolvePuppetFramePose(model: att.model, uid: att.parentUID, authored: att.parentLayers, time: time)
+                if let A = PuppetPose.attachmentFrame(model: att.model, name: att.name,
+                    layers: pose.layers, time: time, overrideFrames: pose.frames, fallbackToFirstClip: false),
                    let d = Self.attachmentSceneDelta(frame: A, parentOrigin: att.parentOrigin,
                                                      parentScale: att.parentScale, parentAngle: att.parentAngle) {
                     let o2 = d.m * SIMD2(origin.x, origin.y) + d.t
@@ -1805,38 +1783,7 @@ extension SceneRenderer {
             pendingInteractionGeometry[layer.uid] = PresentedInteractionGeometry(
                 scope: scope, parallaxOrigin: storedOrigin, parallaxDepth: storedDepth)
         }
-        // animationlayers 스크립트: per-frame 재평가 → 유효 visible/rate/blend 를 로컬 사본에 반영
-        // (캐스케이드 블렌드 소비자 전용 — 정적 파스값 def.animationLayers 는 불변, current 인자로 재공급).
-        // propScripts 와 동일하게 draw 스킵보다 먼저 평가(shared 사이드이펙트 보존). 예외/무update → 정적값 유지.
-        var effLayers = layer.def?.animationLayers ?? []
-        for index in effLayers.indices {
-            let base = effLayers[index]
-            for (key, animation) in base.propertyAnimations {
-                switch key {
-                case "blend": effLayers[index].blend = animation.value(component: 0, atTime: time, base: base.blend)
-                case "rate": effLayers[index].rate = animation.value(component: 0, atTime: time, base: base.rate)
-                case "visible": effLayers[index].visible = animation.value(component: 0, atTime: time, base: base.visible ? 1 : 0) >= 0.5
-                default: break
-                }
-            }
-        }
-        for sc in layer.animLayerScripts where sc.layerIndex < effLayers.count {
-            sc.engine.setRuntime(Double(time))
-            switch sc.key {
-            case "visible":
-                let cur = effLayers[sc.layerIndex].visible
-                effLayers[sc.layerIndex].visible = sc.engine.evaluateBool(current: cur) ?? cur
-            case "rate":
-                if let r = sc.engine.evaluateVec(current: [effLayers[sc.layerIndex].rate])?.first {
-                    effLayers[sc.layerIndex].rate = r
-                }
-            case "blend":   // 이미지 레이어 코퍼스 실측 0건 — 동일 스위치라 무비용 커버(3D 쪽 실물만 존재)
-                if let b = sc.engine.evaluateVec(current: [effLayers[sc.layerIndex].blend])?.first {
-                    effLayers[sc.layerIndex].blend = b
-                }
-            default: break
-            }
-        }
+        let puppetPose = layer.puppet.map { puppetFramePose(layer, model: $0, time: time) }
         // visible 스크립트 평가값(또는 정적 초기값)이 거짓 → draw 스킵(레이어는 유지 — 런타임 토글 가능).
         if !(scriptVisible[layer.uid] ?? layer.initialVisible) { return }
         // 영구 비가시 조상 상속(SceneLayer.hiddenByAncestor)은 스크립트 반환값보다 우선한다 — 조상이
@@ -1844,54 +1791,11 @@ extension SceneRenderer {
         // **먼저** 끝낸 뒤 여기서 스킵하므로 컨트롤러 스크립트의 shared 사이드이펙트는 그대로 돈다.
         if layer.hiddenByAncestor { return }
         // 퍼펫: per-frame CPU 스키닝 → 메시 삼각형 리스트로 쿼드 대체.
-        if let pm = layer.puppet, let def = layer.def, let device {
-            // 2D 퍼펫 정점은 이미 독립 평면 경로로 만들어진다. 이미지 쿼드의 UV-depth 평면을
-            // 스킨 메시 위에 적용하면 안 된다(기존 xy/scale.xy/angle.z 계약 유지).
+        if let pm = layer.puppet, let puppetPose, let def = layer.def, let device {
+            // The mesh and its attachments sample the same resolved playback phase.
             projectiveDepth = SIMD4(0, 0, 1, 0)
-            // 다층 animationlayers → 캐스케이드 블렌드(2+ 활성 레이어). 0/1 = 기존 단일 경로(무회귀).
-            // effLayers = 정적 파스값 + per-frame 스크립트 평가값(위 animLayerScripts 루프).
-            let eff = effLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
-            let mats: [simd_float4x4]
-            if !eff.isEmpty {
-                let resolved = eff.map { (pos, L) in
-                    (anim: PuppetPose.clipIndex(model: pm, name: L.name, fallback: pos, clipId: L.clipId),
-                     additive: L.additive, weight: L.blend, rate: L.rate)
-                }
-                // C④: rate 가 스크립트로 매프레임 재평가되는 레이어(오디오 반응 등)만 dt 위상적분 —
-                // 정적 rate 레이어는 기존 time×rate 순간위상 그대로(비트동일). rate 스크립트 부재 씬은
-                // overrideFrames 전원 nil → PuppetPose 내부 기존 계산과 100% 동일.
-                var overrideFrames: [Float?] = [Float?](repeating: nil, count: resolved.count)
-                var phase = puppetCascadePhase[layer.uid] ?? []
-                if phase.count != resolved.count { phase = [Float](repeating: .nan, count: resolved.count) }
-                let dt = puppetCascadeLastTime[layer.uid].map { max(0, time - $0) } ?? 0
-                var phaseTouched = false
-                for (i, e) in eff.enumerated() {
-                    guard layer.animLayerScripts.contains(where: { $0.key == "rate" && $0.layerIndex == e.offset })
-                        || e.element.propertyAnimations["rate"] != nil
-                    else { continue }
-                    let prev: Float? = phase[i].isNaN ? nil : phase[i]
-                    let r = PuppetPose.integratedCascadeFrame(model: pm, anim: resolved[i].anim,
-                                                              rate: resolved[i].rate, time: time, dt: dt,
-                                                              previousPhase: prev)
-                    phase[i] = r.phase
-                    overrideFrames[i] = r.frame
-                    phaseTouched = true
-                }
-                if phaseTouched {
-                    puppetCascadePhase[layer.uid] = phase
-                    puppetCascadeLastTime[layer.uid] = time
-                }
-                mats = PuppetPose.blendedSkinMatrices(model: pm, layers: resolved, time: time,
-                                                      overrideFrames: overrideFrames)
-            } else if let (_, L) = eff.first {
-                // C③: 활성 레이어가 1개면 종전엔 무조건 클립 0(하드코딩)이었다 — id/이름 매칭 없이.
-                // clipIndex 와 동일 규약(id 최우선 → 이름 서브스트링 → fallback)으로 통일하되, fallback
-                // 을 0 으로 둬 id/이름 모두 미매칭이면 종전과 100% 동일한 클립 0 을 유지(무회귀).
-                let ci = PuppetPose.clipIndex(model: pm, name: L.name, fallback: 0, clipId: L.clipId)
-                mats = PuppetPose.skinMatrices(model: pm, animation: ci, time: time)
-            } else {
-                mats = PuppetPose.skinMatrices(model: pm, animation: 0, time: time)
-            }
+            let mats = PuppetPose.blendedSkinMatrices(model: pm, layers: puppetPose.layers,
+                                                      time: time, overrideFrames: puppetPose.frames)
             let pos = PuppetPose.skinnedPositions(model: pm, matrices: mats)
             // C②: 스킨 메시 배치는 이 함수가 앞서 계산한 유효 변환(애니/스크립트/attachment 반영,
             // effectiveTransform)을 써야 한다 — attachment 자식 퍼펫(머리카락 등)의 부착 델타뿐 아니라

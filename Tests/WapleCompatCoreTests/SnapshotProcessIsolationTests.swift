@@ -23,24 +23,25 @@ final class SnapshotProcessIsolationTests: XCTestCase {
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
         try Data("""
             #!/bin/sh
-            printf '%s\n%s\n%s\n%s\n' "$$" "$1" "$2" "$3" > "$3/invocation.txt"
+            printf '%s\n' "$$" "$@" > "$3/invocation.txt"
             """.utf8).write(to: script)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
 
         let status = try SnapshotPipeline.launchSelfCheckPass(
-            executableURL: script, root: root.path, outDir: output)
+            executableURL: script, root: root.path, outDir: output, sceneIDs: ["scene with spaces", "scene,comma"])
 
         XCTAssertEqual(status, 0)
         let fields = try String(contentsOf: output.appendingPathComponent("invocation.txt"),
                                 encoding: .utf8)
             .split(whereSeparator: \Character.isNewline)
             .map(String.init)
-        XCTAssertEqual(fields.count, 4)
+        XCTAssertEqual(fields.count, 6)
         let childPID = try XCTUnwrap(Int(fields[0]))
         XCTAssertNotEqual(childPID, Int(ProcessInfo.processInfo.processIdentifier),
                           "셀프체크가 부모 프로세스 안에서 재실행되면 per-process 난수를 검출하지 못한다")
         XCTAssertEqual(fields[1], "--snapshot-self-check-pass")
         XCTAssertEqual(fields[2], root.path)
         XCTAssertEqual(fields[3], output.path)
+        XCTAssertEqual(Array(fields.dropFirst(4)), ["scene with spaces", "scene,comma"])
     }
 }

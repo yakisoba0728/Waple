@@ -638,6 +638,8 @@ public enum GLSLTranslator {
         let captureOf = computeCaptures(helpers: helpers, materials: materials, varyings: captureVaryings,
                                         textures: textures, textureKinds: textureKinds, engineParams: engineParams,
                                         varyingArrays: reconstructedArrays, varyingMatrices: Set(reconstructedMatrices.keys))
+        var referenceCalls = SwizzleReferenceCalls(helpers: helpers, captures: captureOf,
+                                                    structs: structNames, occupiedNames: bodyIds)
 
         // 헬퍼 방출: 프로토타입 전량 선행(정의 순서 무관 호출 가능) + 정의.
         // 헬퍼 내부의 다른 헬퍼 호출엔 캡처 인자를 원 이름으로 전달(자신의 파라미터로 존재).
@@ -663,7 +665,7 @@ public enum GLSLTranslator {
             }
             guard let body = translateBody(withCalls, symbols: typeAndMacroRenames(), isFragment: false) else { continue }
             helperProtos.append(sig + ";")
-            helperDefs.append(sig + " {\n" + indent(body) + "\n}")
+            helperDefs.append(sig + " {\n" + indent(referenceCalls.lower(body)) + "\n}")
         }
         // main 본문의 헬퍼 호출: 스테이지별 매핑 값으로 캡처 인자 전달.
         fragBody = appendCaptureArgs(fragBody, helpers: helpers, captureOf: captureOf) { cap in
@@ -759,7 +761,7 @@ public enum GLSLTranslator {
                            fragAudioNames: audioBufferNames.filter { fragIds.contains($0.name) },
                            consts: consts, helperProtos: helperProtos, helperDefs: helperDefs,
                            vertBody: vertBody, fragBody: fragBody, structs: structBlock,
-                           premultiplyOutput: premultiplyOutput)
+                           premultiplyOutput: premultiplyOutput, referenceCalls: &referenceCalls)
         return TranslatedShader(msl: msl, materialParams: materials, engineParams: engineParams,
                                 textureKinds: textureKinds, vertexTextureSlots: vertexTextureSlots,
                                 fragmentTextureSlots: fragmentTextureSlots, textureSlots: textures, usesAudio: usesAudio,
@@ -796,7 +798,13 @@ public enum GLSLTranslator {
         let name: String
         let params: [Param]
         var body: String
-        struct Param: Equatable { let type: String; let byRef: Bool; let name: String; var array: Bool = false }
+        struct Param: Equatable {
+            let type: String
+            let byRef: Bool
+            let name: String
+            var array: Bool = false
+            var outputOnly: Bool = false
+        }
     }
 
     /// GLSL 타입 → MSL 타입(시그니처용). 미지원 타입 nil → 해당 헬퍼 스킵(사용 시 컴파일 실패 → 폴백 안전망).
@@ -991,8 +999,12 @@ public enum GLSLTranslator {
             // 여러 줄 시그니처(실물 dqss2 calcShadowMask): 개행 포함 공백류 전체로 분리.
             var toks = piece.split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { !$0.isEmpty }
             var byRef = false
+            var outputOnly = false
             while let first = toks.first, ["in", "out", "inout", "const"].contains(first) {
-                if first == "out" || first == "inout" { byRef = true }
+                if first == "out" || first == "inout" {
+                    byRef = true
+                    outputOnly = first == "out"
+                }
                 toks.removeFirst()
             }
             guard toks.count >= 2 else { continue }
@@ -1002,7 +1014,7 @@ public enum GLSLTranslator {
                 name = String(name[..<br])
                 array = true
             }
-            out.append(GLSLFunction.Param(type: toks[0], byRef: byRef, name: name, array: array))
+            out.append(GLSLFunction.Param(type: toks[0], byRef: byRef, name: name, array: array, outputOnly: outputOnly))
         }
         return out
     }
@@ -2340,6 +2352,96 @@ public enum GLSLTranslator {
         return out
     }
 
+    /// Metal references cannot bind to swizzles. Forward the enclosing variable once, then use
+    /// temporaries for GLSL copy-in/copy-out. A helper wrapper also works in an expression on MSL 2.4.
+    private struct SwizzleReferenceCalls {
+        private struct Signature: Hashable {
+            let name: String
+            let members: [String?]
+        }
+
+        private let helpers: [GLSLFunction]
+        private let captures: [String: [Capture]]
+        private let structs: Set<String>
+        private var occupiedNames: Set<String>
+        private var names: [Signature: String] = [:]
+        private(set) var definitions: [String] = []
+
+        init(helpers: [GLSLFunction], captures: [String: [Capture]], structs: Set<String>, occupiedNames: Set<String>) {
+            self.helpers = helpers.filter { $0.params.contains { $0.byRef && !$0.array } }
+            self.captures = captures
+            self.structs = structs
+            self.occupiedNames = occupiedNames.union(helpers.map(\.name))
+        }
+
+        mutating func lower(_ body: String) -> String {
+            guard !helpers.isEmpty else { return body }
+            let identifiers = GLSLTranslator.identifiers(in: body)
+            var source = body
+            for helper in helpers where identifiers.contains(helper.name) {
+                let captured = captures[helper.name] ?? []
+                source = GLSLTranslator.rewriteCall(source, helper.name) { supplied in
+                    guard supplied.count == helper.params.count + captured.count else { return nil }
+                    var args = supplied
+                    let members: [String?] = helper.params.enumerated().map { index, param in
+                        let argument = supplied[index]
+                        guard param.byRef, !param.array, let dot = argument.lastIndex(of: ".") else { return nil }
+                        let base = argument[..<dot].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let member = argument[argument.index(after: dot)...].trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !base.isEmpty, (1...4).contains(member.count),
+                              ["xyzw", "rgba", "stpq"].contains(where: { alphabet in
+                                  member.allSatisfy { alphabet.contains($0) }
+                              }) else { return nil }
+                        args[index] = base
+                        return member
+                    }
+                    guard members.contains(where: { $0 != nil }),
+                          let name = wrapper(for: helper, members: members, captures: captured) else { return nil }
+                    return "\(name)(\(args.joined(separator: ", ")))"
+                }
+            }
+            return source
+        }
+
+        private mutating func wrapper(for helper: GLSLFunction, members: [String?], captures: [Capture]) -> String? {
+            let signature = Signature(name: helper.name, members: members)
+            if let name = names[signature] { return name }
+            guard let resultType = GLSLTranslator.mslType(helper.ret, structs: structs) else { return nil }
+            let references = helper.params.map { $0.byRef && !$0.array } + captures.map {
+                if case .varying(_, _, let written) = $0 { return written }
+                return false
+            }
+            let types = references.indices.map { "WeArg\($0)" }
+            let parameters = references.enumerated().map { index, byRef in
+                "\(byRef ? "thread " : "")\(types[index])\(byRef ? "&" : "") we_arg\(index)"
+            }
+            var callArgs = references.indices.map { "we_arg\($0)" }
+            var before: [String] = []
+            var after: [String] = []
+            for (index, member) in members.enumerated() {
+                guard let member else { continue }
+                let param = helper.params[index]
+                guard let type = GLSLTranslator.mslType(param.type, structs: structs) else { return nil }
+                let target = "we_arg\(index).\(member)"
+                let value = "we_value\(index)"
+                let initializer = param.outputOnly ? "" : " = \(target)"
+                before.append("\(type) \(value)\(initializer);")
+                after.append("\(target) = \(value);")
+                callArgs[index] = value
+            }
+            let call = "::\(helper.name)(\(callArgs.joined(separator: ", ")))"
+            let invocation = resultType == "void" ? call + ";" : "\(resultType) we_result = \(call);"
+            let statements = before + [invocation] + after + (resultType == "void" ? [] : ["return we_result;"])
+            var name = "we_ref_call_\(definitions.count)"
+            while !occupiedNames.insert(name).inserted { name += "_" }
+            names[signature] = name
+            let template = types.map { "typename \($0)" }.joined(separator: ", ")
+            definitions.append("template<\(template)> inline \(resultType) \(name)(\(parameters.joined(separator: ", "))) {\n"
+                               + GLSLTranslator.indent(statements.joined(separator: "\n")) + "\n}")
+            return name
+        }
+    }
+
     /// 헬퍼 시그니처(MSL): 원 파라미터 + 캡처 파라미터. 미지원 타입 포함 시 nil.
     static func helperSignature(_ h: GLSLFunction, captures: [Capture] = [], materials: [MaterialParam] = [],
                                 structs: Set<String> = [], textureKinds: [Int: GLSLType] = [:],
@@ -2381,7 +2483,8 @@ public enum GLSLTranslator {
                                  consts: [String] = [],
                                  helperProtos: [String] = [], helperDefs: [String] = [],
                                  vertBody: String, fragBody: String, structs: String = "",
-                                 premultiplyOutput: Bool = false) -> String {
+                                 premultiplyOutput: Bool = false,
+                                 referenceCalls: inout SwizzleReferenceCalls) -> String {
         var vary = "struct Vary {\n  float4 gl_Position [[position]];\n"
         // 레이어드 렌더 타깃 선택자(실물 shadowcaster 계열: 아틀라스 슬라이스를 인스턴스로 고른다).
         // MSL 은 uint + [[viewport_array_index]] 를 요구한다 — GLSL 원문의 `varying uint` 과 같은 폭.
@@ -2546,7 +2649,7 @@ public enum GLSLTranslator {
             constexpr sampler smpRepeatNearest(filter::nearest, mip_filter::linear, address::repeat);
         \(cmpSampler)
             Vary out = {};
-        \(indent(vertBody))
+        \(indent(referenceCalls.lower(vertBody)))
             return out;
         }
         """
@@ -2562,13 +2665,14 @@ public enum GLSLTranslator {
             // 감사 V07: NoInterpolation(eng.texFilter) 용 nearest 쌍 — 필터만 point, 어드레스 모드 보존.
             constexpr sampler smpNearest(filter::nearest, mip_filter::linear, address::clamp_to_edge);
             constexpr sampler smpRepeatNearest(filter::nearest, mip_filter::linear, address::repeat);
-        \(cmpSampler)\(indent(fragBody))
+        \(cmpSampler)\(indent(referenceCalls.lower(fragBody)))
         }
         """
         let structBlock = structs.isEmpty ? "" : structs + "\n"
         let constBlock = consts.isEmpty ? "" : consts.joined(separator: "\n") + "\n"
         let protoBlock = helperProtos.isEmpty ? "" : helperProtos.joined(separator: "\n") + "\n"
-        let defBlock = helperDefs.isEmpty ? "" : helperDefs.joined(separator: "\n\n") + "\n"
+        let definitions = referenceCalls.definitions + helperDefs
+        let defBlock = definitions.isEmpty ? "" : definitions.joined(separator: "\n\n") + "\n"
         return "#include <metal_stdlib>\nusing namespace metal;\n\(structBlock)\(eng)\(vin)\(vary)\(uvHelpers)\(premulHelper)\(constBlock)\(protoBlock)\(defBlock)\n\(vertSig)\n\n\(fragSig)\n"
     }
 

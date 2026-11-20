@@ -292,6 +292,7 @@ struct SettingsView: View {
 
     @ViewBuilder private var playlistSlots: some View {
         if vm.playlistConfiguration.mode == .daytime || vm.playlistConfiguration.mode == .dayOfWeek {
+            let endpoints = vm.playlistConfiguration.effectiveDaytimeEnds
             ForEach(Array(vm.playlistConfiguration.ids.enumerated()), id: \.element) { index, id in
                 VStack(alignment: .leading) {
                     HStack {
@@ -309,8 +310,7 @@ struct SettingsView: View {
                         }.disabled(index == vm.playlistConfiguration.ids.count - 1)
                     }
                     if vm.playlistConfiguration.mode == .daytime {
-                        let end = vm.playlistConfiguration.daytimeEnds[id]
-                            ?? Float(index + 1) / Float(max(vm.playlistConfiguration.ids.count, 1))
+                        let end = endpoints[index]
                         HStack {
                             Slider(value: Binding(get: { Double(end) },
                                 set: { vm.setDaytimeEnd(entryId: id, value: Float($0)) }), in: 0...1, step: 1.0 / 1440) {

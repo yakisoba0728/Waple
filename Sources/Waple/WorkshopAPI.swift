@@ -114,7 +114,9 @@ enum WorkshopResponseParser {
         let preview = lenientString(obj["preview_url"])
             .flatMap(URL.init(string:))
             .flatMap { $0.scheme?.lowercased() == "https" ? $0 : nil }
-        let vote = (obj["vote_data"] as? [String: Any]).flatMap { lenientDouble($0["score"]) }
+        let vote = (obj["vote_data"] as? [String: Any])
+            .flatMap { lenientDouble($0["score"]) }
+            .flatMap { (0...1).contains($0) ? $0 : nil }
         return WorkshopItem(
             id: id,
             title: title,

@@ -160,10 +160,17 @@ extension MediaFixRegressionTests {
         w.bits(1, 2)                               // ilog(3)=2비트: 1개 → lengths[1]=2
         w.bits(2, 2)                               // ilog(2)=2비트: 2개 → lengths[2..3]=3
         w.bits(0, 4)                               // lookup type 0
-        var r = VorbisBitReader(w.finish())
-        let book = try VorbisCodebook.parse(&r)
+        let bytes = w.finish()
+        var r = VorbisBitReader(bytes)
+        let book = try VorbisCodebook.parse(&r, maximumCells: 4, maximumTrieNodes: 7)
         XCTAssertEqual(book.entries, 4)
         XCTAssertEqual(book.dimensions, 1)
+        XCTAssertEqual(book.trieNodeCount, 7)
+
+        r = VorbisBitReader(bytes)
+        XCTAssertThrowsError(try VorbisCodebook.parse(&r, maximumCells: 3))
+        r = VorbisBitReader(bytes)
+        XCTAssertThrowsError(try VorbisCodebook.parse(&r, maximumTrieNodes: 6))
     }
 }
 
@@ -352,19 +359,19 @@ extension MediaFixRegressionTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let cap = VideoTextureExtractor.maxCachedVideos
         let fm = FileManager.default
-        for i in 0..<cap { _ = try extract(pkg, sceneID: "s\(i)", dir: dir) }
-        for i in 0..<cap {
+        let before = try (0..<cap).map { try extract(pkg, sceneID: "s\($0)", dir: dir) }
+        for (i, url) in before.enumerated() {
             try fm.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1000 + Double(i))],
-                                 ofItemAtPath: dir.appendingPathComponent("s\(i).mp4").path)
+                                 ofItemAtPath: url.path)
         }
-        let active = dir.appendingPathComponent("s0.mp4")   // 가장 오래된 것을 활성 마크
+        let active = before[0]   // 가장 오래된 것을 활성 마크
         VideoTextureExtractor.markActive(active)
         defer { VideoTextureExtractor.unmarkActive(active) }
         // cap+2 개까지 추출 → 활성 제외 집합(s1..)이 상한을 넘어 그중 가장 오래된 s1 이 evict.
         _ = try extract(pkg, sceneID: "s\(cap)", dir: dir)
         _ = try extract(pkg, sceneID: "s\(cap + 1)", dir: dir)
         XCTAssertTrue(fm.fileExists(atPath: active.path), "F560: 활성 mp4 는 가장 오래됐어도 보존")
-        XCTAssertFalse(fm.fileExists(atPath: dir.appendingPathComponent("s1.mp4").path),
+        XCTAssertFalse(fm.fileExists(atPath: before[1].path),
                        "활성 아닌 것 중 가장 오래된 s1 이 대신 evict")
     }
 

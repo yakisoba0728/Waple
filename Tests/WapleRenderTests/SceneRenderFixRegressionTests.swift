@@ -312,6 +312,37 @@ final class SceneRenderFixRegressionTests: XCTestCase {
 
     // MARK: - E1(⑥): buildLayers projW/projH 클램프 통일(projection 0 씬 NaN 방지)
 
+    func testBitmapTextureReadsLocalPresetAndPickerFiles() throws {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let scene = folder.appendingPathComponent("scene", isDirectory: true)
+        let preset = folder.appendingPathComponent("preset", isDirectory: true)
+        try fm.createDirectory(at: scene, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        try fm.createDirectory(at: preset, withIntermediateDirectories: false)
+
+        let local = scene.appendingPathComponent("local.png")
+        let bundled = preset.appendingPathComponent("bundled.png")
+        let selected = folder.appendingPathComponent("selected.png")
+        let bytes = Data([1, 2, 3])
+        for file in [local, bundled, selected] { try bytes.write(to: file) }
+        let project = ProjectJSONParser.parse(json: ["type": "scene"], folderURL: scene)
+            .with(presetFolderURL: preset)
+        let installed = project.with(userStateID: "library-\(UUID().uuidString)")
+        let grants = ["texture": selected.resolvingSymlinksInPath().standardizedFileURL.path]
+
+        XCTAssertEqual(SceneRenderer.bitmapTextureData(local.path, propertyKey: nil,
+                                                       project: project, grants: [:]), bytes)
+        XCTAssertEqual(SceneRenderer.bitmapTextureData(bundled.path, propertyKey: nil,
+                                                       project: project, grants: [:]), bytes)
+        XCTAssertEqual(SceneRenderer.bitmapTextureData(selected.path, propertyKey: "texture",
+                                                       project: installed, grants: grants), bytes)
+        XCTAssertNil(SceneRenderer.bitmapTextureData(selected.path, propertyKey: "other",
+                                                     project: installed, grants: grants))
+        XCTAssertNil(SceneRenderer.bitmapTextureData(selected.path, propertyKey: "texture",
+                                                     project: project, grants: grants))
+    }
+
     /// WE는 width/height가 둘 다 0이 아니어야 orthographic bit를 세운다. 명시적 0은 viewport
     /// 폴백(우리 표현의 1920×1080)으로 접힌다. 그 파서 계약과 별개로, 호출자가 직접 만든
     /// `SceneDocument(0,0)`도 가능하므로 buildLayers의 0-나눗셈 방어는 계속 검증한다.

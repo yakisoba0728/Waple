@@ -207,7 +207,7 @@ final class SnapshotTests: XCTestCase {
 
     func testParseCaptureTimesSkipsInvalidTokensButKeepsValid() {
         // 빈 토큰/문자열 토큰은 무시되지만, 나머지 유효 값은 살아남는다(전부 무효일 때만 fallback).
-        XCTAssertEqual(parseCaptureTimes("0,,abc, 6.5 ,", fallback: [6.0]), [0.0, 6.5])
+        XCTAssertEqual(parseCaptureTimes("0,,abc,inf,nan,-1, 6.5 ,", fallback: [6.0]), [0.0, 6.5])
     }
 
     func testParseCaptureTimesAllInvalidUsesFallback() {

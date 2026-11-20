@@ -48,12 +48,22 @@ enum MonitorMapping {
         assignedFolder: (String) -> URL?,
         parse: (URL) -> WallpaperProject?
     ) -> [WallpaperProject?] {
-        var cache: [URL: WallpaperProject] = [:]
+        resolveProjectSlots(screenKeys: screenKeys, global: global, assignment: assignedFolder, projectFor: parse)
+    }
+
+    /// Cache by the assigned installation, so sharing a folder never shares preferences.
+    static func resolveProjectSlots<Assignment: Hashable>(
+        screenKeys: [String], global: WallpaperProject?,
+        assignment: (String) -> Assignment?, projectFor: (Assignment) -> WallpaperProject?,
+        screenRequiringAssignment: String? = nil
+    ) -> [WallpaperProject?] {
+        var cache: [Assignment: WallpaperProject] = [:]
         return screenKeys.map { key in
-            guard let folder = assignedFolder(key) else { return global }
-            if let cached = cache[folder] { return cached }
-            guard let parsed = parse(folder) else { return global }
-            cache[folder] = parsed
+            let fallback = key == screenRequiringAssignment ? nil : global
+            guard let assigned = assignment(key) else { return fallback }
+            if let cached = cache[assigned] { return cached }
+            guard let parsed = projectFor(assigned) else { return fallback }
+            cache[assigned] = parsed
             return parsed
         }
     }
@@ -331,6 +341,11 @@ enum PlaylistScheduling {
 
 /// 정적 배경 동기화(작업 1): 실제 macOS 바탕화면을 현재 배경 스틸로 덮어쓸 때의 순수 결정 로직.
 enum StillDesktopSync {
+    struct Ownership: Codable, Equatable {
+        let originalPath: String
+        let appliedPath: String
+    }
+
     /// 이 화면의 현재 바탕화면을 '원본'으로 백업할지.
     /// - 이미 백업이 있으면 유지(false) — 최초 덮어쓰기 직전 값만 원본으로 본다.
     /// - 현재 경로가 우리 still 디렉터리 내부면 자기 오염이므로 백업 안 함(false):
@@ -341,24 +356,38 @@ enum StillDesktopSync {
         return !isUnder(currentPath, dir: stillDirPath)
     }
 
-    /// 복원 패스(P-D1): 연결된 화면 키만 복원 시도하고, 소비한 키를 제거한 백업 dict 를 반환.
+    static func originalPath(currentPath: String?, stillDirPath: String, ownership: Ownership?) -> String? {
+        if let ownership, let currentPath, samePath(currentPath, ownership.appliedPath) {
+            return ownership.originalPath
+        }
+        return shouldBackupOriginal(currentPath: currentPath, stillDirPath: stillDirPath, hasBackup: false) ? currentPath : nil
+    }
+
+    /// 복원 패스(P-D1): 연결된 화면에서 우리 이미지가 여전히 선택된 경우에만 백업을 복원한다.
     /// - 파일 부재 → 복원 불가 확정이므로 제거(보존해도 영원히 못 쓴다).
     /// - restore 성공 → 제거. 실패 → 보존(다음 복원 경로에서 재시도).
     /// - 연결 안 된 화면 키는 건드리지 않는다 — 종전 전체 소거(= [:])가 분리 모니터 백업을 유실했다.
     static func restorePass(
-        originals: [String: String],
+        ownership: [String: Ownership],
         connectedKeys: [String],
+        currentPath: (String) -> String?,
         fileExists: (String) -> Bool,
         restore: (String, String) -> Bool
-    ) -> [String: String] {
-        var remaining = originals
+    ) -> [String: Ownership] {
+        var remaining = ownership
         for key in connectedKeys {
-            guard let path = remaining[key] else { continue }
-            if !fileExists(path) || restore(key, path) {
+            guard let record = remaining[key], let current = currentPath(key) else { continue }
+            if !samePath(current, record.appliedPath) || !fileExists(record.originalPath)
+                || restore(key, record.originalPath) {
                 remaining.removeValue(forKey: key)
             }
         }
         return remaining
+    }
+
+    private static func samePath(_ lhs: String, _ rhs: String) -> Bool {
+        URL(fileURLWithPath: lhs).standardizedFileURL.resolvingSymlinksInPath()
+            == URL(fileURLWithPath: rhs).standardizedFileURL.resolvingSymlinksInPath()
     }
 
     /// path 가 dir 내부(또는 동일)인가 — 표준화 후 경로 프리픽스 비교.

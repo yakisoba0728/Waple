@@ -865,7 +865,7 @@ public enum WallpaperCompatibilityAnalyzer {
         case .package(let packageURL):
             sourcePath = packageURL.lastPathComponent
             do {
-                package = try ScenePackage.parse(Data(contentsOf: packageURL))
+                package = try ScenePackage.parse(ScenePackage.readData(at: packageURL, in: folderURL))
             } catch {
                 issues.append(WallpaperCompatibilityIssue(
                     severity: .error,
@@ -1092,11 +1092,7 @@ public enum WallpaperCompatibilityAnalyzer {
     }
 
     private static func rawProjectJSON(folderURL: URL) -> [String: Any]? {
-        guard let data = try? Data(contentsOf: folderURL.appendingPathComponent("project.json")),
-              let object = AssetJSON.dictionary(data) else {
-            return nil
-        }
-        return object
+        try? ProjectJSONParser.readObject(in: folderURL)
     }
 
     private static func makeSummary(_ projects: [WallpaperCompatibilityProjectReport]) -> WallpaperCompatibilitySummary {

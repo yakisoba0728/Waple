@@ -142,6 +142,26 @@ final class SnapshotWorkflowTests: XCTestCase {
         withHelper(helper) { XCTAssertEqual(SnapshotPipeline.runCompare(root: corpus.path, baselineDir: baseline), 1) }
     }
 
+    @MainActor func testCompareUsesDirectProjectRootAndSelfCheckCanSelectBaselineScenes() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let root = try root(), corpus = root.appendingPathComponent("corpus")
+        let project = try scene(corpus, id: "subject")
+        let unrelated = try scene(corpus, id: "unrelated")
+        try Data("invalid scene".utf8).write(to: unrelated.folderURL.appendingPathComponent("custom.json"))
+
+        guard case let .pixels(pixels, png) = try SnapshotPipeline.captureFrame(project: project, into: root) else {
+            return XCTFail("synthetic scene must render")
+        }
+        let baseline = try baseline(in: root, pixels: pixels, deterministic: true)
+        let helper = try helper(in: root, images: ["subject": png])
+        withHelper(helper) {
+            XCTAssertEqual(SnapshotPipeline.runCompare(root: project.folderURL.path, baselineDir: baseline), 0)
+        }
+        let secondPass = root.appendingPathComponent("second-pass")
+        XCTAssertEqual(SnapshotPipeline.runSelfCheckPass(root: corpus.path, outDir: secondPass, sceneIDs: ["subject"]), 0)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: secondPass.path), ["subject.png"])
+    }
+
     @MainActor func testPublicCompareTightensHistoricNondeterministicEntryAndRejectsMissingSelfCheck() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let root = try root(), corpus = root.appendingPathComponent("corpus")

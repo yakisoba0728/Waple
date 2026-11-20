@@ -1,5 +1,6 @@
 import XCTest
 import Metal
+import simd
 @testable import WapleCore
 @testable import WapleRender
 
@@ -348,7 +349,7 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
         return d
     }
 
-    private func captureMesh(animated: Bool, tag: String, time: Float) throws -> NSBitmapImageRep {
+    private func captureMesh(animated: Bool, tag: String, time: Float, nativeSkinning: Bool = false) throws -> NSBitmapImageRep {
         let anim = animated
             ? #","animationlayers":[{"name":"Idle","blend":1.0,"visible":true,"rate":1.0}]"#
             : ""
@@ -358,7 +359,20 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
          "objects":[{"id":1,"name":"sk","model":"models/sk.mdl","origin":"0 0 0"\(anim)}]}
         """
         let material = #"{"passes":[{"shader":"skintest","textures":["white"]}]}"#
-        let vert = """
+        let vert = nativeSkinning ? """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        uniform mat4x3 g_Bones[BONECOUNT];
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        attribute uvec4 a_BlendIndices;
+        attribute vec4 a_BlendWeights;
+        varying vec2 v_TexCoord;
+        void main() {
+            vec3 position = mul(vec4(a_Position, 1.0), g_Bones[a_BlendIndices.x]) * a_BlendWeights.x;
+            gl_Position = mul(vec4(position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """ : """
         uniform mat4 g_ModelViewProjectionMatrix;
         attribute vec3 a_Position;
         attribute vec2 a_TexCoord;
@@ -382,12 +396,73 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)),
                     project: try project(files: files, id: tag))
         defer { r.teardown() }
+        if nativeSkinning {
+            XCTAssertEqual(r.meshRenderables.first?.meshes.first?.customShader?.usesSourceVertices, true)
+        }
         let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_h1s_\(tag)", isDirectory: true)
         try? FileManager.default.removeItem(at: dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = try XCTUnwrap(r.captureFrames(width: 64, height: 64, times: [time], toDir: dir).first)
         return try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+    }
+
+    func testNativeSkinnedCustomMeshDrawReadsTheAnimatedBonePalette() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let result = try captureMesh(animated: true, tag: "nativeskin", time: 1, nativeSkinning: true)
+        XCTAssertGreaterThan(try XCTUnwrap(result.colorAt(x: 32, y: 21)).redComponent, 0.9)
+        XCTAssertLessThan(try XCTUnwrap(result.colorAt(x: 32, y: 35)).redComponent, 0.1)
+    }
+
+    func testPuppetAttachmentUsesIntegratedRateAndInactiveAuthoredLayerKeepsBindPose() throws {
+        var model = try XCTUnwrap(PuppetModel.parse(skinnedQuadMDL()))
+        model.attachments = [.init(name: "child", bone: 1, local: matrix_identity_float4x4)]
+        let renderer = SceneRenderer()
+        var layer = AnimationLayer(name: "Idle", additive: false, blend: 1, rate: 1, visible: true)
+        let script = try XCTUnwrap(TextScriptEngine(script: "export function update(v) { return engine.runtime == 0 ? 1 : 0.5; }"))
+        let scripts = [(layerIndex: 0, key: "rate", engine: script)]
+        _ = renderer.resolvePuppetFramePose(model: model, uid: 0, authored: [layer], scripts: scripts, time: 0)
+        let pose = renderer.resolvePuppetFramePose(model: model, uid: 0, authored: [layer], scripts: scripts, time: 1 / 30)
+        XCTAssertEqual(try XCTUnwrap(pose.clocks.first?.phase), 0.5, accuracy: 0.0001)
+        let attachment = try XCTUnwrap(PuppetPose.attachmentFrame(model: model, name: "child",
+            layers: pose.layers, time: 1 / 30, overrideFrames: pose.frames, fallbackToFirstClip: false))
+        let skin = PuppetPose.blendedSkinMatrices(model: model, layers: pose.layers, time: 1 / 30, overrideFrames: pose.frames)
+        XCTAssertEqual(attachment.columns.3.y, skin[1].columns.3.y, accuracy: 0.0001)
+        XCTAssertEqual(attachment.columns.3.y, 1, accuracy: 0.001)
+        layer.visible = false
+        let disabled = renderer.resolvePuppetFramePose(model: model, uid: 0, authored: [layer], time: 1)
+        XCTAssertTrue(disabled.layers.isEmpty)
+        XCTAssertTrue(disabled.clocks.isEmpty)
+        let rest = try XCTUnwrap(PuppetPose.attachmentFrame(model: model, name: "child", layers: disabled.layers,
+            time: 1, overrideFrames: disabled.frames, fallbackToFirstClip: false))
+        XCTAssertEqual(rest.columns.3.y, 0)
+    }
+
+    @MainActor func testModelClipMarkersFollowRuntimeRateAndPause() throws {
+        var model = try XCTUnwrap(Model3D.parse(skinnedQuadMDL()))
+        model.animations[0].events = [.init(name: "motion", frame: 0.5)]
+        let layer = AnimationLayer(name: "Idle", additive: false, blend: 1, rate: 0.25, visible: true)
+        let state = SceneRenderer.ModelAnimationState(model: model, layers: [layer])
+        let renderer = SceneRenderer()
+        let engine = try XCTUnwrap(TextScriptEngine(script: """
+        var hits = 0;
+        export function animationEvent(e) { if (e.name == 'motion') hits++; }
+        export function update(v) { return hits; }
+        """))
+        renderer.animEventTargets = [.init(timelines: [], engines: [engine], clipSource: .model(state))]
+        state.evaluate(time: 0)
+        renderer.tickClipAnimationEvents()
+        state.evaluate(time: 0.04)
+        renderer.tickClipAnimationEvents()
+        XCTAssertEqual(engine.evaluateVec(current: [0])?.first, 0)
+        state.playing[0] = false
+        state.evaluate(time: 1)
+        renderer.tickClipAnimationEvents()
+        XCTAssertEqual(engine.evaluateVec(current: [0])?.first, 0)
+        state.playing[0] = true
+        state.evaluate(time: 1.04)
+        renderer.tickClipAnimationEvents()
+        XCTAssertEqual(engine.evaluateVec(current: [0])?.first, 1)
     }
 
     /// H1 스키닝: 커스텀 셰이더가 지정된 스키닝 메시는 CPU 프리스킨으로 커스텀 파이프라인을 타고,
