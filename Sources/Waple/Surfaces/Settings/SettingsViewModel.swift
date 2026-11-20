@@ -261,11 +261,11 @@ final class SettingsViewModel: ObservableObject {
     func setDaytimeEnd(entryId: String, value: Float) {
         updatePlaylist { configuration in
             guard let index = configuration.ids.firstIndex(of: entryId) else { return }
-            let count = configuration.ids.count
-            let lower: Float = index == 0 ? 0 : configuration.daytimeEnds[configuration.ids[index - 1]] ?? Float(index) / Float(count)
-            let upper: Float = index == count - 1 ? 1 : configuration.daytimeEnds[configuration.ids[index + 1]] ?? Float(index + 2) / Float(count)
+            let endpoints = configuration.effectiveDaytimeEnds
+            guard index < endpoints.count - 1 else { return }
+            let lower: Float = index == 0 ? 0 : endpoints[index - 1]
+            let upper = endpoints[index + 1]
             configuration.daytimeEnds[entryId] = min(max(value, lower), upper)
-            if let last = configuration.ids.last { configuration.daytimeEnds[last] = 1 }
         }
     }
 
@@ -273,9 +273,7 @@ final class SettingsViewModel: ObservableObject {
         updatePlaylist { configuration in
             guard let index = configuration.ids.firstIndex(of: id),
                   configuration.ids.indices.contains(index + offset) else { return }
-            let endpoints = configuration.ids.enumerated().map { position, id in
-                configuration.daytimeEnds[id] ?? Float(position + 1) / Float(configuration.ids.count)
-            }
+            let endpoints = configuration.effectiveDaytimeEnds
             configuration.ids.swapAt(index, index + offset)
             for (position, id) in configuration.ids.enumerated() {
                 configuration.daytimeEnds[id] = endpoints[position]

@@ -3,6 +3,24 @@ import WapleCore
 import WapleLibrary
 
 final class PlaylistConfigurationStoreTests: XCTestCase {
+    func testDaytimeEditsKeepMidnightReachable() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PlaylistStore(baseDirectory: directory)
+        store.configuration = PlaylistConfiguration(enabled: true, mode: .daytime,
+            ids: ["morning", "oldLast"], daytimeEnds: ["morning": 0.4, "oldLast": 1])
+        store.toggle("newLast")
+        let ends = store.configuration.effectiveDaytimeEnds
+        XCTAssertEqual(ends.count, 3)
+        guard ends.count == 3 else { return }
+        XCTAssertEqual(ends[0], 0.4, accuracy: 0.0001)
+        XCTAssertEqual(ends[1], 0.7, accuracy: 0.0001)
+        XCTAssertEqual(ends[2], 1)
+        store.toggle("morning")
+        store.toggle("newLast")
+        XCTAssertEqual(store.configuration.effectiveDaytimeEnds, [1])
+    }
     private var directories: [URL] = []
 
     override func tearDown() {

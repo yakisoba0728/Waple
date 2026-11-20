@@ -43,7 +43,20 @@ extension SceneRenderer {
         let viewProjection = projection * view
         let modelView = view * model
         let normal = Scene3DMath.normalMatrix4x4(model)
-        var values = Scene3DLighting.shaderLightValues(lights).values
+        var populated = lights
+        for (kind, key) in [(Scene3DLightKind.point, "LIGHTS_POINT"), (.spot, "LIGHTS_SPOT"),
+                            (.tube, "LIGHTS_TUBE"), (.directional, "LIGHTS_DIRECTIONAL")] {
+            let missing = (scene3DShaderLightSlots[key] ?? 0) - lights.filter { $0.kind == kind }.count
+            if missing > 0 {
+                // Inactive slots contribute zero light while retaining finite attenuation inputs.
+                let outsideScene = SIMD3<Float>(repeating: 100_000_000)
+                let inactive = Scene3DResolvedLight(position: outsideScene, exponent: 1,
+                    colorRadius: SIMD4(0, 0, 0, 1), castsShadow: false, kind: kind,
+                    coneInnerCos: 1, coneOuterCos: -1, originB: outsideScene + SIMD3<Float>(1024, 0, 0))
+                populated.append(contentsOf: repeatElement(inactive, count: missing))
+            }
+        }
+        var values = Scene3DLighting.shaderLightValues(populated).values
         let matrices = ["g_ModelMatrix": model, "g_ModelViewMatrix": modelView,
                         "g_ViewMatrix": view, "g_ProjectionMatrix": projection,
                         "g_ViewProjectionMatrix": viewProjection, "g_ModelViewProjectionMatrix": viewProjection * model,

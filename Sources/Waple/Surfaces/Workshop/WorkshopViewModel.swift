@@ -51,6 +51,8 @@ final class WorkshopViewModel: ObservableObject {
     private var downloadTasks: [String: SteamCmdDownloader.DownloadTask] = [:]
     private var downloadGenerations: [String: UUID] = [:]
     private var page = 1
+    private var committedQuery: (text: String, sort: WorkshopSort)?
+    private var pagingFailure: String?
     private var attemptedInitialLoad = false
     // F492: steamcmd 출력 신호(다운로드별) — 완료 콜백의 nil 하나로는 원인을 알 수 없어,
     // ERROR!/성공 라인 관측 여부로 실패 유형(로그인 계열 vs 그 외)을 나누는 데 쓴다.
@@ -142,12 +144,14 @@ final class WorkshopViewModel: ObservableObject {
         searchEpoch &+= 1
         hasAPIKey = false
         results = []
+        committedQuery = nil
         canLoadMore = false
         attemptedInitialLoad = false
         isSearching = false
         isLoadingMore = false
         searchFailed = false
         statusMessage = nil
+        pagingFailure = nil
     }
 
     // MARK: - 검색·페이징
@@ -162,19 +166,22 @@ final class WorkshopViewModel: ObservableObject {
         guard let key = keyProvider() else { hasAPIKey = false; return }
         searchEpoch &+= 1
         let epoch = searchEpoch
+        let query = (text: searchText, sort: sort)
         isSearching = true
         isLoadingMore = false
         statusMessage = nil
+        pagingFailure = nil
         searchFailed = false
-        page = 1
-        canLoadMore = false
         // 최신 세대만 isSearching 을 내린다 — 낡은 search 가 먼저 끝나도 스피너를 끄지 않게.
         defer { if epoch == searchEpoch { isSearching = false } }
         do {
             let fetched = try await client.search(apiKey: key, page: 1, numPerPage: pageSize,
-                                                  searchText: searchText, sort: sort)
-            guard epoch == searchEpoch else { return }   // 더 새 검색이 떴다 → 이 응답 폐기
-            results = fetched
+                                                  searchText: query.text, sort: query.sort)
+            guard epoch == searchEpoch, !Task.isCancelled else { return }
+            page = 1
+            committedQuery = query
+            var known = Set<String>()
+            results = fetched.filter { known.insert($0.id).inserted }
             canLoadMore = fetched.count == pageSize
             if fetched.isEmpty {
                 statusMessage = NSLocalizedString("결과가 없습니다.", comment: "검색 결과 0건")
@@ -186,6 +193,8 @@ final class WorkshopViewModel: ObservableObject {
             if isCancellation(error) { return }
             guard epoch == searchEpoch else { return }
             results = []
+            committedQuery = nil
+            canLoadMore = false
             searchFailed = true
             statusMessage = (error as? LocalizedError)?.errorDescription
                 ?? String(format: NSLocalizedString("검색 실패: %@", comment: "분류되지 않은 검색 오류"),
@@ -195,7 +204,7 @@ final class WorkshopViewModel: ObservableObject {
 
     /// 그리드 마지막 타일 onAppear 에서 호출 — 다음 페이지를 append(중복 id 는 버린다: ForEach id 충돌 방지).
     func loadMore() async {
-        guard canLoadMore, !isLoadingMore, !isSearching, let key = keyProvider() else { return }
+        guard canLoadMore, !isLoadingMore, !isSearching, let key = keyProvider(), let query = committedQuery else { return }
         let epoch = searchEpoch
         isLoadingMore = true
         defer { if epoch == searchEpoch { isLoadingMore = false } }
@@ -204,25 +213,28 @@ final class WorkshopViewModel: ObservableObject {
         let nextPage = page + 1
         do {
             let batch = try await client.search(apiKey: key, page: nextPage, numPerPage: pageSize,
-                                                searchText: searchText, sort: sort)
-            guard epoch == searchEpoch else { return }   // 검색이 끼어든 응답 → page/results 미변경 후 폐기
+                                                searchText: query.text, sort: query.sort)
+            guard epoch == searchEpoch, !Task.isCancelled else { return }
             page = nextPage
-            let known = Set(results.map(\.id))
-            results.append(contentsOf: batch.filter { !known.contains($0.id) })
+            var known = Set(results.map(\.id))
+            results.append(contentsOf: batch.filter { known.insert($0.id).inserted })
             canLoadMore = batch.count == pageSize
+            if let pagingFailure, statusMessage == pagingFailure { statusMessage = nil }
+            pagingFailure = nil
         } catch {
             if isCancellation(error) { return }   // 취소는 실패가 아니다 — page/results/메시지 미변경
             guard epoch == searchEpoch else { return }
-            statusMessage = (error as? LocalizedError)?.errorDescription
+            pagingFailure = (error as? LocalizedError)?.errorDescription
                 ?? String(format: NSLocalizedString("더 불러오기 실패: %@", comment: "다음 페이지 로드 오류"),
                           error.localizedDescription)
+            statusMessage = pagingFailure
         }
     }
 
     // MARK: - 다운로드 → 임포트 → 적용 (레거시 그대로 이동)
 
     private func installedEntry(for item: WorkshopItem) -> LibraryEntry? {
-        library.entries.last { $0.workshopItemID == item.id }
+        library.entries.last { $0.workshopItemID == item.id && library.isUsableWorkshopEntry($0) }
     }
 
     func downloadState(for item: WorkshopItem) -> DownloadUIState? {
@@ -280,7 +292,7 @@ final class WorkshopViewModel: ObservableObject {
     private func applyProgress(_ id: String, _ p: SteamCmdDownloader.Progress) {
         guard var state = downloads[id], state.phase != .done else { return }
         switch p {
-        case .downloading(let v): state.phase = .downloading(v)
+        case .downloading(let v): state.phase = .downloading(v.flatMap { (0...100).contains($0) ? $0 : nil })
         case .verifying: state.phase = .verifying
         case .committing: state.phase = .committing
         case .success:
@@ -327,19 +339,20 @@ final class WorkshopViewModel: ObservableObject {
         }
         sawErrorSignal.remove(item.id)
         sawSuccessSignal.remove(item.id)
-        guard let entry = library.importDownloaded(url, workshopItemID: item.id) else {
+        let entry: LibraryEntry
+        do { entry = try library.registerDownload(url, workshopItemID: item.id, rating: item.voteScore) }
+        catch {
             // [2026-08-25] **이 분기는 사유를 아예 안 남기고 있었다.** 다운로드는 성공했는데
             // 라이브러리 임포트가 실패한 경우인데, 타일은 "다운로드 실패" 만 말하고 화면 어디에도
             // 왜인지가 없었다(위 세 분기와 달리 `statusMessage` 도 안 세웠다). 문구를 새로 만든다.
-            let reason = String(
-                format: NSLocalizedString("‘%@’ 은(는) 받았지만 라이브러리에 넣지 못했습니다 — 받은 폴더에 project.json 이 없거나 읽을 수 없습니다.",
+            let reason = error is LibraryStore.PersistenceError ? LibraryViewModel.importStorageFailure : String(
+                format: NSLocalizedString("‘%@’ 은(는) 받았지만 라이브러리에 넣지 못했습니다. project.json 또는 재생 파일을 읽을 수 없습니다.",
                                           comment: "다운로드는 성공, 임포트 실패"),
                 item.title)
             statusMessage = reason
             downloads[item.id] = DownloadUIState(phase: .failed, entryId: nil, failureReason: reason)
             return
         }
-        if let score = item.voteScore { library.setRating(score, for: entry) }
         downloads[item.id] = DownloadUIState(phase: .done, entryId: entry.id, failureReason: nil)
     }
 

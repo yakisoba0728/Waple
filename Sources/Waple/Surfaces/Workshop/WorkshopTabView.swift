@@ -87,6 +87,9 @@ struct WorkshopTabView: View {
                 ProgressView().controlSize(.small)
                     .padding(.bottom, Space.lg)
                     .accessibilityLabel("더 불러오는 중")
+            } else if vm.canLoadMore && !vm.isSearching {
+                Button("더 불러오기") { Task { await vm.loadMore() } }
+                    .padding(.bottom, Space.lg)
             }
         }
     }

@@ -582,12 +582,14 @@ public enum PuppetPose {
     /// `skinMatrices(animation: 0)` 과 포즈 클록을 일치시킨다(단일 절대 weight=1 캐스케이드 ≡ 클립 0).
     public static func attachmentFrame(model: PuppetModel, name: String,
                                        layers: [(anim: Int, additive: Bool, weight: Float, rate: Float)],
-                                       time: Float) -> simd_float4x4? {
+                                       time: Float, overrideFrames: [Float?]? = nil,
+                                       fallbackToFirstClip: Bool = true) -> simd_float4x4? {
         guard let att = model.attachments.first(where: { $0.name == name }),
               att.bone >= 0, Int(att.bone) < model.bones.count else { return nil }
-        let L = (layers.isEmpty && !model.animations.isEmpty)
+        let L = (fallbackToFirstClip && layers.isEmpty && !model.animations.isEmpty)
             ? [(anim: 0, additive: false, weight: Float(1), rate: Float(1))] : layers
-        return worldMatrices(model: model, layers: L, time: time)[Int(att.bone)] * att.local
+        return worldMatrices(model: model, layers: L, time: time,
+                             overrideFrames: overrideFrames)[Int(att.bone)] * att.local
     }
 
     /// CPU 스키닝: p' = Σ wᵏ · skin[idxᵏ] · p. **선형 블렌드 스키닝(LBS)** 이다.

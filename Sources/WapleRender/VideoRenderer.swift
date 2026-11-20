@@ -424,9 +424,16 @@ public final class VideoRenderer: @MainActor WallpaperRenderer, LiveMediaSetting
     public func applyLiveMediaSettings(volume: Float, rate: Float) {
         guard let player else { return }
         volumeRampTimer?.invalidate(); volumeRampTimer = nil; volumeRamp = nil
+        player.defaultRate = rate
+        if isEffectivelyPaused {
+            // The canceled fade owned the final transport pause.
+            player.pause()
+            player.volume = 0
+            player.isMuted = true
+            return
+        }
         player.volume = volume
         player.isMuted = Self.effectiveMute(volume: volume, policyMuted: policyMuted, audioOutputEnabled: audioOutputEnabled)
-        player.defaultRate = rate
         // defaultRate 는 다음 play() 부터 적용 — 재생 중이면 현재 rate 도 즉시 맞춘다.
         // 정지(수동/가림, rate==0) 중 대입은 재생 재개를 뜻하므로 건드리지 않는다.
         if player.rate != 0 { player.rate = rate }

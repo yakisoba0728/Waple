@@ -55,6 +55,58 @@ final class Scene3DEnvironmentRuntime {
     }
 }
 
+struct Scene3DLightRuntime {
+    static let keys = ["visible", "color", "intensity", "radius", "origin", "angles", "exponent",
+                       "innercone", "outercone", "density", "volumetricsexponent", "castvolumetrics", "castshadow"]
+
+    let index: Int
+    let authored: SceneLight3D
+    let scripts: [String: TextScriptEngine]
+
+    func evaluate(time: Float) -> SceneLight3D {
+        func animated(_ key: String, _ values: [Float]) -> [Float] {
+            guard let animation = authored.propertyAnimations[key] else { return values }
+            return values.enumerated().map { animation.value(component: $0.offset, atTime: time, base: $0.element) }
+        }
+        func engine(_ key: String) -> TextScriptEngine? {
+            let script = scripts[key]
+            script?.setRuntime(Double(time))
+            return script
+        }
+        func flag(_ key: String, _ base: Bool) -> Bool {
+            let value = animated(key, [base ? 1 : 0])[0] >= 0.5
+            return engine(key)?.evaluateBool(current: value) ?? value
+        }
+        func scalar(_ key: String, _ base: Float) -> Float {
+            let value = animated(key, [base])
+            return engine(key)?.evaluateVec(current: value)?.first ?? value[0]
+        }
+        func vector(_ key: String, _ base: Vec3) -> Vec3 {
+            let values = animated(key, [base.x, base.y, base.z])
+            let evaluated = key == "angles"
+                ? engine(key)?.evaluateAnglesVec(currentRadians: values)
+                : engine(key)?.evaluateVec(current: values)
+            let result = evaluated.flatMap { $0.count >= 3 ? $0 : nil } ?? values
+            return Vec3(x: result[0], y: result[1], z: result[2])
+        }
+        var light = authored
+        light.initialVisible = flag("visible", authored.initialVisible)
+        light.color = vector("color", authored.color)
+        light.intensity = scalar("intensity", authored.intensity)
+        light.radius = scalar("radius", authored.radius)
+        light.origin = vector("origin", authored.origin)
+        light.angles = vector("angles", authored.angles)
+        light.exponent = scalar("exponent", authored.exponent)
+        light.innerCone = scalar("innercone", authored.innerCone)
+        light.outerCone = scalar("outercone", authored.outerCone)
+        light.density = scalar("density", authored.density)
+        light.volumetricsExponent = scalar("volumetricsexponent", authored.volumetricsExponent)
+        light.castVolumetrics = flag("castvolumetrics", authored.castVolumetrics)
+        light.castShadow = flag("castshadow", authored.castShadow)
+        return light
+    }
+}
+
 extension SceneRenderer {
     var scene3DUserValues: [String: Any] {
         variantProperties.mapValues { value in

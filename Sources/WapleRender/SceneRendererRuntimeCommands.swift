@@ -114,7 +114,7 @@ extension SceneRenderer {
                     "playing": runtimeTextureAnimations[layer.uid]?.playing ?? true
                 ] as [String: Any]
             }
-            if let video = layer.video { values["videoTexture"] = video.runtimeSnapshot }
+            if let video = layer.video { values["videoTexture"] = video.runtimeSnapshot(at: time) }
             return values.isEmpty ? nil : SceneScriptRuntimeLayerSnapshot(slot: layer.uid, values: values)
         }
         let particles = particleSystems.compactMap { system -> SceneScriptRuntimeLayerSnapshot? in
@@ -185,11 +185,13 @@ extension SceneRenderer {
         switch item.kind {
         case .layer:
             layers[item.idx].video?.teardown()
+            releaseUniqueEffectTextures(layers[item.idx].effects)
             layers.remove(at: item.idx)
             scriptVisible.removeValue(forKey: slot)
             runtimeTextureAnimations.removeValue(forKey: slot)
         case .text:
             scriptTextVisible.removeValue(forKey: textLayers[item.idx].uid)
+            releaseUniqueEffectTextures(textLayers[item.idx].effects)
             textLayers.remove(at: item.idx)
         default: return false
         }
@@ -199,6 +201,17 @@ extension SceneRenderer {
             return DrawItem(kind: existing.kind, idx: existing.idx > item.idx ? existing.idx - 1 : existing.idx)
         }
         return true
+    }
+
+    private func releaseUniqueEffectTextures(_ effects: [EffectGPU]) {
+        for effect in effects {
+            guard case .translated(_, _, let store) = effect.bind else { continue }
+            for case let texture? in store.textures {
+                uniqueFBOBytesInUse -= Self.uniqueFBOBytes(texture)
+            }
+            store.textures.removeAll()
+            store.pendingClear.removeAll()
+        }
     }
 
     private func sortRuntimeLayer(_ command: SceneScriptRuntimeCommand) -> Bool {

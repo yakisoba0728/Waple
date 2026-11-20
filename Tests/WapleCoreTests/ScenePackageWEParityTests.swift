@@ -68,13 +68,16 @@ final class ScenePackageWEParityTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let folder = try writeFolder(root, "techno", files: [:])
         let pkg = folder.appendingPathComponent("techno.pkg")
-        try ScenePackageTests.makePkg([("techno.json", Data("{}".utf8))]).write(to: pkg)
+        let data = ScenePackageTests.makePkg([("techno.json", Data("{}".utf8))])
+        try data.write(to: pkg)
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("scene.pkg"),
+                                                withIntermediateDirectories: false)
 
         XCTAssertEqual(ScenePackage.resolveMountSource(folderURL: folder, fileName: "techno.json"),
                        .package(pkg))
-        // 종전 선택자는 이 자리에서 nil 이었다 — 그래서 폴더 마운트로 떨어져 `.noScene` 이 났다.
+        XCTAssertEqual(try ScenePackage.readData(at: pkg, in: folder), data)
         XCTAssertNil(ScenePackage.legacyPackageURL(in: folder),
-                     "이름이 scene.pkg/gifscene.pkg 가 아니면 종전 선택자는 못 찾는다")
+                     "scene.pkg 이름의 디렉터리는 패키지가 아니다")
     }
 
     /// `file` 이 명시적으로 `.pkg` 면 그대로 연다 — WE 는 `.json` 을 **찾아보지도 않는다**

@@ -103,6 +103,20 @@ final class WorkshopPagingTests: XCTestCase {
         XCTAssertEqual(Set(vm.results.map(\.id)).count, 58)
     }
 
+    func testPaginationKeepsTheSubmittedCriteriaWhileSearchFieldIsEdited() async {
+        let recorder = URLRecorder()
+        let vm = makeVM { url in
+            recorder.record(url)
+            return (self.itemsJSON(ids: queryValue(url, "page") == "1" ? 1...30 : 31...33), 200)
+        }
+        vm.searchText = "nature"
+        await vm.search()
+        vm.searchText = "city"
+        await vm.loadMore()
+        XCTAssertEqual(recorder.urls.compactMap { queryValue($0, "search_text") }, ["nature", "nature"])
+        XCTAssertEqual(vm.results.count, 33)
+    }
+
     func testShortPageDisarmsLoadMore() async {
         let recorder = URLRecorder()
         let vm = makeVM { url in
@@ -142,6 +156,7 @@ final class WorkshopPagingTests: XCTestCase {
         await vm.loadMore()                       // 같은 2페이지 재요청 → 성공
         XCTAssertEqual(queryValue(recorder.urls[2], "page"), "2")
         XCTAssertEqual(vm.results.count, 60)
+        XCTAssertNil(vm.statusMessage)
     }
 
     /// 정렬 급변경 경합: 낡은 검색 응답이 늦게 도착해도 최신 검색 결과를 덮어쓰지 않아야 한다(요청 에폭).

@@ -19,7 +19,7 @@ struct WapleCompatCLI {
     var visBlastOut: String? = nil       // --vis-blast <csv>: W3-① C8 가시성 상속 코퍼스 블라스트 반경(파스만)
     var remount = false                  // --remount: 프로세스 내 2차 마운트(웜) 비용 측정
     var frameRes = "1920x1080"           // --frame-res WxH: 실해상도 프레임 타이밍(GPU 예산 분모)
-    var snapshotSelfCheckPass: (root: String, out: String)? = nil
+    var snapshotSelfCheckPass: (root: String, out: String, sceneIDs: [String])? = nil
 
     mutating func parse(arguments: [String]) throws {
         var iterator = arguments.dropFirst().makeIterator()
@@ -61,7 +61,9 @@ struct WapleCompatCLI {
             case "--snapshot-self-check-pass":
                 let root = try value(for: "--snapshot-self-check-pass")
                 let out = try value(for: "--snapshot-self-check-pass")
-                snapshotSelfCheckPass = (root, out)
+                var sceneIDs: [String] = []
+                while let id = iterator.next() { sceneIDs.append(id) }
+                snapshotSelfCheckPass = (root, out, sceneIDs)
             case "--help", "-h":
                 printUsage()
                 Foundation.exit(0)
@@ -110,7 +112,7 @@ struct WapleCompatCLI {
             let root = NSString(string: pass.root).expandingTildeInPath
             let out = NSString(string: pass.out).expandingTildeInPath
             Foundation.exit(SnapshotPipeline.runSelfCheckPass(
-                root: root, outDir: URL(fileURLWithPath: out, isDirectory: true)))
+                root: root, outDir: URL(fileURLWithPath: out, isDirectory: true), sceneIDs: pass.sceneIDs))
         }
         let root = NSString(string: rootPath).expandingTildeInPath
         warnIgnoredFlagCombinations()
@@ -124,9 +126,11 @@ struct WapleCompatCLI {
         }
         if let out = profileOut {
             guard let id = only else { fputs("WapleCompat: --profile requires --only <sceneID>\n", stderr); Foundation.exit(2) }
-            let parts = frameRes.lowercased().split(separator: "x")
-            let fw = parts.count == 2 ? Int(parts[0]) ?? 1920 : 1920
-            let fh = parts.count == 2 ? Int(parts[1]) ?? 1080 : 1080
+            let parts = frameRes.lowercased().split(separator: "x", omittingEmptySubsequences: false)
+            guard parts.count == 2, let fw = Int(parts[0]), let fh = Int(parts[1]) else {
+                fputs("WapleCompat: --frame-res requires a resolution such as 1920x1080\n", stderr)
+                Foundation.exit(2)
+            }
             let code = ProfilePipeline.runProfile(root: root, outDir: URL(fileURLWithPath: NSString(string: out).expandingTildeInPath),
                                                   only: id, remount: remount, frameW: fw, frameH: fh)
             Foundation.exit(code)

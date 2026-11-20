@@ -73,6 +73,15 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(out, [global], "파스 실패 → 전역 폴백")
     }
 
+    func testBrokenPlaylistCandidateNeverResolvesToTheGlobalProject() {
+        let global = project("global")
+        let out = MonitorMapping.resolveProjectSlots(
+            screenKeys: ["primary", "secondary"], global: global,
+            assignment: { $0 == "secondary" ? "broken" : nil },
+            projectFor: { _ in nil }, screenRequiringAssignment: "secondary")
+        XCTAssertEqual(out, [global, nil])
+    }
+
     func testResolveProjects_parsesFolderOnlyOnce() {
         // 두 화면이 같은 할당 폴더 → parse 는 폴더당 1회만(캐시).
         let folderA = URL(fileURLWithPath: "/lib/A")
@@ -533,30 +542,46 @@ final class AppLogicTests: XCTestCase {
     // MARK: - StillDesktopSync.restorePass (P-D1: 분리 모니터 백업 보존)
 
     func testRestorePass_preservesDisconnectedKeys() {
+        let second = StillDesktopSync.Ownership(originalPath: "/b.jpg", appliedPath: "/still/b.png")
         let out = StillDesktopSync.restorePass(
-            originals: ["s1": "/a.jpg", "s2": "/b.jpg"],
+            ownership: ["s1": .init(originalPath: "/a.jpg", appliedPath: "/still/a.png"), "s2": second],
             connectedKeys: ["s1"],
+            currentPath: { _ in "/still/a.png" },
             fileExists: { _ in true },
             restore: { _, _ in true })
-        XCTAssertEqual(out, ["s2": "/b.jpg"], "연결 안 된 화면(s2) 백업 보존 — 종전 전체 소거 버그")
+        XCTAssertEqual(out, ["s2": second], "연결 안 된 화면(s2) 백업 보존 — 종전 전체 소거 버그")
     }
 
     func testRestorePass_missingFile_consumesBackup() {
         let out = StillDesktopSync.restorePass(
-            originals: ["s1": "/gone.jpg"],
+            ownership: ["s1": .init(originalPath: "/gone.jpg", appliedPath: "/still/a.png")],
             connectedKeys: ["s1"],
+            currentPath: { _ in "/still/a.png" },
             fileExists: { _ in false },
             restore: { _, _ in XCTFail("파일 부재면 복원 시도 없음"); return false })
         XCTAssertTrue(out.isEmpty, "파일 부재 = 복원 불가 확정 → 백업 제거")
     }
 
     func testRestorePass_failedRestore_keepsBackup() {
+        let record = StillDesktopSync.Ownership(originalPath: "/a.jpg", appliedPath: "/still/a.png")
         let out = StillDesktopSync.restorePass(
-            originals: ["s1": "/a.jpg"],
+            ownership: ["s1": record],
             connectedKeys: ["s1"],
+            currentPath: { _ in "/still/a.png" },
             fileExists: { _ in true },
             restore: { _, _ in false })
-        XCTAssertEqual(out, ["s1": "/a.jpg"], "복원 실패 키는 보존(다음 경로에서 재시도)")
+        XCTAssertEqual(out, ["s1": record], "복원 실패 키는 보존(다음 경로에서 재시도)")
+    }
+
+    func testRestorePassDoesNotOverwriteTheUsersNewWallpaper() {
+        let record = StillDesktopSync.Ownership(originalPath: "/old.jpg", appliedPath: "/still/a.png")
+        let out = StillDesktopSync.restorePass(
+            ownership: ["s1": record], connectedKeys: ["s1"], currentPath: { _ in "/new.jpg" },
+            fileExists: { _ in true },
+            restore: { _, _ in XCTFail("Current wallpaper is user-owned"); return true })
+        XCTAssertTrue(out.isEmpty)
+        XCTAssertEqual(StillDesktopSync.originalPath(currentPath: "/new.jpg", stillDirPath: "/still",
+                                                    ownership: record), "/new.jpg")
     }
 
     // MARK: - RecentWallpapers (작업 6: 최근 목록 push)
@@ -727,7 +752,7 @@ final class AppLogicTests: XCTestCase {
             presetFolderURL: URL(fileURLWithPath: "/lib/\(seed)/preset", isDirectory: true),
             supportsAudioProcessing: true,
             playbackProperties: ["playbackfullscreen": "pause"]
-        )
+        ).with(userStateID: "installation-\(seed)")
     }
 
     /// 필수 인자에는 빈값을, 기본값 있는 인자에는 아무것도 주지 않은 프로젝트.
@@ -799,6 +824,7 @@ final class AppLogicTests: XCTestCase {
             dependencyFolder: { _ in target.folderURL },
             parse: { $0 == target.folderURL ? target : nil })
         guard let resolved else { return XCTFail("프리셋이 해석되지 않았다") }
+        XCTAssertEqual(resolved.userStateID, preset.userStateID)
 
         let bare = storedFields(minimalProject())
         // resolve 는 필드를 **교차 대입**한다(presetFolderURL := project.folderURL). 그래서 같은

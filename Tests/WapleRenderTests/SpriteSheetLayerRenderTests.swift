@@ -1,6 +1,7 @@
 import XCTest
 import AppKit
 import Metal
+import simd
 @testable import WapleCore
 @testable import WapleRender
 
@@ -157,36 +158,79 @@ final class SpriteSheetLayerRenderTests: XCTestCase {
         XCTAssertEqual(res.frames.first { $0.imageId == 0 }?.atlasY, 0, "page0 프레임은 오프셋 0")
     }
 
-    /// 초대형 멀티페이지(스택 높이 20000 > Metal 16384): stackedAtlas 가 디코드 전 조기 거부 →
-    /// resolveTextureWithFrames 가 **정지 폴백(frames=[])** 으로 "조용한 오프레임 애니" 대신 page 0
-    /// 정지. 실코퍼스 6씬(3379048027 7페이지 sumH 52920 등)의 CI 안전 미러(1×10000 ×2페이지).
+    /// Distinct oversized pages exercise both order-preserving batching and perspective crossfades.
     func testTallMultipageKeepsFramesAndStreamsPages() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         func f32(_ v: Float) -> Data { var b = v.bitPattern.littleEndian; return Data(bytes: &b, count: 4) }
-        let ph = 10000
-        let page = Data(repeating: 128, count: ph * 4)   // 1×10000 raw RGBA
-        var tex = Data("TEXV0005".utf8); tex.append(0); tex.append(Data("TEXI0001".utf8)); tex.append(0)
-        tex.append(i32(0)); tex.append(i32(0)); tex.append(i32(1)); tex.append(i32(ph)); tex.append(i32(1)); tex.append(i32(ph))  // fmt0, 1×10000
-        tex.append(Data("TEXB0003".utf8)); tex.append(0); tex.append(i32(2)); tex.append(i32(-1))                                  // imageCount=2
-        for _ in 0..<2 {   // 2 페이지, 각 1×10000 → 스택 높이 20000
-            tex.append(i32(1)); tex.append(i32(1)); tex.append(i32(ph)); tex.append(i32(0)); tex.append(i32(ph * 4)); tex.append(i32(ph * 4)); tex.append(page)
+        let ph = 6000
+        var tex = Data("TEXV0005\0TEXI0001\0".utf8)
+        for n in [0, 0, 1, ph, 1, ph] { tex.append(i32(n)) }
+        tex.append(Data("TEXB0003\0".utf8))
+        for n in [3, -1] { tex.append(i32(n)) }
+        for gray: UInt8 in [64, 128, 192] {
+            for n in [1, 1, ph, 0, ph * 4, ph * 4] { tex.append(i32(n)) }
+            tex.append(Data(Array(repeating: [gray, gray, gray, 255], count: ph).flatMap { $0 }))
         }
-        tex.append(Data("TEXS0003".utf8)); tex.append(0)
-        tex.append(i32(2)); tex.append(i32(1)); tex.append(i32(ph))
-        tex.append(i32(0)); tex.append(f32(0.2)); tex.append(f32(0)); tex.append(f32(0)); tex.append(f32(1)); tex.append(f32(0)); tex.append(f32(0)); tex.append(f32(Float(ph)))  // f0 id0
-        tex.append(i32(1)); tex.append(f32(0.2)); tex.append(f32(0)); tex.append(f32(0)); tex.append(f32(1)); tex.append(f32(0)); tex.append(f32(0)); tex.append(f32(Float(ph)))  // f1 id1
-        let package = try ScenePackage.parse(encodePkg([("materials/tall.tex", tex)]))
-        let r = SceneRenderer()
-        guard let res = r.resolveTextureWithFrames("materials/tall.tex", package: package, device: device) else {
-            return XCTFail("resolveTextureWithFrames nil")
+        tex.append(Data("TEXS0003\0".utf8))
+        for n in [3, 1, ph] { tex.append(i32(n)) }
+        for id in 0..<3 {
+            tex.append(i32(id))
+            for n: Float in [1, 0, 0, 1, 0, 0, Float(ph)] { tex.append(f32(n)) }
         }
-        XCTAssertEqual(res.frames.count, 2, "oversized sheets keep their animation metadata")
-        XCTAssertEqual(res.texture.height, ph)
-        let source = try XCTUnwrap(r.pagedTextureSources[ObjectIdentifier(res.texture)])
-        let second = try XCTUnwrap(source.texture(page: 1, renderer: r, device: device))
-        XCTAssertFalse(second === res.texture)
-        XCTAssertEqual(second.height, ph)
-        XCTAssertLessThanOrEqual(source.residentPageCount, 2)
+        let package = ScenePackage.assemble([("materials/tall.tex", tex)])
+        let renderer = SceneRenderer()
+        let decoded = try XCTUnwrap(renderer.resolveTextureWithFrames("materials/tall.tex", package: package, device: device))
+        XCTAssertEqual(decoded.frames.count, 3)
+        XCTAssertEqual(decoded.texture.height, ph)
+
+        var def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0.2), distanceMax: Vec3(x: 0, y: 0, z: 0),
+                            rate: 30, burst: 0)],
+            initializers: [.lifetimeRandom(min: 1, max: 1), .sizeRandom(min: 1, max: 1)],
+            operators: [], renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        def.animationMode = .sequence
+        let system = SceneRenderer.GPUParticleSystem(sim: ParticleSimulator(def: def, seed: 1), def: def, seed: 1,
+            texture: decoded.texture, blendAdditive: true, origin: .zero, scale: SIMD2(1, 1),
+            texRatio: 1, order: 0, isTrail: false, frames: decoded.frames)
+        let alternating = (0..<12).map { index in
+            var particle = Particle()
+            particle.frame = Float(index % 3)
+            return particle
+        }
+        let batches = try XCTUnwrap(renderer.pagedParticleBatches(alternating, system: system, device: device))
+        XCTAssertEqual(batches.map(\.current), alternating.map { Int($0.frame) })
+        XCTAssertEqual(Set(batches.map { ObjectIdentifier($0.system.texture) }).count, 3)
+        let source = try XCTUnwrap(renderer.pagedTextureSources[ObjectIdentifier(decoded.texture)])
+        XCTAssertEqual(source.residentPageCount, 2)
+
+        renderer.particleSystems = [system]
+        _ = renderer.stepParticleSnapshots(time: 0.5, liveDelta: nil)
+        renderer.particle3DAdditive = try XCTUnwrap(renderer.particle3DPipeline(additive: true, device: device))
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+            width: 16, height: 16, mipmapped: false)
+        descriptor.storageMode = .shared; descriptor.usage = .renderTarget
+        let target = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
+        let command = try XCTUnwrap(device.makeCommandQueue()?.makeCommandBuffer())
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .clear; pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].clearColor = .init(red: 0, green: 0, blue: 0, alpha: 1)
+        pass.depthAttachment.texture = try XCTUnwrap(renderer.pooledDepth(16, 16, device))
+        pass.depthAttachment.loadAction = .clear; pass.depthAttachment.clearDepth = 1
+        let encoder = try XCTUnwrap(command.makeRenderCommandEncoder(descriptor: pass))
+        let fog = SceneRenderer.Particle3DFogUniform(eye: .zero, fogDistanceColor: .zero, fogDistanceParams: .zero,
+            fogHeightColor: .zero, fogHeightParams: .zero)
+        renderer.encode3DParticles(time: 0.5, liveDelta: 0, viewProj: matrix_identity_float4x4,
+            right: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0), nmap: [:],
+            fog: fog, fogActive: false, into: encoder, device: device)
+        encoder.endEncoding()
+        command.commit(); command.waitUntilCompleted()
+        XCTAssertEqual(command.status, .completed)
+        var pixel: [UInt8] = [0, 0, 0, 0]
+        pixel.withUnsafeMutableBytes {
+            target.getBytes($0.baseAddress!, bytesPerRow: 4, from: MTLRegionMake2D(8, 8, 1, 1), mipmapLevel: 0)
+        }
+        XCTAssertEqual(Int(pixel[0]), 160, accuracy: 1, "The 3D draw blends page 1 (128) and page 2 (192).")
     }
 
     // MARK: 실코퍼스(폴더 있을 때만 — CI 안전 skip)

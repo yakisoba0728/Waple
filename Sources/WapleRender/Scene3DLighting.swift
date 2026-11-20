@@ -179,7 +179,7 @@ struct Scene3DMaterialValues: Equatable {
 /// diffuse `albedo*(saturate(NL)+rim)*attn²` — /π 없음)를 별도 kind 로 이식해야 한다. 별도 작업 단위다.
 /// 수식은 `SceneWELightMath.legacyAttenuation/legacySpecularPower/legacySpecularStrength` 에
 /// 순수 함수로 고정해 뒀다(리눅스 테스트로 값 못박음).
-enum Scene3DLightKind: Float, Equatable {
+enum Scene3DLightKind: Float, Equatable, CaseIterable {
     case point = 0, directional = 1, spot = 2, tube = 4
     init?(type: String) {
         // G-A4-04: 접두 `l` 없는 레거시 표기도 받는다. WE 2.8.42 설치본 실측: 씬의 `"light"` 값이
@@ -448,7 +448,8 @@ enum Scene3DLighting {
     /// PBR·볼류메트릭은 같은 부모 가시성·월드 변환·forward 축을 소비한다.
     static func worldTransform(for light: SceneLight3D, nodes: [Int: Scene3DMath.Node])
         -> (position: SIMD3<Float>, forward: SIMD3<Float>, parentMatrix: simd_float4x4)? {
-        guard light.origin.x.isFinite, light.origin.y.isFinite, light.origin.z.isFinite,
+        guard light.initialVisible,
+              light.origin.x.isFinite, light.origin.y.isFinite, light.origin.z.isFinite,
               light.angles.x.isFinite, light.angles.y.isFinite, light.angles.z.isFinite else { return nil }
         // scale=1 로 라이트 자체 크기 오염을 막고 col0(+X)를 forward로 쓴다(V1 패커 glm::column(M, 0)).
         let localMatrix = Scene3DMath.modelMatrix(

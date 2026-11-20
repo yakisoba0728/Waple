@@ -25,7 +25,7 @@ GPU, including particles, 3D meshes, puppet warp and audio-reactive effects.
 | `scene.pkg` scene | ✅ Native Metal renderer | See the [scene feature matrix](#scene-renderer-feature-matrix) |
 | `.mp4` `.mov` `.m4v` video | ✅ AVFoundation, direct | HEVC preferred |
 | `.webm` `.mkv` `.avi` video | 🟡 Transcoded first | Requires local `ffmpeg`; **only** for video containers found inside a WE background package — raw drag-and-drop import accepts `.mp4`/`.mov`/`.m4v` only |
-| `index.html` web | 🟡 Restricted offline WKWebView | Storage is non-persistent by policy (`localStorage`/`IndexedDB` do not survive a remount) |
+| `index.html` web | 🟡 Restricted WKWebView | Storage is discarded on remount. Pages may load HTTPS subresources, and access to system audio spectrum and Now Playing data requires permission for that wallpaper. |
 | `.jpg` `.png` `.gif` image | ❌ Not a top-level type | The type system and renderer factory have no image case. Unrelated to images used *as textures* by layers **inside** a scene |
 
 ## Scene renderer feature matrix
@@ -49,6 +49,13 @@ Legend: ✅ implemented · 🟡 partial (the gap is named) · ❌ not implemente
 are skipped with a log entry, but some paths — for example a layer texture whose bytes are present but
 fail to decode, or shader compile validation on a machine with no GPU device — are skipped completely
 silently. "It gets logged" is a general design direction, not a guarantee.
+
+Open **Wallpaper Permissions** in a wallpaper’s Library inspector to enable its scene scripts or to
+share audio spectrum and Now Playing information with its web content. Both permissions start off.
+Web scripts loaded from remote sites can receive data shared with their wallpaper. Enabled native
+scene scripts run inside Waple, so a stalled script can make the app unresponsive. Enable them only
+for wallpapers you trust. If a wallpaper used a file or folder outside its own directory before
+this update, select it again in the inspector to grant that wallpaper access.
 
 Known gaps that are tracked rather than hidden live in [BACKLOG.md](BACKLOG.md) and
 [docs/README.md](docs/README.md); a few current examples: `_rt_` composite triangle masks in one corpus scene, word

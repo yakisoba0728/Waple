@@ -17,6 +17,58 @@ final class LibraryImportFixRegressionTests: XCTestCase {
 
     private func base() -> URL { tmp.appendingPathComponent("store", isDirectory: true) }
 
+    func testArchivesClaimingTheSameWorkshopIDKeepBothSources() throws {
+        let store = LibraryStore(baseDirectory: base())
+        let first = try makeZipFixture(wrapperName: "Wallpaper", workshopId: "123456", tag: "First")
+        let second = try makeZipFixture(wrapperName: "Wallpaper", workshopId: "123456", tag: "Second")
+        let original = try XCTUnwrap(store.importZip(first).first)
+        let imported = try XCTUnwrap(store.importZip(second).first)
+        let restored = LibraryStore(baseDirectory: base())
+
+        XCTAssertEqual(restored.entries.map(\.title), ["First", "Second"])
+        XCTAssertNotEqual(original.id, imported.id)
+        XCTAssertNil(imported.workshopItemID, "Unverified archive metadata is not an installed Steam record")
+        let originalFolder = try XCTUnwrap(restored.resolveFolderURL(for: original))
+        let importedFolder = try XCTUnwrap(restored.resolveFolderURL(for: imported))
+        XCTAssertEqual(try String(contentsOf: originalFolder.appendingPathComponent("wallpaper.mp4"), encoding: .utf8), "dummy-First")
+        XCTAssertEqual(try String(contentsOf: importedFolder.appendingPathComponent("wallpaper.mp4"), encoding: .utf8), "dummy-Second")
+    }
+
+    func testArchiveAndFolderImportsRollBackWhenIndexCannotBeWritten() throws {
+        let store = LibraryStore(baseDirectory: base())
+        let fm = FileManager.default
+        let indexFolder = base().appendingPathComponent("library.json", isDirectory: true)
+        try fm.createDirectory(at: indexFolder, withIntermediateDirectories: false)
+        let folder = try makeWallpaperFolder(id: "External")
+        let archive = try makeZipFixture(wrapperName: "Wallpaper", workshopId: "123456", tag: "Managed")
+        let extracted = try XCTUnwrap(store.extractZipToTemp(archive))
+
+        XCTAssertThrowsError(try store.importFolder(folder))
+        XCTAssertThrowsError(try store.importFoldersPersisting([folder]))
+        XCTAssertThrowsError(try store.importExtractedZipPersisting(extracted))
+        XCTAssertTrue(store.entries.isEmpty)
+        let managed = base().appendingPathComponent("imported", isDirectory: true)
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: managed.path), [])
+        XCTAssertFalse(fm.fileExists(atPath: extracted.path))
+        XCTAssertTrue(fm.fileExists(atPath: folder.path))
+    }
+
+    func testSuffixedEntryKeepsItsIdentityAfterTheBaseEntryIsRemoved() throws {
+        let store = LibraryStore(baseDirectory: base())
+        let first = try makeWallpaperFolder(id: "first").appendingPathComponent("project.json")
+        let second = try makeWallpaperFolder(id: "second").appendingPathComponent("project.json")
+        let manifest = Data(#"{"type":"video","file":"wallpaper.mp4","workshopid":"123456"}"#.utf8)
+        try manifest.write(to: first)
+        try manifest.write(to: second)
+        let original = try store.importFolder(first.deletingLastPathComponent())
+        let unique = try store.importFolder(second.deletingLastPathComponent())
+        XCTAssertTrue(store.remove(id: original.id))
+        let repeated = try store.importFolder(second.deletingLastPathComponent())
+        XCTAssertEqual(repeated.id, unique.id)
+        XCTAssertEqual(repeated.installationID, unique.installationID)
+        XCTAssertEqual(store.entries, [repeated])
+    }
+
     /// 임시 배경 폴더(project.json + 더미 자산) 생성(LibraryStoreTests 관례와 동일).
     private func makeWallpaperFolder(id: String, type: String = "video") throws -> URL {
         let folder = tmp.appendingPathComponent(id, isDirectory: true)

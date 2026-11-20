@@ -4,6 +4,36 @@ import WapleCore
 /// 배경별 유저 속성 오버라이드(UserDefaults JSON 영속). 값은 String/Bool/Double 만.
 public enum UserPropertyStore {
     private static func key(_ id: String) -> String { "waple.userprops.\(id)" }
+    private static func resourceKey(_ id: String) -> String { "waple.resource-grants.\(id)" }
+
+    public static func allowsWebMedia(id: String) -> Bool {
+        UserDefaults.standard.bool(forKey: "waple.web-media.\(id)")
+    }
+
+    public static func setAllowsWebMedia(_ allowed: Bool, id: String) {
+        UserDefaults.standard.set(allowed, forKey: "waple.web-media.\(id)")
+    }
+
+    public static func allowsSceneScripts(id: String) -> Bool {
+        UserDefaults.standard.bool(forKey: "waple.scene-scripts.\(id)")
+    }
+
+    public static func setAllowsSceneScripts(_ allowed: Bool, id: String) {
+        UserDefaults.standard.set(allowed, forKey: "waple.scene-scripts.\(id)")
+    }
+
+    public static func resourceGrants(id: String) -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: resourceKey(id)) as? [String: String] ?? [:]
+    }
+
+    public static func setResourceGrant(absolutePath: String?, key: String, id: String) {
+        var grants = resourceGrants(id: id)
+        grants[key] = absolutePath.flatMap { path in
+            guard path.hasPrefix("/"), !path.contains("\0") else { return nil }
+            return URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        }
+        UserDefaults.standard.set(grants, forKey: resourceKey(id))
+    }
 
     /// 씬 파서(userProps:)용 raw 딕셔너리.
     public static func rawOverrides(id: String) -> [String: Any] {
@@ -71,6 +101,7 @@ public enum UserPropertyStore {
 
     public static func reset(id: String) {
         UserDefaults.standard.removeObject(forKey: key(id))
+        UserDefaults.standard.removeObject(forKey: resourceKey(id))
     }
 
     private static func rawDictionary(from overrides: [String: PropertyValue]) -> [String: Any] {
@@ -90,14 +121,7 @@ public enum UserPropertyStore {
         return raw
     }
 
-    /// preset(project.json "preset" 키) 오버라이드는 배경 작성자가 제어하는 신뢰 경계 밖 값이다.
-    /// 상대경로는 preset 루트 안에 봉쇄해 해석하지만, **절대경로 값은 root 유무와 무관하게 항상
-    /// 폐기한다** — WebRenderer 의 userSelectedResourceOverrides 허용목록은 이 함수의 반환값을
-    /// 그대로 스캔해 절대경로 문자열을 "사용자가 파일피커로 직접 선택"한 것으로 취급하므로, 여기서
-    /// 걸러내지 않으면 악성 web 배경이 project.json 에 `"preset":{"key":"/etc/passwd"}` 를 심어
-    /// randomFile/fetchall 브릿지로 임의 절대경로의 파일 존재 여부·디렉터리 목록을 프로빙할 수 있다
-    /// (F357). 진짜 사용자 선택은 이 함수를 거치지 않는 별도 경로(overrides(id:) → UserDefaults,
-    /// LibraryViewModel.setProperty)로만 들어오므로 영향받지 않는다.
+    /// 패키지가 선언한 리소스는 프리셋 루트에 속한 상대경로만 허용한다.
     private static func resolvingPresetResources(_ overrides: [String: PropertyValue], root: URL?) -> [String: PropertyValue] {
         var out = overrides
         for (key, value) in overrides {

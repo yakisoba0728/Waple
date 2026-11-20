@@ -7,7 +7,7 @@ import WapleRender
 // 부수효과(ScreenSaverController — 설치/선택/해제/설정 열기)를 분리해 로직을 WapleAppTests 에서 검증한다.
 // 상태는 전부 CFPreferences 에 있으므로 둘 다 인스턴스 없는 enum 이다.
 
-/// 순수 결정 로직 — 파일시스템/CFPreferences 접근 없음(단위테스트 대상).
+/// 시스템 화면보호기 설정을 쓰기 전에 설치 위치와 비디오 설정을 결정한다.
 enum ScreenSaverLogic {
     static let saverName = "Waple"
     /// 화면보호기(AVFoundation)가 확실히 재생하는 컨테이너 — WapleSaverView.m 의 목록과 일치해야 한다.
@@ -23,19 +23,27 @@ enum ScreenSaverLogic {
         screenSaversDirectory.appendingPathComponent("\(saverName).saver")
     }
 
-    /// 화면보호기가 재생할 동영상의 절대 경로. 동영상 타입 + 지원 확장자일 때만 반환.
-    static func videoPath(for project: WallpaperProject?) -> String? {
-        guard let project, project.type == .video, let fileName = project.fileName else { return nil }
-        let url = project.folderURL.appendingPathComponent(fileName)
-        guard videoExtensions.contains(url.pathExtension.lowercased()) else { return nil }
-        return url.path
-    }
-
     /// The three values are synchronized together; changing non-video backgrounds preserves the last video.
-    static func videoConfiguration(for project: WallpaperProject?, fitMode: FitMode, rate: Float) -> [String: Any]? {
-        guard let path = videoPath(for: project) else { return nil }
-        let safeRate = rate.isFinite ? max(VideoSettings.minRate, min(VideoSettings.maxRate, rate)) : 1
-        return ["videoPath": path, "videoFitMode": fitMode.rawValue, "videoPlaybackRate": NSNumber(value: safeRate)]
+    static func videoConfiguration(
+        for projects: [WallpaperProject],
+        preparedVideoURLs: [URL: URL] = [:],
+        fitMode: FitMode,
+        rate: (String) -> Float,
+        isRegularFile: (URL) -> Bool = {
+            (try? $0.resolvingSymlinksInPath().resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+        }
+    ) -> [String: Any]? {
+        for project in projects where project.type == .video {
+            guard let source = WallpaperPathSecurity.containedFileURL(project.fileName, root: project.folderURL)
+            else { continue }
+            let url = preparedVideoURLs[source.standardizedFileURL] ?? source
+            guard url.isFileURL, videoExtensions.contains(url.pathExtension.lowercased()), isRegularFile(url)
+            else { continue }
+            let speed = rate(project.id)
+            let safeRate = speed.isFinite ? max(VideoSettings.minRate, min(VideoSettings.maxRate, speed)) : 1
+            return ["videoPath": url.path, "videoFitMode": fitMode.rawValue, "videoPlaybackRate": NSNumber(value: safeRate)]
+        }
+        return nil
     }
 
     /// enable 시 현재 시스템 선택(moduleDict)을 백업해 둘지 판정.
@@ -95,7 +103,7 @@ enum ScreenSaverController {
 
     /// 켜기: ① 번들 saver 를 ~/Library/Screen Savers 로 설치(덮어쓰기)
     ///       ② moduleDict 로 시스템 선택 ③ 현재 배경이 동영상이면 경로 기록.
-    static func enable(currentProject: WallpaperProject?) throws {
+    static func enable(currentProjects: [WallpaperProject], preparedVideoURLs: [URL: URL] = [:]) throws {
         guard let bundled = Bundle.main.url(forResource: ScreenSaverLogic.saverName,
                                             withExtension: "saver") else {
             // F840: 이 문자열은 AppDelegate.toggleScreenSaverCore 의 알림에 `error.localizedDescription`
@@ -105,11 +113,8 @@ enum ScreenSaverController {
                 NSLocalizedString("앱 번들에 Waple.saver 가 없습니다 — scripts/package-app.sh 로 패키징한 앱에서 실행하세요.",
                                   comment: "화면보호기 설치 실패 — 앱 번들에 .saver 부재")])
         }
-        let fm = FileManager.default
-        try fm.createDirectory(at: screenSaversDirectory, withIntermediateDirectories: true)
         let dest = ScreenSaverLogic.installDestination(screenSaversDirectory: screenSaversDirectory)
-        if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }  // 버전 갱신 시 덮어쓰기
-        try fm.copyItem(at: bundled, to: dest)
+        try installBundle(from: bundled, to: dest)
 
         // 덮어쓰기 전에 사용자의 원래 선택을 백업(disable 이 원복). 이미 Waple 이면 원본 백업 보존.
         let current = CFPreferencesCopyValue(moduleDictKey, systemDomain,
@@ -131,7 +136,22 @@ enum ScreenSaverController {
                               ScreenSaverLogic.moduleDict(installedPath: dest.path) as CFDictionary,
                               systemDomain, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
         CFPreferencesSynchronize(systemDomain, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
-        syncVideoPath(for: currentProject)
+        syncVideoPath(for: currentProjects, preparedVideoURLs: preparedVideoURLs)
+    }
+
+    static func installBundle(from bundled: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        let directory = destination.deletingLastPathComponent()
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        // 기존 번들을 건드리기 전에 같은 볼륨에 복사를 완료한다.
+        let staged = directory.appendingPathComponent(".Waple-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: staged) }
+        try fm.copyItem(at: bundled, to: staged)
+        if fm.fileExists(atPath: destination.path) {
+            _ = try fm.replaceItemAt(destination, withItemAt: staged)
+        } else {
+            try fm.moveItem(at: staged, to: destination)
+        }
     }
 
     /// 끄기: 백업된 사용자 화면보호기가 있으면 원복(백업 소거), 없으면 선택 제거.
@@ -157,14 +177,12 @@ enum ScreenSaverController {
 
     /// 현재 배경이 동영상이면 그 경로를 saver 도메인에 기록. 아니면 기존 값 유지
     /// (마지막 동영상을 계속 재생 — 검은 화면보다 낫다). AppDelegate.apply 성공 경로에서 호출.
-    static func syncVideoPath(for project: WallpaperProject?) {
-        let rate = project.map { VideoSettings.rate(id: $0.id) } ?? 1
-        guard let configuration = ScreenSaverLogic.videoConfiguration(for: project,
-            fitMode: SceneRenderSettings.fitMode, rate: rate) else { return }
-        for (key, value) in configuration {
-            CFPreferencesSetValue(key as CFString, value as CFPropertyList, saverDomain,
-                                  kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
-        }
+    static func syncVideoPath(for projects: [WallpaperProject], preparedVideoURLs: [URL: URL] = [:]) {
+        guard let configuration = ScreenSaverLogic.videoConfiguration(for: projects,
+            preparedVideoURLs: preparedVideoURLs, fitMode: SceneRenderSettings.fitMode,
+            rate: VideoSettings.rate(id:)) else { return }
+        CFPreferencesSetMultiple(configuration as CFDictionary, nil, saverDomain,
+                                 kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
         CFPreferencesSynchronize(saverDomain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
     }
 

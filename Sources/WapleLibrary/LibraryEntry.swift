@@ -15,10 +15,17 @@ public struct LibraryEntry: Codable, Equatable {
     public var rating: Double?
     /// Remote publishedfileid, independent of the local project/uniquified entry id.
     public var workshopItemID: String?
+    public let installationID: UUID?
+
+    /// New installations must never inherit state from an entry removed under the same project ID.
+    public var userStateID: String {
+        installationID.map { "installation:\($0.uuidString)" } ?? id
+    }
 
     public init(id: String, title: String, typeRaw: String,
                 fileName: String?, previewName: String?, bookmark: Data,
-                tags: [String]? = nil, contentRating: String? = nil, rating: Double? = nil, workshopItemID: String? = nil) {
+                tags: [String]? = nil, contentRating: String? = nil, rating: Double? = nil,
+                workshopItemID: String? = nil, installationID: UUID? = nil) {
         self.id = id
         self.title = title
         self.typeRaw = typeRaw
@@ -29,5 +36,6 @@ public struct LibraryEntry: Codable, Equatable {
         self.contentRating = contentRating
         self.rating = rating
         self.workshopItemID = workshopItemID
+        self.installationID = installationID
     }
 }

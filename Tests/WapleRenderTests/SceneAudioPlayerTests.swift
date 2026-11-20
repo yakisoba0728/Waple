@@ -295,7 +295,39 @@ final class SceneAudioPlayerTests: XCTestCase {
         XCTAssertTrue(player.isPlaying(name: "sfx"))
         spin(until: { !player.isPlaying(name: "sfx") })
         XCTAssertFalse(player.isPlaying(name: "sfx"), "0.15초 곡 자연종료 후 isPlaying false 이어야")
+        player.pause()
+        player.resume()
+        XCTAssertFalse(player.isPlaying(name: "sfx"), "resuming the scene must not retrigger an ended one-shot")
         player.teardown()
+    }
+
+    func testScenePauseAndResumeDuringRandomGapKeepsTheGap() throws {
+        try skipUnlessAudioOutputCanPlay()
+        let pkg = ScenePackage.assemble([(name: "sounds/track.wav", data: Self.silentWAV(seconds: 0.15))])
+        let player = SceneAudioPlayer()
+        defer { player.teardown() }
+        player.start(sounds: [sound(["sounds/track.wav"], mode: "random", name: "bgm", minTime: 2, maxTime: 2)],
+                     package: pkg, settingVolume: 0)
+        XCTAssertTrue(player.isPlaying(name: "bgm"))
+        spin(until: { !player.isPlaying(name: "bgm") })
+        XCTAssertFalse(player.isPlaying(name: "bgm"))
+        player.pause()
+        player.resume()
+        XCTAssertFalse(player.isPlaying(name: "bgm"))
+    }
+
+    func testSceneResumePreservesScriptPauseUntilSoundIsRetriggered() throws {
+        try skipUnlessAudioOutputCanPlay()
+        let pkg = ScenePackage.assemble([(name: "sounds/loop.wav", data: Self.silentWAV())])
+        let player = SceneAudioPlayer()
+        defer { player.teardown() }
+        player.start(sounds: [sound(["sounds/loop.wav"], name: "bgm")], package: pkg, settingVolume: 0)
+        player.pause(name: "bgm")
+        player.pause()
+        player.resume()
+        XCTAssertFalse(player.isPlaying(name: "bgm"))
+        player.play(name: "bgm")
+        XCTAssertTrue(player.isPlaying(name: "bgm"))
     }
 
     /// stop(name:) → 즉시 정지.

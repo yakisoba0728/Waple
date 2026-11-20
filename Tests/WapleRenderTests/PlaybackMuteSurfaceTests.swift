@@ -81,15 +81,15 @@ final class PlaybackMuteSurfaceTests: XCTestCase {
     // **주입 문자열이 무엇을 약속하는가** 이고, 그 약속 셋이 사라지면 조용히 안 먹는다.
 
     func testMuteJSCarriesTheRequestedState() {
-        XCTAssertTrue(WebRenderer.muteJS(true).contains("window.__wapleMuted = true"))
-        XCTAssertTrue(WebRenderer.muteJS(false).contains("window.__wapleMuted = false"))
+        XCTAssertTrue(WebRenderer.muteJS(true).contains("__wapleSetAudioMuted?.(true)"))
+        XCTAssertTrue(WebRenderer.muteJS(false).contains("__wapleSetAudioMuted?.(false)"))
     }
 
     /// `<video>` 와 `<audio>` **둘 다** 본다. 하나만 보면 오디오 전용 벽지가 정책을 무시한다.
     func testMuteJSTargetsBothMediaElementKinds() {
-        let js = WebRenderer.muteJS(true)
+        let js = WebHardPauseJS.source
         XCTAssertTrue(js.contains("querySelectorAll('video, audio')"))
-        XCTAssertTrue(js.contains("el.muted = true"))
+        XCTAssertTrue(js.contains("element.muted = true"))
     }
 
     /// **우리가 켠 음소거만 우리가 끈다.**
@@ -98,21 +98,20 @@ final class PlaybackMuteSurfaceTests: XCTestCase {
     /// 그냥 지우면 사용자가 음소거해 둔 배경이 **최대 음량으로** 소리를 낸다(`<video>` 의
     /// `volume` 기본값은 1 이다). 그래서 요소마다 정책 이전 값을 적어 두고 그 값으로 되돌린다.
     func testMuteJSRestoresTheAuthoredMutedStateInsteadOfUnmutingBlindly() {
-        for js in [WebRenderer.muteJS(true), WebRenderer.muteJS(false)] {
-            XCTAssertTrue(js.contains("__wapleWasMuted"),
-                          "정책 이전 값을 기록하지 않으면 해제가 사용자 음소거를 지운다")
-            XCTAssertTrue(js.contains("el.muted = el.__wapleWasMuted"),
-                          "해제는 기록한 값으로 되돌려야 한다")
-            XCTAssertFalse(js.contains("el.muted = false"),
-                           "무조건 false 대입은 사용자가 음소거해 둔 배경을 소리 나게 만든다")
-        }
+        let js = WebHardPauseJS.source
+        XCTAssertTrue(js.contains("__wapleWasMuted"),
+                      "정책 이전 값을 기록하지 않으면 해제가 사용자 음소거를 지운다")
+        XCTAssertTrue(js.contains("element.muted = element.__wapleWasMuted"),
+                      "해제는 기록한 값으로 되돌려야 한다")
+        XCTAssertFalse(js.contains("element.muted = false"),
+                       "무조건 false 대입은 사용자가 음소거해 둔 배경을 소리 나게 만든다")
     }
 
     /// **나중에 생기는 요소까지 따라가야 한다.** 웹 벽지는 `<video>` 를 스크립트로 붙이는 것이
     /// 흔하고, 폴백 HTML 조차 `onerror` 에서 `src` 를 재설정한다. 한 번 훑고 끝내면 그 뒤에
     /// 생긴 요소가 정책을 무시한 채 소리를 낸다.
     func testMuteJSInstallsAMutationObserverForLateElements() {
-        let js = WebRenderer.muteJS(true)
+        let js = WebHardPauseJS.source
         XCTAssertTrue(js.contains("MutationObserver"))
         XCTAssertTrue(js.contains("subtree: true"))
     }
@@ -121,7 +120,6 @@ final class PlaybackMuteSurfaceTests: XCTestCase {
     /// volumeScript, 웹 벽지의 자체 설정) 정책이 그 값을 덮으면 음소거를 풀 때 되돌릴 원본이
     /// 없다. `muted` 는 그 위에 겹치는 별개 비트라 정확히 우리가 원하는 층이다.
     func testMuteJSNeverWritesPageVolume() {
-        XCTAssertFalse(WebRenderer.muteJS(true).contains(".volume ="))
-        XCTAssertFalse(WebRenderer.muteJS(false).contains(".volume ="))
+        XCTAssertFalse(WebHardPauseJS.source.contains(".volume ="))
     }
 }

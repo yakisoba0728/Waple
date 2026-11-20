@@ -143,7 +143,7 @@ final class PlaylistWiringTests: XCTestCase {
     func testRestoreHandlesDeferredFailureInsteadOfTreatingPendingAsSuccess() throws {
         let code = stripComments(try body(of: "private func restoreLastWallpaper() {",
                                           in: try appDelegateSource()))
-        XCTAssertTrue(code.contains("requestApply(folderURL: folder) {"))
+        XCTAssertTrue(code.contains("requestApply(entry: entry, folderURL: folder) {"))
         XCTAssertTrue(code.contains("handleRestoredWallpaperFailure()"),
                       "시작 시 비디오 변환 실패도 선택 clear + 화면별 할당 fallback을 타야 한다")
     }
@@ -175,8 +175,8 @@ final class PlaylistWiringTests: XCTestCase {
     func testScreenResolutionGoesThroughTheEffectiveAssignment() throws {
         let code = stripComments(try appDelegateSource())
         let closures = code.split(separator: "\n").filter { $0.contains("assignment: {") }
-        XCTAssertEqual(closures.count, 2,
-                       "MonitorMapping.assignedFolder 주입 지점이 둘이 아니다 — 이 오라클의 전제가 바뀌었다")
+        XCTAssertEqual(closures.count, 1,
+                       "화면 해석 공용 주입 지점이 하나가 아니다 — 이 오라클의 전제가 바뀌었다")
         for line in closures {
             XCTAssertTrue(line.contains("effectiveAssignment(for:"),
                           "화면 해석이 재생목록 오버라이드를 못 본다 — 모니터별 재생목록이 화면에 도달하지 않는다: \(line)")

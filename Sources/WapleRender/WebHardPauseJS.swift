@@ -195,15 +195,46 @@ enum WebHardPauseJS {
           return nativeAudioDisconnect.apply(this, args);
         };
       }
-      window.__wapleSetAudioMuted = function(muted) {
+      function applyMediaMute() {
+        var elements = document.querySelectorAll('video, audio');
+        for (var index = 0; index < elements.length; index += 1) {
+          var element = elements[index];
+          if (audioPolicyMuted) {
+            if (element.__wapleWasMuted === undefined) { element.__wapleWasMuted = element.muted; }
+            if (!element.muted) { element.muted = true; }
+          } else if (element.__wapleWasMuted !== undefined) {
+            element.muted = element.__wapleWasMuted;
+            element.__wapleWasMuted = undefined;
+          }
+        }
+      }
+
+      function setAudioMuted(muted) {
         audioPolicyMuted = !!muted;
+        window.__wapleMuted = audioPolicyMuted;
         audioEntries.forEach(function(entry) {
           if (entry.policyGain) { entry.policyGain.gain.value = audioPolicyMuted ? 0 : 1; }
         });
-        for (var i = 0; i < window.frames.length; ++i) {
-          try { if (window.frames[i].__wapleSetAudioMuted) { window.frames[i].__wapleSetAudioMuted(audioPolicyMuted); } } catch (_) {}
+        applyMediaMute();
+      }
+      Object.defineProperty(window, '__wapleSetAudioMuted', {
+        value: function(muted) {
+          setAudioMuted(muted);
+          postStateToChildren();
         }
-      };
+      });
+
+      if (window.MutationObserver) {
+        new window.MutationObserver(function () {
+          if (audioPolicyMuted) { applyMediaMute(); }
+        }).observe(document, { childList: true, subtree: true });
+      }
+      document.addEventListener('volumechange', function (event) {
+        if (audioPolicyMuted && event.target instanceof HTMLMediaElement && !event.target.muted) {
+          applyMediaMute();
+        }
+      }, true);
+      if (audioPolicyMuted) { applyMediaMute(); }
 
 
       function removeAudioEntry(entry) {
@@ -611,7 +642,8 @@ enum WebHardPauseJS {
           channel: frameChannel,
           version: frameVersion,
           type: type,
-          paused: paused
+          paused: paused,
+          muted: audioPolicyMuted
         };
       }
 
@@ -652,7 +684,11 @@ enum WebHardPauseJS {
         if (message.type === 'state' &&
             window.parent !== window &&
             event.source === window.parent) {
+          var muteChanged = typeof message.muted === 'boolean' && message.muted !== audioPolicyMuted;
+          if (muteChanged) { setAudioMuted(message.muted); }
+          var pauseChanged = paused !== !!message.paused;
           controller.setPaused(!!message.paused);
+          if (muteChanged && !pauseChanged) { postStateToChildren(); }
         }
       }, false);
 

@@ -799,22 +799,25 @@ final class WebHardPauseTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        let child = """
-        <html><body><script>
-        parent.postMessage({ wapleFrame: 'same', kind: 'ready' }, '*');
-        setInterval(function () {
-          parent.postMessage({ wapleFrame: 'same', kind: 'tick' }, '*');
-        }, 100);
-        </script></body></html>
-        """
-        let dataChild = """
-        <html><body><script>
-        parent.postMessage({ wapleFrame: 'data', kind: 'ready' }, '*');
-        setInterval(function () {
-          parent.postMessage({ wapleFrame: 'data', kind: 'tick' }, '*');
-        }, 100);
-        </script></body></html>
-        """
+        func frame(_ id: String) -> String {
+            """
+            <html><body><audio id="plain"></audio><audio id="authored" muted></audio><script>
+            function reportMute() {
+              parent.postMessage({ wapleFrame: '\(id)', kind: 'mute',
+                plain: document.getElementById('plain').muted,
+                authored: document.getElementById('authored').muted }, '*');
+            }
+            document.addEventListener('volumechange', reportMute, true);
+            reportMute();
+            parent.postMessage({ wapleFrame: '\(id)', kind: 'ready' }, '*');
+            setInterval(function () {
+              parent.postMessage({ wapleFrame: '\(id)', kind: 'tick' }, '*');
+            }, 100);
+            </script></body></html>
+            """
+        }
+        let child = frame("same")
+        let dataChild = frame("data")
         let dataURL = "data:text/html;charset=utf-8," +
             (dataChild.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")
         let dataURLLiteral = try XCTUnwrap(
@@ -834,7 +837,13 @@ final class WebHardPauseTests: XCTestCase {
         window.addEventListener('message', function (event) {
           var body = event.data || {};
           if (!window.__frameEvents[body.wapleFrame]) { return; }
-          window.__frameEvents[body.wapleFrame][body.kind] += 1;
+          var events = window.__frameEvents[body.wapleFrame];
+          if (body.kind === 'mute') {
+            events.plain = body.plain;
+            events.authored = body.authored;
+          } else {
+            events[body.kind] += 1;
+          }
         });
         window.__spawnPausedFrames = function () {
           var same = document.createElement('iframe');
@@ -921,6 +930,16 @@ final class WebHardPauseTests: XCTestCase {
             "data 프레임이 \(String(format: "%.3f", observedAfter))초 동안 \(dataAtFirstTick)틱 — "
                 + "경과가 허용하는 \(budget)틱을 넘었다(백로그 플러시)"
         )
+        renderer.setPolicyMuted(true)
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "[window.__frameEvents.same, window.__frameEvents.data].every(e => e.plain && e.authored)")
+                as? Bool == true
+        })
+        renderer.setPolicyMuted(false)
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "[window.__frameEvents.same, window.__frameEvents.data].every(e => e.plain === false && e.authored)")
+                as? Bool == true
+        })
     }
 
     func testReloadReplaysEffectivePauseBeforePropertyDelivery() throws {

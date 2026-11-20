@@ -1,4 +1,9 @@
 import Foundation
+#if os(Linux)
+import Glibc
+#else
+import Darwin
+#endif
 
 public enum WallpaperPathSecurity {
     public static func normalizedRelativePath(_ raw: String?) -> String? {
@@ -80,7 +85,62 @@ public enum WallpaperPathSecurity {
     public static func contains(_ candidate: URL, in root: URL) -> Bool {
         let rootPath = root.standardizedFileURL.path
         let candidatePath = candidate.standardizedFileURL.path
-        return candidatePath == rootPath || candidatePath.hasPrefix(rootPath + "/")
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        return candidatePath == rootPath || candidatePath.hasPrefix(prefix)
+    }
+
+    static func regularFileURL(_ candidate: URL, in root: URL) -> URL? {
+        let realRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        let realFile = candidate.resolvingSymlinksInPath().standardizedFileURL
+        guard contains(candidate, in: root), contains(realFile, in: realRoot),
+              (try? realFile.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+            return nil
+        }
+        return realFile
+    }
+
+    /// Check the opened file before reading or mapping, so type and size apply to the actual descriptor.
+    public static func readRegularFile(_ candidate: URL, in root: URL, maximumBytes: Int,
+                                       mapped: Bool = false) throws -> Data {
+        let realRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        guard let file = regularFileURL(candidate, in: root), contains(file, in: realRoot) else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        let relative = file.pathComponents.dropFirst(realRoot.pathComponents.count)
+        guard let name = relative.last else { throw CocoaError(.fileReadNoSuchFile) }
+        let directoryFlags = O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+        var directory = realRoot.withUnsafeFileSystemRepresentation { path in
+            path.map { open($0, directoryFlags) } ?? -1
+        }
+        guard directory >= 0 else { throw CocoaError(.fileReadUnknown) }
+        defer { _ = close(directory) }
+        for component in relative.dropLast() {
+            let child = openat(directory, component, directoryFlags)
+            guard child >= 0 else { throw CocoaError(.fileReadUnknown) }
+            _ = close(directory)
+            directory = child
+        }
+        let descriptor = openat(directory, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
+        guard descriptor >= 0 else { throw CocoaError(.fileReadUnknown) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        guard let size = Int(exactly: info.st_size), size >= 0, size <= maximumBytes else {
+            throw CocoaError(.fileReadTooLarge)
+        }
+        guard size > 0 else { return Data() }
+        if mapped, let address = mmap(nil, size, PROT_READ, MAP_PRIVATE, descriptor, 0),
+           address != MAP_FAILED {
+            return Data(bytesNoCopy: address, count: size, deallocator: .unmap)
+        }
+        guard let data = try handle.read(upToCount: size), data.count == size else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        return data
     }
 
     private static func fullyPercentDecoded(_ raw: String) -> String {

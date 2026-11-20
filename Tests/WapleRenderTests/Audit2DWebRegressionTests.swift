@@ -224,14 +224,14 @@ final class Audit2DWebRegressionTests: XCTestCase {
         let firstFile = firstAssets.appendingPathComponent("file.txt")
         let secondFile = second.folderURL.appendingPathComponent("assets/file.txt")
         let renderer = WebRenderer(mode: .web)
-        renderer.directoryWalker = { url in
+        renderer.directoryWalker = { url, _ in
             if url == firstAssets {
                 entered.fulfill()
                 _ = release.wait(timeout: .now() + 5)
                 returned.fulfill()
-                return [firstFile]
+                return ([firstFile], 1)
             }
-            return [secondFile]
+            return ([secondFile], 1)
         }
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36))
         try renderer.mount(in: container, project: first)
@@ -252,6 +252,40 @@ final class Audit2DWebRegressionTests: XCTestCase {
         XCTAssertEqual(files, [secondFile.resolvingSymlinksInPath().path])
     }
 
+    func testFetchAllSharesOneDirectoryWalkAcrossPropertyNames() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try directoryProject(in: directory)
+        try """
+        <script>
+        window.filesByProperty = {};
+        window.wallpaperPropertyListener = {
+          userDirectoryFilesAddedOrChanged: function (key, files) {
+            if (!window.filesByProperty[key]) { window.filesByProperty[key] = files; }
+          }
+        };
+        </script>
+        """.write(to: directory.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        try """
+        {"type":"web","file":"index.html","general":{"properties":{
+          "primary":{"type":"directory","value":"assets","mode":"fetchall"},
+          "secondary":{"type":"directory","value":"./assets","mode":"fetchall"}
+        }}}
+        """.write(to: directory.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+
+        let renderer = WebRenderer(mode: .web)
+        renderer.directoryWalker = { url, _ in
+            ([url.appendingPathComponent(UUID().uuidString)], 1)
+        }
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+                           project: ProjectJSONParser.parse(folderURL: directory))
+        defer { renderer.teardown() }
+        let web = try XCTUnwrap(renderer.webViewForTesting)
+        try waitForJavaScript("!!(window.filesByProperty?.primary && window.filesByProperty?.secondary)", in: web)
+        let shared = try evaluate("window.filesByProperty.primary[0] === window.filesByProperty.secondary[0]", in: web)
+        XCTAssertEqual(shared as? Bool, true)
+    }
+
     func testSaturatedOldDirectoryWalksRetryCurrentFetchAllAfterRemount() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -266,13 +300,13 @@ final class Audit2DWebRegressionTests: XCTestCase {
         let secondAssets = second.folderURL.appendingPathComponent("assets")
         let currentFile = current.folderURL.appendingPathComponent("assets/file.txt")
         let renderer = WebRenderer(mode: .web)
-        renderer.directoryWalker = { url in
+        renderer.directoryWalker = { url, _ in
             if url == firstAssets || url == secondAssets {
                 (url == firstAssets ? firstEntered : secondEntered).fulfill()
                 _ = release.wait(timeout: .now() + 10)
-                return [url.appendingPathComponent("file.txt")]
+                return ([url.appendingPathComponent("file.txt")], 1)
             }
-            return [currentFile]
+            return ([currentFile], 1)
         }
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36))
         try renderer.mount(in: container, project: first)

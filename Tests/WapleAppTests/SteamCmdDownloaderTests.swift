@@ -59,6 +59,7 @@ final class SteamCmdDownloaderTests: XCTestCase {
         XCTAssertEqual(SteamCmdDownloader.progressValue("progress: 42.35 (100 / 236)"), 42.35)
         XCTAssertEqual(SteamCmdDownloader.progressValue("... progress:7 ..."), 7)
         XCTAssertNil(SteamCmdDownloader.progressValue("no progress here"))
+        XCTAssertNil(SteamCmdDownloader.progressValue("progress: 120.0"))
     }
 
     func testParseDownloadingWithoutProgressIsNil() {

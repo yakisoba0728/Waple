@@ -77,7 +77,8 @@ enum SteamCmdDownloader {
     static func progressValue(_ line: String) -> Double? {
         guard let range = line.range(of: #"progress:\s*([\d.]+)"#, options: .regularExpression) else { return nil }
         let matched = line[range].drop { !$0.isNumber && $0 != "." }
-        return Double(matched)
+        guard let percent = Double(matched), (0...100).contains(percent) else { return nil }
+        return percent
     }
 
     /// 성공 라인의 목적지 경로 추출 — steamcmd 는 `Success. Downloaded item <id> to "<path>" :` 형태로

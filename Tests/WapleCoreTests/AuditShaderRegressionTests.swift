@@ -183,6 +183,26 @@ final class AuditShaderRegressionTests: XCTestCase {
         XCTAssertTrue(out.contains("after = K;"), out)
     }
 
+    func testSeededComboEndsAtUndefOrRedefinition() {
+        let out = ShaderPreprocessor.preprocess("""
+        before = QUALITY;
+        #undef QUALITY
+        between = QUALITY;
+        #define QUALITY 7
+        after = QUALITY;
+        preRedefinition = OTHER;
+        #define OTHER 8
+        postRedefinition = OTHER;
+        """, combos: ["QUALITY": 2, "OTHER": 3])
+        XCTAssertEqual(out, """
+        before = 2;
+        between = QUALITY;
+        after = 7;
+        preRedefinition = 3;
+        postRedefinition = 8;
+        """)
+    }
+
     func testIfExpressionSplicesMacroTokensWithoutAddingParentheses() {
         let out = ShaderPreprocessor.preprocess("""
         #define ONE 1
@@ -202,6 +222,20 @@ final class AuditShaderRegressionTests: XCTestCase {
     func testNumericLeadingExpressionMacroKeepsTextualPrecedence() {
         let out = ShaderPreprocessor.preprocess("#define VALUE 1 + 2\n#if VALUE * 3 == 7\nselected;\n#endif", combos: [:])
         XCTAssertTrue(out.contains("selected;"), out)
+    }
+
+    func testIfMacroCanSupplyAnOperatorAndSplitParenthesizedExpression() {
+        let out = ShaderPreprocessor.preprocess("""
+        #define COMPARE >=
+        #define START (2 +
+        #define END 4)
+        #if START END COMPARE 6
+        selected;
+        #else
+        rejected;
+        #endif
+        """, combos: [:])
+        XCTAssertEqual(out, "selected;")
     }
 
     func testExpressionMacroPreservesDefinedCyclesAndStrictRefusal() {

@@ -46,7 +46,7 @@ public enum ProfilePipeline {
                                                fileName: project?.fileName ?? "scene.pkg",
                                                hasDependency: project?.dependency != nil) {
         case .package(let pkgURL):
-            guard let d = try? Data(contentsOf: pkgURL, options: .mappedIfSafe) else { return nil }
+            guard let d = try? ScenePackage.readData(at: pkgURL, in: folder, mapped: true) else { return nil }
             return try? ScenePackage.parse(d)
         case .directory:
             return ScenePackage.fromDirectory(folder)
@@ -77,6 +77,11 @@ public enum ProfilePipeline {
 
     struct InventoryRow { let id: String; let is3D: Bool; let layers: Int; let effects: Int
                           let particles: Int; let texBytes: Int; let hdr: Bool; let bloom: Bool }
+
+    private static func csvField(_ value: String) -> String {
+        guard value.rangeOfCharacter(from: CharacterSet(charactersIn: ",\"\r\n")) != nil else { return value }
+        return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
 
     public static func runInventory(root: String, outCSV: URL) -> Int32 {
         let restore = SnapshotPipeline.pinRenderSettings(root: root)
@@ -117,7 +122,7 @@ public enum ProfilePipeline {
         }
         var csv = "id,is3D,layers,effects,particles,texBytes,hdr,bloom\n"
         for r in rows.sorted(by: { $0.id < $1.id }) {
-            csv += "\(r.id),\(r.is3D ? 1 : 0),\(r.layers),\(r.effects),\(r.particles),\(r.texBytes),\(r.hdr ? 1 : 0),\(r.bloom ? 1 : 0)\n"
+            csv += "\(csvField(r.id)),\(r.is3D ? 1 : 0),\(r.layers),\(r.effects),\(r.particles),\(r.texBytes),\(r.hdr ? 1 : 0),\(r.bloom ? 1 : 0)\n"
         }
         do { try csv.write(to: outCSV, atomically: true, encoding: .utf8) }
         catch { fputs("[profile] inventory write failed: \(error)\n", stderr); return 2 }
@@ -195,7 +200,7 @@ public enum ProfilePipeline {
         }
         let sorted = rows.sorted { $0.total != $1.total ? $0.total > $1.total : $0.id < $1.id }
         var csv = "id,layersHidden,textsHidden,particlesHidden,total\n"
-        for r in sorted { csv += "\(r.id),\(r.layers),\(r.texts),\(r.particles),\(r.total)\n" }
+        for r in sorted { csv += "\(csvField(r.id)),\(r.layers),\(r.texts),\(r.particles),\(r.total)\n" }
         do { try csv.write(to: outCSV, atomically: true, encoding: .utf8) }
         catch { fputs("[vis-blast] write failed: \(error)\n", stderr); return 2 }
         let totalObjects = sorted.reduce(0) { $0 + $1.total }

@@ -14,14 +14,22 @@ public enum VideoTextureExtractor {
     }
 
     /// 비디오 .tex의 내장 MP4 바이트를 캐시 파일로 추출(유효하면 재사용) → URL.
-    /// cacheKey: 캐시 파일명(기본 sceneID). 한 씬에 video 레이어가 여럿(예 3019043758=2, 3363473482=4)이면
+    /// cacheKey: 캐시 식별자(기본 sceneID). 한 씬에 video 레이어가 여럿(예 3019043758=2, 3363473482=4)이면
     /// sceneID 만으론 상호 덮어씀 → 호출부가 "sceneID_레이어인덱스" 같은 고유 키를 넘긴다.
     public static func extractMP4(textureEntryName: String, package: ScenePackage, sceneID: String,
                                   cacheKey: String? = nil, cacheDir: URL) -> URL? {
         guard let texData = package.data(for: textureEntryName),
               let tex = TexImage.parse(texData), tex.payload == .video else { return nil }
         let fm = FileManager.default
-        let url = cacheDir.appendingPathComponent("\(cacheKey ?? sceneID).mp4")
+        let hash = SHA256.hash(data: Data((cacheKey ?? sceneID).utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        let name = "\(hash).mp4"
+        guard let url = WallpaperPathSecurity.containedFileURL(name, root: cacheDir),
+              let fingerprintFile = WallpaperPathSecurity.containedFileURL("\(name).fp", root: cacheDir),
+              (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
+              (try? fingerprintFile.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else {
+            return nil
+        }
         let expected = tex.payloadRange.count
         // F559: 캐시 적중 검증 보강 — 크기 일치만으로는 동일 크기의 다른 콘텐츠가 stale 재사용됐다.
         // 페이로드 지문(사이드카 .fp)까지 일치해야 재사용. 지문 없는 구 캐시는 1회 재추출 후 지문 생성.
@@ -29,14 +37,10 @@ public enum VideoTextureExtractor {
         if let attrs = try? fm.attributesOfItem(atPath: url.path),
            let size = attrs[.size] as? Int,
            size == expected,
-           let stored = try? String(contentsOf: fingerprintURL(for: url), encoding: .utf8),
+           let stored = try? String(contentsOf: fingerprintFile, encoding: .utf8),
            stored == fp {
             touch(url)   // 마지막 접근 갱신(LRU) — evict 순서에서 최근 사용을 보존
             return url
-        }
-        if fm.fileExists(atPath: url.path) {
-            NSLog("%@", "[Waple] stale/partial mp4 cache at \(url.path) — re-extracting")
-            try? fm.removeItem(at: url)
         }
         do {
             try fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
@@ -47,7 +51,7 @@ public enum VideoTextureExtractor {
         let mp4 = texData.subdata(in: tex.payloadRange)
         do {
             try mp4.write(to: url, options: [.atomic])
-            try? fp.write(to: fingerprintURL(for: url), atomically: true, encoding: .utf8)   // F559 지문 사이드카
+            try? fp.write(to: fingerprintFile, atomically: true, encoding: .utf8)
         } catch {
             NSLog("%@", "[Waple] failed to write mp4 cache \(url.path): \(error)")
             return nil

@@ -1,6 +1,7 @@
 import SwiftUI
 import WapleCore
 import WapleLibrary
+import WapleRender
 
 /// 표준 인스펙터의 콘텐츠: 히어로 프리뷰(상시 애니) → 제목·메타 → 액션 → 속성 편집.
 ///
@@ -48,6 +49,12 @@ struct SelectionPanelView: View {
         VStack(spacing: 0) {
             header(entry, supported: supported)
             Divider()
+            if supported {
+                WallpaperPermissionControls(entry: entry) {
+                    viewModel.refreshPlaybackPermissions(for: entry)
+                }
+                .id(entry.userStateID)
+            }
             propertiesHeader(entry)
             // id 는 엔트리에만 건다 — 초기화는 재마운트가 아니라 제자리 재로드다.
             PropertyEditorView(entry: entry, viewModel: viewModel,
@@ -330,6 +337,53 @@ struct SelectionPanelView: View {
     private func resetProperties(for entry: LibraryEntry) {
         viewModel.resetProperties(for: entry)
         propsReload &+= 1
+    }
+}
+
+private struct WallpaperPermissionControls: View {
+    let entry: LibraryEntry
+    let refreshPlayback: () -> Void
+    @State private var webMedia: Bool
+    @State private var sceneScripts: Bool
+
+    init(entry: LibraryEntry, refreshPlayback: @escaping () -> Void) {
+        self.entry = entry
+        self.refreshPlayback = refreshPlayback
+        _webMedia = State(initialValue: UserPropertyStore.allowsWebMedia(id: entry.userStateID))
+        _sceneScripts = State(initialValue: UserPropertyStore.allowsSceneScripts(id: entry.userStateID))
+    }
+
+    var body: some View {
+        let type = WallpaperType.from(entry.typeRaw)
+        if type == .web || type == .scene || type == .preset {
+            DisclosureGroup("배경화면 권한") {
+                VStack(alignment: .leading, spacing: Space.controlGap) {
+                    if type == .web || type == .preset {
+                        Toggle("시스템 오디오 정보 공유", isOn: $webMedia)
+                        Text("이 배경과 배경이 불러온 웹 스크립트에 소리 스펙트럼과 재생 중인 미디어 정보를 공유합니다.")
+                            .font(Typography.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if type == .scene || type == .preset {
+                        Toggle("이 배경의 씬 스크립트 허용", isOn: $sceneScripts)
+                        Text("신뢰하는 배경에만 허용하세요. 느리거나 멈춘 스크립트는 Waple을 멈추게 할 수 있습니다.")
+                            .font(Typography.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.top, Space.controlGap)
+            }
+            .padding(.horizontal, Space.panelInset)
+            .padding(.vertical, Space.controlGap)
+            .onChange(of: webMedia) { _, allowed in
+                UserPropertyStore.setAllowsWebMedia(allowed, id: entry.userStateID)
+                refreshPlayback()
+            }
+            .onChange(of: sceneScripts) { _, allowed in
+                UserPropertyStore.setAllowsSceneScripts(allowed, id: entry.userStateID)
+                refreshPlayback()
+            }
+        }
     }
 }
 

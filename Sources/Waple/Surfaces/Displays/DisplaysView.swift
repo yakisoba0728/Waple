@@ -52,7 +52,7 @@ struct DisplaysView: View {
     static let maxHeight: CGFloat = Metrics.windowMin.height
 
     @ObservedObject var viewModel: LibraryViewModel
-    var screenFrames: () -> [CGRect]
+    var screenFrames: () -> [String: CGRect]
     @Environment(\.dismiss) private var dismiss
     @State private var selectedScreenKey: String?
     @State private var dropTargetKey: String?
@@ -71,23 +71,16 @@ struct DisplaysView: View {
             Divider()
             GeometryReader { geo in
                 let _ = screensGeneration   // F497: 변경 시 재평가되도록 body 가 의존
-                let screens = viewModel.screens
-                let rects = DisplayDiagramLayout.rects(screenFrames: screenFrames(),
+                let framesByKey = screenFrames()
+                let screens = viewModel.screens.compactMap { screen in
+                    framesByKey[screen.key].map { (screen: screen, frame: $0) }
+                }
+                let rects = DisplayDiagramLayout.rects(screenFrames: screens.map(\.frame),
                                                        container: geo.size,
                                                        padding: Metrics.diagramPadding)
                 ZStack(alignment: .topLeading) {
-                    // ⚠️ r3-O16: `screens` 와 `rects` 는 **서로 다른 소스**를 위치로 재짝짓는다.
-                    // `screens` = `LibraryViewModel.screensProvider` → `desktopController.screenViews`
-                    // (Waple 이 실제로 붙인 화면 뷰의 순서), `rects` = 주입 클로저 `screenFrames()`
-                    // → `NSScreen.screens.map(\.frame)`(AppKit 순서). 둘은 다른 시점·다른 경로에서
-                    // 얻어지므로 순서가 어긋나면 **모니터 상자에 다른 화면의 이름·드롭 타깃이 붙는다**
-                    // (핫플러그·재배치 직후, 또는 screenViews 가 아직 새 화면을 못 만든 창).
-                    // 지금 고치지 않는 이유: 올바른 짝짓기는 `screenKey` 기준 조인이라
-                    // `screenFrames` 의 타입을 `[(key: String, frame: CGRect)]` 로 바꿔야 하고,
-                    // 그 주입점(`AppDelegate`)과 `DisplayDiagramLayout.rects` 가 이 레인 소유가
-                    // 아니다. 짝짓기 키를 넓히는 것이 해소 조건이다(보고 경계).
-                    ForEach(Array(zip(screens, rects)), id: \.0.key) { screen, rect in
-                        monitorBox(screen: screen, rect: rect)
+                    ForEach(Array(zip(screens, rects)), id: \.0.screen.key) { slot, rect in
+                        monitorBox(screen: slot.screen, rect: rect)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -95,7 +88,7 @@ struct DisplaysView: View {
             .background(ColorRole.well)
             Divider()
             statusRow.padding(.horizontal, Space.panelInset).padding(.top, Space.md)
-            if let key = selectedScreenKey {
+            if let key = selectedScreenKey, viewModel.screens.contains(where: { $0.key == key }) {
                 Picker("화면 재생목록", selection: Binding(
                     get: { viewModel.playlist.assignedPlaylistId(forScreen: key) ?? "" },
                     set: { id in
@@ -129,7 +122,12 @@ struct DisplaysView: View {
         .onAppear { if selectedScreenKey == nil { selectedScreenKey = viewModel.screens.first?.key } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
             // F497: AppDelegate 의 rebuild 가 0.5초 디바운스로 뒤따르므로, 그 직후에 읽도록 살짝 늦게 갱신.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { screensGeneration += 1 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                screensGeneration += 1
+                if !viewModel.screens.contains(where: { $0.key == selectedScreenKey }) {
+                    selectedScreenKey = viewModel.screens.first?.key
+                }
+            }
         }
     }
 
@@ -169,11 +167,14 @@ struct DisplaysView: View {
             get: { dropTargetKey == screen.key },
             set: { dropTargetKey = $0 ? screen.key : (dropTargetKey == screen.key ? nil : dropTargetKey) }
         )) { providers in
-            guard let provider = providers.first else { return false }
+            guard GlobalPlaybackSettings.monitorLayout == .perMonitor,
+                  let provider = providers.first else { return false }
             provider.loadObject(ofClass: NSString.self) { reading, _ in
                 guard let id = reading as? String else { return }
                 DispatchQueue.main.async {
-                    guard let entry = viewModel.supportedEntry(forId: id) else { return }
+                    guard GlobalPlaybackSettings.monitorLayout == .perMonitor,
+                          viewModel.screens.contains(where: { $0.key == screen.key }),
+                          let entry = viewModel.supportedEntry(forId: id) else { return }
                     selectedScreenKey = screen.key
                     viewModel.assign(entry, toScreen: screen.key)
                 }

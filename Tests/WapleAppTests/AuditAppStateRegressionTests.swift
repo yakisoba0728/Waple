@@ -230,7 +230,7 @@ final class AuditAppStateWiringTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent()
         let source = try String(contentsOf: root.appendingPathComponent("Sources/Waple/AppDelegate.swift"),
                                 encoding: .utf8)
-        XCTAssertTrue(source.contains("libraryEntryId: recentEntryId(mountedFolder: folderURL)"))
+        XCTAssertTrue(source.contains("project.with(id: entry.id, userStateID: entry.userStateID)"))
         XCTAssertTrue(source.contains("reuse: { reusedRenderers[$0.screenKey] }"))
         XCTAssertTrue(source.contains("try RenderPauseComposition.mount(muted: mountMute,"))
         XCTAssertTrue(source.contains("stillCaptureGeneration.isCurrent(generation)"))

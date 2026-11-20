@@ -12,6 +12,11 @@ import Foundation
 /// (`private(set)` 의 세터는 이 파일 안에서만 보이고, 실제로 쓰는 곳은 `with(...)` 하나뿐이다).
 public struct WallpaperProject: Equatable, Sendable {
     public private(set) var id: String          // 폴더명 (워크샵 ID)
+    private var installedUserStateID: String?
+    /// Library mounts supply their own namespace. Direct captures use the project ID.
+    public var userStateID: String { installedUserStateID ?? id }
+    /// Native resource grants require an identity supplied by the library.
+    public var libraryUserStateID: String? { installedUserStateID }
     public private(set) var type: WallpaperType
     public private(set) var fileName: String?   // project.json "file"
     public private(set) var previewName: String?// project.json "preview"
@@ -201,7 +206,8 @@ public struct WallpaperProject: Equatable, Sendable {
         presetOverrides: [String: PropertyValue]? = nil,
         presetFolderURL: URL?? = nil,
         supportsAudioProcessing: Bool? = nil,
-        playbackProperties: [String: String]? = nil
+        playbackProperties: [String: String]? = nil,
+        userStateID: String? = nil
     ) -> WallpaperProject {
         var copy = self
         if let id { copy.id = id }
@@ -218,6 +224,7 @@ public struct WallpaperProject: Equatable, Sendable {
         if let presetFolderURL { copy.presetFolderURL = presetFolderURL }
         if let supportsAudioProcessing { copy.supportsAudioProcessing = supportsAudioProcessing }
         if let playbackProperties { copy.playbackProperties = playbackProperties }
+        if let userStateID { copy.installedUserStateID = userStateID }
         return copy
     }
 }

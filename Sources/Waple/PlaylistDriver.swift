@@ -36,10 +36,8 @@ enum PlaylistSettingsBridge {
     }
 
     static func items(configuration: PlaylistConfiguration) -> [PlaylistItem] {
-        configuration.ids.enumerated().map { index, id in
-            PlaylistItem(file: id, daytimeEnd: configuration.daytimeEnds[id]
-                ?? Float(index + 1) / Float(max(configuration.ids.count, 1)))
-        }
+        zip(configuration.ids, configuration.effectiveDaytimeEnds)
+            .map { PlaylistItem(file: $0.0, daytimeEnd: $0.1) }
     }
 
     static func settings(enabled: Bool, intervalMinutes: Int, shuffle: Bool) -> PlaylistSettings {
@@ -110,6 +108,8 @@ final class PlaylistDriver {
     private var screenEntryIds: [String: [String]] = [:]
     private var lastScreenSelections: [String: String] = [:]
     private var begunScreens = Set<String>()
+    private var lastScheduledScreen: String?
+    private var retryAfter: [String: Date] = [:]
     private var lastConfigurationIds: [String: String] = [:]
     private var lastTick: Date?
     private var lastPersist: Date?
@@ -168,17 +168,24 @@ final class PlaylistDriver {
             let settings = settingsByScreen[key] ?? PlaylistSettings(mode: .never)
             let items = itemsByScreen[key] ?? []
             let oldItems = screenEntryIds[key]
+            let previouslyBegan = runtime.settings(for: key).beginFirst
             let changedConfiguration = lastConfigurationIds[key] != nil
                 && lastConfigurationIds[key] != configurationIds[key]
             runtime.apply(settings: settings, items: items, screenKey: key)
             screenEntryIds[key] = items.map(\.file)
-            if changedConfiguration || (oldItems != nil && oldItems != screenEntryIds[key]) { begunScreens.remove(key) }
+            let orderChanged = oldItems != nil && oldItems != screenEntryIds[key]
+            if changedConfiguration || orderChanged || previouslyBegan != runtime.settings(for: key).beginFirst {
+                begunScreens.remove(key)
+                retryAfter.removeValue(forKey: key)
+            }
             let current = currentEntryIds[key]
             let index = current.flatMap { screenEntryIds[key]?.firstIndex(of: $0) }
             if oldItems == nil {
                 runtime.restoreSelection(index: index, screenKey: key)
             } else if changedConfiguration || current != lastScreenSelections[key] {
                 runtime.adopt(index: index, screenKey: key)
+                runtime.restoreSelection(index: index, screenKey: key)
+            } else if orderChanged {
                 runtime.restoreSelection(index: index, screenKey: key)
             }
         }
@@ -189,7 +196,20 @@ final class PlaylistDriver {
     private func ids(for screenKey: String) -> [String] { screenEntryIds[screenKey] ?? entryIds }
 
     func shouldAdvanceOnVideoEnd(screenKey: String) -> Bool {
-        runtime.shouldAdvanceOnVideoEnd(screenKey: screenKey)
+        let entries = ids(for: screenKey)
+        return (entries.count > 1 || entries.first != lastScreenSelections[screenKey])
+            && runtime.shouldAdvanceOnVideoEnd(screenKey: screenKey)
+    }
+
+    func nextScheduledScreen(due: Set<String>, now: Date) -> String? {
+        let screens = runtime.activeScreens
+        let start = lastScheduledScreen.flatMap { screens.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
+        let ordered = screens.dropFirst(start) + screens.prefix(start)
+        let next = ordered.first { key in
+            due.contains(key) && now >= (retryAfter[key] ?? .distantPast)
+        }
+        if let next { lastScheduledScreen = next }
+        return next
     }
 
     func needsBeginning(screenKey: String) -> Bool {
@@ -258,13 +278,16 @@ final class PlaylistDriver {
         completion: @escaping (PlaylistAdvanceResolution) -> Void
     ) -> WallpaperApplyDisposition {
         guard remainingAttempts > 0 else {
+            delayRetry(screenKey: screenKey, now: now)
             completion(.exhausted(screenKey: screenKey))
             return .failed
         }
         let reading = PlaylistClockReading(date: now, calendar: calendar)
         let entries = ids(for: screenKey)
+        let attempts = runtime.settings(for: screenKey).mode.usesTimerTick ? remainingAttempts : 1
         guard let index = beginning ? 0 : runtime.nextCandidate(screenKey: screenKey, now: reading),
               entries.indices.contains(index) else {
+            delayRetry(screenKey: screenKey, now: now)
             completion(.exhausted(screenKey: screenKey))
             return .failed
         }
@@ -273,7 +296,7 @@ final class PlaylistDriver {
         let token = nextPendingToken
         pendingAdvance = PendingAdvance(token: token, screenKey: screenKey, index: index,
                                         entryId: id, now: now,
-                                        remainingAttempts: remainingAttempts - 1,
+                                        remainingAttempts: attempts - 1,
                                         beginning: beginning,
                                         apply: apply, completion: completion)
 
@@ -286,16 +309,14 @@ final class PlaylistDriver {
         case .applied:
             guard pendingAdvance?.token == token else { return .applied }
             pendingAdvance = nil
-            if beginning { runtime.commitBeginning(screenKey: screenKey) }
-            else { runtime.commit(index: index, screenKey: screenKey) }
-            persist(now: now)
+            commit(index: index, entryId: id, screenKey: screenKey, beginning: beginning, now: now)
             completion(.applied(screenKey: screenKey, entryId: id))
             return .applied
         case .failed:
             guard pendingAdvance?.token == token else { return .failed }
             pendingAdvance = nil
             return continueAdvance(screenKey: screenKey, now: now,
-                                   remainingAttempts: remainingAttempts - 1,
+                                   remainingAttempts: attempts - 1,
                                    apply: apply, completion: completion)
         }
     }
@@ -313,9 +334,8 @@ final class PlaylistDriver {
                 pending.completion(.cancelled(screenKey: pending.screenKey))
                 return
             }
-            if pending.beginning { runtime.commitBeginning(screenKey: pending.screenKey) }
-            else { runtime.commit(index: pending.index, screenKey: pending.screenKey) }
-            persist(now: pending.now)
+            commit(index: pending.index, entryId: pending.entryId, screenKey: pending.screenKey,
+                   beginning: pending.beginning, now: pending.now)
             pending.completion(.applied(screenKey: pending.screenKey,
                                         entryId: pending.entryId))
         case .failed:
@@ -323,8 +343,21 @@ final class PlaylistDriver {
                                 remainingAttempts: pending.remainingAttempts,
                                 apply: pending.apply, completion: pending.completion)
         case .cancelled:
+            if pending.beginning { begunScreens.remove(pending.screenKey) }
             pending.completion(.cancelled(screenKey: pending.screenKey))
         }
+    }
+
+    private func commit(index: Int, entryId: String, screenKey: String, beginning: Bool, now: Date) {
+        lastScreenSelections[screenKey] = entryId
+        retryAfter.removeValue(forKey: screenKey)
+        if beginning { runtime.commitBeginning(screenKey: screenKey) }
+        else { runtime.commit(index: index, screenKey: screenKey) }
+        persist(now: now)
+    }
+
+    private func delayRetry(screenKey: String, now: Date) {
+        retryAfter[screenKey] = max(now, lastTick ?? now).addingTimeInterval(5)
     }
 
     /// 사용자가 그 화면의 배경을 직접 바꿨다. 전진이 아니므로 시계만 되돌린다.

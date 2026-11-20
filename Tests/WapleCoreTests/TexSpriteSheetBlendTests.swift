@@ -259,11 +259,15 @@ final class TexSpriteSheetBlendTests: XCTestCase {
     /// 소스 문면으로 잠근다 — 한쪽만 부르면 2D/3D 가 갈린다.
     func testBothParticlePathsUseFixedSheetPairForMapsequence() throws {
         let root = try Self.repoRoot()
+        let common = try String(contentsOf: root.appendingPathComponent(
+            "Sources/WapleRender/ScenePagedTextures.swift"), encoding: .utf8)
+        XCTAssertTrue(common.contains("TexImage.fixedSheetPair(currentIndex: sheetFrameIndex(sequence: particle.frame"))
+        XCTAssertTrue(common.contains("Self.framePair(for: particle, system: system)"), "Batch selection uses the same pair.")
         for rel in ["Sources/WapleRender/SceneRendererFrameEncoder.swift",
                     "Sources/WapleRender/SceneRenderer3D.swift"] {
             let src = try String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8)
-            XCTAssertTrue(src.contains("TexImage.fixedSheetPair(currentIndex:"),
-                          "\(rel) 이 고정 프레임 규약을 직접 짓고 있다(두 자리가 갈릴 수 있다)")
+            XCTAssertTrue(src.contains("Self.framePair(for: p, system: sys)"), "\(rel) routes UVs through the shared selector.")
+            XCTAssertFalse(src.contains("TexImage.fixedSheetPair(currentIndex:"), "\(rel) duplicates the fixed-frame logic.")
         }
     }
 
@@ -301,14 +305,21 @@ final class TexSpriteSheetBlendTests: XCTestCase {
     /// 소스를 직접 읽어 잠근다(리눅스에서 `WapleRender` 를 실행할 수 없으므로 이것이 유일한 그물이다).
     func testFallbackFrameTimeHasNoLiteralSiblings() throws {
         let root = try Self.repoRoot()
+        let shared = try String(contentsOf: root.appendingPathComponent(
+            "Sources/WapleRender/ScenePagedTextures.swift"), encoding: .utf8)
+        XCTAssertTrue(shared.contains("particleSheetPair(age: particle.age"))
+        XCTAssertTrue(shared.contains("frameTime: system.frames.first?.time ?? TexImage.fallbackFrameTime"))
+        XCTAssertFalse(shared.contains("max(0.016,"))
         for rel in ["Sources/WapleRender/SceneRendererFrameEncoder.swift",
                     "Sources/WapleRender/SceneRenderer3D.swift"] {
             let src = try String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8)
-            XCTAssertTrue(src.contains("TexImage.fallbackFrameTime"),
-                          "\(rel) 이 공유 상수를 안 쓴다")
+            XCTAssertTrue(src.contains("Self.framePair(for: p, system: sys)"))
             XCTAssertFalse(src.contains("max(0.016,"),
                            "\(rel) 에 폴백 프레임시간 리터럴 사본이 되살아났다")
         }
+        let calculation = try String(contentsOf: root.appendingPathComponent(
+            "Sources/WapleRender/SceneRendererFrameEncoder.swift"), encoding: .utf8)
+        XCTAssertTrue(calculation.contains("max(TexImage.fallbackFrameTime, ft)"))
     }
 
     /// TEXS0002(= 파일에 재생속도가 없는 버전) 실물 8건이 그대로인지. 이 8건이 곧

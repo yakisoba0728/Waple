@@ -16,6 +16,7 @@ extension SceneRenderer {
         var layerIDs: [Int]
         var scripts: [ModelAnimationScript] = []
         var phases: [Int: Float] = [:]
+        var markerRevisions: [Int: Int] = [:]
         var playing: [Int: Bool] = [:]
         var lastTime: Float?
         var time: Float = 0
@@ -85,6 +86,16 @@ extension SceneRenderer {
         func attachment(_ name: String) -> simd_float4x4? {
             Model3DPose.attachmentFrame(model: model, name: name, layers: poseLayers, time: time,
                                         overrideFrames: poseFrames, localOverrides: localOverrides)
+        }
+
+        func clipClocks() -> [AnimationClipClock] {
+            layers.enumerated().compactMap { index, layer in
+                guard layer.visible, layer.blend != 0 else { return nil }
+                let clip = Model3DPose.resolveAnimation(model: model, layerName: layer.name, clipId: layer.clipId)
+                let id = layerIDs[index]
+                guard model.animations.indices.contains(clip), let phase = phases[id] else { return nil }
+                return AnimationClipClock(layer: id, clip: clip, phase: phase, revision: markerRevisions[id] ?? 0)
+            }
         }
 
         func snapshot(slot: Int, objectWorld: simd_float4x4) -> SceneScriptRuntimeLayerSnapshot {
@@ -227,8 +238,14 @@ extension SceneRenderer {
             switch action {
             case "play": state.playing[id] = true
             case "pause": state.playing[id] = false
-            case "stop": state.playing[id] = false; state.phases[id] = 0
-            case "setFrame": if let value = number(arguments["value"]) { state.phases[id] = value }
+            case "stop":
+                state.playing[id] = false; state.phases[id] = 0
+                state.markerRevisions[id, default: 0] += 1
+            case "setFrame":
+                if let value = number(arguments["value"]) {
+                    state.phases[id] = value
+                    state.markerRevisions[id, default: 0] += 1
+                }
             case "setRate": if let value = number(arguments["value"]) { state.layers[index].rate = value }
             case "setBlend": if let value = number(arguments["value"]) { state.layers[index].blend = value }
             case "setVisible": if let value = arguments["value"] as? Bool { state.layers[index].visible = value }
@@ -240,6 +257,7 @@ extension SceneRenderer {
                                           key: script.key, engine: script.engine)
                 }
                 state.phases[id] = nil; state.playing[id] = nil
+                state.markerRevisions[id] = nil
             default: return false
             }
             state.refreshPose(); publish3DRuntimeSnapshots(); return true

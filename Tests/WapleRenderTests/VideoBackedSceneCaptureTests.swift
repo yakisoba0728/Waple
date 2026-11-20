@@ -72,6 +72,36 @@ final class VideoBackedSceneCaptureTests: XCTestCase {
         XCTAssertTrue(r.hasVideoLayer)
     }
 
+    @MainActor
+    func testHeadlessVideoAdvancesWhenOffscreenCapturePausesDrawing() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal device") }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("video-capture-\(UUID())")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let mp4 = dir.appendingPathComponent("source.mp4")
+        try makeTinyMP4(at: mp4)
+        let package = encodePkg([
+            ("scene.json", Data(#"{"general":{"orthogonalprojection":{"width":64,"height":64},"clearcolor":"0 0 0"},"objects":[{"image":"models/video.json","origin":"32 32 0","size":"64 64","visible":{"value":true}}]}"#.utf8)),
+            ("models/video.json", Data(#"{"material":"materials/video.json"}"#.utf8)),
+            ("materials/video.json", Data(#"{"passes":[{"shader":"genericimage2","textures":["v"]}]}"#.utf8)),
+            ("materials/v.tex", try makeTex(format: 0, w: 64, h: 64, payload: Array(Data(contentsOf: mp4)))),
+        ])
+        try package.write(to: dir.appendingPathComponent("scene.pkg"))
+        try Data(#"{"type":"scene","title":"video","file":"scene.pkg"}"#.utf8).write(to: dir.appendingPathComponent("project.json"))
+
+        let renderer = SceneRenderer()
+        defer { renderer.teardown() }
+        let project = try ProjectJSONParser.parse(folderURL: dir)
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: project)
+        let video = try XCTUnwrap(renderer.layers.first?.video)
+        XCTAssertFalse(video.isLive)
+        // This is the same mount, pause, and capture sequence used by OffscreenCapture.scene.
+        renderer.pause()
+        XCTAssertEqual(renderer.captureFrames(width: 64, height: 64, times: [0.2], toDir: dir).count, 1)
+        XCTAssertEqual(try XCTUnwrap(video.runtimeSnapshot["currentTime"] as? Double), 0.2, accuracy: 0.001)
+        XCTAssertEqual(video.runtimeSnapshot["playing"] as? Bool, true)
+    }
+
     // MARK: 라이브 경로 스모크 (env-guarded — AVPlayerItemVideoOutput+CVMetalTextureCache)
 
     /// 헤드리스(AVAssetImageGenerator)와 별개인 라이브 디코드 경로를 검증: startLive → 런루프 펌프 →

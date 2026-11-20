@@ -250,12 +250,16 @@ final class WorkshopAPITests: XCTestCase {
         let json = """
         {"response":{"publishedfiledetails":[
           {"publishedfileid":"7","title":"T","vote_data":{"score":0.91,"votes_up":10,"votes_down":1}},
-          {"publishedfileid":"8","title":"U"}
+          {"publishedfileid":"8","title":"U"},
+          {"publishedfileid":"9","title":"V","vote_data":{"score":"NaN"}},
+          {"publishedfileid":"10","title":"W","vote_data":{"score":1.5}}
         ]}}
         """
         let items = WorkshopResponseParser.parse(Data(json.utf8))
-        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items.count, 4)
         XCTAssertEqual(items[0].voteScore, 0.91)
         XCTAssertNil(items[1].voteScore)
+        XCTAssertNil(items[2].voteScore)
+        XCTAssertNil(items[3].voteScore)
     }
 }

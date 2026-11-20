@@ -9,8 +9,11 @@ extension SceneRenderer {
               let device, let package = runtimePackage,
               let safe = WallpaperPathSecurity.normalizedRelativePath(name),
               !safe.contains("/") else { return }
-        let resource = safe.hasSuffix(".tex") ? "lut/" + safe : "lut/" + safe + ".tex"
-        if let texture = resolveTexture(resource, package: package, device: device), texture.textureType == .type3D {
+        let resource = "materials/lut/" + (safe.hasSuffix(".tex") ? safe : safe + ".tex")
+        if let data = quietAssetData(resource, package: package),
+           let image = TexImage.parse(data),
+           let texture = makeImageTexture(tex: image, data: data, device: device)?.texture,
+           texture.textureType == .type3D {
             colorGradingLUT = texture
         } else {
             WapleLog.warn("[Waple] color grading LUT is unavailable or is not a volume: " + name)

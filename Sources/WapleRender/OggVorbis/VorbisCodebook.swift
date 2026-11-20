@@ -10,6 +10,9 @@ enum VorbisError: Error, Equatable {
 /// codeword 배정은 stb_vorbis(퍼블릭 도메인) `compute_codewords` 알고리즘을 충실히 재현한다
 /// (libvorbis 와 동일한 canonical prefix code 를 얻어야 디코드가 성립).
 struct VorbisCodebook {
+    static let maximumCells = 1 << 24
+    static let maximumTrieNodes = 1 << 21
+
     let dimensions: Int
     let entries: Int
     let lookupType: Int
@@ -20,6 +23,7 @@ struct VorbisCodebook {
     private let child0: [Int32]
     private let child1: [Int32]
     private let leaf: [Int32]
+    var trieNodeCount: Int { leaf.count }
 
     /// 스칼라 1개 디코드(Huffman) → entry index. EOP/무효 코드 시 nil.
     func decodeScalar(_ r: inout VorbisBitReader) -> Int? {
@@ -38,7 +42,8 @@ struct VorbisCodebook {
 
     // MARK: setup 파싱
 
-    static func parse(_ r: inout VorbisBitReader) throws -> VorbisCodebook {
+    static func parse(_ r: inout VorbisBitReader, maximumCells: Int = Self.maximumCells,
+                      maximumTrieNodes: Int = Self.maximumTrieNodes) throws -> VorbisCodebook {
         // sync pattern 0x564342 ("BCV", 24 bit)
         let sync = r.read(24)
         guard sync == 0x564342 else { throw VorbisError.corrupt("codebook sync \(String(sync, radix: 16))") }
@@ -49,9 +54,11 @@ struct VorbisCodebook {
         // F553: ordered 코드북 DoS 가드 강화 — entries=2^24, 길이 32 짜리가 상한을 equality 로 통과해
         // lengths(134MB)+트라이(수천만 노드, 수백MB) 할당/수억 회 삽입(메모리 압박·정체)을 유발했다.
         // entries 실질 상한을 1<<20(실제 코드북 수천 엔트리의 수십 배 여유)으로 강화.
-        guard dimensions > 0, entries > 0, entries <= 1 << 20, dimensions * entries <= 1 << 24 else {
+        guard dimensions > 0, entries > 0, entries <= 1 << 20,
+              dimensions * entries <= maximumCells else {
             throw VorbisError.corrupt("codebook dim/entries \(dimensions)/\(entries)")
         }
+        guard maximumTrieNodes > 0 else { throw VorbisError.corrupt("codebook trie too large") }
 
         // codeword 길이(0 = 미사용)
         var lengths = [Int](repeating: 0, count: entries)
@@ -83,7 +90,7 @@ struct VorbisCodebook {
         if r.endOfPacket { throw VorbisError.corrupt("EOP in codebook lengths") }
 
         // Huffman codeword 배정 → trie
-        let (child0, child1, leaf) = try buildTrie(lengths: lengths)
+        let (child0, child1, leaf) = try buildTrie(lengths: lengths, maximumNodes: maximumTrieNodes)
 
         // VQ lookup
         let lookupType = Int(r.read(4))
@@ -105,7 +112,7 @@ struct VorbisCodebook {
             // `lookupType == 1` 은 `lookupValues = lookup1Values(entries, dimensions)`
             // (≈ entries^(1/dimensions)) 라 `entries * dimensions` 보다 **훨씬 작게** 자란다 —
             // 즉 패킷 크기 게이트를 통과하고도 그보다 큰 배열을 잡을 수 있다.
-            // 무한 폭발은 아니다: `VorbisDecoder` 의 `totalCells <= 1 << 24` 총량 캡이
+            // 무한 폭발은 아니다: 디코더가 이 코드북 파싱에 배정한 남은 셀 예산이
             // `entries * dimensions` 에 상한(≈67 MB, Float 기준)을 건다. 그래서 이 자리는
             // "DoS 가드가 일관되게 방어한다" 가 아니라 **"두 축을 서로 다른 가드가 덮는다"** 로
             // 읽어야 한다 — 총량 캡을 걷어내면 이 경로가 먼저 무너진다.
@@ -129,12 +136,12 @@ struct VorbisCodebook {
 
     // MARK: Huffman trie 빌드 (stb_vorbis compute_codewords 재현)
 
-    static func buildTrie(lengths: [Int]) throws -> (child0: [Int32], child1: [Int32], leaf: [Int32]) {
+    private static func buildTrie(lengths: [Int], maximumNodes: Int) throws -> (child0: [Int32], child1: [Int32], leaf: [Int32]) {
         let n = lengths.count
         var child0: [Int32] = [-1]; var child1: [Int32] = [-1]; var leaf: [Int32] = [-1]  // root = 0
         func newNode() throws -> Int32 {
             // F553: 트라이 노드 실질 상한(1<<21 ≈ 2M 노드 ≈ 24MB) — 방대 코드북의 메모리/정체 DoS 차단.
-            guard child0.count < 1 << 21 else { throw VorbisError.corrupt("codebook trie too large") }
+            guard child0.count < maximumNodes else { throw VorbisError.corrupt("codebook trie too large") }
             child0.append(-1); child1.append(-1); leaf.append(-1); return Int32(child0.count - 1)
         }
         func insert(codeword: UInt32, len: Int, entry: Int) throws {

@@ -65,7 +65,7 @@ final class AuditWorkshopFeatureGapTests: XCTestCase {
 
         let restored = library(at: directory)
         var applied = false
-        restored.onApply = { _, _ in applied = true; return .applied }
+        restored.onApply = { _, _, _ in applied = true; return .applied }
         let reloadedVM = WorkshopViewModel(library: restored, keyProvider: { nil }, steamcmdAvailable: false,
                                           usernameProvider: { "" }, usernameSaver: { _ in },
                                           downloader: { _, _, _, _ in XCTFail("Installed item must not redownload"); return nil })
@@ -88,6 +88,26 @@ final class AuditWorkshopFeatureGapTests: XCTestCase {
         library.remove(entry)
         XCTAssertNil(vm.downloadState(for: remote))
         XCTAssertNil(LibraryStore(baseDirectory: directory).entries.first { $0.workshopItemID == remote.id })
+    }
+
+    func testLegacySteamEntryMigratesAndMissingMediaCanBeDownloadedAgain() throws {
+        let directory = try temporaryDirectory()
+        let remote = item()
+        let folder = directory.appendingPathComponent("steamapps/workshop/content/431960/\(remote.id)")
+        try FileManager.default.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: wallpaperFolder(), to: folder)
+        let store = LibraryStore(baseDirectory: directory)
+        let imported = try store.importFolder(folder)
+        var legacyEntry = try XCTUnwrap(try JSONSerialization.jsonObject(with: JSONEncoder().encode(imported)) as? [String: Any])
+        legacyEntry.removeValue(forKey: "workshopItemID")
+        let legacy = try JSONSerialization.data(withJSONObject: ["entries": [legacyEntry]])
+        try legacy.write(to: directory.appendingPathComponent("library.json"))
+
+        let vm = WorkshopViewModel(library: library(at: directory), keyProvider: { nil }, steamcmdAvailable: true)
+        XCTAssertEqual(vm.downloadState(for: remote)?.entryId, imported.id)
+        XCTAssertEqual(LibraryStore(baseDirectory: directory).entries.first?.workshopItemID, remote.id)
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("wallpaper.mp4"))
+        XCTAssertNil(vm.downloadState(for: remote))
     }
 
     func testReimportPreservesDownloadedRemoteIdentityAndLegacyIndexStillLoads() throws {

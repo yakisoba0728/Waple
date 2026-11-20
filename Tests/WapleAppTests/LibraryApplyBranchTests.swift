@@ -56,7 +56,7 @@ final class LibraryApplyBranchTests: XCTestCase {
         var errors: [String] = []
         var mountAttempts = 0
         vm.onNotify = { errors.append($0) }
-        vm.onApply = { _, _ in mountAttempts += 1; return .applied }
+        vm.onApply = { _, _, _ in mountAttempts += 1; return .applied }
 
         XCTAssertEqual(vm.apply(ghost), .failed)
         XCTAssertEqual(errors.count, 1)
@@ -80,7 +80,7 @@ final class LibraryApplyBranchTests: XCTestCase {
         store.select("wp0")
         var errors: [String] = []
         vm.onNotify = { errors.append($0) }
-        vm.onApply = { _, _ in .failed }
+        vm.onApply = { _, _, _ in .failed }
 
         XCTAssertEqual(vm.apply(entry), .failed)
         XCTAssertEqual(errors.count, 1)
@@ -102,7 +102,7 @@ final class LibraryApplyBranchTests: XCTestCase {
         let vm = makeVM(store: store, dir: dir)
         var mounted: [URL] = []
         var errors: [String] = []
-        vm.onApply = { url, _ in mounted.append(url); return .applied }
+        vm.onApply = { _, url, _ in mounted.append(url); return .applied }
         vm.onNotify = { errors.append($0) }
 
         XCTAssertEqual(vm.apply(entry), .applied)
@@ -124,7 +124,7 @@ final class LibraryApplyBranchTests: XCTestCase {
         store.select(old.id)
         vm.selectedId = old.id
         var finishPending: ((WallpaperApplyResolution) -> Void)?
-        vm.onApply = { _, finish in finishPending = finish; return .pending }
+        vm.onApply = { _, _, finish in finishPending = finish; return .pending }
 
         XCTAssertEqual(vm.apply(next), .pending)
         XCTAssertEqual(vm.selectedId, old.id)
@@ -146,7 +146,7 @@ final class LibraryApplyBranchTests: XCTestCase {
             vm.selectedId = old.id
             var finishPending: ((WallpaperApplyResolution) -> Void)?
             var observed: WallpaperApplyResolution?
-            vm.onApply = { _, finish in finishPending = finish; return .pending }
+            vm.onApply = { _, _, finish in finishPending = finish; return .pending }
 
             XCTAssertEqual(vm.apply(next) { observed = $0 }, .pending)
             finishPending?(terminal)
@@ -168,7 +168,7 @@ final class LibraryApplyBranchTests: XCTestCase {
         var finishPending: ((WallpaperApplyResolution) -> Void)?
         var cancellationCount = 0
         var observed: WallpaperApplyResolution?
-        vm.onApply = { _, finish in finishPending = finish; return .pending }
+        vm.onApply = { _, _, finish in finishPending = finish; return .pending }
         vm.onCancelPendingApply = { cancellationCount += 1 }
 
         XCTAssertEqual(vm.apply(next) { observed = $0 }, .pending)
@@ -190,7 +190,7 @@ final class LibraryApplyBranchTests: XCTestCase {
         let vm = makeVM(store: store, dir: dir)
         var finishPending: ((WallpaperApplyResolution) -> Void)?
         var cancellationCount = 0
-        vm.onApply = { _, finish in finishPending = finish; return .pending }
+        vm.onApply = { _, _, finish in finishPending = finish; return .pending }
         vm.onCancelPendingApply = { cancellationCount += 1 }
 
         XCTAssertEqual(vm.apply(next), .pending)

@@ -433,6 +433,12 @@ public enum SceneMountSource: Equatable {
 }
 
 extension ScenePackage {
+    /// Limit every file-backed mount to 1 GiB. Batch tools can opt into paging.
+    public static func readData(at packageURL: URL, in folderURL: URL, mapped: Bool = false) throws -> Data {
+        try WallpaperPathSecurity.readRegularFile(packageURL, in: folderURL,
+                                                  maximumBytes: 1 << 30, mapped: mapped)
+    }
+
     /// 종전(2026-08-21 이전) Waple 의 마운트 선택자 — `scene.pkg`/`gifscene.pkg` **이름 두 개**를
     /// 하드코딩해 찾는다. 이제는 `resolveMountSource` 의 **마지막 폴백**으로만 쓴다(§7.1 ③).
     ///
@@ -442,15 +448,17 @@ extension ScenePackage {
     /// 경로로 가고, 거기서도 못 정하면 실패한다 — `0x14011d9e1`).
     public static func legacyPackageURL(in folder: URL) -> URL? {
         let fm = FileManager.default
-        for name in ["scene.pkg", "gifscene.pkg"] {
-            let u = folder.appendingPathComponent(name)
-            if fm.fileExists(atPath: u.path) { return u }
+        let expectedNames = ["scene.pkg", "gifscene.pkg"]
+        for name in expectedNames {
+            let url = folder.appendingPathComponent(name)
+            if WallpaperPathSecurity.regularFileURL(url, in: folder) != nil { return url }
         }
         // 대소문자 보존 파일시스템(리눅스·case-sensitive APFS)에서 `Scene.pkg` 같은 표기를 살린다.
         if let names = try? fm.contentsOfDirectory(atPath: folder.path) {
-            for expected in ["scene.pkg", "gifscene.pkg"] {
-                if let actual = names.first(where: { $0.caseInsensitiveCompare(expected) == .orderedSame }) {
-                    return folder.appendingPathComponent(actual)
+            for expected in expectedNames {
+                for actual in names where actual.caseInsensitiveCompare(expected) == .orderedSame {
+                    let url = folder.appendingPathComponent(actual)
+                    if WallpaperPathSecurity.regularFileURL(url, in: folder) != nil { return url }
                 }
             }
         }
@@ -537,20 +545,17 @@ extension ScenePackage {
     public static func resolveMountSource(folderURL: URL,
                                           fileName: String?,
                                           hasDependency: Bool = false) -> SceneMountSource {
-        let fm = FileManager.default
-        func isRegularFile(_ url: URL) -> Bool {
-            var isDir: ObjCBool = false
-            return fm.fileExists(atPath: url.path, isDirectory: &isDir) && !isDir.boolValue
-        }
         if let declared = WallpaperPathSecurity.containedFileURL(fileName, root: folderURL) {
             // ③ 선언된 파일이 실재하면 그것이 단독 결정자다 — `.pkg` 를 찾아보지도 않는다.
-            if isRegularFile(declared) {
+            if WallpaperPathSecurity.regularFileURL(declared, in: folderURL) != nil {
                 return asciiLowercased(declared.pathExtension) == "pkg" ? .package(declared) : .directory
             }
             // ②④ 없을 때만, 그리고 `dependency` 가 없을 때만 stem 을 `.pkg` 로 바꿔 본다.
             if !hasDependency {
                 let sibling = declared.deletingPathExtension().appendingPathExtension("pkg")
-                if isRegularFile(sibling) { return .package(sibling) }
+                if WallpaperPathSecurity.regularFileURL(sibling, in: folderURL) != nil {
+                    return .package(sibling)
+                }
             }
         }
         if let legacy = legacyPackageURL(in: folderURL) { return .package(legacy) }

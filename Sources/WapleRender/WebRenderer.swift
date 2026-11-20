@@ -30,6 +30,16 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     public enum Mode { case web; case videoFallback }
 
     public var onVideoEnded: (() -> Void)?
+    /// Desktop mounts set this from the installed wallpaper's consent setting.
+    public var allowsWebMedia = false {
+        didSet {
+            guard !allowsWebMedia else { return }
+            hasAudioListener = false
+            audioProvider?.stop()
+            mediaPoller?.stop()
+            mediaPoller = nil
+        }
+    }
     private let mode: Mode
     private var webView: WKWebView?
     /// 테스트 전용 접근자(JS 상태 검증).
@@ -39,6 +49,7 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     }
     private var userPropertiesJSON: String?
     private var userPropertiesByKey: [String: WallpaperProperty] = [:]
+    private var fetchAllPropertyKeys: [String] = []
     private var projectRootURL: URL?
     var audioProviderFactory: () -> AudioSpectrumProviding = { SystemAudioSpectrumProvider() }
     private var audioProvider: AudioSpectrumProviding?
@@ -70,6 +81,12 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     /// 진단·테스트가 마지막 실패를 되읽는 자리다.
     private(set) var lastError: Error?
     private var userSelectedResourceOverrides: [String: String] = [:]
+    private var presetResources: [String: URL] = [:]
+
+    public func hasStaleResourceGrants(id: String) -> Bool {
+        let current = UserPropertyStore.resourceGrants(id: id)
+        return userSelectedResourceOverrides.contains { current[$0.key] != $0.value }
+    }
 
     // MARK: F840 — 페이지 유발 파일시스템 열거 상한
     //
@@ -85,6 +102,9 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     /// **static let 도 격리된다**(AppDelegate:430 의 `SettingsView.minHeight` 진단이 같은 사례). 아래
     /// regularFiles 는 백그라운드 큐 전용(F573)이라 이 상수를 격리 밖에서 읽어야 한다.
     nonisolated private static let maxEnumeratedEntries = 20_000
+    private static let maxFetchAllTargets = 64
+    private static let maxCachedRandomDirectories = 4
+    nonisolated private static let maxFetchAllResultBytes = 4 * 1024 * 1024
     /// 브리지 문자열 인자(name/requestId) 길이 상한(바이트). 초과 메시지는 폐기.
     private static let maxBridgeStringBytes = 1024
     /// 진행 중인 재귀 열거 수. 메인 큐에서만 읽고 쓴다(브리지 메시지·didFinish·완료 콜백 전부 메인).
@@ -102,7 +122,9 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
         let modified: TimeInterval
     }
 
-    var directoryWalker: @Sendable (URL) -> [URL] = { WebRenderer.regularFiles(in: $0) }
+    var directoryWalker: @Sendable (URL, Int) -> (files: [URL], visited: Int) = {
+        WebRenderer.regularFiles(in: $0, visitLimit: $1)
+    }
 
     public init(mode: Mode) {
         self.mode = mode
@@ -183,11 +205,32 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
             }
             // 유저 오버라이드 병합(속성 편집 UI) — WE 의 "저장된 사용자 값" 의미론.
             let mergedOverrides = UserPropertyStore.overrides(
-                id: project.id,
+                id: project.userStateID,
                 presetOverrides: project.presetOverrides,
                 presetResourceRoot: project.presetFolderURL
             )
-            let effective = WallpaperProperties.applying(overrides: mergedOverrides, to: props)
+            projectRootURL = project.folderURL.standardizedFileURL
+            userSelectedResourceOverrides = project.libraryUserStateID.map {
+                UserPropertyStore.resourceGrants(id: $0)
+            } ?? [:]
+            let effective = WallpaperProperties.applying(overrides: mergedOverrides, to: props).map { property in
+                guard ["directory", "file"].contains(property.type.lowercased()),
+                      case .string(let value) = property.value else { return property }
+                if let root = project.presetFolderURL,
+                   case .string(let path) = project.presetOverrides[property.key],
+                   let allowed = WallpaperPathSecurity.containedFileURL(path, root: root),
+                   allowed.path == value {
+                    presetResources[property.key] = allowed
+                }
+                let path = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard path.hasPrefix("/"),
+                      resourceURL(for: property, rawPath: path, projectRoot: project.folderURL) == nil else {
+                    return property
+                }
+                var redacted = property
+                redacted.value = .string("")
+                return redacted
+            }
             userPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(effective)
             // `uniqueKeysWithValues` 가 여기서는 안전하다 — 키가 구조적으로 유일하다:
             // `WallpaperProperties.parse`(:56-61)가 project.json 의 **JSON 객체**를 순회해 만들고
@@ -196,20 +239,20 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
             // 쓰는 것은 그쪽이 **공개 API 로 임의 배열을 받기** 때문이고, 이 자리와는 입력이 다르다.
             // 2026-08-19 스윕에서 확인 — 같아 보이지만 같은 결함이 아니다.
             userPropertiesByKey = Dictionary(uniqueKeysWithValues: effective.map { ($0.key, $0) })
-            // 절대경로 허용목록은 effective 에 실제 반영된 병합 오버라이드 기준 — 유저 직접 선택 외에
-            // 프리셋 리소스 해석(resolvingPresetResources, 프리셋 폴더 봉쇄 검증 완료)의 절대경로도 포함.
-            userSelectedResourceOverrides = Self.absoluteResourceOverrides(from: mergedOverrides)
-            projectRootURL = project.folderURL.standardizedFileURL
+            fetchAllPropertyKeys = Array(effective.lazy
+                .filter { $0.type.lowercased() == "directory" && $0.mode?.lowercased() == "fetchall"
+                    && $0.key.utf8.count <= Self.maxBridgeStringBytes }
+                .map(\.key).prefix(Self.maxFetchAllTargets))
             web.load(URLRequest(url: url))
-            let provider = audioProviderFactory()
-            provider.onFrame = { [weak self] frame in
-                // F840-sweep: `String(format: "%.3f", .infinity)` 는 `"inf"` 를 내고 그건 유효한 JS
-                // 리터럴이 아니다 — 배열 하나가 통째로 파스 실패해 그 틱의 오디오 배달이 사라진다.
-                // 리포에 이미 `TextScriptEngine.jsNumber`(비유한 → "0") 가 있는데 이 자리가 안 거쳤다.
-                let csv = frame.map { TextScriptEngine.jsNumber($0) }.joined(separator: ",")
-                self?.webView?.evaluateJavaScript("if(window.__wapleAudio)window.__wapleAudio([\(csv)]);")
+            if allowsWebMedia {
+                let provider = audioProviderFactory()
+                provider.onFrame = { [weak self, weak web] frame in
+                    guard let self, let web, self.webView === web, self.allowsWebMedia else { return }
+                    let csv = frame.map { TextScriptEngine.jsNumber($0) }.joined(separator: ",")
+                    web.evaluateJavaScript("if(window.__wapleAudio)window.__wapleAudio([\(csv)]);")
+                }
+                audioProvider = provider
             }
-            audioProvider = provider
         case .videoFallback:
             guard let baseURL = URL(string: base) else { throw RendererError.assetMissing }
             // F576: 정상 경로(VideoRenderer)와 같은 배경별 음량을 폴터 <video> 에도 적용.
@@ -340,40 +383,8 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     /// 되돌린다** — 우리가 켠 음소거만 우리가 끈다. 정책이 켜져 있는 동안 생긴 요소도 같은
     /// 규칙을 타므로(생성 시점의 저작 값이 기록된다) 해제가 손실 없이 되돌아간다.
     ///
-    /// **`MutationObserver` 가 있어야 한다.** 웹 벽지는 `<video>` 를 스크립트로 만들어 붙이는
-    /// 것이 흔하고(폴백 HTML 조차 `onerror` 에서 `src` 를 재설정한다), 한 번 훑고 끝내면
-    /// 그 뒤에 생긴 요소가 정책을 무시한 채 소리를 낸다. 관찰자는 한 번만 설치하고
-    /// `window.__wapleMuted` 를 매번 읽으므로 최신 값이 따라온다.
-    ///
-    /// Web Audio is routed through a separate unity gain by WebHardPauseJS; its clock keeps running.
     static func muteJS(_ muted: Bool) -> String {
-        #"""
-        (function () {
-          window.__wapleMuted = \#(muted);
-          if (window.__wapleSetAudioMuted) { window.__wapleSetAudioMuted(window.__wapleMuted); }
-          function applyTo(el) {
-            try {
-              if (window.__wapleMuted) {
-                if (el.__wapleWasMuted === undefined) { el.__wapleWasMuted = el.muted; }
-                el.muted = true;
-              } else if (el.__wapleWasMuted !== undefined) {
-                el.muted = el.__wapleWasMuted;
-                el.__wapleWasMuted = undefined;
-              }
-            } catch (e) {}
-          }
-          function applyAll() {
-            var els = document.querySelectorAll('video, audio');
-            for (var i = 0; i < els.length; i += 1) { applyTo(els[i]); }
-          }
-          applyAll();
-          if (!window.__wapleMuteObserver && window.MutationObserver && document.documentElement) {
-            window.__wapleMuteObserver = new window.MutationObserver(applyAll);
-            window.__wapleMuteObserver.observe(document.documentElement,
-                                               { childList: true, subtree: true });
-          }
-        })();
-        """#
+        "window.__wapleSetAudioMuted?.(\(muted));"
     }
 
     private func setMutedJS(_ muted: Bool) {
@@ -481,12 +492,12 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
             setPausedJS(effective)
         }
 
-        if effective || !hasAudioListener {
+        if effective || !allowsWebMedia || !hasAudioListener {
             audioProvider?.stop()
         } else {
             audioProvider?.start()
         }
-        if effective {
+        if effective || !allowsWebMedia {
             mediaPoller?.stop()
         } else {
             mediaPoller?.start()
@@ -532,10 +543,7 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard webView === self.webView, Self.isAllowedTopFrameURL(webView.url) else { return }
         synchronizeEffectivePause(forceJavaScript: isEffectivelyPaused)
-        // 문서가 교체되면 JS 월드가 통째로 사라진다 — `__wapleMuted` 도 `MutationObserver` 도
-        // 같이 없어지므로 여기서 다시 심는다(`synchronizeEffectivePause` 가 정지 상태를 다시
-        // 미는 것과 같은 이유). `policyMuted` 가 false 여도 부른다: 관찰자를 설치해 둬야 이
-        // 문서에서 나중에 켜는 음소거가 새로 생긴 요소까지 따라간다.
+        // The frame scripts are installed at document start. Synchronize policy changes made during load.
         setMutedJS(effectiveMediaMuted)
         if mode == .videoFallback { applyLiveMediaSettings(volume: mountedVolume, rate: mountedRate) }
         // didFinish 는 모든 허용 main-frame 내비게이션마다 발생한다. WE 는 문서가 다시 로드될 때도
@@ -651,13 +659,13 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
         guard let dict = message.body as? [String: Any], let type = dict["type"] as? String else { return }
         if type == "videoEnded", mode == .videoFallback, message.frameInfo.isMainFrame {
             onVideoEnded?()
-        } else if type == "audioListen" {
+        } else if type == "audioListen", allowsWebMedia {
             hasAudioListener = true
             synchronizeEffectivePause()
         } else if type == "audioUnlisten" {
             hasAudioListener = false
             synchronizeEffectivePause()
-        } else if type == "mediaListen" {
+        } else if type == "mediaListen", allowsWebMedia {
             startMediaPolling()
             synchronizeEffectivePause()
         } else if type == "randomFile",
@@ -697,7 +705,9 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
                 let generation = documentGeneration
                 let walk = directoryWalker
                 DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                    let files = walk(directoryURL).map { $0.resolvingSymlinksInPath().path }
+                    let files = walk(directoryURL, Self.maxEnumeratedEntries).files.map {
+                        $0.resolvingSymlinksInPath().path
+                    }
                     DispatchQueue.main.async { [weak self] in
                         guard let self, self.finishDirectoryWalk(generation: generation) else { return }
                         self.refillDirectoryShuffle(propertyName: name, files: files)
@@ -763,8 +773,7 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     }
 
     private func startDirectoryWatcher() {
-        guard directoryWatchTimer == nil,
-              userPropertiesByKey.values.contains(where: { $0.type.lowercased() == "directory" && $0.mode?.lowercased() == "fetchall" }) else { return }
+        guard directoryWatchTimer == nil, !fetchAllPropertyKeys.isEmpty else { return }
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.webView != nil, !self.isEffectivelyPaused else { return }
@@ -776,6 +785,10 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     }
 
     private func refillDirectoryShuffle(propertyName: String, files: [String]) {
+        if directoryShuffleBags[propertyName] == nil, directoryShuffleBags.count >= Self.maxCachedRandomDirectories {
+            directoryShuffleBags.removeAll()
+            directoryLastRandomFile.removeAll()
+        }
         var bag = Array(Set(files)).shuffled()
         if bag.count > 1, bag.last == directoryLastRandomFile[propertyName] { bag.swapAt(0, bag.count - 1) }
         directoryShuffleBags[propertyName] = bag
@@ -793,10 +806,8 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
         // 프로퍼티 필터+경로 검증(단일 stat)은 메인 상태(userPropertiesByKey/projectRootURL)를
         // 읽으므로 여기서 스냅섯하고, 재귀 열거만 백그라운드로 본낸다.
         var targets: [(key: String, directoryURL: URL)] = []
-        for key in userPropertiesByKey.keys.sorted() {
+        for key in fetchAllPropertyKeys {
             guard let property = userPropertiesByKey[key],
-                  property.type.lowercased() == "directory",
-                  property.mode?.lowercased() == "fetchall",
                   let directoryURL = fetchAllDirectoryURL(for: property) else { continue }
             targets.append((key, directoryURL))
         }
@@ -819,16 +830,37 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
         fetchAllWalkGeneration = generation
         let walk = directoryWalker
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let resolved: [(String, [String: DirectoryFileStamp])] = snapshot.map { target in
-                var files: [String: DirectoryFileStamp] = [:]
-                for url in walk(target.directoryURL) {
-                    let file = url.resolvingSymlinksInPath()
-                    let attributes = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-                    files[file.path] = DirectoryFileStamp(size: attributes?.fileSize ?? 0,
-                        modified: attributes?.contentModificationDate?.timeIntervalSince1970 ?? 0)
+            var entriesLeft = Self.maxEnumeratedEntries
+            var bytesLeft = Self.maxFetchAllResultBytes
+            var byDirectory: [URL: [String: DirectoryFileStamp]] = [:]
+            var results: [(String, [String: DirectoryFileStamp])] = []
+            for target in snapshot {
+                guard bytesLeft > 0 else { break }
+                let directory = target.directoryURL.resolvingSymlinksInPath().standardizedFileURL
+                if byDirectory[directory] == nil, entriesLeft > 0 {
+                    let walkResult = walk(target.directoryURL, entriesLeft)
+                    entriesLeft -= walkResult.visited
+                    var files: [String: DirectoryFileStamp] = [:]
+                    for url in walkResult.files {
+                        let file = url.resolvingSymlinksInPath()
+                        let attributes = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+                        files[file.path] = DirectoryFileStamp(size: attributes?.fileSize ?? 0,
+                            modified: attributes?.contentModificationDate?.timeIntervalSince1970 ?? 0)
+                    }
+                    byDirectory[directory] = files
                 }
-                return (target.key, files)
+                guard let files = byDirectory[directory] else { continue }
+                var deliverable: [String: DirectoryFileStamp] = [:]
+                for path in files.keys.sorted() {
+                    // Include the worst-case JSON string escaping and array punctuation.
+                    let cost = path.utf8.count * 6 + 3
+                    guard cost <= bytesLeft else { break }
+                    bytesLeft -= cost
+                    deliverable[path] = files[path]
+                }
+                results.append((target.key, deliverable))
             }
+            let resolved = results
             // 위 randomFile 경로와 같은 이유로 안쪽에서 재캡처한다(근거는 그 주석 참조).
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -865,36 +897,34 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     }
 
     /// F573: 인스턴스 상태 없는 재귀 열거+stat — 백그라운드 큐에서 실행한다.
-    nonisolated private static func regularFiles(in directoryURL: URL) -> [URL] {
+    nonisolated private static func regularFiles(in directoryURL: URL, visitLimit: Int) -> (files: [URL], visited: Int) {
         let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]
         guard let enumerator = FileManager.default.enumerator(
             at: directoryURL,
             includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles]
-        ) else { return [] }
+        ) else { return ([], 0) }
 
         var candidates: [URL] = []
         var visited = 0
-        for case let url as URL in enumerator {
-            // F840: 열거 엔트리 상한 — 상한이 없으면 워크 하나가 트리 크기만큼(홈 디렉터리를 고른
-            // 경우 수십만 stat) 돌아, 인-플라이트 상한만으로는 부족하다.
+        while visited < visitLimit, let url = enumerator.nextObject() as? URL {
             visited += 1
-            if visited > Self.maxEnumeratedEntries {
-                NSLog("%@", "[Waple] directory enumeration truncated at \(Self.maxEnumeratedEntries) entries: \(directoryURL.path)")
-                break
-            }
             if isRegularFile(url, containedIn: directoryURL) {
                 candidates.append(url)
             }
         }
-        return candidates.sorted { $0.path < $1.path }
+        return (candidates.sorted { $0.path < $1.path }, visited)
     }
 
     private func resourceURL(for property: WallpaperProperty, rawPath: String, projectRoot: URL) -> URL? {
         if rawPath.hasPrefix("/") {
-            let selected = URL(fileURLWithPath: rawPath).standardizedFileURL.path
-            guard userSelectedResourceOverrides[property.key] == selected else { return nil }
-            return URL(fileURLWithPath: rawPath)
+            guard !rawPath.contains("\0") else { return nil }
+            if let grant = userSelectedResourceOverrides[property.key] {
+                let selected = URL(fileURLWithPath: rawPath).resolvingSymlinksInPath().standardizedFileURL
+                if grant == selected.path { return selected }
+            }
+            if presetResources[property.key]?.path == rawPath { return presetResources[property.key] }
+            return nil
         }
         return WallpaperPathSecurity.containedFileURL(rawPath, root: projectRoot)
     }
@@ -911,12 +941,10 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
 
     /// nonisolated: regularFiles(백그라운드)가 엔트리마다 호출한다 — 인스턴스 상태 무접근(위 주석 참조).
     nonisolated private static func isRegularFile(_ url: URL, containedIn root: URL?) -> Bool {
-        var isDirectory = ObjCBool(false)
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
-              !isDirectory.boolValue else { return false }
+        let realURL = url.resolvingSymlinksInPath().standardizedFileURL
+        guard (try? realURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { return false }
         guard let root else { return true }
         let realRoot = root.resolvingSymlinksInPath().standardizedFileURL
-        let realURL = url.resolvingSymlinksInPath().standardizedFileURL
         return WallpaperPathSecurity.contains(realURL, in: realRoot)
     }
 
@@ -953,17 +981,6 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
         return string
     }
 
-    private static func absoluteResourceOverrides(from overrides: [String: PropertyValue]) -> [String: String] {
-        var out: [String: String] = [:]
-        for (key, value) in overrides {
-            guard case .string(let rawPath) = value else { continue }
-            let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard path.hasPrefix("/") else { continue }
-            out[key] = URL(fileURLWithPath: path).standardizedFileURL.path
-        }
-        return out
-    }
-
     // MARK: - 미디어 연동(페이지가 wallpaperRegisterMedia* 를 등록한 경우에만 폴링)
 
     /// 테스트 주입용. nil 이면 AppleScript(Music/Spotify) 프로바이더.
@@ -971,13 +988,14 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
     private var mediaPoller: MediaPoller?
 
     private func startMediaPolling() {
-        guard mediaPoller == nil else { return }
+        guard allowsWebMedia, mediaPoller == nil else { return }
         // 5초 간격(MediaPoller): AppleScript 비용(수십 ms)과 체감 실시간성의 균형. 타임라인은 틱마다 배달.
         let poller = MediaPoller(provider: nowPlayingProvider ?? AppleScriptNowPlayingProvider())
         // weak self — poller 콜백이 self 를 소유하면 self→poller→콜백 순환(teardown 전 누수).
-        let js: (String, String) -> Void = { [weak self] kind, obj in
-            self?.webView?.evaluateJavaScript("window.__wapleMedia && window.__wapleMedia('\(kind)', \(obj));",
-                                              completionHandler: nil)
+        let js: (String, String) -> Void = { [weak self, weak web = webView] kind, obj in
+            guard let self, let web, self.webView === web, self.allowsWebMedia else { return }
+            web.evaluateJavaScript("window.__wapleMedia && window.__wapleMedia('\(kind)', \(obj));",
+                                   completionHandler: nil)
         }
         func q(_ s: String) -> String {
             (try? String(data: JSONEncoder().encode(s), encoding: .utf8) ?? "\"\"") ?? "\"\""
@@ -987,13 +1005,10 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
             js("playback", "{ state: \(info.state.rawValue) }")
         }
         poller.onProperties = { info in
-            js("properties", "{ title: \(q(info.title)), artist: \(q(info.artist)), albumTitle: \(q(info.album)), subTitle: \(q(info.artist)) }")
+            js("properties", info.propertiesJSON)
         }
         poller.onTimeline = { info in
-            // F840-sweep: 같은 이유로 jsNumber 경유(비유한 → 0). osascript 파스 실패 시 0 이라
-            // 현재 도달은 미입증이지만, 가드가 있는데 안 거치는 상태를 남길 이유가 없다.
-            js("timeline", "{ position: \(TextScriptEngine.jsNumber(Float(info.position))), "
-                         + "duration: \(TextScriptEngine.jsNumber(Float(info.duration))) }")
+            js("timeline", info.timelineJSON)
         }
         // 썸네일(웹 규약 — 실물 3639973107 소비): thumbnail = dataURL 문자열, 색은 "#RRGGBB".
         // 아트워크 실패 시 poller 가 이벤트 자체를 생략(graceful).
@@ -1061,7 +1076,9 @@ public final class WebRenderer: NSObject, @MainActor WallpaperRenderer, LiveMedi
         hasAudioListener = false
         userPropertiesJSON = nil
         userPropertiesByKey = [:]
+        fetchAllPropertyKeys = []
         userSelectedResourceOverrides = [:]
+        presetResources = [:]
         projectRootURL = nil
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "waple")
         webView?.removeFromSuperview()

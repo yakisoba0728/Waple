@@ -339,13 +339,17 @@ final class SceneDocumentTests: XCTestCase {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
          "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"1 1 1",
-                     "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":{"value":true}}]}
+                     "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":{"value":true}},
+                    {"image":"models/x.json","instance":{"textures":["/tmp/project-default.jpg"]}}]}
         """
         let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", materialUserTexture)])
         let doc = try SceneDocument.parse(package: p, userProps: ["customimage": "/tmp/yeezus.jpg"])
 
-        XCTAssertEqual(doc.layers.count, 1)
+        XCTAssertEqual(doc.layers.count, 2)
         XCTAssertEqual(doc.layers[0].textureEntryName, "/tmp/yeezus.jpg")
+        XCTAssertEqual(doc.layers[0].textureUserPropertyKey, "customimage")
+        XCTAssertEqual(doc.layers[1].textureEntryName, "/tmp/project-default.jpg")
+        XCTAssertNil(doc.layers[1].textureUserPropertyKey)
     }
 
     /// 실물(3147346398): origin/alpha 가 애니메이션 바인딩 객체 {"animation":{...},"value":X} 로 온다.

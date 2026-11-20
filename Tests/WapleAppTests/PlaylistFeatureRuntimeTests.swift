@@ -45,10 +45,59 @@ final class PlaylistFeatureRuntimeTests: XCTestCase {
             XCTAssertFalse(driver.shouldAdvanceOnVideoEnd(screenKey: "screen"))
             finish?(.applied)
             XCTAssertTrue(driver.shouldAdvanceOnVideoEnd(screenKey: "screen"))
+            driver.sync(settingsByScreen: ["screen": PlaylistSettings(delayMinutes: 0.01,
+                order: .sorted, videoSequence: false, beginFirst: true, playIntro: true)],
+                itemsByScreen: ["screen": [PlaylistItem(file: "intro"), PlaylistItem(file: "regular")]],
+                screenKeys: ["screen"], currentEntryIds: ["screen": "intro"])
+            XCTAssertTrue(driver.shouldAdvanceOnVideoEnd(screenKey: "screen"))
             XCTAssertFalse(driver.needsBeginning(screenKey: "screen"))
             _ = driver.requestAdvance(screenKey: "screen", now: Date()) { id, _ in
                 XCTAssertEqual(id, "regular"); return .applied
             }
+            XCTAssertFalse(driver.shouldAdvanceOnVideoEnd(screenKey: "screen"))
+        }
+    }
+
+    func testDaytimeReorderRefreshesCurrentIndexByID() {
+        withDriver { driver in
+            let settings = ["screen": PlaylistSettings(mode: .daytime)]
+            let first = PlaylistItem(file: "a", daytimeEnd: 1)
+            let second = PlaylistItem(file: "b", daytimeEnd: 1)
+            let now = Date()
+            driver.sync(settingsByScreen: settings, itemsByScreen: ["screen": [first, second]],
+                        screenKeys: ["screen"], currentEntryIds: ["screen": "a"])
+            XCTAssertTrue(driver.tick(now: now, isPaused: false).isEmpty)
+            driver.sync(settingsByScreen: settings, itemsByScreen: ["screen": [second, first]],
+                        screenKeys: ["screen"], currentEntryIds: ["screen": "a"])
+            XCTAssertEqual(driver.tick(now: now, isPaused: false), ["screen"])
+        }
+    }
+
+    func testFailedDaytimeCandidateDoesNotRepeatOrBlockAnotherDisplay() {
+        withDriver { driver in
+            let now = Date()
+            let due: Set<String> = ["a", "b"]
+            let items = [PlaylistItem(file: "bad", daytimeEnd: 1), PlaylistItem(file: "other", daytimeEnd: 1)]
+            driver.sync(settingsByScreen: ["a": PlaylistSettings(mode: .daytime)],
+                        itemsByScreen: ["a": items], screenKeys: ["a", "b"], currentEntryIds: [:])
+            XCTAssertEqual(driver.nextScheduledScreen(due: due, now: now), "a")
+            var attempted: [String] = []
+            XCTAssertEqual(driver.requestAdvance(screenKey: "a", now: now) { id, _ in
+                attempted.append(id)
+                return .failed
+            }, .failed)
+            XCTAssertEqual(attempted, ["bad"])
+            XCTAssertEqual(driver.nextScheduledScreen(due: due, now: now), "b")
+            XCTAssertNil(driver.nextScheduledScreen(due: ["a"], now: now))
+            XCTAssertEqual(driver.nextScheduledScreen(due: due, now: now.addingTimeInterval(6)), "a")
+        }
+    }
+
+    func testSingletonVideoEndDoesNotRemountTheCurrentEntry() {
+        withDriver { driver in
+            driver.sync(settingsByScreen: ["screen": PlaylistSettings(videoSequence: true)],
+                        itemsByScreen: ["screen": [PlaylistItem(file: "only")]],
+                        screenKeys: ["screen"], currentEntryIds: ["screen": "only"])
             XCTAssertFalse(driver.shouldAdvanceOnVideoEnd(screenKey: "screen"))
         }
     }

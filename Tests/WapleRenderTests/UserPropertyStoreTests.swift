@@ -23,6 +23,28 @@ final class UserPropertyStoreTests: XCTestCase {
         XCTAssertTrue(UserPropertyStore.overrides(id: id).isEmpty)
     }
 
+    func testResourcePickerGrantIsIndependentOfThePropertyValue() {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("photo.jpg")
+        UserPropertyStore.set(.string(file.path), key: "photo", id: id)
+        XCTAssertTrue(UserPropertyStore.resourceGrants(id: id).isEmpty)
+
+        UserPropertyStore.setResourceGrant(absolutePath: file.path, key: "photo", id: id)
+        XCTAssertEqual(UserPropertyStore.resourceGrants(id: id)["photo"],
+                       file.resolvingSymlinksInPath().standardizedFileURL.path)
+        UserPropertyStore.reset(id: id)
+        XCTAssertTrue(UserPropertyStore.resourceGrants(id: id).isEmpty)
+    }
+
+    func testPrivateBridgePermissionsRequireSeparateInstallationChoices() {
+        XCTAssertFalse(UserPropertyStore.allowsWebMedia(id: id))
+        XCTAssertFalse(UserPropertyStore.allowsSceneScripts(id: id))
+        UserPropertyStore.setAllowsWebMedia(true, id: id)
+        defer { UserPropertyStore.setAllowsWebMedia(false, id: id) }
+        XCTAssertTrue(UserPropertyStore.allowsWebMedia(id: id))
+        XCTAssertFalse(UserPropertyStore.allowsWebMedia(id: id + "-second"))
+        XCTAssertFalse(UserPropertyStore.allowsSceneScripts(id: id))
+    }
+
     func testPresetOverridesMergeBeforeUserOverrides() {
         UserPropertyStore.set(.number(0.9), key: "amount", id: id)
 

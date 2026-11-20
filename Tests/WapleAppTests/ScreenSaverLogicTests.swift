@@ -3,12 +3,11 @@ import XCTest
 import WapleCore
 import WapleRender
 
-/// 화면보호기 순수 결정 로직 검증 — moduleDict 조립 / 설치 경로 / 대상 동영상 결정.
-/// 부수효과(설치/CFPreferences)는 ScreenSaverController 로 분리되어 있어 여기서는 다루지 않는다.
+/// 화면보호기 선택과 설치를 실제 사용자 설정과 분리해 검증한다.
 final class ScreenSaverLogicTests: XCTestCase {
 
-    private func project(type: WallpaperType, fileName: String?) -> WallpaperProject {
-        WallpaperProject(id: "p1", type: type, fileName: fileName, previewName: nil,
+    private func project(type: WallpaperType, fileName: String?, id: String = "p1") -> WallpaperProject {
+        WallpaperProject(id: id, type: type, fileName: fileName, previewName: nil,
                          title: "t", tags: [], contentRating: nil, workshopId: nil,
                          dependency: nil, folderURL: URL(fileURLWithPath: "/tmp/wp"))
     }
@@ -31,50 +30,102 @@ final class ScreenSaverLogicTests: XCTestCase {
         XCTAssertEqual(dest.path, "/Users/u/Library/Screen Savers/Waple.saver")
     }
 
+    func testInstallBundlePreservesInstalledCopyUntilReplacementIsReady() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let source = root.appendingPathComponent("Bundled.saver")
+        let installed = root.appendingPathComponent("Waple.saver")
+        try fm.createDirectory(at: source, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let sourceBinary = source.appendingPathComponent("binary")
+        let installedBinary = installed.appendingPathComponent("binary")
+        try Data("first".utf8).write(to: sourceBinary)
+        try ScreenSaverController.installBundle(from: source, to: installed)
+        XCTAssertThrowsError(try ScreenSaverController.installBundle(
+            from: root.appendingPathComponent("Missing.saver"), to: installed))
+        XCTAssertEqual(try Data(contentsOf: installedBinary), Data("first".utf8))
+
+        try Data("second".utf8).write(to: sourceBinary)
+        try ScreenSaverController.installBundle(from: source, to: installed)
+        XCTAssertEqual(try Data(contentsOf: installedBinary), Data("second".utf8))
+        XCTAssertEqual(Set(try fm.contentsOfDirectory(atPath: root.path)), ["Bundled.saver", "Waple.saver"])
+    }
+
     // MARK: - 대상 동영상 결정
 
+    private func videoPath(for project: WallpaperProject?) -> String? {
+        ScreenSaverLogic.videoConfiguration(for: [project].compactMap { $0 }, fitMode: .fit,
+            rate: { _ in 1 }, isRegularFile: { _ in true })?["videoPath"] as? String
+    }
+
     func testVideoPath_videoProject_returnsFullPath() {
-        XCTAssertEqual(ScreenSaverLogic.videoPath(for: project(type: .video, fileName: "movie.mp4")),
+        XCTAssertEqual(videoPath(for: project(type: .video, fileName: "movie.mp4")),
                        "/tmp/wp/movie.mp4")
     }
 
     func testVideoPath_extensionCaseInsensitive() {
-        XCTAssertEqual(ScreenSaverLogic.videoPath(for: project(type: .video, fileName: "MOVIE.MOV")),
+        XCTAssertEqual(videoPath(for: project(type: .video, fileName: "MOVIE.MOV")),
                        "/tmp/wp/MOVIE.MOV")
     }
 
     func testVideoPath_nonVideoType_nil() {
-        XCTAssertNil(ScreenSaverLogic.videoPath(for: project(type: .scene, fileName: "movie.mp4")),
+        XCTAssertNil(videoPath(for: project(type: .scene, fileName: "movie.mp4")),
                      "scene 배경은 화면보호기 대상이 아니다")
     }
 
     func testVideoPath_unsupportedContainer_nil() {
-        XCTAssertNil(ScreenSaverLogic.videoPath(for: project(type: .video, fileName: "movie.webm")),
+        XCTAssertNil(videoPath(for: project(type: .video, fileName: "movie.webm")),
                      "webm 은 AVFoundation(saver)이 재생하지 못한다")
     }
 
     func testVideoPath_missingFileNameOrProject_nil() {
-        XCTAssertNil(ScreenSaverLogic.videoPath(for: project(type: .video, fileName: nil)))
-        XCTAssertNil(ScreenSaverLogic.videoPath(for: nil))
+        XCTAssertNil(videoPath(for: project(type: .video, fileName: nil)))
+        XCTAssertNil(videoPath(for: nil))
     }
 
     func testVideoConfigurationPreservesFitRateAndVideoOnlyBoundary() throws {
         let video = project(type: .video, fileName: "movie.mp4")
-        let configuration = try XCTUnwrap(ScreenSaverLogic.videoConfiguration(for: video, fitMode: .stretch, rate: 1.5))
+        let configuration = try XCTUnwrap(ScreenSaverLogic.videoConfiguration(for: [video], fitMode: .stretch,
+            rate: { _ in 1.5 }, isRegularFile: { _ in true }))
         XCTAssertEqual(configuration["videoPath"] as? String, "/tmp/wp/movie.mp4")
         XCTAssertEqual(configuration["videoFitMode"] as? String, "stretch")
         XCTAssertEqual(configuration["videoPlaybackRate"] as? NSNumber, NSNumber(value: Float(1.5)))
         XCTAssertEqual(configuration.count, 3)
-        XCTAssertNil(ScreenSaverLogic.videoConfiguration(for: project(type: .scene, fileName: "scene.pkg"), fitMode: .fit, rate: 1))
+        XCTAssertNil(ScreenSaverLogic.videoConfiguration(for: [project(type: .scene, fileName: "scene.pkg")],
+            fitMode: .fit, rate: { _ in 1 }, isRegularFile: { _ in true }))
     }
 
     func testVideoConfigurationBoundsInvalidRates() {
         let video = project(type: .video, fileName: "movie.mp4")
         let cases: [(Float, Float)] = [(.nan, 1), (.infinity, 1), (-1, 0.1), (9, 2)]
         for (input, expected) in cases {
-            let value = ScreenSaverLogic.videoConfiguration(for: video, fitMode: .fill, rate: input)?["videoPlaybackRate"] as? NSNumber
+            let value = ScreenSaverLogic.videoConfiguration(for: [video], fitMode: .fill,
+                rate: { _ in input }, isRegularFile: { _ in true })?["videoPlaybackRate"] as? NSNumber
             XCTAssertEqual(value?.floatValue, expected)
         }
+    }
+
+    func testVideoConfigurationUsesFirstDisplayWithAvailableVideoAndMatchingRate() throws {
+        let missing = project(type: .video, fileName: "missing.mov", id: "missing")
+        let webM = project(type: .video, fileName: "first.webm", id: "first")
+        let native = project(type: .video, fileName: "second.mp4", id: "second")
+        let source = webM.folderURL.appendingPathComponent("first.webm").standardizedFileURL
+        let prepared = URL(fileURLWithPath: "/tmp/cache/first.mp4")
+        let rate: (String) -> Float = { $0 == "first" ? 1.5 : 0.5 }
+        let projects = [missing, webM, native]
+
+        let fallback = try XCTUnwrap(ScreenSaverLogic.videoConfiguration(for: projects,
+            preparedVideoURLs: [source: prepared], fitMode: .fit, rate: rate,
+            isRegularFile: { $0.lastPathComponent == "second.mp4" }))
+        XCTAssertEqual(fallback["videoPath"] as? String, "/tmp/wp/second.mp4")
+        XCTAssertEqual(fallback["videoPlaybackRate"] as? NSNumber, NSNumber(value: Float(0.5)))
+
+        let primary = try XCTUnwrap(ScreenSaverLogic.videoConfiguration(for: projects,
+            preparedVideoURLs: [source: prepared], fitMode: .fit, rate: rate,
+            isRegularFile: { $0.lastPathComponent != "missing.mov" }))
+        XCTAssertEqual(primary["videoPath"] as? String, prepared.path)
+        XCTAssertEqual(primary["videoPlaybackRate"] as? NSNumber, NSNumber(value: Float(1.5)))
     }
 
     // MARK: - enable 시 사용자 원본 화면보호기 백업 판정

@@ -149,7 +149,6 @@ public final class SceneVideoLayer {
     private var runtimeAnchorTime: Double = 0
     private var runtimeAnchorPosition: Double = 0
     private var runtimeLastSceneTime: Double = 0
-    private var runtimeHasControl = false
     private var runtimeEndedGeneration: UInt64 { playbackEndState.access { $0.endedGeneration } }
     /// F5-2: startLive 가 채운다 — identity(기본값)면 기존 CVMetalTextureCache 제로카피 경로 그대로.
     private var trackOrientation: VideoTrackOrientation = .identity
@@ -230,6 +229,7 @@ public final class SceneVideoLayer {
         resolveTrackOrientation(asset: liveAsset)   // F5-2: liveTexture 가 참조할 방향 보정값 확정
         let p = AVPlayer(playerItem: item)
         p.isMuted = true                 // 스코프 밖: 비디오 오디오 트랙.
+        p.defaultRate = Float(runtimeRate)
         p.actionAtItemEnd = .none
         // 루프: AVPlayerLooper 는 매 루프 아이템을 교체 → 부착한 output 이 새 아이템을 못 따라간다.
         // 단일 아이템 + 종료 시 seek(0) 수동 루프(output-기반 재생의 표준 패턴).
@@ -247,7 +247,7 @@ public final class SceneVideoLayer {
             p?.play()
         }
         player = p
-        p.play()
+        if runtimePlaying, !paused { p.play() }
     }
 
     /// 라이브 현재 프레임 텍스처(씬 draw 루프가 매 프레임 pull). 새 프레임이 없으면 직전 프레임 재사용.
@@ -376,42 +376,71 @@ public final class SceneVideoLayer {
         get { playbackEndState.access { $0.paused } }
         set { playbackEndState.access { $0.paused = newValue } }
     }
-    public func pause() { paused = true; player?.pause() }
-    public func resume() { paused = false; if runtimePlaying { player?.play() } }
+    public func pause() {
+        paused = true
+        player?.pause()
+    }
+
+    public func resume() {
+        paused = false
+        if runtimePlaying { player?.play() }
+    }
 
     var runtimeSnapshot: [String: Any] {
-        let time = player?.currentTime().seconds ?? runtimePosition(at: runtimeLastSceneTime)
         let length = player?.currentItem?.duration.seconds ?? duration
+        let time = player?.currentTime().seconds ?? headlessPosition(length: length)
         return ["currentTime": time.isFinite ? max(0, time) : 0,
                 "duration": length.isFinite ? max(0, length) : 0,
                 "rate": runtimeRate, "loop": runtimeLoops,
-                "playing": runtimePlaying && !paused, "endedGeneration": runtimeEndedGeneration]
+                "playing": runtimePlaying && (player == nil || !paused), "endedGeneration": runtimeEndedGeneration]
+    }
+
+    func runtimeSnapshot(at sceneTime: Float) -> [String: Any] {
+        if player == nil, !liveStartFailed { advanceHeadlessClock(to: Double(sceneTime)) }
+        return runtimeSnapshot
     }
 
     private func runtimePosition(at time: Double) -> Double {
-        guard runtimeHasControl else { return time }
-        return runtimeAnchorPosition + (runtimePlaying ? max(0, time - runtimeAnchorTime) * runtimeRate : 0)
+        // Offscreen capture pauses live drawing but advances video at its requested scene times.
+        runtimeAnchorPosition + (runtimePlaying ? max(0, time - runtimeAnchorTime) * runtimeRate : 0)
+    }
+
+    private func anchorRuntimePosition() {
+        guard player == nil else { return }
+        runtimeAnchorPosition = headlessPosition(length: duration)
+        runtimeAnchorTime = runtimeLastSceneTime
     }
 
     func applyRuntime(action: String, value: Any?) -> Bool {
-        let position = player?.currentTime().seconds ?? runtimePosition(at: runtimeLastSceneTime)
-        runtimeAnchorPosition = position.isFinite ? max(0, position) : 0
-        runtimeAnchorTime = runtimeLastSceneTime
-        runtimeHasControl = true
         switch action {
-        case "play": runtimePlaying = true; if !paused { player?.play() }
-        case "pause": runtimePlaying = false; player?.pause()
-        case "stop": runtimePlaying = false; runtimeAnchorPosition = 0; player?.pause(); player?.seek(to: .zero)
+        case "play":
+            anchorRuntimePosition()
+            runtimePlaying = true
+            if !paused { player?.play() }
+        case "pause":
+            anchorRuntimePosition()
+            runtimePlaying = false
+            player?.pause()
+        case "stop":
+            runtimePlaying = false
+            runtimeAnchorPosition = 0
+            runtimeAnchorTime = runtimeLastSceneTime
+            player?.pause()
+            player?.seek(to: .zero)
         case "setCurrentTime", "seek":
             guard let number = value as? NSNumber, number.doubleValue.isFinite else { return false }
             runtimeAnchorPosition = max(0, number.doubleValue)
+            runtimeAnchorTime = runtimeLastSceneTime
             player?.seek(to: CMTime(seconds: runtimeAnchorPosition, preferredTimescale: 600))
         case "setRate", "rate":
-            guard let number = value as? NSNumber, number.doubleValue.isFinite else { return false }
+            guard let number = value as? NSNumber, Float(number.doubleValue).isFinite else { return false }
+            anchorRuntimePosition()
             runtimeRate = max(0.1, number.doubleValue)
+            player?.defaultRate = Float(runtimeRate)
             if runtimePlaying, !paused { player?.rate = Float(runtimeRate) }
         case "setLoop", "loop":
             guard let enabled = value as? Bool else { return false }
+            anchorRuntimePosition()
             runtimeLoops = enabled
         default: return false
         }
@@ -457,9 +486,8 @@ public final class SceneVideoLayer {
     /// 동일 scene-time 프레임을 낸다(clamp 아님 — 루프 재생 정합). 디코드 실패(LZ4-mp4 등
     /// AVFoundation 미해독)면 nil → 호출부가 placeholder 폴백(형제 레이어 보존).
     public func headlessTexture(at t: Float, device: MTLDevice) -> MTLTexture? {
-        runtimeLastSceneTime = Double(t)
-        let requested = runtimePosition(at: Double(t))
-        let position = runtimeLoops ? wrappedTime(requested) : min(max(0, requested), max(0, duration))
+        advanceHeadlessClock(to: Double(t))
+        let position = headlessPosition(length: duration)
         let cg: CGImage
         do {
             cg = try generator.copyCGImage(
@@ -469,6 +497,29 @@ public final class SceneVideoLayer {
             cg = zero
         }
         return Self.rgbaTexture(from: cg, device: device)
+    }
+
+    private func advanceHeadlessClock(to time: Double) {
+        guard time.isFinite else { return }
+        let previousTime = runtimeLastSceneTime
+        runtimeLastSceneTime = time
+        let length = duration
+        guard time > previousTime, runtimePlaying, length.isFinite, length > 0 else { return }
+        let position = runtimePosition(at: time)
+        if runtimeLoops {
+            let previousPosition = runtimePosition(at: previousTime)
+            if floor(position / length) > floor(previousPosition / length) { _ = playbackEndState.finishedCycle() }
+        } else if position >= length {
+            runtimeAnchorPosition = length
+            runtimeAnchorTime = time
+            _ = playbackEndState.finishedCycle()
+        }
+    }
+
+    private func headlessPosition(length: Double) -> Double {
+        let position = runtimePosition(at: runtimeLastSceneTime)
+        guard length.isFinite, length > 0 else { return max(0, position) }
+        return runtimeLoops ? Self.wrap(position, duration: length) : min(max(0, position), length)
     }
 
     func wrappedTime(_ t: Double) -> Double { Self.wrap(t, duration: duration) }
