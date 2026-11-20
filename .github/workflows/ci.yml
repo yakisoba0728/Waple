@@ -803,6 +803,9 @@ jobs:
       # 정본 정적 레시피도4288. d9917e50 대비 순증161, 파일별 음수 증분0:
       # App34 + Core30 + Render84 + Library10 + CompatCore3 (Policy/Snapshot ±0).
       # 근거: https://github.com/yakisoba0728/Waple/actions/runs/42082324736/job/127439044334
+      # [2026-11-20 — 4288 → 4334] 전체 감사 수정분 881d6316의 Apple Silicon
+      # Xcode 27.2 debug 실측: executed=4334, skipped=58, failures=0.
+      # 정본 정적 개수도 4334이며 실행 대상 7개 전부 성공했다.
       - name: Skip / execution census
         if: always()
         run: |
@@ -828,10 +831,10 @@ jobs:
             echo "::error::스킵 ${SKIPPED}건 — 상한 100 초과. GPU/코퍼스 없이 대량 스킵되고 있을 가능성이 크다."
             exit 1
           fi
-          # (하한 4288 — 실행 수 래칫과 그 이력) — 근거는 이 스텝 위 YAML 주석에 있다.
+          # (하한 4334 — 실행 수 래칫과 그 이력) — 근거는 이 스텝 위 YAML 주석에 있다.
           # run 블록 밖으로 옮긴 이유도 거기 적었다(21,000바이트 한도).
-          if [ "${EXECUTED:-0}" -lt 4288 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 4288 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
+          if [ "${EXECUTED:-0}" -lt 4334 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 4334 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
             exit 1
           fi
 
