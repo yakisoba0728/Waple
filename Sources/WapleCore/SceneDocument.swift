@@ -2192,7 +2192,7 @@ extension SceneDocument {
         var isFB = false
         switch resolved {
         case .entry(let name): entryName = name
-        case .file(let path, let propertyKey):
+        case .textureFile(let path, let propertyKey):
             entryName = path
             textureUserPropertyKey = propertyKey
         case .solid: entryName = ""
@@ -3400,7 +3400,7 @@ extension SceneDocument {
     /// 레이어 소스 해석 결과.
     private enum LayerTexture {
         case entry(String)                    // 일반 텍스처 엔트리
-        case file(String, propertyKey: String?)
+        case textureFile(String, propertyKey: String?)
         case solid                            // 무텍스처 머티리얼(flat) → 솔리드 필
         case frameBuffer(fullscreen: Bool)    // _rt_FullFrameBuffer → 컴포지션 레이어
     }
@@ -3496,7 +3496,7 @@ extension SceneDocument {
             return .frameBuffer(fullscreen: fullscreen)
         }
         if name.hasPrefix("/") {
-            return .file(name, propertyKey: textureUserKeys[slot])
+            return .textureFile(name, propertyKey: textureUserKeys[slot])
         }
         let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
         for candidate in candidates {
