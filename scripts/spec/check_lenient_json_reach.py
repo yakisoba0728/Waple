@@ -52,6 +52,7 @@ MIN_LENIENT_NEEDED = 31
 # 트리 루트가 갈리므로 트리 상대경로로 고정한다.
 PINNED_ALWAYS = {"presets/water/preset.json"}                                   # 동봉 트리에 있다
 PINNED_IF_INSTALLED = {"defaultprojects/fantasticcar/materials/car/glass.json"}  # 설치본 projects/ 전용
+SNAPSHOT_PIPELINE = "Sources/WapleCompatCore/SnapshotPipeline.swift"
 # 자산 리더는 이 진입점을 타야 한다. 파일 → 최소 호출 수.
 WIRED = {"Sources/WapleCore/SceneDocument.swift": 7,
          "Sources/WapleCore/ProjectJSONParser.swift": 1,
@@ -66,11 +67,8 @@ WIRED = {"Sources/WapleCore/SceneDocument.swift": 7,
          # 판정했다. 표에 없으면 이 게이트는 그 파일을 **쳐다보지도 않는다** — 관용 파서가
          # 있어도 리더가 안 부르면 아무 일도 안 일어난다는 게 이 게이트의 전제다.
          "Sources/WapleCompatCore/DeepScan.swift": 5,
-         # [2026-08-21] `SnapshotPipeline.unpackedSceneFolders` 가 `project.json` 을 직접 읽는다
-         # (언팩 코퍼스 폴백). 캡처 대상 열거가 렌더러보다 엄격하면 JSONC `project.json` 을 가진
-         # 씬이 **캡처에서 조용히 빠지고** 골든 매니페스트 엔트리 집합이 줄어든다.
-         # 설치본·동봉 `project.json` 중 JSONC 는 0건이지만 워크샵 코퍼스는 여기서 못 쟀다.
-         "Sources/WapleCompatCore/SnapshotPipeline.swift": 1}
+         # 스냅샷의 언팩 코퍼스 열거는 공용 ProjectJSONParser.readObject를 경유한다.
+         SNAPSHOT_PIPELINE: 1}
 
 
 def swift_characters(text: str):
@@ -233,9 +231,11 @@ def main() -> int:
     # ── B. 배선 확인 ──────────────────────────────────────────────────────
     for rel, least in sorted(WIRED.items()):
         src = (ROOT / rel).read_text(encoding="utf-8")
-        n = len(re.findall(r"AssetJSON\.(dictionary|object)\(", src))
+        reader = (r"ProjectJSONParser\.readObject" if rel == SNAPSHOT_PIPELINE
+                  else r"AssetJSON\.(?:dictionary|object)")
+        n = len(re.findall(reader + r"\(", src))
         if n < least:
-            print(f"[lenient-json] {rel}: AssetJSON 호출 {n}건 — 최소 {least} 미만. "
+            print(f"[lenient-json] {rel}: 관용 JSON 리더 호출 {n}건 — 최소 {least} 미만. "
                   f"관용 파서가 있어도 리더가 안 부르면 아무 일도 안 일어난다.", file=sys.stderr)
             rc = 1
 
