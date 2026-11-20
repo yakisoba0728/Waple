@@ -37,3 +37,7 @@ class WapleSaverNativeTests(unittest.TestCase):
                                         capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn(f"SAVER_LIFECYCLE_OK {language}", result.stderr)
+                result = subprocess.run([str(binary), str(video), language, "decode", "-AppleLanguages", f"({language})"],
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"SAVER_DECODE_OK {language}", result.stderr)

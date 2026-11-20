@@ -56,6 +56,7 @@ cap "verify-$SHA"
 
 python3 - "$OUT" "$SHA" "$REPO" <<'PY'
 import json, os, shutil, sys
+from pathlib import Path
 out, sha, repo = sys.argv[1], sys.argv[2], sys.argv[3]
 def man(d):
     with open(os.path.join(out, d, "manifest.json"), encoding="utf-8") as fh:
@@ -87,6 +88,17 @@ if diff:
     print("  " + " ".join(diff[:20]))
     print("!! 두 캡처가 다르다 — 포인터 핀이 새거나 다른 미핀 입력이 있다. 설치하지 않는다.")
     sys.exit(1)
+for scene_id in a:
+    try:
+        name = f"{scene_id}.png"
+        first = (Path(out) / f"baseline-{sha}" / "thumbs" / name).read_bytes()
+        second = (Path(out) / f"verify-{sha}" / "thumbs" / name).read_bytes()
+    except OSError as error:
+        print(f"!! 썸네일을 읽지 못했다: {error}", file=sys.stderr)
+        sys.exit(1)
+    if not first.startswith(b"\x89PNG\r\n\x1a\n") or first != second:
+        print(f"!! 누락·손상되었거나 두 캡처가 다른 썸네일: {name}", file=sys.stderr)
+        sys.exit(1)
 for tag, m in (("1차", m1), ("2차", m2)):
     if m["failures"]:
         print(f"!! {tag} 캡처에 마운트 실패 {len(m['failures'])}종 — 설치하지 않는다: "

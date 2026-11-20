@@ -225,7 +225,7 @@ class TestCaptureProbeScripts(unittest.TestCase):
         known = repo / "spec/golden/snapshot/nondet-2026-08-01/stateA"
         known.mkdir(parents=True)
         (known / "manifest.json").write_text(json.dumps(payload))
-        capture = f"#!{sys.executable}\n" + r'''import json, os, pathlib, sys
+        capture = f"#!{sys.executable}\n" + r'''import base64, json, os, pathlib, sys
 if '--capture' not in sys.argv:
     sys.exit(0)
 args = sys.argv
@@ -242,7 +242,7 @@ if out.exists():
 payload = {'entries': [{'id': 'fixture', 'hash': 'fixed', 'meanLuma': 1,
                        'selfMaxDiff': 0, 'deterministic': True}], 'empties': [], 'failures': []}
 (out / 'manifest.json').write_text(json.dumps(payload))
-(out / 'thumbs/fixture.png').write_bytes(b'fixture pixels')
+(out / 'thumbs/fixture.png').write_bytes(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j8q0AAAAASUVORK5CYII='))
 '''
         executable = repo / ".build/release/WapleCompat"
         executable.parent.mkdir(parents=True)
@@ -326,6 +326,17 @@ out.chmod(0o700)
                     self.assertFalse(list(output.rglob("nondet.json")))
                     self.assertFalse(list(output.rglob("session-compare.json")))
                     self.assertFalse((repo / "spec/golden/snapshot/baseline-fixture-sha").exists())
+
+    def test_rebaseline_refuses_a_manifest_without_the_png(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, _, _ = self.fixture(root)
+            executable = repo / ".build/release/WapleCompat"
+            source = executable.read_text().splitlines(keepends=True)
+            executable.write_text("".join(line for line in source if "thumbs/fixture.png" not in line))
+            result = self.run_script("rebaseline-golden.sh", root)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertFalse((repo / "spec/golden/snapshot/baseline-fixture-sha").exists())
 
 
 class TestXrefSectionEnds(unittest.TestCase):

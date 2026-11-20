@@ -61,6 +61,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>Waple reads the currently playing track in Music or Spotify to update media-aware wallpapers.</string>
   <!-- 원본 언어. 사용 가능한 언어는 Contents/Resources/*.lproj 가 스스로 선언하므로
        CFBundleLocalizations 는 두지 않는다(둘 다 두면 목록이 중복된다). -->
   <key>CFBundleDevelopmentRegion</key><string>ko</string>
@@ -137,9 +138,13 @@ if [ "$WAPLE_SIGN_IDENTITY" != "-" ]; then
   SIGN_ARGS+=(--options runtime)
 fi
 codesign "${SIGN_ARGS[@]}" "$SAVER"
+if [ "$WAPLE_SIGN_IDENTITY" != "-" ]; then
+  SIGN_ARGS+=(--entitlements scripts/Waple.entitlements)
+fi
 codesign "${SIGN_ARGS[@]}" --identifier kr.yaki.waple "$APP"
 # 검증은 `--deep` 이 여전히 정당한 용도다(폐기된 것은 서명 쪽이다).
 codesign --verify --deep --strict "$APP"
+codesign --verify --strict "$SAVER"
 SAVER_ID=$(codesign -dvv "$SAVER" 2>&1 | sed -n 's/^Identifier=//p')
 [ "$SAVER_ID" = "kr.yaki.waple.saver" ] \
   || { echo "!! 중첩 saver 서명 식별자가 '$SAVER_ID' — 'kr.yaki.waple.saver' 여야 한다" >&2; exit 1; }
@@ -183,6 +188,10 @@ trap 'rm -rf "$STAGING"' EXIT
 cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -volname "Waple" -srcfolder "$STAGING" -ov -format UDZO "$DMG"
+if [ "$WAPLE_SIGN_IDENTITY" != "-" ]; then
+  codesign --force --sign "$WAPLE_SIGN_IDENTITY" "$DMG"
+  codesign --verify --strict "$DMG"
+fi
 echo "Built $DMG"
 
 # 릴리스 노트/Homebrew cask 갱신에 쓸 sha256 을 항상 출력한다.

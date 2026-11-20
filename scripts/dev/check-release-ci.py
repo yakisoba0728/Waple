@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require completed successful CI and spec runs for an exact release SHA.
+"""Select successful CI/spec runs and verify XCTest for the selected attempt.
 
 The workflow downloads the Actions API response.  Keeping the decision here
 makes the fail-closed policy unit-testable without contacting GitHub.
@@ -17,24 +17,50 @@ REQUIRED = {
 }
 
 
+def read_json(source: str):
+    raw = sys.stdin.read() if source == "-" else pathlib.Path(source).read_text(encoding="utf-8")
+    return json.loads(raw)
+
+
+def check_jobs(document) -> int:
+    jobs = document.get("jobs", []) if isinstance(document, dict) else []
+    for name in ("swift · debug", "swift · release"):
+        matches = [job for job in jobs if job.get("name") == name]
+        if len(matches) != 1:
+            print(f"[release-ci] {name}: expected one job", file=sys.stderr)
+            return 1
+        job = matches[0]
+        steps = {step.get("name"): step.get("conclusion") for step in job.get("steps", [])}
+        if (job.get("conclusion") != "success" or steps.get("Test") != "success"
+                or steps.get("Confirm XCTest success") != "success"):
+            print(f"[release-ci] {name}: XCTest success not confirmed", file=sys.stderr)
+            return 1
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 3:
-        print(f"usage: {argv[0]} COMMIT_SHA RUNS.json|-", file=sys.stderr)
+        print(f"usage: {argv[0]} COMMIT_SHA RUNS.json|- or --jobs JOBS.json|-", file=sys.stderr)
         return 2
     sha, source = argv[1], argv[2]
     try:
-        raw = sys.stdin.read() if source == "-" else pathlib.Path(source).read_text(encoding="utf-8")
-        document = json.loads(raw)
+        document = read_json(source)
     except (OSError, json.JSONDecodeError) as error:
         print(f"[release-ci] Actions 응답을 읽지 못했다: {error}", file=sys.stderr)
         return 2
 
+    if sha == "--jobs":
+        return check_jobs(document)
+
     runs = document.get("workflow_runs", []) if isinstance(document, dict) else []
     waiting, failed, passed = [], [], []
+    ci_attempt = None
     for path, label in REQUIRED.items():
+        # pull_request exposes the head SHA even when checkout builds a synthetic merge commit.
         candidates = [run for run in runs
                       if isinstance(run, dict)
                       and run.get("path") == path
+                      and run.get("event") in ("push", "workflow_dispatch")
                       and run.get("head_sha") == sha]
         if not candidates:
             waiting.append(f"{label}=missing")
@@ -53,6 +79,8 @@ def main(argv: list[str]) -> int:
             failed.append(detail)
         else:
             passed.append(detail)
+            if label == "CI":
+                ci_attempt = (int(latest["id"]), int(latest.get("run_attempt") or 1))
 
     if failed:
         print(f"[release-ci] {sha[:12]} 릴리스 거부 — " + ", ".join(failed), file=sys.stderr)
@@ -60,7 +88,8 @@ def main(argv: list[str]) -> int:
     if waiting:
         print(f"[release-ci] {sha[:12]} 검증 대기 — " + ", ".join(waiting), file=sys.stderr)
         return 2
-    print(f"[release-ci] {sha[:12]} 검증 성공 — " + ", ".join(passed))
+    print(f"[release-ci] {sha[:12]} 워크플로 성공 — " + ", ".join(passed), file=sys.stderr)
+    print(*ci_attempt)
     return 0
 
 

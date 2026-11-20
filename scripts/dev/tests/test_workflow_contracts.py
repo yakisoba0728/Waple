@@ -11,6 +11,7 @@ import json
 import pathlib
 import re
 import subprocess
+import tempfile
 import unittest
 
 
@@ -20,6 +21,8 @@ RELEASE = ROOT / ".github" / "workflows" / "release.yml"
 SPEC = ROOT / ".github" / "workflows" / "spec.yml"
 CENSUS = ROOT / "scripts" / "dev" / "xctest-census.py"
 RELEASE_GATE = ROOT / "scripts" / "dev" / "check-release-ci.py"
+RELEASE_TAG_GATE = ROOT / "scripts" / "dev" / "check-release-tag.sh"
+PACKAGE = ROOT / "scripts" / "package-app.sh"
 SHA = "a" * 40
 
 
@@ -67,12 +70,26 @@ class TestReleaseCIGate(unittest.TestCase):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=ROOT,
         )
 
+    def run_job_gate(self, jobs):
+        return subprocess.run(
+            ["python3", str(RELEASE_GATE), "--jobs", "-"],
+            input=json.dumps({"jobs": jobs}), text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=ROOT,
+        )
+
+    @staticmethod
+    def job(configuration, *, confirmed=True, test_outcome="success"):
+        steps = [{"name": "Test", "conclusion": test_outcome}]
+        if confirmed:
+            steps.append({"name": "Confirm XCTest success", "conclusion": "success"})
+        return {"name": f"swift · {configuration}", "conclusion": "success", "steps": steps}
+
     @staticmethod
     def run_item(path=".github/workflows/ci.yml", name="CI", **kw):
         value = {
             "name": name, "path": path,
             "head_sha": SHA, "status": "completed", "conclusion": "success",
-            "id": 10, "html_url": "https://example.invalid/run/10",
+            "event": "push", "id": 10, "html_url": "https://example.invalid/run/10",
         }
         value.update(kw)
         return value
@@ -83,6 +100,18 @@ class TestReleaseCIGate(unittest.TestCase):
             self.run_item(path=".github/workflows/spec.yml", name="spec", id=11),
         ])
         self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), "10 1")
+
+    def test_rejects_release_job_that_reports_success_without_a_passing_test(self):
+        debug, release = self.job("debug"), self.job("release")
+        self.assertEqual(self.run_job_gate([debug, release]).returncode, 0)
+        for jobs in (
+            [debug],
+            [debug, self.job("release", confirmed=False)],
+            [debug, self.job("release", test_outcome="failure")],
+        ):
+            with self.subTest(jobs=jobs):
+                self.assertEqual(self.run_job_gate(jobs).returncode, 1)
 
     def test_terminal_failure_is_immediate_failure(self):
         runs = [
@@ -91,6 +120,16 @@ class TestReleaseCIGate(unittest.TestCase):
                           id=11, conclusion="failure"),
         ]
         self.assertEqual(self.run_gate(runs).returncode, 1)
+
+    def test_only_selects_runs_that_check_out_the_release_sha(self):
+        spec = self.run_item(path=".github/workflows/spec.yml", name="spec",
+                             id=20, event="workflow_dispatch")
+        pr = self.run_item(id=30, event="pull_request")
+        self.assertEqual(self.run_gate([pr, spec]).returncode, 2)
+        push = self.run_item(id=10, event="push")
+        p = self.run_gate([push, pr, spec])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), "10 1")
 
     def test_missing_or_pending_run_requests_a_bounded_wait(self):
         ci = self.run_item()
@@ -125,7 +164,50 @@ class TestReleaseCIGate(unittest.TestCase):
         # GitHub workflow re-runs retain the workflow run id and increment run_attempt.
         first_attempt = self.run_item(id=40, run_attempt=1, conclusion="failure")
         second_attempt = self.run_item(id=40, run_attempt=2, conclusion="success")
-        self.assertEqual(self.run_gate([first_attempt, second_attempt, spec_ok]).returncode, 0)
+        p = self.run_gate([first_attempt, second_attempt, spec_ok])
+        self.assertEqual(p.returncode, 0)
+        self.assertEqual(p.stdout.strip(), "40 2")
+
+
+class TestReleaseTagGate(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.checkout = pathlib.Path(temp.name) / "checkout"
+        self.remote = pathlib.Path(temp.name) / "remote"
+        self.checkout.mkdir()
+        self.git("init")
+        self.git("init", "--bare", str(self.remote))
+        self.git("remote", "add", "origin", str(self.remote))
+        self.git("config", "user.name", "Workflow test")
+        self.git("config", "user.email", "workflow@example.invalid")
+        self.git("commit", "--allow-empty", "-m", "first")
+        self.sha = self.git("rev-parse", "HEAD")
+        self.git("commit", "--allow-empty", "-m", "second")
+        self.other_sha = self.git("rev-parse", "HEAD")
+
+    def git(self, *args):
+        return subprocess.check_output(["git", *args], cwd=self.checkout,
+                                       stderr=subprocess.PIPE, text=True).strip()
+
+    def gate(self, mode, sha):
+        return subprocess.run(["bash", str(RELEASE_TAG_GATE), mode, "v1.2.3", sha],
+                              cwd=self.checkout, text=True, capture_output=True)
+
+    def test_existing_tag_must_point_to_the_built_commit(self):
+        self.assertEqual(self.gate("preflight", self.sha).returncode, 0)
+        self.assertNotEqual(self.gate("require", self.sha).returncode, 0)
+        self.assertEqual(self.gate("create", self.sha).returncode, 0)
+        self.assertEqual(self.gate("require", self.sha).returncode, 0)
+        self.assertNotEqual(self.gate("create", self.other_sha).returncode, 0)
+        self.assertEqual(self.gate("require", self.sha).returncode, 0)
+
+    def test_accepts_annotated_tags_but_rejects_lookup_errors(self):
+        self.git("tag", "-a", "v1.2.3", self.sha, "-m", "release")
+        self.git("push", "origin", "refs/tags/v1.2.3")
+        self.assertEqual(self.gate("require", self.sha).returncode, 0)
+        self.git("remote", "set-url", "origin", str(self.remote / "missing"))
+        self.assertNotEqual(self.gate("preflight", self.sha).returncode, 0)
 
 
 class TestWorkflowWiring(unittest.TestCase):
@@ -183,7 +265,20 @@ class TestWorkflowWiring(unittest.TestCase):
         gate = step_block(self.release, "Require successful CI and spec for this commit")
         self.assertIn("for attempt in", gate)
         self.assertIn("sleep 20", gate)
+        self.assertIn("/attempts/$run_attempt/jobs", gate)
+        self.assertIn("check-release-ci.py --jobs", gate)
         self.assertIn("WAPLE_WE_ASSETS_DISTRIBUTION_APPROVED", self.release)
+
+    def test_release_requires_trusted_ref_and_verifies_tag_at_publication(self):
+        trusted = step_block(self.release, "Require trusted release ref")
+        self.assertIn("environment: release", self.release)
+        self.assertIn("vars.WAPLE_RELEASE_READY", trusted)
+        self.assertIn("git merge-base --is-ancestor", trusted)
+        self.assertIn("refs/remotes/origin/main", trusted)
+        publish = step_block(self.release, "Create GitHub Release")
+        self.assertIn("check-release-tag.sh", publish)
+        self.assertIn("--verify-tag", publish)
+        self.assertNotIn("continue-on-error", step_block(self.ci, "Test"))
 
     def test_signing_detection_requires_all_six_secrets(self):
         block = step_block(self.release, "Detect signing configuration")
@@ -201,7 +296,12 @@ class TestWorkflowWiring(unittest.TestCase):
     def test_gatekeeper_verification_is_not_ignored(self):
         block = step_block(self.release, "Notarize DMG")
         spctl = next(line for line in block.splitlines() if "spctl " in line)
+        self.assertIn("-t open --context context:primary-signature Waple.dmg", spctl)
         self.assertNotIn("|| true", spctl)
+        package = PACKAGE.read_text(encoding="utf-8")
+        self.assertIn('codesign --verify --strict "$DMG"', package)
+        self.assertIn("NSAppleEventsUsageDescription", package)
+        self.assertIn("--entitlements scripts/Waple.entitlements", package)
 
     def test_cited_address_census_is_wired_into_spec(self):
         self.assertIn("python3 scripts/spec/check_cited_address_census.py", self.spec)
